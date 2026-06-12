@@ -1,0 +1,131 @@
+"use client";
+
+import { useLayoutEffect, useRef } from "react";
+import type { DbRow } from "@/lib/db";
+import type { TimelineEntry } from "@/lib/cases";
+import { asText, formatDateTime } from "@/lib/format";
+import { StatusChip } from "@/components/ui/StatusChip";
+import { Icon } from "@/components/ui/Icon";
+import { CaseReplyPanel } from "./CaseReplyPanel";
+
+function isTruthy(value: unknown) {
+  return value === true || value === 1 || value === "1" || String(value).toLowerCase() === "true";
+}
+
+function bubbleClass(direction: TimelineEntry["direction"]) {
+  if (direction === "inbound") return "mr-auto max-w-[88%] rounded-2xl rounded-bl-sm border border-slate-200 bg-white";
+  if (direction === "system") return "mx-auto max-w-[78%] rounded-2xl border border-slate-200 bg-slate-100";
+  return "ml-auto max-w-[88%] rounded-2xl rounded-br-sm border border-sky-100 bg-sky-50";
+}
+
+function directionTone(direction: TimelineEntry["direction"]) {
+  if (direction === "inbound") return "gray" as const;
+  if (direction === "system") return "amber" as const;
+  return "blue" as const;
+}
+
+export function CaseConversationPanel({
+  caseId,
+  row,
+  messages,
+  source,
+  writeEnabled,
+  closed
+}: {
+  caseId: string;
+  row: DbRow;
+  messages: TimelineEntry[];
+  source: string;
+  writeEnabled: boolean;
+  closed: boolean;
+}) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const windowOpen = isTruthy(row.whatsapp_window_open);
+
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages]);
+
+  return (
+    <section className="hub-card flex h-[calc(100vh-8.75rem)] min-h-[780px] flex-col overflow-hidden border-l-4 border-l-primary-container">
+      <div className="border-b border-slate-200 px-5 py-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-headline-md text-on-surface">{asText(row.contact_name, "Conversacion")}</p>
+              <StatusChip label={`${row.message_count ?? messages.length} mensajes`} tone="gray" />
+            </div>
+            <p className="mt-1 text-body-md text-slate-500">
+              {asText(row.wa_id)} | Fuente timeline: {source}
+            </p>
+          </div>
+          <div className={`rounded-full px-3 py-1 text-label-bold uppercase ${windowOpen ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}>
+            {windowOpen ? "ventana abierta" : "ventana cerrada"}
+          </div>
+        </div>
+      </div>
+
+      <div className={`border-b px-5 py-3 text-body-md ${windowOpen ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span>Ventana WhatsApp {windowOpen ? "abierta" : "cerrada"}</span>
+          <span>Ultimo mensaje cliente: {asText(row.hours_since_last_customer_message, "sin datos")} horas</span>
+        </div>
+      </div>
+
+      <div ref={viewportRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-slate-50/80 px-5 py-5">
+        {messages.length === 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-6 text-body-md text-slate-500">
+            Sin mensajes disponibles en tablas conversacionales.
+          </div>
+        ) : (
+          <div className="flex min-h-full flex-col justify-end">
+            <div className="space-y-4 pb-2">
+              {messages.map((message) => (
+                <div key={message.key} className={bubbleClass(message.direction)}>
+                  <div className="p-4">
+                    <div className="mb-2 flex flex-wrap gap-2">
+                      <StatusChip label={message.direction} tone={directionTone(message.direction)} />
+                      {message.messageType ? <StatusChip label={message.messageType} tone="gray" /> : null}
+                      {message.finalAction ? <StatusChip label={message.finalAction} tone="amber" /> : null}
+                      {message.intent ? <StatusChip label={message.intent} tone="amber" /> : null}
+                      {message.department ? <StatusChip label={message.department} tone="gray" /> : null}
+                      {message.status ? <StatusChip label={message.status} /> : null}
+                    </div>
+
+                    <p className="whitespace-pre-wrap text-body-md text-on-surface">{message.body}</p>
+
+                    <div className="mt-3 border-t border-slate-200/70 pt-3 text-label-sm text-slate-500">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span>Hora: {formatDateTime(message.occurredAt)}</span>
+                        {message.providerMessageId ? <span>Provider: {message.providerMessageId}</span> : null}
+                        {message.technicalOrigin ? <span>Origen: {message.technicalOrigin}</span> : null}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        {message.sourceId ? <span>source_id: {message.sourceId}</span> : null}
+                        {message.idOrder ? <span>id_order: {message.idOrder}</span> : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <div ref={endRef} aria-hidden="true" />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-slate-200 bg-white px-5 py-4">
+        <div className="mb-3 flex items-center gap-2">
+          <Icon name="edit_square" className="text-slate-500" />
+          <p className="text-label-bold uppercase text-slate-500">Reply manual</p>
+        </div>
+        <CaseReplyPanel caseId={caseId} closed={closed} writeEnabled={writeEnabled} whatsappWindowOpen={windowOpen} embedded />
+      </div>
+    </section>
+  );
+}

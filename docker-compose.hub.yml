@@ -1,0 +1,18 @@
+services:
+  pesas-hub-webapp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pesas-hub-webapp
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: false
+    ports:
+      - "3010:3000"
+    networks:
+      - pesas-hub
+
+networks:
+  pesas-hub:
+    driver: bridge

@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS hub_audit_log (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED NULL,
+  action VARCHAR(100) NOT NULL,
+  entity_type VARCHAR(100) NOT NULL,
+  entity_id VARCHAR(100) NULL,
+  before_json JSON NULL,
+  after_json JSON NULL,
+  ip_address VARCHAR(100) NULL,
+  user_agent TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
