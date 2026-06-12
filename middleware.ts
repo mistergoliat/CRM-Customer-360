@@ -7,6 +7,24 @@ function toHex(buffer: ArrayBuffer) {
   return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function getSessionSecret() {
+  const secret = process.env.SESSION_SECRET?.trim();
+  if (!secret) {
+    throw new Error("SESSION_SECRET no configurado");
+  }
+
+  return secret;
+}
+
+function getAdminBypassToken() {
+  const token = process.env.ADMIN_BYPASS_TOKEN?.trim();
+  if (!token) {
+    throw new Error("ADMIN_BYPASS_TOKEN no configurado");
+  }
+
+  return token;
+}
+
 async function hmac(payload: string, secret: string) {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -39,12 +57,25 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const secret = process.env.SESSION_SECRET || process.env.ADMIN_BYPASS_TOKEN || "dev-only-change-me";
+  let sessionSecret: string;
+  let adminBypassToken: string;
+  try {
+    sessionSecret = getSessionSecret();
+    adminBypassToken = getAdminBypassToken();
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : "Auth configuration missing"
+      },
+      { status: 500 }
+    );
+  }
+
   const session = request.cookies.get(COOKIE_NAME)?.value;
   const headerToken = request.headers.get("x-admin-bypass-token");
-  const headerOk = Boolean(process.env.ADMIN_BYPASS_TOKEN && headerToken === process.env.ADMIN_BYPASS_TOKEN);
+  const headerOk = headerToken === adminBypassToken;
 
-  if (headerOk || (await verifySession(session, secret))) return NextResponse.next();
+  if (headerOk || (await verifySession(session, sessionSecret))) return NextResponse.next();
 
   if (pathname.startsWith("/api/")) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
