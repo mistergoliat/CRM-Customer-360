@@ -10,12 +10,62 @@ type DashboardMetric = {
   error?: string;
 };
 
+type N8nHealth = {
+  status: "ok" | "warning" | "error";
+  description: string;
+  details: string;
+  configured: boolean;
+};
+
 async function metric(key: string, title: string, sql: string, description: string, icon: string): Promise<DashboardMetric> {
   const result = await safeScalar(sql);
   if (!result.ok) {
     return { key, title, value: "query_error", description: result.error, state: "error", icon, error: result.error };
   }
   return { key, title, value: Number(result.value ?? 0), description, state: "ok", icon };
+}
+
+async function getN8nHealth(): Promise<N8nHealth> {
+  const n8nUrl = process.env.N8N_BASE_URL?.trim();
+  const configured = Boolean(n8nUrl);
+  if (!n8nUrl) {
+    return {
+      status: "warning",
+      description: "N8N_BASE_URL no configurado.",
+      details: "La webapp sigue operando con DB y Meta configurados.",
+      configured
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3500);
+    const response = await fetch(n8nUrl, { signal: controller.signal, cache: "no-store" });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return {
+        status: "error",
+        description: `N8N_BASE_URL respondio HTTP ${response.status}.`,
+        details: "La continuidad del HUB no depende de n8n para operar manualmente.",
+        configured
+      };
+    }
+
+    return {
+      status: "ok",
+      description: "N8N_BASE_URL respondio.",
+      details: "El HUB no depende de esta respuesta para operar casos manualmente.",
+      configured
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      description: "n8n no respondio o no esta disponible.",
+      details: error instanceof Error ? error.message : String(error),
+      configured
+    };
+  }
 }
 
 export async function getDashboardData() {
@@ -83,6 +133,7 @@ export async function getDashboardData() {
   );
   const recentAudit = await safeQueryRows("SELECT * FROM hub_audit_log ORDER BY created_at DESC LIMIT 8");
   const dbHealth = await safeQueryRows("SELECT 1 AS ok");
+  const n8nHealth = await getN8nHealth();
 
   return {
     metrics,
@@ -90,6 +141,7 @@ export async function getDashboardData() {
     recentAudit,
     dbHealth,
     metaConfigured: Boolean(process.env.META_ACCESS_TOKEN && (process.env.DEFAULT_PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID)),
-    n8nConfigured: Boolean(process.env.N8N_BASE_URL)
+    n8nConfigured: n8nHealth.configured,
+    n8nHealth
   };
 }

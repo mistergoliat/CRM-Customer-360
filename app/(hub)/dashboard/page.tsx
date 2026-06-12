@@ -18,7 +18,7 @@ export default async function DashboardPage() {
       <PageHeader
         eyebrow="AI Operations"
         title="Ops Dashboard"
-        description="Centro operativo independiente para continuidad del HUB: casos, WhatsApp manual, auditoría y salud básica sin depender de webhooks n8n."
+        description="Centro operativo independiente para continuidad del HUB: casos, WhatsApp manual, auditoria y salud basica sin depender de webhooks n8n."
         status="Activo"
       />
 
@@ -32,20 +32,20 @@ export default async function DashboardPage() {
         <HealthStatusCard
           title="DB"
           status={data.dbHealth.ok ? "ok" : "error"}
-          description={data.dbHealth.ok ? "Conexión disponible." : "No se pudo consultar SELECT 1."}
+          description={data.dbHealth.ok ? "Conexion disponible." : "No se pudo consultar SELECT 1."}
           details={data.dbHealth.ok ? undefined : data.dbHealth.error}
         />
         <HealthStatusCard
           title="Meta config"
           status={data.metaConfigured ? "ok" : "warning"}
           description={data.metaConfigured ? "Variables Meta configuradas." : "Falta token o phone_number_id."}
-          details="No se llama a Meta desde dashboard para evitar tráfico innecesario."
+          details="No se llama a Meta desde dashboard para evitar trafico innecesario."
         />
         <HealthStatusCard
           title="n8n"
-          status={data.n8nConfigured ? "warning" : "warning"}
-          description={data.n8nConfigured ? "N8N_BASE_URL configurado. La webapp no depende de n8n para responder." : "N8N_BASE_URL no configurado."}
-          details="La continuidad depende de DB y Meta API para operación manual."
+          status={data.n8nHealth.status}
+          description={data.n8nHealth.description}
+          details={data.n8nHealth.details}
         />
       </section>
 
@@ -60,9 +60,9 @@ export default async function DashboardPage() {
           {!data.recentCases.ok ? (
             <ErrorState message={data.recentCases.error} />
           ) : data.recentCases.rows.length === 0 ? (
-            <EmptyState title="Sin casos" description="La vista n8n_vw_hub_cases no devolvió registros." />
+            <EmptyState title="Sin casos" description="La vista n8n_vw_hub_cases no devolvio registros." />
           ) : (
-            <DataTable headers={["Caso", "Cliente", "Estado", "Último mensaje"]}>
+            <DataTable headers={["Caso", "Cliente", "Estado", "Ultimo mensaje"]}>
               {data.recentCases.rows.map((row) => (
                 <tr key={String(row.conversation_case_id)}>
                   <td>
@@ -85,7 +85,7 @@ export default async function DashboardPage() {
           )}
         </div>
         <div>
-          <h2 className="mb-3 text-headline-md text-on-surface">Última auditoría</h2>
+          <h2 className="mb-3 text-headline-md text-on-surface">Ultima auditoria</h2>
           {data.recentAudit.ok ? <AuditTable rows={data.recentAudit.rows} /> : <ErrorState message={data.recentAudit.error} />}
         </div>
       </section>
