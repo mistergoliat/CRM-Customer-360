@@ -31,7 +31,6 @@ export type BrainProcessInboundOptions = {
   debug: boolean;
   runAgentDryRun: boolean;
   buildExecutionPlanDryRun: boolean;
-  persistOutboxPlan?: boolean;
   preferredAgent?: "knowledge";
 };
 
@@ -181,24 +180,6 @@ export type BrainInstructions = {
   steps: BrainInstruction[];
 };
 
-export const BRAIN_INBOUND_OUTBOX_PLAN_STATUSES = [
-  "skipped_by_flag",
-  "skipped_by_policy",
-  "planned",
-  "existing",
-  "warning"
-] as const;
-export type BrainInboundOutboxPlanStatus = (typeof BRAIN_INBOUND_OUTBOX_PLAN_STATUSES)[number];
-
-export type BrainInboundOutboxPlanResult = {
-  status: BrainInboundOutboxPlanStatus;
-  existing: boolean;
-  outbox_id: number | null;
-  dedupe_key: string | null;
-  reason?: string | null;
-  warning?: string | null;
-};
-
 export type BrainProcessInboundResponse = {
   ok: boolean;
   requestId: string;
@@ -216,7 +197,6 @@ export type BrainProcessInboundResponse = {
   context_debug?: unknown;
   agent_draft?: BrainAgentRunResponse["draft"] | null;
   execution_plan?: BrainExecutionPlan | null;
-  outbox_plan_result?: BrainInboundOutboxPlanResult | null;
   instructions: BrainInstructions;
   warnings: string[];
   errors: BrainError[];

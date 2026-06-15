@@ -8,14 +8,12 @@ import type { BrainBotEligibility, BrainContextResolveResponse } from "./context
 import { adaptBrainInboundToContextRequest } from "./context/legacyAdapters";
 import { buildFallbackBrainInboundRequest, normalizeBrainInboundRequest } from "./inbound/normalize";
 import { evaluateBrainExecution } from "./messaging/responseExecutor";
-import { createOutboxPlannedRecord } from "./messaging/outbox";
-import type { BrainExecutionSource, BrainExecuteRequest } from "./messaging/types";
+import type { BrainExecuteRequest } from "./messaging/types";
 import { makeBrainRequestId } from "./instructions";
 import type { BrainActionPolicy, BrainNormalizedAction } from "./actions/types";
 import type {
   BrainContextSummary,
   BrainError,
-  BrainInboundOutboxPlanResult,
   BrainNormalizedProcessInboundRequest,
   BrainInstructions,
   BrainProcessInboundResponse,
@@ -55,77 +53,6 @@ function mergeBrainErrors(...groups: Array<Array<BrainErrorLike> | undefined>): 
     }
   }
   return [...values.values()];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asLooseBoolean(value: unknown): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") return value.trim().toLowerCase() === "true";
-  return false;
-}
-
-function getProcessInboundPersistOutboxPlanRequested(input: unknown): boolean {
-  if (!isRecord(input)) return false;
-  const options = isRecord(input.options) ? input.options : null;
-  return asLooseBoolean(options?.persistOutboxPlan);
-}
-
-function getProcessInboundOutboxPlanEnabled(): boolean {
-  return process.env.BRAIN_PROCESS_INBOUND_ALLOW_OUTBOX_PLAN === "true";
-}
-
-function canAutoReplyForInboundOutboxPlan(actionPolicy: BrainActionPolicy): boolean {
-  const policy = actionPolicy as BrainActionPolicy & { allowedToAutoReply?: boolean };
-  return Boolean(policy.allowedToAutoReply ?? actionPolicy.can_auto_reply);
-}
-
-function mapInboundSourceToExecutionSource(source: BrainNormalizedProcessInboundRequest["source"]): BrainExecutionSource {
-  if (source === "n8n_meta_webhook") return "n8n";
-  if (source === "hub_preview") return "operator";
-  if (source === "manual_test") return "operator";
-  return "brain";
-}
-
-function buildSkippedOutboxPlanResult(status: "skipped_by_flag" | "skipped_by_policy", reason: string): BrainInboundOutboxPlanResult {
-  return {
-    status,
-    existing: false,
-    outbox_id: null,
-    dedupe_key: null,
-    reason
-  };
-}
-
-function buildWarningOutboxPlanResult(reason: string, warning: string): BrainInboundOutboxPlanResult {
-  return {
-    status: "warning",
-    existing: false,
-    outbox_id: null,
-    dedupe_key: null,
-    reason,
-    warning
-  };
-}
-
-function buildPersistedOutboxPlanResult(
-  persistResult: Awaited<ReturnType<typeof createOutboxPlannedRecord>>
-): BrainInboundOutboxPlanResult {
-  if (persistResult.ok) {
-    return {
-      status: persistResult.existing ? "existing" : "planned",
-      existing: persistResult.existing,
-      outbox_id: persistResult.row.id ?? null,
-      dedupe_key: persistResult.row.dedupe_key,
-      reason: persistResult.existing ? null : persistResult.warning ?? null,
-      warning: persistResult.existing ? null : persistResult.warning ?? null
-    };
-  }
-
-  return buildWarningOutboxPlanResult("outbox_plan_persist_failed", persistResult.warning);
 }
 
 function buildFallbackPolicy(requestId: string, reason: string, blockedReasons: string[]): BrainActionPolicy {
@@ -529,102 +456,13 @@ function shouldRunKnowledgeAgent(
   return request.options.preferredAgent === "knowledge";
 }
 
-async function maybePersistInboundOutboxPlan(
-  request: BrainNormalizedProcessInboundRequest,
-  actionResponse: Awaited<ReturnType<typeof resolveBrainAction>>,
-  agentDraft: BrainAgentRunResponse["draft"] | null,
-  contextResponse: BrainContextResolveResponse,
-  persistOutboxPlanRequested: boolean
-): Promise<{ result: BrainInboundOutboxPlanResult; warnings: string[] }> {
-  if (!getProcessInboundOutboxPlanEnabled()) {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_flag", "BRAIN_PROCESS_INBOUND_ALLOW_OUTBOX_PLAN=false"), warnings: [] };
-  }
-  if (!request.options.dryRun) {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_policy", "dryRun=true is required."), warnings: [] };
-  }
-  if (request.options.executeActions) {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_policy", "executeActions=false is required."), warnings: [] };
-  }
-  if (!request.options.runAgentDryRun) {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_policy", "runAgentDryRun=true is required."), warnings: [] };
-  }
-  if (!persistOutboxPlanRequested) {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_policy", "persistOutboxPlan=true is required."), warnings: [] };
-  }
-  if (!agentDraft) {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_policy", "agent_draft is required."), warnings: [] };
-  }
-  if (agentDraft.decision !== "answer") {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_policy", "agent_draft.decision must be answer."), warnings: [] };
-  }
-  if (!agentDraft.message || !agentDraft.message.trim()) {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_policy", "agent_draft.message is required."), warnings: [] };
-  }
-  if (!canAutoReplyForInboundOutboxPlan(actionResponse.action_policy)) {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_policy", "action_policy.allowedToAutoReply=false"), warnings: [] };
-  }
-  if (!contextResponse.bot_eligibility?.can_auto_reply) {
-    return { result: buildSkippedOutboxPlanResult("skipped_by_policy", "bot_eligibility.canAutoReply=false"), warnings: [] };
-  }
-
-  const normalizedAction = actionResponse.normalized_action.action;
-  if (normalizedAction === "blocked" || normalizedAction === "no_action" || normalizedAction === "needs_human_review") {
-    return {
-      result: buildSkippedOutboxPlanResult("skipped_by_policy", `normalized_action=${normalizedAction} is not eligible.`),
-      warnings: []
-    };
-  }
-
-  const persistResult = await createOutboxPlannedRecord({
-    dedupeKeyInput: {
-      source: mapInboundSourceToExecutionSource(request.source),
-      actionType: "send_whatsapp_message",
-      channel: "whatsapp",
-      waId: request.waId,
-      phoneNumberId: request.phoneNumberId,
-      conversationCaseId: request.conversationCaseId,
-      messageText: agentDraft.message,
-      sourceRequestId: request.messageId
-    },
-    status: "planned",
-    source: request.source,
-    sourceRequestId: request.messageId,
-    sourceAgentName: agentDraft.agentName,
-    sourceAgentVersion: agentDraft.agentVersion,
-    waId: request.waId,
-    phoneNumberId: request.phoneNumberId,
-    conversationCaseId: request.conversationCaseId ?? null,
-    messageText: agentDraft.message,
-    metaPayloadJson: {
-      model_version: "brain.process-inbound.outbox-plan.v1",
-      source: request.source,
-      requestId: request.messageId,
-      channel: request.channel,
-      waId: request.waId,
-      phoneNumberId: request.phoneNumberId,
-      conversationCaseId: request.conversationCaseId ?? null,
-      messageText: agentDraft.message,
-      agentDecision: agentDraft.decision,
-      actionPolicyAllowedToAutoReply: canAutoReplyForInboundOutboxPlan(actionResponse.action_policy),
-      botEligibilityCanAutoReply: contextResponse.bot_eligibility?.can_auto_reply ?? null,
-      normalizedAction
-    }
-  });
-
-  const result = buildPersistedOutboxPlanResult(persistResult);
-  const warnings = result.warning ? [result.warning] : [];
-  return { result, warnings };
-}
-
 function buildValidResponse(
   request: BrainNormalizedProcessInboundRequest,
   startedAt: number,
   contextResponse: BrainContextResolveResponse,
   actionResponse: Awaited<ReturnType<typeof resolveBrainAction>>,
   agentDraft: BrainAgentRunResponse["draft"] | null,
-  executionPlan: BrainProcessInboundResponse["execution_plan"],
-  outboxPlanResult: BrainInboundOutboxPlanResult | null,
-  outboxPlanWarnings: string[] = []
+  executionPlan: BrainProcessInboundResponse["execution_plan"]
 ): BrainProcessInboundResponse {
   const requestId = makeBrainRequestId(request);
   const context = resolveBrainContext(request);
@@ -648,7 +486,6 @@ function buildValidResponse(
     contextSummary.warnings,
     contextResponse.warnings,
     actionResponse.warnings,
-    outboxPlanWarnings,
     request.options.debug ? [] : ["Full context payload is hidden unless debug=true."]
   );
   const errors = mergeBrainErrors(contextResponse.errors, actionResponse.errors);
@@ -670,7 +507,6 @@ function buildValidResponse(
     context_debug: request.options.debug ? buildBrainContextDebugPayload(request, contextResponse, context) : undefined,
     agent_draft: agentDraft,
     execution_plan: executionPlan,
-    outbox_plan_result: outboxPlanResult,
     instructions: safeInstructions,
     warnings,
     errors,
@@ -733,9 +569,6 @@ export async function processInbound(input: unknown, startedAt = Date.now()): Pr
   const actionResponse = await resolveBrainAction(actionRequest, startedAt);
   let agentDraft: BrainAgentRunResponse["draft"] | null = null;
   let executionPlan: BrainProcessInboundResponse["execution_plan"] = null;
-  let outboxPlanResult: BrainInboundOutboxPlanResult | null = null;
-  let outboxPlanWarnings: string[] = [];
-  const persistOutboxPlanRequested = getProcessInboundPersistOutboxPlanRequested(input);
 
   if (shouldRunKnowledgeAgent(request, actionResponse, contextResponse)) {
     try {
@@ -759,24 +592,5 @@ export async function processInbound(input: unknown, startedAt = Date.now()): Pr
     }
   }
 
-  const outboxPlanAttempt = await maybePersistInboundOutboxPlan(
-    request,
-    actionResponse,
-    agentDraft,
-    contextResponse,
-    persistOutboxPlanRequested
-  );
-  outboxPlanResult = outboxPlanAttempt.result;
-  outboxPlanWarnings = outboxPlanAttempt.warnings;
-
-  return buildValidResponse(
-    request,
-    startedAt,
-    contextResponse,
-    actionResponse,
-    agentDraft,
-    executionPlan,
-    outboxPlanResult,
-    outboxPlanWarnings
-  );
+  return buildValidResponse(request, startedAt, contextResponse, actionResponse, agentDraft, executionPlan);
 }
