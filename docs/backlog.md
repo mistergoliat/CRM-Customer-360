@@ -28,6 +28,7 @@ Este documento es backlog de trabajo, no arquitectura completa ni brief de produ
 | TASK-010 Define AgentAction Log contract | DESIGN | Agent Control Center / Audit | Definir el formato canonico de logs de acciones de agentes. | Docs, `lib/audit.ts`, contratos futuros. | Telemetria avanzada o trazas distribuidas completas. | Archivos: `lib/audit.ts`, docs; tablas: `hub_audit_log` y futuras tablas de eventos si aplican. | Envelopes IA y lista de acciones operativas. | Cada accion de agente puede registrarse con before/after, actor, contexto y resultado. | `npm run build`, `npm run typecheck` | Documentar campos obligatorios, opcionales y severidad de eventos. |
 | TASK-011 Normalize agent outputs from n8n/workflows | IMPLEMENTATION | AI Routing & Agents | Hacer que los outputs de n8n y agentes sigan el mismo contrato estructurado. | Normalizacion en backend, validadores, adaptadores de salida. | Cambiar por completo todos los workflows de n8n. | Archivos: backend de normalizacion que se cree en el futuro; nodos: workflows router/agentes; tablas: logs de mensajes/casos. | TASK-009, observacion de payloads reales. | El backend puede aceptar y normalizar output de n8n sin depender de texto libre. | `npm run build`, `npm run typecheck` | Reportar variantes soportadas y variantes rechazadas. |
 
+
 ## P1C - n8n Load Shedding & AI Runtime Extraction
 
 | Task | Status | Module | Objective | Allowed scope | Out of scope | Expected files/tables/nodes | Dependencies | Acceptance criteria | Validation commands | Reporting requirements |
