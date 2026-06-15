@@ -1,7 +1,6 @@
 import { requireAiOrchestrationAccess } from "@/lib/auth";
-import { buildMetaWhatsAppTextPayloadPreview } from "@/lib/brain/messaging/metaPayload";
 import { sendMetaWhatsAppTextMessage, validateMetaSendGuards } from "@/lib/brain/messaging/metaSendAdapter";
-import type { BrainMetaSendRequest } from "@/lib/brain/messaging/types";
+import type { MetaSendRequest } from "@/lib/brain/messaging/types";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +14,7 @@ function asTrimmedString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeRequest(input: unknown): BrainMetaSendRequest | null {
+function normalizeRequest(input: unknown): MetaSendRequest | null {
   if (!isRecord(input)) return null;
 
   const waId = asTrimmedString(input.waId);
@@ -28,7 +27,7 @@ function normalizeRequest(input: unknown): BrainMetaSendRequest | null {
     phoneNumberId,
     messageText,
     timeoutMs: typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
-    source: asTrimmedString(input.source) as BrainMetaSendRequest["source"] | undefined,
+    source: asTrimmedString(input.source) as MetaSendRequest["source"] | undefined,
     sourceRequestId: asTrimmedString(input.sourceRequestId),
     conversationCaseId:
       typeof input.conversationCaseId === "string" || typeof input.conversationCaseId === "number"
@@ -40,12 +39,7 @@ function normalizeRequest(input: unknown): BrainMetaSendRequest | null {
   };
 }
 
-function buildDisabledResponse(input: BrainMetaSendRequest, errorMessage: string) {
-  const preview = buildMetaWhatsAppTextPayloadPreview({
-    waId: input.waId,
-    messageText: input.messageText
-  });
-
+function buildDisabledResponse(errorMessage: string) {
   return {
     ok: false,
     status: "disabled",
@@ -53,8 +47,9 @@ function buildDisabledResponse(input: BrainMetaSendRequest, errorMessage: string
     error_message: errorMessage,
     blocked_reasons: ["meta_send_test_disabled"],
     warnings: ["El endpoint de prueba Meta esta deshabilitado por defecto."],
-    meta_payload_preview: preview,
-    response_body: null
+    meta_payload_preview: null,
+    response_body: null,
+    adapter_status: "disabled"
   };
 }
 
@@ -67,6 +62,10 @@ export async function POST(request: Request) {
     body = await request.json();
   } catch {
     body = null;
+  }
+
+  if (process.env.BRAIN_META_SEND_TEST_ENABLED?.trim() !== "true") {
+    return Response.json(buildDisabledResponse("BRAIN_META_SEND_TEST_ENABLED=false"), { status: 200 });
   }
 
   const normalized = normalizeRequest(body);
@@ -84,10 +83,6 @@ export async function POST(request: Request) {
       },
       { status: 400 }
     );
-  }
-
-  if (process.env.BRAIN_META_SEND_TEST_ENABLED?.trim() !== "true") {
-    return Response.json(buildDisabledResponse(normalized, "BRAIN_META_SEND_TEST_ENABLED=false"), { status: 200 });
   }
 
   const guard = validateMetaSendGuards(normalized);
