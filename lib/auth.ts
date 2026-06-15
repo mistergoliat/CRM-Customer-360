@@ -21,6 +21,45 @@ export function getAdminBypassToken() {
   }
 
   return token;
+
+}
+
+export function getAiOrchestrationApiToken() {
+  const token = process.env.AI_ORCHESTRATION_API_TOKEN?.trim();
+  if (!token) {
+    throw new Error("AI_ORCHESTRATION_API_TOKEN no configurado");
+  }
+
+  return token;
+}
+
+function timingSafeStringEquals(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function getBearerToken(request?: Request) {
+  const authorization = request?.headers.get("authorization")?.trim();
+  if (!authorization) return null;
+
+  const [scheme, ...tokenParts] = authorization.split(/\s+/);
+  if (scheme?.toLowerCase() !== "bearer") return null;
+
+  const token = tokenParts.join(" ").trim();
+  return token || null;
+}
+
+function verifyAiOrchestrationApiToken(request?: Request) {
+  const providedToken = getBearerToken(request) || request?.headers.get("x-ai-orchestration-token")?.trim();
+  if (!providedToken) return { ok: false as const, configured: Boolean(process.env.AI_ORCHESTRATION_API_TOKEN?.trim()) };
+
+  const expectedToken = getAiOrchestrationApiToken();
+  return {
+    ok: timingSafeStringEquals(providedToken, expectedToken),
+    configured: true
+  };
 }
 
 export function signSession(timestamp = Date.now()) {
@@ -74,6 +113,25 @@ export async function requireOperator(request?: Request) {
   }
 
   return { ok: false as const, response: NextResponse.json({ error: "unauthorized" }, { status: 401 }) };
+}
+
+export async function requireAiOrchestrationAccess(request?: Request) {
+  try {
+    const tokenAuth = verifyAiOrchestrationApiToken(request);
+    if (tokenAuth.ok) return { ok: true as const };
+  } catch (error) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        {
+          error: error instanceof Error ? error.message : "AI orchestration auth configuration missing"
+        },
+        { status: 500 }
+      )
+    };
+  }
+
+  return requireOperator(request);
 }
 
 export function setSessionCookie(response: NextResponse) {
