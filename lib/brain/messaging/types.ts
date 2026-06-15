@@ -112,6 +112,8 @@ export type BrainMetaSendRequest = {
   metadata?: Record<string, unknown>;
 };
 
+export type MetaSendRequest = BrainMetaSendRequest;
+
 export type BrainMetaSendGuardResult = {
   ok: boolean;
   adapterStatus: BrainMetaSendAdapterStatus;
@@ -136,6 +138,16 @@ export type BrainMetaSendResponse = {
   adapter_status?: BrainMetaSendAdapterStatus;
 };
 
+export type MetaSendResponse = BrainMetaSendResponse;
+
+export type MetaSendGuardResult = BrainMetaSendGuardResult;
+
+export type MetaSendAdapterStatus = BrainMetaSendAdapterStatus;
+
+export type MetaSendErrorCode = BrainMetaSendErrorCode;
+
+export type MetaSendOutcomeStatus = BrainMetaSendOutcomeStatus;
+
 export type BrainOutboxPreview = {
   dedupe_key: string;
   channel: "whatsapp";
@@ -153,6 +165,202 @@ export type BrainOutboxResult = {
   outbox_id: number | null;
   warning?: string;
   error?: string;
+};
+
+export const BRAIN_OUTBOX_WORKER_STATUSES = ["disabled", "planned", "locked", "sending", "sent", "noop", "blocked", "failed"] as const;
+export type BrainOutboxWorkerStatus = (typeof BRAIN_OUTBOX_WORKER_STATUSES)[number];
+
+export const BRAIN_OUTBOX_WORKER_MODES = ["disabled", "dry_run", "lock_only", "send_locked", "noop", "blocked", "failed"] as const;
+export type BrainOutboxWorkerMode = (typeof BRAIN_OUTBOX_WORKER_MODES)[number];
+
+export type BrainOutboxWorkerRequest = {
+  requestId?: string;
+  dryRun?: boolean;
+  lockOnly?: boolean;
+  sendLocked?: boolean;
+  outboxId?: number | string | null;
+  limit?: number;
+  debug?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type BrainOutboxWorkerCandidate = {
+  id: number | null;
+  dedupe_key: string;
+  status: BrainOutboxStatus;
+  source: string | null;
+  wa_id: string | null;
+  phone_number_id: string | null;
+  conversation_case_id: string | number | null;
+  message_text_preview: string | null;
+  message_text_length: number | null;
+  planned_at: string | null;
+  locked_at: string | null;
+  failed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  stale_locked: boolean;
+};
+
+export type BrainOutboxWorkerLockedRecord = {
+  id: number | null;
+  previous_status: "planned";
+  status: "locked";
+  dedupe_key: string;
+  locked_at: string | null;
+};
+
+export type BrainOutboxWorkerSkippedRecord = {
+  id: number | null;
+  previous_status: BrainOutboxStatus;
+  status: BrainOutboxStatus;
+  dedupe_key: string;
+  reason: string;
+  stale_locked: boolean;
+};
+
+export const BRAIN_CANONICAL_OUTBOUND_PERSIST_STATUSES = [
+  "skipped_by_flag",
+  "skipped",
+  "persisted",
+  "existing",
+  "warning"
+] as const;
+export type BrainCanonicalOutboundPersistStatus = (typeof BRAIN_CANONICAL_OUTBOUND_PERSIST_STATUSES)[number];
+
+export type BrainCanonicalOutboundPersistResult = {
+  status: BrainCanonicalOutboundPersistStatus;
+  message_id: number | null;
+  warning?: string | null;
+};
+
+export const BRAIN_CASE_UPDATE_STATUSES = [
+  "skipped_by_flag",
+  "skipped_no_case_id",
+  "skipped_no_canonical_message",
+  "updated",
+  "warning"
+] as const;
+export type BrainCaseUpdateStatus = (typeof BRAIN_CASE_UPDATE_STATUSES)[number];
+
+export type BrainCaseUpdateResult = {
+  status: BrainCaseUpdateStatus;
+  case_id: string | number | null;
+  updated_fields: string[];
+  warning?: string | null;
+};
+
+export type BrainOutboxWorkerSentRecord = {
+  outbox_id: number | null;
+  previous_status: "sending";
+  status: "sent";
+  dedupe_key: string;
+  provider_message_id: string | null;
+  sent_at: string | null;
+  error_code: null;
+  error_message: null;
+  stale_locked: boolean;
+  canonical_persist_result?: BrainCanonicalOutboundPersistResult | null;
+  case_update_result?: BrainCaseUpdateResult | null;
+};
+
+export type BrainOutboxWorkerFailedRecord = {
+  outbox_id: number | null;
+  previous_status: "locked" | "sending";
+  status: "failed";
+  dedupe_key: string;
+  provider_message_id: string | null;
+  sent_at: string | null;
+  failed_at: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  stale_locked: boolean;
+};
+
+export type BrainOutboxTransitionResult = {
+  outbox_id: number | null;
+  dedupe_key: string;
+  from_status: BrainOutboxStatus;
+  to_status: BrainOutboxStatus;
+  allowed: boolean;
+  applied: boolean;
+  simulated: boolean;
+  retryable: boolean;
+  reason: string;
+  blocked_reasons: string[];
+  warnings: string[];
+  locked_at?: string | null;
+  failed_at?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type BrainOutboxWorkerPlan = {
+  mode: BrainOutboxWorkerMode;
+  enabled: boolean;
+  allowRealSend: boolean;
+  dryRun: boolean;
+  lockOnly?: boolean;
+  sendLocked?: boolean;
+  outboxId?: number | string | null;
+  debug?: boolean;
+  limit: number;
+  batchSize: number;
+  lockSeconds: number;
+  candidateCount: number;
+  lockedCount: number;
+  skippedCount: number;
+  selectedCount: number;
+  sentCount?: number;
+  failedCount?: number;
+  candidates: BrainOutboxWorkerCandidate[];
+  lockedRecords: BrainOutboxWorkerLockedRecord[];
+  skippedRecords: BrainOutboxWorkerSkippedRecord[];
+  sentRecords?: BrainOutboxWorkerSentRecord[];
+  failedRecords?: BrainOutboxWorkerFailedRecord[];
+  transitionResults: BrainOutboxTransitionResult[];
+  blocked_reasons: string[];
+  warnings: string[];
+  notes: string[];
+};
+
+export type BrainOutboxWorkerResponse = {
+  ok: boolean;
+  disabled: boolean;
+  status: BrainOutboxWorkerStatus;
+  reason?: string | null;
+  dryRun: boolean;
+  lockOnly: boolean;
+  sendLocked: boolean;
+  debug: boolean;
+  locked_count: number;
+  sent_count: number;
+  failed_count: number;
+  skipped_count: number;
+  candidates: BrainOutboxWorkerCandidate[];
+  locked_records: BrainOutboxWorkerLockedRecord[];
+  skipped_records: BrainOutboxWorkerSkippedRecord[];
+  sent_records: BrainOutboxWorkerSentRecord[];
+  failed_records: BrainOutboxWorkerFailedRecord[];
+  error_code?: "disabled" | "invalid_payload" | "real_send_disabled" | "invalid_send_request" | "blocked" | "failed" | null;
+  error_message?: string | null;
+  blocked_reasons: string[];
+  warnings: string[];
+  plan: BrainOutboxWorkerPlan;
+  metadata: {
+    version: string;
+    generatedAt: string;
+    processingMs: number;
+    enabled: boolean;
+    allowRealSend: boolean;
+    dryRun: boolean;
+    lockOnly: boolean;
+    sendLocked: boolean;
+    debug: boolean;
+    limit: number;
+    batchSize: number;
+    lockSeconds: number;
+    outboxId: number | string | null;
+  };
 };
 
 export type BrainExecutionPlan = {

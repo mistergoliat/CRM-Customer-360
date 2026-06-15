@@ -59,6 +59,7 @@ Opciones soportadas:
 - `returnInstructionsForN8n`
 - `runAgentDryRun`
 - `preferredAgent` (`knowledge` por ahora)
+- `persistOutboxPlan` habilita, solo bajo flag de entorno, la creacion de una fila `planned` en `brain_message_outbox` para uso posterior del worker. No envia WhatsApp ni bloquea el flujo legacy.
 
 Defaults actuales:
 
@@ -67,7 +68,9 @@ Defaults actuales:
 - `returnInstructionsForN8n=true`
 - `debug=false`
 - `runAgentDryRun=false`
+- `buildExecutionPlanDryRun=false`
 - `preferredAgent` no definido
+- `persistOutboxPlan=false`
 
 `executeActions=true` sigue bloqueado en P1D. El endpoint devuelve una respuesta estructurada, pero no ejecuta acciones reales ni muta casos.
 
@@ -87,6 +90,7 @@ La respuesta incluye:
 - `suggested_next_step`
 - `agent_draft` cuando `runAgentDryRun=true`
 - `instructions`
+- `outbox_plan_result` cuando `persistOutboxPlan=true` y el gate estricto permite crear o reutilizar un plan `planned`
 - `warnings`
 - `errors`
 - `adapters`
@@ -116,6 +120,24 @@ Patron recomendado:
 6. Si n8n pide `executeActions=true`, el backend responde fail-closed y no ejecuta nada.
 7. Si `debug=false`, el backend no expone el payload completo del resolver.
 8. Si `buildExecutionPlanDryRun=true`, el backend puede adjuntar un `execution_plan` de observacion sin side effects.
+9. Si `persistOutboxPlan=true` y `BRAIN_PROCESS_INBOUND_ALLOW_OUTBOX_PLAN=true`, `processInbound` puede crear o reutilizar una fila `planned` en `brain_message_outbox` usando el `agent_draft` aprobado por policy. Eso no envia WhatsApp, no bloquea el worker y no cambia casos.
+
+## Outbox planning controlado
+
+P1I-009 agrega un camino estrictamente opt-in para dejar preparado el mensaje saliente en la outbox sin ejecutar envios:
+
+- requiere `dryRun=true`
+- requiere `executeActions=false`
+- requiere `runAgentDryRun=true`
+- requiere `persistOutboxPlan=true`
+- requiere `BRAIN_PROCESS_INBOUND_ALLOW_OUTBOX_PLAN=true`
+- requiere `agent_draft.decision === "answer"`
+- requiere `agent_draft.message` no vacio
+- requiere `action_policy.can_auto_reply === true`
+- requiere `bot_eligibility.can_auto_reply === true`
+- requiere `normalized_action.action` distinto de `blocked`, `no_action` y `needs_human_review`
+
+El resultado aparece en `outbox_plan_result` con estados como `skipped_by_flag`, `skipped_by_policy`, `planned`, `existing` o `warning`. El flujo legacy sigue activo y `continueLegacyFlow` permanece en `true`.
 
 Ejemplo de request:
 
@@ -188,6 +210,7 @@ Esta base prepara la salida progresiva de:
 - mover mutaciones de caso a un backend versionado
 - conectar logging operacional y comparacion shadow
 - definir el adaptador final para replace mode
+- documentar y ejecutar la corrida manual end-to-end del backend de envio en `docs/brain-end-to-end-send-test.md`
 
 ## Riesgos
 
