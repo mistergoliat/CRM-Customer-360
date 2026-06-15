@@ -20,24 +20,15 @@ function normalizeTimeoutMs(timeoutMs: unknown) {
 }
 
 function getMetaGraphVersion() {
-  return (
-    process.env.BRAIN_META_GRAPH_VERSION?.trim() ||
-    process.env.META_GRAPH_API_VERSION?.trim() ||
-    DEFAULT_META_GRAPH_VERSION
-  );
+  return process.env.BRAIN_META_GRAPH_VERSION?.trim() || DEFAULT_META_GRAPH_VERSION;
 }
 
 export function getMetaAccessToken() {
-  return process.env.META_WHATSAPP_ACCESS_TOKEN?.trim() || process.env.META_ACCESS_TOKEN?.trim() || null;
+  return process.env.META_WHATSAPP_ACCESS_TOKEN?.trim() || null;
 }
 
 export function getMetaDefaultPhoneNumberId() {
-  return (
-    process.env.META_WHATSAPP_DEFAULT_PHONE_NUMBER_ID?.trim() ||
-    process.env.DEFAULT_PHONE_NUMBER_ID?.trim() ||
-    process.env.META_PHONE_NUMBER_ID?.trim() ||
-    null
-  );
+  return process.env.META_WHATSAPP_DEFAULT_PHONE_NUMBER_ID?.trim() || null;
 }
 
 export function buildMetaGraphUrl(phoneNumberId: string) {
@@ -130,13 +121,17 @@ export async function postMetaWhatsAppTextMessage(input: BrainMetaSendRequest): 
     return buildDisabledResponse(metaPayloadPreview);
   }
 
-  const accessToken = getMetaAccessToken();
-  if (!accessToken) {
-    return buildMissingCredentialsResponse(metaPayloadPreview, "META_WHATSAPP_ACCESS_TOKEN no configurado");
-  }
-
   if (!waId || !phoneNumberId || !messageText) {
     return buildInvalidPayloadResponse("waId, phoneNumberId y messageText son obligatorios.", metaPayloadPreview);
+  }
+
+  const accessToken = getMetaAccessToken();
+  const defaultPhoneNumberId = getMetaDefaultPhoneNumberId();
+  if (!accessToken || !defaultPhoneNumberId) {
+    return buildMissingCredentialsResponse(
+      metaPayloadPreview,
+      "META_WHATSAPP_ACCESS_TOKEN o META_WHATSAPP_DEFAULT_PHONE_NUMBER_ID no configurado"
+    );
   }
 
   const timeoutMs = normalizeTimeoutMs(input.timeoutMs);
@@ -202,4 +197,8 @@ export async function postMetaWhatsAppTextMessage(input: BrainMetaSendRequest): 
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function sendMetaWhatsAppTextMessage(input: BrainMetaSendRequest): Promise<BrainMetaSendResponse> {
+  return postMetaWhatsAppTextMessage(input);
 }
