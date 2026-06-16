@@ -1,0 +1,559 @@
+﻿{
+    "updatedAt":  "2026-06-11T22:48:05.615Z",
+    "createdAt":  "2026-05-29T17:57:21.734Z",
+    "id":  "LzIMwJOonu1MUxqP",
+    "name":  "AI_AGENT_Postventa",
+    "description":  null,
+    "active":  true,
+    "isArchived":  false,
+    "nodes":  [
+                  {
+                      "parameters":  {
+                                         "inputSource":  "jsonExample",
+                                         "jsonExample":  "{\n  \"input_event\": {\n    \"event_type\": \"whatsapp_message\",\n    \"channel\": \"whatsapp\",\n    \"wa_id\": \"56912345678\",\n    \"phone_normalized\": \"56912345678\",\n    \"message_text\": \"Hola, quiero cotizar una banca con despacho a Maipú\",\n    \"message_type\": \"text\",\n    \"received_at\": \"2026-05-28 10:30:00\"\n  },\n  \"customer_context\": {\n    \"customer_id\": 123,\n    \"full_name\": \"Juan Pérez\",\n    \"lifecycle_stage\": \"active_customer\",\n    \"cluster\": \"home_gym\",\n    \"total_orders\": 2,\n    \"total_revenue\": 250000,\n    \"last_order_at\": \"2026-04-20\"\n  },\n  \"case_context\": {\n    \"case_id\": 456,\n    \"status\": \"open\",\n    \"department\": \"ventas\",\n    \"service_code\": \"sales\",\n    \"case_type\": \"cotizacion\",\n    \"priority\": \"normal\"\n  },\n  \"conversation_context\": {\n    \"last_messages\": []\n  },\n  \"business_context\": {\n    \"has_open_complaint\": false,\n    \"has_open_quote\": false,\n    \"recent_campaigns\": [],\n    \"recent_orders\": []\n  }\n}"
+                                     },
+                      "type":  "n8n-nodes-base.executeWorkflowTrigger",
+                      "typeVersion":  1.1,
+                      "position":  [
+                                       0,
+                                       0
+                                   ],
+                      "id":  "b6e86341-89d9-4f79-ad13-9aca3fbe8140",
+                      "name":  "When Executed by Another Workflow"
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "const input = $json || {};\n\nfunction clean(value) {\n  if (value === null || value === undefined) return \"\";\n  return String(value).trim();\n}\n\nfunction asObject(value) {\n  return value \u0026\u0026 typeof value === \"object\" \u0026\u0026 !Array.isArray(value) ? value : {};\n}\n\nfunction asArray(value) {\n  return Array.isArray(value) ? value : [];\n}\n\nfunction normalizeChilePhone(value) {\n  let phone = clean(value).replace(/\\D/g, \"\");\n  if (!phone) return \"\";\n\n  if (/^9\\d{8}$/.test(phone)) return `56${phone}`;\n  if (/^09\\d{8}$/.test(phone)) return `56${phone.slice(1)}`;\n  if (/^569\\d{8}$/.test(phone)) return phone;\n  if (/^56\\d{9}$/.test(phone)) return phone;\n\n  return phone;\n}\n\nconst inputEvent = asObject(input.input_event);\nconst customerContext = asObject(input.customer_context);\nconst caseContext = asObject(input.case_context);\nconst conversationContext = asObject(input.conversation_context);\nconst businessContext = asObject(input.business_context);\n\nconst serviceContext = asObject(\n  input.service_context ||\n  businessContext.service_context ||\n  {}\n);\n\nconst rootClassification = asObject(input.classification);\nconst rootCaseDecision = asObject(input.case_decision);\nconst rootDecision = asObject(input.decision);\nconst rootRouting = asObject(input.routing);\nconst rootSafety = asObject(input.safety);\nconst rootRecommendedAction = asObject(input.recommended_action);\n\nconst waId = normalizeChilePhone(\n  inputEvent.wa_id ||\n  inputEvent.phone_normalized ||\n  input.wa_id ||\n  input.phone_normalized ||\n  customerContext.phone_normalized ||\n  customerContext.phone ||\n  caseContext.wa_id\n);\n\nconst phoneNormalized = normalizeChilePhone(\n  inputEvent.phone_normalized ||\n  inputEvent.wa_id ||\n  input.phone_normalized ||\n  input.wa_id ||\n  waId\n);\n\nconst messageText = clean(\n  inputEvent.message_text ||\n  inputEvent.text ||\n  input.message?.text ||\n  input.message_text ||\n  input.text\n);\n\nconst normalized = {\n  input_event: {\n    ...inputEvent,\n\n    event_type: clean(inputEvent.event_type || input.event_type || \"whatsapp_message\"),\n    channel: clean(inputEvent.channel || input.channel || \"whatsapp\"),\n\n    wa_id: waId,\n    phone_normalized: phoneNormalized,\n\n    provider_message_id: clean(\n      inputEvent.provider_message_id ||\n      inputEvent.message_id ||\n      inputEvent.id ||\n      input.provider_message_id ||\n      input.message_id\n    ),\n\n    context_message_id: clean(\n      inputEvent.context_message_id ||\n      input.context_message_id\n    ),\n\n    phone_number_id: clean(\n      inputEvent.phone_number_id ||\n      input.phone_number_id\n    ),\n\n    contact_name: clean(\n      inputEvent.contact_name ||\n      input.contact_name ||\n      customerContext.full_name ||\n      customerContext.name ||\n      customerContext.firstname ||\n      \"\"\n    ),\n\n    message_text: messageText,\n\n    message_type: clean(\n      inputEvent.message_type ||\n      input.message_type ||\n      \"text\"\n    ),\n\n    received_at: clean(\n      inputEvent.received_at ||\n      input.received_at\n    ),\n\n    timestamp: clean(\n      inputEvent.timestamp ||\n      input.timestamp\n    ),\n\n    conversation_message_id:\n      inputEvent.conversation_message_id ??\n      input.conversation_message_id ??\n      null\n  },\n\n  customer_context: customerContext,\n  case_context: caseContext,\n\n  conversation_context: {\n    ...conversationContext,\n    last_messages: asArray(conversationContext.last_messages).slice(-15)\n  },\n\n  business_context: businessContext,\n\n  service_context: {\n    ...serviceContext,\n\n    dominant_service: clean(\n      serviceContext.dominant_service ||\n      serviceContext.service_code ||\n      rootCaseDecision.service_code ||\n      input.service_code\n    ),\n\n    service_code: clean(\n      serviceContext.service_code ||\n      serviceContext.dominant_service ||\n      rootCaseDecision.service_code ||\n      input.service_code\n    ),\n\n    case_origin_type: clean(\n      serviceContext.case_origin_type ||\n      rootCaseDecision.case_origin_type ||\n      input.case_origin_type ||\n      \"organic_whatsapp\"\n    ),\n\n    source_table:\n      serviceContext.source_table ??\n      rootCaseDecision.source_table ??\n      input.source_table ??\n      null,\n\n    source_id:\n      serviceContext.source_id ??\n      rootCaseDecision.source_id ??\n      input.source_id ??\n      null,\n\n    id_order:\n      serviceContext.id_order ??\n      rootCaseDecision.id_order ??\n      input.id_order ??\n      customerContext.id_order ??\n      customerContext.last_order_id ??\n      null,\n\n    id_customer:\n      serviceContext.id_customer ??\n      rootCaseDecision.id_customer ??\n      input.id_customer ??\n      customerContext.id_customer ??\n      customerContext.customer_id ??\n      null,\n\n    invoice_number:\n      serviceContext.invoice_number ??\n      rootCaseDecision.invoice_number ??\n      input.invoice_number ??\n      customerContext.invoice_number ??\n      null\n  },\n\n  orchestrator_decision: {\n    classification: rootClassification,\n    case_decision: rootCaseDecision,\n    decision: rootDecision,\n    missing_data: asArray(input.missing_data),\n    recommended_action: rootRecommendedAction,\n    routing: rootRouting,\n    safety: rootSafety\n  },\n\n  classification: rootClassification,\n  case_decision: rootCaseDecision,\n  decision: rootDecision,\n  message: asObject(input.message),\n  routing: rootRouting,\n  safety: rootSafety,\n  risk_flags: asArray(input.risk_flags),\n  resolver_meta: asObject(input.resolver_meta),\n\n  raw_input: input,\n\n  _meta: {\n    received_agent_input_at: new Date().toISOString()\n  }\n};\n\nif (!normalized.input_event.wa_id) {\n  normalized._validation_warning = \"missing_wa_id\";\n}\n\nif (!normalized.input_event.message_text \u0026\u0026 normalized.input_event.message_type === \"text\") {\n  normalized._validation_warning = normalized._validation_warning\n    ? `${normalized._validation_warning}|missing_message_text`\n    : \"missing_message_text\";\n}\n\nreturn [{ json: normalized }];"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       208,
+                                       0
+                                   ],
+                      "id":  "4ec2a638-ac93-485e-aa33-dcb5031892d0",
+                      "name":  "Code - Normalize Input"
+                  },
+                  {
+                      "parameters":  {
+                                         "method":  "POST",
+                                         "url":  "https://api.deepseek.com/v1/chat/completions",
+                                         "sendHeaders":  true,
+                                         "specifyHeaders":  "json",
+                                         "jsonHeaders":  "{\n  \"Authorization\": \"Bearer sk-c854a40f049a4970b2078577d87ad75a\",\n  \"Content-Type\": \"application/json\"\n}",
+                                         "sendBody":  true,
+                                         "specifyBody":  "json",
+                                         "jsonBody":  "={{ $json.deepseek_payload }}",
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "type":  "n8n-nodes-base.httpRequest",
+                      "typeVersion":  4.4,
+                      "position":  [
+                                       624,
+                                       0
+                                   ],
+                      "id":  "fce90fd2-42a5-46a8-aed8-9de2a5ca107c",
+                      "name":  "HTTP Request"
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "const data = $json || {};\n\nconst normalizedInput = data.normalized_input || {};\nconst agentConfig = data.agent_config || {};\n\nfunction clean(value) {\n  if (value === null || value === undefined) return \"\";\n  return String(value).trim();\n}\n\nfunction asObject(value) {\n  return value \u0026\u0026 typeof value === \"object\" \u0026\u0026 !Array.isArray(value) ? value : {};\n}\n\nfunction asArray(value) {\n  return Array.isArray(value) ? value : [];\n}\n\nfunction clamp01(value, fallback = 0.8) {\n  const n = Number(value);\n  if (!Number.isFinite(n)) return fallback;\n  return Math.max(0, Math.min(1, n));\n}\n\nfunction pickFirst(...values) {\n  for (const value of values) {\n    const v = clean(value);\n    if (v) return v;\n  }\n  return \"\";\n}\n\nfunction pickFirstNumber(...values) {\n  for (const value of values) {\n    if (value === null || value === undefined || value === \"\") continue;\n    const n = Number(value);\n    if (Number.isFinite(n) \u0026\u0026 n \u003e 0) return n;\n  }\n  return null;\n}\n\nfunction normalizeAction(value) {\n  const v = clean(value).toLowerCase();\n\n  if ([\"reply\", \"ask_missing_data\", \"send_reply\", \"send_to_executor\"].includes(v)) return \"reply\";\n  if ([\"handoff\", \"handoff_to_human\", \"human_review\", \"send_to_handoff\", \"requires_human\"].includes(v)) return \"handoff_to_human\";\n  if ([\"tool_request\", \"request_tool\", \"request_quote_tool\", \"create_quote\", \"quote_tool\"].includes(v)) return \"tool_request\";\n  if ([\"close\", \"close_case\", \"close_candidate\"].includes(v)) return \"close_case\";\n  if ([\"none\", \"noop\", \"no_action\"].includes(v)) return \"no_action\";\n\n  return \"reply\";\n}\n\nfunction normalizeRisk(value, fallback = \"medium\") {\n  const v = clean(value).toLowerCase();\n  if ([\"low\", \"medium\", \"high\"].includes(v)) return v;\n  return fallback;\n}\n\nfunction bool(value, fallback = false) {\n  if (value === true || value === 1 || value === \"1\" || value === \"true\") return true;\n  if (value === false || value === 0 || value === \"0\" || value === \"false\") return false;\n  return fallback;\n}\n\nfunction hasAny(text, terms) {\n  const t = clean(text).toLowerCase();\n  return terms.some(term =\u003e t.includes(term));\n}\n\nconst inputEvent = asObject(normalizedInput.input_event);\nconst customerContext = asObject(normalizedInput.customer_context);\nconst serviceContext = asObject(normalizedInput.service_context);\nconst caseContext = asObject(normalizedInput.case_context);\nconst classification = asObject(normalizedInput.classification);\nconst orch = asObject(normalizedInput.orchestrator_decision);\nconst orchCase = asObject(normalizedInput.case_decision || orch.case_decision);\n\nconst outDecision = asObject(data.decision);\nconst outMessage = asObject(data.message);\nconst outCase = asObject(data.case_update);\nconst outTool = asObject(data.tool_request);\nconst outNext = asObject(data.next_steps);\nconst outSafety = asObject(data.safety);\n\nconst agentName = pickFirst(\n  data.agent?.name,\n  data._parse_error ? \"\" : \"\",\n  \"UNKNOWN_AGENT\"\n);\n\nconst version = pickFirst(\n  data.agent?.version,\n  agentConfig.version,\n  \"0.3.0\"\n);\n\nconst originalMessageText = pickFirst(\n  inputEvent.message_text,\n  inputEvent.text,\n  normalizedInput.message?.text\n);\n\nconst combinedText = [\n  originalMessageText,\n  outMessage.text,\n  JSON.stringify(classification),\n  JSON.stringify(outCase),\n  JSON.stringify(serviceContext)\n].join(\" \").toLowerCase();\n\nconst complaintTerms = [\n  \"reclamo\",\n  \"molesto\",\n  \"mala experiencia\",\n  \"pésima\",\n  \"pesima\",\n  \"horrible\",\n  \"defectuoso\",\n  \"defectuosa\",\n  \"dañado\",\n  \"dañada\",\n  \"roto\",\n  \"rota\",\n  \"garantía\",\n  \"garantia\",\n  \"devolución\",\n  \"devolucion\",\n  \"cambio\",\n  \"sernac\",\n  \"demanda\",\n  \"legal\",\n  \"abogado\",\n  \"estafa\"\n];\n\nconst postventaArmadoTerms = [\n  \"postventa_armado\",\n  \"armado\",\n  \"instalación\",\n  \"instalacion\"\n];\n\nconst postventaMantencionTerms = [\n  \"postventa_mantencion\",\n  \"mantención\",\n  \"mantencion\"\n];\n\nlet actionType = normalizeAction(\n  outDecision.action_type ||\n  data.action_type ||\n  outNext.target_workflow ||\n  agentConfig.default_action\n);\n\nlet riskLevel = normalizeRisk(\n  outDecision.risk_level ||\n  classification.risk_level,\n  \"medium\"\n);\n\nlet confidence = clamp01(\n  outDecision.confidence ??\n  classification.confidence,\n  0.85\n);\n\nlet department = pickFirst(\n  outCase.department,\n  orchCase.department,\n  agentConfig.department,\n  \"SAC\"\n);\n\nlet serviceCode = pickFirst(\n  outCase.service_code,\n  orchCase.service_code,\n  serviceContext.service_code,\n  serviceContext.dominant_service,\n  agentConfig.service_code,\n  \"organic_whatsapp\"\n);\n\nlet caseOriginType = pickFirst(\n  outCase.case_origin_type,\n  orchCase.case_origin_type,\n  serviceContext.case_origin_type,\n  agentConfig.case_origin_type,\n  \"organic_whatsapp\"\n);\n\nlet caseType = pickFirst(\n  outCase.case_type,\n  orchCase.case_type,\n  serviceContext.case_type,\n  classification.intent,\n  agentConfig.case_type,\n  \"consulta_general\"\n);\n\nlet priority = pickFirst(\n  outCase.priority,\n  orchCase.priority,\n  agentConfig.priority,\n  \"normal\"\n).toLowerCase();\n\nlet messageText = clean(outMessage.text || data.response_text || \"\");\n\nconst textForPostventa = [\n  serviceCode,\n  caseType,\n  caseOriginType,\n  serviceContext.dominant_service,\n  originalMessageText\n].join(\" \").toLowerCase();\n\n// Normalización postventa\nif (\n  agentName === \"AI_AGENT_Postventa\" ||\n  hasAny(textForPostventa, postventaArmadoTerms) ||\n  hasAny(textForPostventa, postventaMantencionTerms)\n) {\n  if (hasAny(textForPostventa, postventaArmadoTerms)) {\n    serviceCode = \"postventa_armado\";\n    caseOriginType = \"postventa_armado\";\n    caseType = \"coordinacion_armado\";\n  } else if (hasAny(textForPostventa, postventaMantencionTerms)) {\n    serviceCode = \"postventa_mantencion\";\n    caseOriginType = \"postventa_mantencion\";\n    caseType = \"coordinacion_mantencion\";\n  } else {\n    serviceCode = \"postventa_general\";\n    caseOriginType = \"postventa_general\";\n    caseType = \"postventa_general\";\n  }\n\n  department = \"Postventa\";\n}\n\n// Riesgo SAC transversal\nif (hasAny(combinedText, complaintTerms)) {\n  department = \"SAC\";\n  serviceCode = combinedText.includes(\"garant\") ? \"garantia\" : \"reclamo\";\n  caseOriginType = serviceCode;\n  caseType = serviceCode;\n  priority = \"high\";\n  riskLevel = \"high\";\n  actionType = \"handoff_to_human\";\n}\n\n// Regla productiva: armado/mantención no auto-responde\nif ([\"postventa_armado\", \"postventa_mantencion\"].includes(serviceCode)) {\n  department = \"Postventa\";\n  priority = priority === \"high\" ? \"high\" : \"normal\";\n  riskLevel = riskLevel === \"high\" ? \"high\" : \"medium\";\n  actionType = \"handoff_to_human\";\n  messageText = \"\";\n}\n\n// Knowledge sin fuente verificada: tool_request\nconst hasKnowledgeSource =\n  (Array.isArray(normalizedInput.knowledge_sources) \u0026\u0026 normalizedInput.knowledge_sources.length \u003e 0) ||\n  (Array.isArray(normalizedInput.sources) \u0026\u0026 normalizedInput.sources.length \u003e 0) ||\n  (Array.isArray(normalizedInput.business_context?.knowledge_sources) \u0026\u0026 normalizedInput.business_context.knowledge_sources.length \u003e 0) ||\n  clean(normalizedInput.verified_source).length \u003e 0;\n\nif (agentName === \"AI_AGENT_Knowledge\" \u0026\u0026 !hasKnowledgeSource) {\n  department = \"Knowledge\";\n  serviceCode = \"knowledge\";\n  caseOriginType = \"knowledge\";\n  caseType = \"knowledge_request\";\n  riskLevel = \"medium\";\n  actionType = \"tool_request\";\n}\n\n// Baja confianza bloquea autonomía\nif (confidence \u003c 0.75 \u0026\u0026 actionType === \"reply\") {\n  actionType = \"handoff_to_human\";\n  riskLevel = riskLevel === \"low\" ? \"medium\" : riskLevel;\n}\n\n// Tool requerida\nconst toolRequired = bool(outTool.required, false) || actionType === \"tool_request\";\nlet toolName = outTool.tool_name ?? null;\n\nif (toolRequired) {\n  actionType = \"tool_request\";\n\n  if (!toolName \u0026\u0026 agentName === \"AI_AGENT_Knowledge\") {\n    toolName = \"knowledge_base\";\n  }\n\n  if (!toolName) {\n    toolName = \"quote_tool\";\n  }\n}\n\n// Reply sin texto no puede pasar\nif (actionType === \"reply\" \u0026\u0026 !messageText) {\n  actionType = \"handoff_to_human\";\n  riskLevel = riskLevel === \"low\" ? \"medium\" : riskLevel;\n}\n\nlet requiresHuman =\n  actionType === \"handoff_to_human\" ||\n  riskLevel === \"high\";\n\nif (requiresHuman) {\n  actionType = \"handoff_to_human\";\n}\n\nconst allowedToAutoReply =\n  actionType === \"reply\" \u0026\u0026\n  !requiresHuman \u0026\u0026\n  riskLevel === \"low\" \u0026\u0026\n  confidence \u003e= 0.75 \u0026\u0026\n  !!messageText;\n\nlet status = \"open\";\nif (requiresHuman) status = \"human_required\";\nif (actionType === \"tool_request\") status = \"pending_tool\";\nif (actionType === \"close_case\") status = \"closed\";\nif (actionType === \"no_action\") status = pickFirst(outCase.status, caseContext.status, \"open\");\n\nconst targetWorkflow =\n  actionType === \"reply\"\n    ? \"OPS_Response_Executor\"\n    : actionType === \"handoff_to_human\"\n      ? \"OPS_Handoff_Manager\"\n      : actionType === \"tool_request\"\n        ? \"OPS_Tool_Dispatcher\"\n        : actionType === \"close_case\"\n          ? \"OPS_Case_Closer\"\n          : \"NOOP\";\n\nconst handoffDepartment =\n  actionType === \"handoff_to_human\"\n    ? department\n    : null;\n\nconst blocked =\n  !allowedToAutoReply \u0026\u0026\n  actionType !== \"no_action\";\n\nconst blockedReason = blocked\n  ? pickFirst(\n      outSafety.blocked_reason,\n      data._parse_error ? \"invalid_json\" : \"\",\n      riskLevel === \"high\" ? \"high_risk\" : \"\",\n      actionType === \"tool_request\" ? \"tool_required\" : \"\",\n      actionType === \"handoff_to_human\" ? \"requires_human\" : \"\",\n      actionType === \"close_case\" ? \"case_close\" : \"\",\n      \"auto_reply_not_allowed\"\n    )\n  : null;\n\nconst sourceTable = pickFirst(\n  outCase.source_table,\n  orchCase.source_table,\n  serviceContext.source_table\n) || null;\n\nconst sourceId = pickFirstNumber(\n  outCase.source_id,\n  orchCase.source_id,\n  serviceContext.source_id\n);\n\nconst idOrder = pickFirstNumber(\n  outCase.id_order,\n  orchCase.id_order,\n  serviceContext.id_order,\n  serviceContext.assembly_context?.[0]?.id_order,\n  serviceContext.maintenance_context?.[0]?.id_order,\n  customerContext.id_order,\n  customerContext.last_order_id\n);\n\nconst idCustomer = pickFirstNumber(\n  outCase.id_customer,\n  orchCase.id_customer,\n  serviceContext.id_customer,\n  serviceContext.assembly_context?.[0]?.id_customer,\n  serviceContext.maintenance_context?.[0]?.id_customer,\n  customerContext.id_customer,\n  customerContext.customer_id\n);\n\nconst invoiceNumber = pickFirstNumber(\n  outCase.invoice_number,\n  orchCase.invoice_number,\n  serviceContext.invoice_number,\n  serviceContext.assembly_context?.[0]?.invoice_number,\n  serviceContext.maintenance_context?.[0]?.invoice_number,\n  customerContext.invoice_number\n);\n\nconst canonical = {\n  agent: {\n    name: agentName,\n    version\n  },\n\n  decision: {\n    action_type: actionType,\n    requires_human: requiresHuman,\n    confidence,\n    risk_level: riskLevel,\n    allowed_to_auto_reply: allowedToAutoReply\n  },\n\n  message: {\n    channel: \"whatsapp\",\n    text: allowedToAutoReply ? messageText : \"\",\n    template_required: bool(outMessage.template_required, false)\n  },\n\n  case_update: {\n    case_action: actionType === \"close_case\" ? \"close\" : \"open_or_continue\",\n    department,\n    service_code: serviceCode,\n    case_origin_type: caseOriginType,\n    case_type: caseType,\n    priority,\n    status,\n    source_table: sourceTable,\n    source_id: sourceId,\n    id_order: idOrder,\n    id_customer: idCustomer,\n    invoice_number: invoiceNumber\n  },\n\n  tool_request: {\n    required: actionType === \"tool_request\",\n    tool_name: actionType === \"tool_request\" ? toolName : null,\n    input: actionType === \"tool_request\" ? asObject(outTool.input) : {}\n  },\n\n  next_steps: {\n    target_workflow: targetWorkflow,\n    schedule_followup: bool(outNext.schedule_followup, false),\n    handoff_department: handoffDepartment\n  },\n\n  safety: {\n    blocked,\n    blocked_reason: blockedReason,\n    allowed_to_auto_reply: allowedToAutoReply,\n    suppress_mail: actionType === \"handoff_to_human\" ? false : true,\n    suppress_handoff: actionType === \"handoff_to_human\" ? false : true\n  },\n\n  _validation_error: false,\n  _validated_at: new Date().toISOString(),\n  normalized_input: normalizedInput,\n\n  raw_model_output: {\n    ...data,\n    normalized_input: undefined,\n    agent_config: undefined\n  }\n};\n\nif (data._parse_error) {\n  canonical._parse_error = true;\n  canonical._parse_error_message = data._parse_error_message || \"invalid_json\";\n}\n\nreturn [{ json: canonical }];"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       1024,
+                                       0
+                                   ],
+                      "id":  "ff004a83-2b5f-4503-af1b-4610a8744c2b",
+                      "name":  "Code - Validate Output"
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "const AGENT_NAME = \"AI_AGENT_Postventa\";\n\nconst input = $json || {};\n\nconst cfg = {\n  version: \"0.3.0\",\n  department: \"Postventa\",\n  service_code: \"postventa_general\",\n  case_origin_type: \"postventa_general\",\n  case_type: \"postventa_general\",\n  priority: \"normal\",\n  default_status: \"human_required\",\n  default_action: \"handoff_to_human\",\n  default_target_workflow: \"OPS_Handoff_Manager\",\n  default_handoff_department: \"Postventa\",\n  role_prompt: `\nEres AI_AGENT_Postventa de PesasChile.\n\nNo saludes si ya existe conversación previa, si el cliente acaba de responder un botón/template, o si el mensaje actual no es un saludo puro.\nNo uses frases como “bienvenido”, “bienvenido de nuevo”, “hola de nuevo” ni “veo que tienes...” salvo que el cliente pregunte explícitamente por ese tema.\nResponde como continuidad natural de WhatsApp.\n\nTu función es preparar la gestión de solicitudes relacionadas con:\n- armado\n- instalación\n- mantención\n- seguimiento post compra\n- coordinación inicial de servicio\n\nNo puedes:\n- prometer fecha de visita\n- prometer costo final\n- confirmar agenda\n- asignar técnico\n- cerrar reclamos\n- resolver garantías complejas\n- inventar información operacional\n- responder automáticamente si se requiere coordinación humana\n\nReglas:\n1. Armado y mantención en productivo deben derivarse a humano.\n2. Si service_context.dominant_service = \"postventa_armado\":\n   - service_code=\"postventa_armado\"\n   - case_origin_type=\"postventa_armado\"\n   - case_type=\"coordinacion_armado\"\n   - department=\"Postventa\"\n   - action_type=\"handoff_to_human\"\n3. Si service_context.dominant_service = \"postventa_mantencion\":\n   - service_code=\"postventa_mantencion\"\n   - case_origin_type=\"postventa_mantencion\"\n   - case_type=\"coordinacion_mantencion\"\n   - department=\"Postventa\"\n   - action_type=\"handoff_to_human\"\n4. Si el cliente reclama daño, garantía, devolución o mala experiencia:\n   - department=\"SAC\"\n   - service_code=\"reclamo\" o \"garantia\"\n   - priority=\"high\"\n   - risk_level=\"high\"\n5. Mensajes ambiguos como \"sí\", \"me interesa\", \"ok\", \"dale\", \"cuánto sale\", \"quiero\", \"perfecto\" deben interpretarse usando service_context.\n`\n};\n\nconst contract = {\n  agent: {\n    name: AGENT_NAME,\n    version: cfg.version\n  },\n  decision: {\n    action_type: cfg.default_action,\n    requires_human: true,\n    confidence: 0.9,\n    risk_level: \"medium\",\n    allowed_to_auto_reply: false\n  },\n  message: {\n    channel: \"whatsapp\",\n    text: \"\",\n    template_required: false\n  },\n  case_update: {\n    case_action: \"open_or_continue\",\n    department: cfg.department,\n    service_code: cfg.service_code,\n    case_origin_type: cfg.case_origin_type,\n    case_type: cfg.case_type,\n    priority: cfg.priority,\n    status: cfg.default_status,\n    source_table: null,\n    source_id: null,\n    id_order: null,\n    id_customer: null,\n    invoice_number: null\n  },\n  tool_request: {\n    required: false,\n    tool_name: null,\n    input: {}\n  },\n  next_steps: {\n    target_workflow: cfg.default_target_workflow,\n    schedule_followup: false,\n    handoff_department: cfg.default_handoff_department\n  },\n  safety: {\n    blocked: true,\n    blocked_reason: \"postventa_requires_human_coordination\",\n    allowed_to_auto_reply: false,\n    suppress_mail: false,\n    suppress_handoff: false\n  }\n};\n\nconst systemPrompt = `\n${cfg.role_prompt}\n\nContrato obligatorio de salida:\n${JSON.stringify(contract, null, 2)}\n\nReglas estructurales obligatorias:\n1. Devuelve exclusivamente JSON válido. Sin markdown. Sin texto fuera del JSON.\n2. El JSON raíz debe tener exactamente estas claves principales:\n   agent, decision, message, case_update, tool_request, next_steps, safety.\n3. No agregues events, final_action, route_to, target_workflow en raíz, raw_input ni raw_model_output.\n4. decision.action_type permitido:\n   - reply\n   - handoff_to_human\n   - tool_request\n   - no_action\n   - close_case\n5. case_update.case_action permitido:\n   - open_or_continue\n   - close\n6. Si decision.requires_human=true:\n   - decision.allowed_to_auto_reply=false\n   - safety.allowed_to_auto_reply=false\n   - next_steps.target_workflow=\"OPS_Handoff_Manager\"\n   - next_steps.handoff_department debe tener el departamento receptor\n   - safety.suppress_mail=false\n   - safety.suppress_handoff=false\n7. Si decision.action_type=\"reply\":\n   - message.text no puede estar vacío\n   - next_steps.target_workflow=\"OPS_Response_Executor\"\n   - safety.suppress_mail=true\n   - safety.suppress_handoff=true\n8. Si tool_request.required=true:\n   - decision.action_type=\"tool_request\"\n   - decision.allowed_to_auto_reply=false\n   - safety.allowed_to_auto_reply=false\n9. Si risk_level=\"high\":\n   - requires_human=true\n   - allowed_to_auto_reply=false\n10. No inventes información no presente en el contexto.\n`;\n\nconst userPrompt = `\nContexto normalizado:\n${JSON.stringify(input, null, 2)}\n`;\n\nreturn [{\n  json: {\n    deepseek_payload: {\n      model: \"deepseek-chat\",\n      messages: [\n        { role: \"system\", content: systemPrompt },\n        { role: \"user\", content: userPrompt }\n      ],\n      temperature: 0,\n      max_tokens: 1200,\n      response_format: { type: \"json_object\" }\n    },\n    normalized_input: input,\n    agent_config: cfg\n  }\n}];"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       416,
+                                       0
+                                   ],
+                      "id":  "81aae9eb-c0de-4f2b-9e9e-58d3309fe300",
+                      "name":  "Code - Build DeepSeek Payload"
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "const output = $json || {};\n\nlet normalizedInput = {};\ntry {\n  normalizedInput =\n    output.normalized_input ||\n    $(\"Code - Validate Output\").item.json.normalized_input ||\n    $(\"Code - Normalize Input\").item.json ||\n    {};\n} catch (e) {\n  normalizedInput = output.normalized_input || {};\n}\n\nfunction sqlString(value) {\n  if (value === null || value === undefined) return \"NULL\";\n  return `\u0027${String(value).replace(/\\\\/g, \"\\\\\\\\\").replace(/\u0027/g, \"\u0027\u0027\")}\u0027`;\n}\n\nfunction sqlNumber(value) {\n  const n = Number(value);\n  if (!Number.isFinite(n)) return \"NULL\";\n  return String(n);\n}\n\nfunction sqlBool(value) {\n  return value ? \"1\" : \"0\";\n}\n\nconst agent = output.agent || {};\nconst decision = output.decision || {};\nconst caseUpdate = output.case_update || {};\nconst customerContext = normalizedInput.customer_context || {};\nconst caseContext = normalizedInput.case_context || {};\nconst inputEvent = normalizedInput.input_event || {};\nconst serviceContext = normalizedInput.service_context || {};\nconst safety = output.safety || {};\n\nconst row = {\n  agent_name: agent.name || \"UNKNOWN_AGENT\",\n  agent_version: agent.version || \"0.3.0\",\n\n  customer_id:\n    caseUpdate.id_customer ??\n    serviceContext.id_customer ??\n    customerContext.id_customer ??\n    customerContext.customer_id ??\n    null,\n\n  case_id:\n    caseContext.case_id ??\n    caseContext.id ??\n    null,\n\n  conversation_message_id:\n    inputEvent.conversation_message_id ??\n    null,\n\n  source_table:\n    caseUpdate.source_table ||\n    serviceContext.source_table ||\n    \"whatsapp_agent\",\n\n  source_id:\n    caseUpdate.source_id ||\n    serviceContext.source_id ||\n    inputEvent.provider_message_id ||\n    inputEvent.wa_id ||\n    null,\n\n  model_provider: \"deepseek\",\n  model_name: \"deepseek-chat\",\n\n  intent:\n    caseUpdate.case_type ||\n    normalizedInput.orchestrator_decision?.classification?.intent ||\n    normalizedInput.classification?.intent ||\n    null,\n\n  confidence: decision.confidence ?? 0,\n  risk_level: decision.risk_level || \"medium\",\n  requires_human: decision.requires_human ? 1 : 0,\n  target_agent: agent.name || null,\n\n  input_json: JSON.stringify(normalizedInput),\n\n  output_json: JSON.stringify({\n    agent: output.agent,\n    decision: output.decision,\n    message: output.message,\n    case_update: output.case_update,\n    tool_request: output.tool_request,\n    next_steps: output.next_steps,\n    safety: output.safety\n  }),\n\n  status: output._validation_error ? \"validation_error\" : \"success\",\n  error: output._validation_error ? (safety.blocked_reason || \"validation_error\") : null\n};\n\nconst query = `\nINSERT INTO n8n_agent_runs (\n  agent_name,\n  agent_version,\n  customer_id,\n  case_id,\n  conversation_message_id,\n  source_table,\n  source_id,\n  model_provider,\n  model_name,\n  intent,\n  confidence,\n  risk_level,\n  requires_human,\n  target_agent,\n  input_json,\n  output_json,\n  status,\n  error,\n  created_at\n)\nVALUES (\n  ${sqlString(row.agent_name)},\n  ${sqlString(row.agent_version)},\n  ${sqlNumber(row.customer_id)},\n  ${sqlNumber(row.case_id)},\n  ${sqlNumber(row.conversation_message_id)},\n  ${sqlString(row.source_table)},\n  ${sqlString(row.source_id)},\n  ${sqlString(row.model_provider)},\n  ${sqlString(row.model_name)},\n  ${sqlString(row.intent)},\n  ${sqlNumber(row.confidence)},\n  ${sqlString(row.risk_level)},\n  ${sqlBool(row.requires_human)},\n  ${sqlString(row.target_agent)},\n  ${sqlString(row.input_json)},\n  ${sqlString(row.output_json)},\n  ${sqlString(row.status)},\n  ${sqlString(row.error)},\n  CONVERT_TZ(UTC_TIMESTAMP(), \u0027+00:00\u0027, \u0027-04:00\u0027)\n);\n`;\n\nreturn [{\n  json: {\n    ...output,\n    normalized_input: normalizedInput,\n    agent_run_insert_query: query\n  }\n}];"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       1216,
+                                       0
+                                   ],
+                      "id":  "055141ec-9792-4d92-b53f-8a5c01a599a1",
+                      "name":  "Code - Prepare n8n_agent_runs Insert"
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "let raw =\n  $json.choices?.[0]?.message?.content ||\n  $json.text ||\n  $json.output ||\n  $json.response ||\n  \"\";\n\nlet buildPayload = {};\ntry {\n  buildPayload = $(\"Code - Build DeepSeek Payload\").item.json || {};\n} catch (e) {\n  buildPayload = {};\n}\n\nconst normalizedInput = buildPayload.normalized_input || {};\nconst agentConfig = buildPayload.agent_config || {};\nconst agentName =\n  buildPayload.deepseek_payload?.messages?.[0]?.content?.match(/Eres (AI_AGENT_[A-Za-z]+)/)?.[1] ||\n  agentConfig.agent_name ||\n  \"UNKNOWN_AGENT\";\n\nif (typeof raw !== \"string\") {\n  raw = JSON.stringify(raw);\n}\n\nraw = raw\n  .trim()\n  .replace(/^```json\\s*/i, \"\")\n  .replace(/^```\\s*/i, \"\")\n  .replace(/```$/i, \"\")\n  .trim();\n\nlet parsed;\n\ntry {\n  parsed = JSON.parse(raw);\n} catch (error) {\n  parsed = {\n    _parse_error: true,\n    _parse_error_message: error.message,\n    _raw_model_output: raw,\n\n    agent: {\n      name: agentName,\n      version: agentConfig.version || \"0.3.0\"\n    },\n\n    decision: {\n      action_type: \"handoff_to_human\",\n      requires_human: true,\n      confidence: 0,\n      risk_level: \"medium\",\n      allowed_to_auto_reply: false\n    },\n\n    message: {\n      channel: \"whatsapp\",\n      text: \"\",\n      template_required: false\n    },\n\n    case_update: {\n      case_action: \"open_or_continue\",\n      department: \"SAC\",\n      service_code: \"unknown\",\n      case_origin_type: \"organic_whatsapp\",\n      case_type: \"consulta_general\",\n      priority: \"normal\",\n      status: \"human_required\",\n      source_table: null,\n      source_id: null,\n      id_order: null,\n      id_customer: null,\n      invoice_number: null\n    },\n\n    tool_request: {\n      required: false,\n      tool_name: null,\n      input: {}\n    },\n\n    next_steps: {\n      target_workflow: \"OPS_Handoff_Manager\",\n      schedule_followup: false,\n      handoff_department: \"SAC\"\n    },\n\n    safety: {\n      blocked: true,\n      blocked_reason: \"invalid_json\",\n      allowed_to_auto_reply: false,\n      suppress_mail: false,\n      suppress_handoff: false\n    }\n  };\n}\n\nreturn [{\n  json: {\n    ...parsed,\n    normalized_input: normalizedInput,\n    agent_config: agentConfig,\n    deepseek_payload_meta: {\n      model: buildPayload.deepseek_payload?.model || \"deepseek-chat\"\n    }\n  }\n}];"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       832,
+                                       0
+                                   ],
+                      "id":  "b9cffdfb-bda2-4728-8b23-3a75cbb8befc",
+                      "name":  "Code - Parse DeepSeek JSON"
+                  },
+                  {
+                      "parameters":  {
+                                         "operation":  "executeQuery",
+                                         "query":  "{{ $json.agent_run_insert_query }}",
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "type":  "n8n-nodes-base.mySql",
+                      "typeVersion":  2.5,
+                      "position":  [
+                                       1424,
+                                       0
+                                   ],
+                      "id":  "7f0fca26-2b0b-449c-8523-8964cd365817",
+                      "name":  "Execute a SQL query",
+                      "credentials":  {
+                                          "mySql":  {
+                                                        "id":  "ZNcs8i15Wb7OEvNy",
+                                                        "name":  "PC boss MM"
+                                                    }
+                                      }
+                  },
+                  {
+                      "parameters":  {
+                                         "content":  "## AI Agent Postventa\n",
+                                         "height":  464,
+                                         "width":  1968,
+                                         "color":  4
+                                     },
+                      "type":  "n8n-nodes-base.stickyNote",
+                      "typeVersion":  1,
+                      "position":  [
+                                       -128,
+                                       -160
+                                   ],
+                      "id":  "c28952d4-da32-47c4-a043-0144c5e1474a",
+                      "name":  "Sticky Note"
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "let result = {};\n\ntry {\n  result = $(\"Code - Prepare n8n_agent_runs Insert\").item.json || {};\n} catch (e) {\n  result = $json || {};\n}\n\nfunction asObject(value) {\n  return value \u0026\u0026 typeof value === \"object\" \u0026\u0026 !Array.isArray(value) ? value : {};\n}\n\nfunction clean(value) {\n  if (value === null || value === undefined) return \"\";\n  return String(value).trim();\n}\n\nfunction pickFirst(...values) {\n  for (const value of values) {\n    const v = clean(value);\n    if (v) return v;\n  }\n  return \"\";\n}\n\nconst normalizedInput = asObject(\n  result.normalized_input ||\n  result.raw_model_output?.normalized_input ||\n  result.raw_input ||\n  {}\n);\n\nconst inputEvent = asObject(normalizedInput.input_event);\nconst customerContext = asObject(normalizedInput.customer_context);\nconst caseContext = asObject(normalizedInput.case_context);\nconst serviceContext = asObject(normalizedInput.service_context);\nconst businessContext = asObject(normalizedInput.business_context);\nconst conversationContext = asObject(normalizedInput.conversation_context);\nconst resolverMeta = asObject(normalizedInput.resolver_meta);\n\nconst finalOutput = {\n  agent: result.agent || {\n    name: \"UNKNOWN_AGENT\",\n    version: \"0.4.0\"\n  },\n\n  decision: result.decision || {\n    action_type: \"handoff_to_human\",\n    requires_human: true,\n    confidence: 0,\n    risk_level: \"medium\",\n    allowed_to_auto_reply: false\n  },\n\n  message: result.message || {\n    channel: \"whatsapp\",\n    text: \"\",\n    template_required: false\n  },\n\n  case_update: result.case_update || {\n    case_action: \"open_or_continue\",\n    department: \"SAC\",\n    service_code: \"unknown\",\n    case_origin_type: \"organic_whatsapp\",\n    case_type: \"consulta_general\",\n    priority: \"normal\",\n    status: \"human_required\",\n    source_table: null,\n    source_id: null,\n    id_order: null,\n    id_customer: null,\n    invoice_number: null\n  },\n\n  tool_request: result.tool_request || {\n    required: false,\n    tool_name: null,\n    input: {}\n  },\n\n  next_steps: result.next_steps || {\n    target_workflow: \"OPS_Handoff_Manager\",\n    schedule_followup: false,\n    handoff_department: \"SAC\"\n  },\n\n  safety: result.safety || {\n    blocked: true,\n    blocked_reason: \"missing_final_result\",\n    allowed_to_auto_reply: false,\n    suppress_mail: false,\n    suppress_handoff: false\n  },\n\n  /*\n    Contexto operativo obligatorio para Router/Switch/Executor.\n    Esto NO es contenido del modelo; es metadata de transporte.\n    Sin esto, OPS_Response_Executor no puede enviar WhatsApp.\n  */\n  input_event: {\n    ...inputEvent,\n\n    wa_id: pickFirst(\n      inputEvent.wa_id,\n      inputEvent.phone_normalized,\n      customerContext.phone,\n      customerContext.phone_normalized,\n      caseContext.wa_id\n    ),\n\n    phone_normalized: pickFirst(\n      inputEvent.phone_normalized,\n      inputEvent.wa_id,\n      customerContext.phone_normalized,\n      customerContext.phone,\n      caseContext.wa_id\n    ),\n\n    phone_number_id: pickFirst(\n      inputEvent.phone_number_id,\n      caseContext.phone_number_id,\n      serviceContext.phone_number_id,\n      businessContext.phone_number_id\n    ) || null,\n\n    contact_name: pickFirst(\n      inputEvent.contact_name,\n      customerContext.full_name,\n      customerContext.name,\n      caseContext.contact_name\n    ),\n\n    provider_message_id: pickFirst(\n      inputEvent.provider_message_id,\n      inputEvent.message_id,\n      inputEvent.id\n    ),\n\n    context_message_id: pickFirst(\n      inputEvent.context_message_id\n    ),\n\n    message_type: pickFirst(\n      inputEvent.message_type,\n      \"text\"\n    ),\n\n    message_text: pickFirst(\n      inputEvent.message_text,\n      inputEvent.text\n    ),\n\n    received_at: pickFirst(\n      inputEvent.received_at\n    ),\n\n    timestamp: pickFirst(\n      inputEvent.timestamp\n    ),\n\n    conversation_message_id:\n      inputEvent.conversation_message_id ??\n      null\n  },\n\n  customer_context: customerContext,\n  case_context: caseContext,\n  service_context: serviceContext,\n  business_context: businessContext,\n  conversation_context: conversationContext,\n  resolver_meta: resolverMeta\n};\n\nreturn [{ json: finalOutput }];"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       1632,
+                                       0
+                                   ],
+                      "id":  "ce9cdb8f-d34e-495a-af0a-edde4217331d",
+                      "name":  "Code - Return Agent Result"
+                  }
+              ],
+    "connections":  {
+                        "When Executed by Another Workflow":  {
+                                                                  "main":  [
+                                                                               [
+                                                                                   {
+                                                                                       "node":  "Code - Normalize Input",
+                                                                                       "type":  "main",
+                                                                                       "index":  0
+                                                                                   }
+                                                                               ]
+                                                                           ]
+                                                              },
+                        "Code - Normalize Input":  {
+                                                       "main":  [
+                                                                    [
+                                                                        {
+                                                                            "node":  "Code - Build DeepSeek Payload",
+                                                                            "type":  "main",
+                                                                            "index":  0
+                                                                        }
+                                                                    ]
+                                                                ]
+                                                   },
+                        "HTTP Request":  {
+                                             "main":  [
+                                                          [
+                                                              {
+                                                                  "node":  "Code - Parse DeepSeek JSON",
+                                                                  "type":  "main",
+                                                                  "index":  0
+                                                              }
+                                                          ]
+                                                      ]
+                                         },
+                        "Code - Build DeepSeek Payload":  {
+                                                              "main":  [
+                                                                           [
+                                                                               {
+                                                                                   "node":  "HTTP Request",
+                                                                                   "type":  "main",
+                                                                                   "index":  0
+                                                                               }
+                                                                           ]
+                                                                       ]
+                                                          },
+                        "Code - Validate Output":  {
+                                                       "main":  [
+                                                                    [
+                                                                        {
+                                                                            "node":  "Code - Prepare n8n_agent_runs Insert",
+                                                                            "type":  "main",
+                                                                            "index":  0
+                                                                        }
+                                                                    ]
+                                                                ]
+                                                   },
+                        "Code - Parse DeepSeek JSON":  {
+                                                           "main":  [
+                                                                        [
+                                                                            {
+                                                                                "node":  "Code - Validate Output",
+                                                                                "type":  "main",
+                                                                                "index":  0
+                                                                            }
+                                                                        ]
+                                                                    ]
+                                                       },
+                        "Code - Prepare n8n_agent_runs Insert":  {
+                                                                     "main":  [
+                                                                                  [
+                                                                                      {
+                                                                                          "node":  "Execute a SQL query",
+                                                                                          "type":  "main",
+                                                                                          "index":  0
+                                                                                      }
+                                                                                  ]
+                                                                              ]
+                                                                 },
+                        "Execute a SQL query":  {
+                                                    "main":  [
+                                                                 [
+                                                                     {
+                                                                         "node":  "Code - Return Agent Result",
+                                                                         "type":  "main",
+                                                                         "index":  0
+                                                                     }
+                                                                 ]
+                                                             ]
+                                                }
+                    },
+    "settings":  {
+                     "executionOrder":  "v1",
+                     "binaryMode":  "separate",
+                     "availableInMCP":  false
+                 },
+    "staticData":  null,
+    "meta":  {
+                 "templateCredsSetupCompleted":  true
+             },
+    "pinData":  {
+
+                },
+    "versionId":  "8b672c01-44e9-4e72-9d0c-41b7e7720822",
+    "activeVersionId":  "8b672c01-44e9-4e72-9d0c-41b7e7720822",
+    "versionCounter":  42,
+    "triggerCount":  0,
+    "shared":  [
+                   {
+                       "updatedAt":  "2026-05-29T17:57:21.736Z",
+                       "createdAt":  "2026-05-29T17:57:21.736Z",
+                       "role":  "workflow:owner",
+                       "workflowId":  "LzIMwJOonu1MUxqP",
+                       "projectId":  "Ptv12Jr5BMW9cceq",
+                       "project":  {
+                                       "updatedAt":  "2026-04-08T18:27:36.473Z",
+                                       "createdAt":  "2026-04-08T18:22:04.835Z",
+                                       "id":  "Ptv12Jr5BMW9cceq",
+                                       "name":  "Felipe Porte \u003cfelipe.porte@pesaschile.cl\u003e",
+                                       "type":  "personal",
+                                       "icon":  null,
+                                       "description":  null,
+                                       "creatorId":  "bb5d7320-6094-433c-928d-2778b1101d2c"
+                                   }
+                   }
+               ],
+    "tags":  [
+
+             ],
+    "activeVersion":  {
+                          "updatedAt":  "2026-06-11T22:48:06.000Z",
+                          "createdAt":  "2026-06-11T22:48:05.616Z",
+                          "versionId":  "8b672c01-44e9-4e72-9d0c-41b7e7720822",
+                          "workflowId":  "LzIMwJOonu1MUxqP",
+                          "nodes":  [
+                                        {
+                                            "parameters":  {
+                                                               "inputSource":  "jsonExample",
+                                                               "jsonExample":  "{\n  \"input_event\": {\n    \"event_type\": \"whatsapp_message\",\n    \"channel\": \"whatsapp\",\n    \"wa_id\": \"56912345678\",\n    \"phone_normalized\": \"56912345678\",\n    \"message_text\": \"Hola, quiero cotizar una banca con despacho a Maipú\",\n    \"message_type\": \"text\",\n    \"received_at\": \"2026-05-28 10:30:00\"\n  },\n  \"customer_context\": {\n    \"customer_id\": 123,\n    \"full_name\": \"Juan Pérez\",\n    \"lifecycle_stage\": \"active_customer\",\n    \"cluster\": \"home_gym\",\n    \"total_orders\": 2,\n    \"total_revenue\": 250000,\n    \"last_order_at\": \"2026-04-20\"\n  },\n  \"case_context\": {\n    \"case_id\": 456,\n    \"status\": \"open\",\n    \"department\": \"ventas\",\n    \"service_code\": \"sales\",\n    \"case_type\": \"cotizacion\",\n    \"priority\": \"normal\"\n  },\n  \"conversation_context\": {\n    \"last_messages\": []\n  },\n  \"business_context\": {\n    \"has_open_complaint\": false,\n    \"has_open_quote\": false,\n    \"recent_campaigns\": [],\n    \"recent_orders\": []\n  }\n}"
+                                                           },
+                                            "type":  "n8n-nodes-base.executeWorkflowTrigger",
+                                            "typeVersion":  1.1,
+                                            "position":  [
+                                                             0,
+                                                             0
+                                                         ],
+                                            "id":  "b6e86341-89d9-4f79-ad13-9aca3fbe8140",
+                                            "name":  "When Executed by Another Workflow"
+                                        },
+                                        {
+                                            "parameters":  {
+                                                               "jsCode":  "const input = $json || {};\n\nfunction clean(value) {\n  if (value === null || value === undefined) return \"\";\n  return String(value).trim();\n}\n\nfunction asObject(value) {\n  return value \u0026\u0026 typeof value === \"object\" \u0026\u0026 !Array.isArray(value) ? value : {};\n}\n\nfunction asArray(value) {\n  return Array.isArray(value) ? value : [];\n}\n\nfunction normalizeChilePhone(value) {\n  let phone = clean(value).replace(/\\D/g, \"\");\n  if (!phone) return \"\";\n\n  if (/^9\\d{8}$/.test(phone)) return `56${phone}`;\n  if (/^09\\d{8}$/.test(phone)) return `56${phone.slice(1)}`;\n  if (/^569\\d{8}$/.test(phone)) return phone;\n  if (/^56\\d{9}$/.test(phone)) return phone;\n\n  return phone;\n}\n\nconst inputEvent = asObject(input.input_event);\nconst customerContext = asObject(input.customer_context);\nconst caseContext = asObject(input.case_context);\nconst conversationContext = asObject(input.conversation_context);\nconst businessContext = asObject(input.business_context);\n\nconst serviceContext = asObject(\n  input.service_context ||\n  businessContext.service_context ||\n  {}\n);\n\nconst rootClassification = asObject(input.classification);\nconst rootCaseDecision = asObject(input.case_decision);\nconst rootDecision = asObject(input.decision);\nconst rootRouting = asObject(input.routing);\nconst rootSafety = asObject(input.safety);\nconst rootRecommendedAction = asObject(input.recommended_action);\n\nconst waId = normalizeChilePhone(\n  inputEvent.wa_id ||\n  inputEvent.phone_normalized ||\n  input.wa_id ||\n  input.phone_normalized ||\n  customerContext.phone_normalized ||\n  customerContext.phone ||\n  caseContext.wa_id\n);\n\nconst phoneNormalized = normalizeChilePhone(\n  inputEvent.phone_normalized ||\n  inputEvent.wa_id ||\n  input.phone_normalized ||\n  input.wa_id ||\n  waId\n);\n\nconst messageText = clean(\n  inputEvent.message_text ||\n  inputEvent.text ||\n  input.message?.text ||\n  input.message_text ||\n  input.text\n);\n\nconst normalized = {\n  input_event: {\n    ...inputEvent,\n\n    event_type: clean(inputEvent.event_type || input.event_type || \"whatsapp_message\"),\n    channel: clean(inputEvent.channel || input.channel || \"whatsapp\"),\n\n    wa_id: waId,\n    phone_normalized: phoneNormalized,\n\n    provider_message_id: clean(\n      inputEvent.provider_message_id ||\n      inputEvent.message_id ||\n      inputEvent.id ||\n      input.provider_message_id ||\n      input.message_id\n    ),\n\n    context_message_id: clean(\n      inputEvent.context_message_id ||\n      input.context_message_id\n    ),\n\n    phone_number_id: clean(\n      inputEvent.phone_number_id ||\n      input.phone_number_id\n    ),\n\n    contact_name: clean(\n      inputEvent.contact_name ||\n      input.contact_name ||\n      customerContext.full_name ||\n      customerContext.name ||\n      customerContext.firstname ||\n      \"\"\n    ),\n\n    message_text: messageText,\n\n    message_type: clean(\n      inputEvent.message_type ||\n      input.message_type ||\n      \"text\"\n    ),\n\n    received_at: clean(\n      inputEvent.received_at ||\n      input.received_at\n    ),\n\n    timestamp: clean(\n      inputEvent.timestamp ||\n      input.timestamp\n    ),\n\n    conversation_message_id:\n      inputEvent.conversation_message_id ??\n      input.conversation_message_id ??\n      null\n  },\n\n  customer_context: customerContext,\n  case_context: caseContext,\n\n  conversation_context: {\n    ...conversationContext,\n    last_messages: asArray(conversationContext.last_messages).slice(-15)\n  },\n\n  business_context: businessContext,\n\n  service_context: {\n    ...serviceContext,\n\n    dominant_service: clean(\n      serviceContext.dominant_service ||\n      serviceContext.service_code ||\n      rootCaseDecision.service_code ||\n      input.service_code\n    ),\n\n    service_code: clean(\n      serviceContext.service_code ||\n      serviceContext.dominant_service ||\n      rootCaseDecision.service_code ||\n      input.service_code\n    ),\n\n    case_origin_type: clean(\n      serviceContext.case_origin_type ||\n      rootCaseDecision.case_origin_type ||\n      input.case_origin_type ||\n      \"organic_whatsapp\"\n    ),\n\n    source_table:\n      serviceContext.source_table ??\n      rootCaseDecision.source_table ??\n      input.source_table ??\n      null,\n\n    source_id:\n      serviceContext.source_id ??\n      rootCaseDecision.source_id ??\n      input.source_id ??\n      null,\n\n    id_order:\n      serviceContext.id_order ??\n      rootCaseDecision.id_order ??\n      input.id_order ??\n      customerContext.id_order ??\n      customerContext.last_order_id ??\n      null,\n\n    id_customer:\n      serviceContext.id_customer ??\n      rootCaseDecision.id_customer ??\n      input.id_customer ??\n      customerContext.id_customer ??\n      customerContext.customer_id ??\n      null,\n\n    invoice_number:\n      serviceContext.invoice_number ??\n      rootCaseDecision.invoice_number ??\n      input.invoice_number ??\n      customerContext.invoice_number ??\n      null\n  },\n\n  orchestrator_decision: {\n    classification: rootClassification,\n    case_decision: rootCaseDecision,\n    decision: rootDecision,\n    missing_data: asArray(input.missing_data),\n    recommended_action: rootRecommendedAction,\n    routing: rootRouting,\n    safety: rootSafety\n  },\n\n  classification: rootClassification,\n  case_decision: rootCaseDecision,\n  decision: rootDecision,\n  message: asObject(input.message),\n  routing: rootRouting,\n  safety: rootSafety,\n  risk_flags: asArray(input.risk_flags),\n  resolver_meta: asObject(input.resolver_meta),\n\n  raw_input: input,\n\n  _meta: {\n    received_agent_input_at: new Date().toISOString()\n  }\n};\n\nif (!normalized.input_event.wa_id) {\n  normalized._validation_warning = \"missing_wa_id\";\n}\n\nif (!normalized.input_event.message_text \u0026\u0026 normalized.input_event.message_type === \"text\") {\n  normalized._validation_warning = normalized._validation_warning\n    ? `${normalized._validation_warning}|missing_message_text`\n    : \"missing_message_text\";\n}\n\nreturn [{ json: normalized }];"
+                                                           },
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             208,
+                                                             0
+                                                         ],
+                                            "id":  "4ec2a638-ac93-485e-aa33-dcb5031892d0",
+                                            "name":  "Code - Normalize Input"
+                                        },
+                                        {
+                                            "parameters":  {
+                                                               "method":  "POST",
+                                                               "url":  "https://api.deepseek.com/v1/chat/completions",
+                                                               "sendHeaders":  true,
+                                                               "specifyHeaders":  "json",
+                                                               "jsonHeaders":  "{\n  \"Authorization\": \"Bearer sk-c854a40f049a4970b2078577d87ad75a\",\n  \"Content-Type\": \"application/json\"\n}",
+                                                               "sendBody":  true,
+                                                               "specifyBody":  "json",
+                                                               "jsonBody":  "={{ $json.deepseek_payload }}",
+                                                               "options":  {
+
+                                                                           }
+                                                           },
+                                            "type":  "n8n-nodes-base.httpRequest",
+                                            "typeVersion":  4.4,
+                                            "position":  [
+                                                             624,
+                                                             0
+                                                         ],
+                                            "id":  "fce90fd2-42a5-46a8-aed8-9de2a5ca107c",
+                                            "name":  "HTTP Request"
+                                        },
+                                        {
+                                            "parameters":  {
+                                                               "jsCode":  "const data = $json || {};\n\nconst normalizedInput = data.normalized_input || {};\nconst agentConfig = data.agent_config || {};\n\nfunction clean(value) {\n  if (value === null || value === undefined) return \"\";\n  return String(value).trim();\n}\n\nfunction asObject(value) {\n  return value \u0026\u0026 typeof value === \"object\" \u0026\u0026 !Array.isArray(value) ? value : {};\n}\n\nfunction asArray(value) {\n  return Array.isArray(value) ? value : [];\n}\n\nfunction clamp01(value, fallback = 0.8) {\n  const n = Number(value);\n  if (!Number.isFinite(n)) return fallback;\n  return Math.max(0, Math.min(1, n));\n}\n\nfunction pickFirst(...values) {\n  for (const value of values) {\n    const v = clean(value);\n    if (v) return v;\n  }\n  return \"\";\n}\n\nfunction pickFirstNumber(...values) {\n  for (const value of values) {\n    if (value === null || value === undefined || value === \"\") continue;\n    const n = Number(value);\n    if (Number.isFinite(n) \u0026\u0026 n \u003e 0) return n;\n  }\n  return null;\n}\n\nfunction normalizeAction(value) {\n  const v = clean(value).toLowerCase();\n\n  if ([\"reply\", \"ask_missing_data\", \"send_reply\", \"send_to_executor\"].includes(v)) return \"reply\";\n  if ([\"handoff\", \"handoff_to_human\", \"human_review\", \"send_to_handoff\", \"requires_human\"].includes(v)) return \"handoff_to_human\";\n  if ([\"tool_request\", \"request_tool\", \"request_quote_tool\", \"create_quote\", \"quote_tool\"].includes(v)) return \"tool_request\";\n  if ([\"close\", \"close_case\", \"close_candidate\"].includes(v)) return \"close_case\";\n  if ([\"none\", \"noop\", \"no_action\"].includes(v)) return \"no_action\";\n\n  return \"reply\";\n}\n\nfunction normalizeRisk(value, fallback = \"medium\") {\n  const v = clean(value).toLowerCase();\n  if ([\"low\", \"medium\", \"high\"].includes(v)) return v;\n  return fallback;\n}\n\nfunction bool(value, fallback = false) {\n  if (value === true || value === 1 || value === \"1\" || value === \"true\") return true;\n  if (value === false || value === 0 || value === \"0\" || value === \"false\") return false;\n  return fallback;\n}\n\nfunction hasAny(text, terms) {\n  const t = clean(text).toLowerCase();\n  return terms.some(term =\u003e t.includes(term));\n}\n\nconst inputEvent = asObject(normalizedInput.input_event);\nconst customerContext = asObject(normalizedInput.customer_context);\nconst serviceContext = asObject(normalizedInput.service_context);\nconst caseContext = asObject(normalizedInput.case_context);\nconst classification = asObject(normalizedInput.classification);\nconst orch = asObject(normalizedInput.orchestrator_decision);\nconst orchCase = asObject(normalizedInput.case_decision || orch.case_decision);\n\nconst outDecision = asObject(data.decision);\nconst outMessage = asObject(data.message);\nconst outCase = asObject(data.case_update);\nconst outTool = asObject(data.tool_request);\nconst outNext = asObject(data.next_steps);\nconst outSafety = asObject(data.safety);\n\nconst agentName = pickFirst(\n  data.agent?.name,\n  data._parse_error ? \"\" : \"\",\n  \"UNKNOWN_AGENT\"\n);\n\nconst version = pickFirst(\n  data.agent?.version,\n  agentConfig.version,\n  \"0.3.0\"\n);\n\nconst originalMessageText = pickFirst(\n  inputEvent.message_text,\n  inputEvent.text,\n  normalizedInput.message?.text\n);\n\nconst combinedText = [\n  originalMessageText,\n  outMessage.text,\n  JSON.stringify(classification),\n  JSON.stringify(outCase),\n  JSON.stringify(serviceContext)\n].join(\" \").toLowerCase();\n\nconst complaintTerms = [\n  \"reclamo\",\n  \"molesto\",\n  \"mala experiencia\",\n  \"pésima\",\n  \"pesima\",\n  \"horrible\",\n  \"defectuoso\",\n  \"defectuosa\",\n  \"dañado\",\n  \"dañada\",\n  \"roto\",\n  \"rota\",\n  \"garantía\",\n  \"garantia\",\n  \"devolución\",\n  \"devolucion\",\n  \"cambio\",\n  \"sernac\",\n  \"demanda\",\n  \"legal\",\n  \"abogado\",\n  \"estafa\"\n];\n\nconst postventaArmadoTerms = [\n  \"postventa_armado\",\n  \"armado\",\n  \"instalación\",\n  \"instalacion\"\n];\n\nconst postventaMantencionTerms = [\n  \"postventa_mantencion\",\n  \"mantención\",\n  \"mantencion\"\n];\n\nlet actionType = normalizeAction(\n  outDecision.action_type ||\n  data.action_type ||\n  outNext.target_workflow ||\n  agentConfig.default_action\n);\n\nlet riskLevel = normalizeRisk(\n  outDecision.risk_level ||\n  classification.risk_level,\n  \"medium\"\n);\n\nlet confidence = clamp01(\n  outDecision.confidence ??\n  classification.confidence,\n  0.85\n);\n\nlet department = pickFirst(\n  outCase.department,\n  orchCase.department,\n  agentConfig.department,\n  \"SAC\"\n);\n\nlet serviceCode = pickFirst(\n  outCase.service_code,\n  orchCase.service_code,\n  serviceContext.service_code,\n  serviceContext.dominant_service,\n  agentConfig.service_code,\n  \"organic_whatsapp\"\n);\n\nlet caseOriginType = pickFirst(\n  outCase.case_origin_type,\n  orchCase.case_origin_type,\n  serviceContext.case_origin_type,\n  agentConfig.case_origin_type,\n  \"organic_whatsapp\"\n);\n\nlet caseType = pickFirst(\n  outCase.case_type,\n  orchCase.case_type,\n  serviceContext.case_type,\n  classification.intent,\n  agentConfig.case_type,\n  \"consulta_general\"\n);\n\nlet priority = pickFirst(\n  outCase.priority,\n  orchCase.priority,\n  agentConfig.priority,\n  \"normal\"\n).toLowerCase();\n\nlet messageText = clean(outMessage.text || data.response_text || \"\");\n\nconst textForPostventa = [\n  serviceCode,\n  caseType,\n  caseOriginType,\n  serviceContext.dominant_service,\n  originalMessageText\n].join(\" \").toLowerCase();\n\n// Normalización postventa\nif (\n  agentName === \"AI_AGENT_Postventa\" ||\n  hasAny(textForPostventa, postventaArmadoTerms) ||\n  hasAny(textForPostventa, postventaMantencionTerms)\n) {\n  if (hasAny(textForPostventa, postventaArmadoTerms)) {\n    serviceCode = \"postventa_armado\";\n    caseOriginType = \"postventa_armado\";\n    caseType = \"coordinacion_armado\";\n  } else if (hasAny(textForPostventa, postventaMantencionTerms)) {\n    serviceCode = \"postventa_mantencion\";\n    caseOriginType = \"postventa_mantencion\";\n    caseType = \"coordinacion_mantencion\";\n  } else {\n    serviceCode = \"postventa_general\";\n    caseOriginType = \"postventa_general\";\n    caseType = \"postventa_general\";\n  }\n\n  department = \"Postventa\";\n}\n\n// Riesgo SAC transversal\nif (hasAny(combinedText, complaintTerms)) {\n  department = \"SAC\";\n  serviceCode = combinedText.includes(\"garant\") ? \"garantia\" : \"reclamo\";\n  caseOriginType = serviceCode;\n  caseType = serviceCode;\n  priority = \"high\";\n  riskLevel = \"high\";\n  actionType = \"handoff_to_human\";\n}\n\n// Regla productiva: armado/mantención no auto-responde\nif ([\"postventa_armado\", \"postventa_mantencion\"].includes(serviceCode)) {\n  department = \"Postventa\";\n  priority = priority === \"high\" ? \"high\" : \"normal\";\n  riskLevel = riskLevel === \"high\" ? \"high\" : \"medium\";\n  actionType = \"handoff_to_human\";\n  messageText = \"\";\n}\n\n// Knowledge sin fuente verificada: tool_request\nconst hasKnowledgeSource =\n  (Array.isArray(normalizedInput.knowledge_sources) \u0026\u0026 normalizedInput.knowledge_sources.length \u003e 0) ||\n  (Array.isArray(normalizedInput.sources) \u0026\u0026 normalizedInput.sources.length \u003e 0) ||\n  (Array.isArray(normalizedInput.business_context?.knowledge_sources) \u0026\u0026 normalizedInput.business_context.knowledge_sources.length \u003e 0) ||\n  clean(normalizedInput.verified_source).length \u003e 0;\n\nif (agentName === \"AI_AGENT_Knowledge\" \u0026\u0026 !hasKnowledgeSource) {\n  department = \"Knowledge\";\n  serviceCode = \"knowledge\";\n  caseOriginType = \"knowledge\";\n  caseType = \"knowledge_request\";\n  riskLevel = \"medium\";\n  actionType = \"tool_request\";\n}\n\n// Baja confianza bloquea autonomía\nif (confidence \u003c 0.75 \u0026\u0026 actionType === \"reply\") {\n  actionType = \"handoff_to_human\";\n  riskLevel = riskLevel === \"low\" ? \"medium\" : riskLevel;\n}\n\n// Tool requerida\nconst toolRequired = bool(outTool.required, false) || actionType === \"tool_request\";\nlet toolName = outTool.tool_name ?? null;\n\nif (toolRequired) {\n  actionType = \"tool_request\";\n\n  if (!toolName \u0026\u0026 agentName === \"AI_AGENT_Knowledge\") {\n    toolName = \"knowledge_base\";\n  }\n\n  if (!toolName) {\n    toolName = \"quote_tool\";\n  }\n}\n\n// Reply sin texto no puede pasar\nif (actionType === \"reply\" \u0026\u0026 !messageText) {\n  actionType = \"handoff_to_human\";\n  riskLevel = riskLevel === \"low\" ? \"medium\" : riskLevel;\n}\n\nlet requiresHuman =\n  actionType === \"handoff_to_human\" ||\n  riskLevel === \"high\";\n\nif (requiresHuman) {\n  actionType = \"handoff_to_human\";\n}\n\nconst allowedToAutoReply =\n  actionType === \"reply\" \u0026\u0026\n  !requiresHuman \u0026\u0026\n  riskLevel === \"low\" \u0026\u0026\n  confidence \u003e= 0.75 \u0026\u0026\n  !!messageText;\n\nlet status = \"open\";\nif (requiresHuman) status = \"human_required\";\nif (actionType === \"tool_request\") status = \"pending_tool\";\nif (actionType === \"close_case\") status = \"closed\";\nif (actionType === \"no_action\") status = pickFirst(outCase.status, caseContext.status, \"open\");\n\nconst targetWorkflow =\n  actionType === \"reply\"\n    ? \"OPS_Response_Executor\"\n    : actionType === \"handoff_to_human\"\n      ? \"OPS_Handoff_Manager\"\n      : actionType === \"tool_request\"\n        ? \"OPS_Tool_Dispatcher\"\n        : actionType === \"close_case\"\n          ? \"OPS_Case_Closer\"\n          : \"NOOP\";\n\nconst handoffDepartment =\n  actionType === \"handoff_to_human\"\n    ? department\n    : null;\n\nconst blocked =\n  !allowedToAutoReply \u0026\u0026\n  actionType !== \"no_action\";\n\nconst blockedReason = blocked\n  ? pickFirst(\n      outSafety.blocked_reason,\n      data._parse_error ? \"invalid_json\" : \"\",\n      riskLevel === \"high\" ? \"high_risk\" : \"\",\n      actionType === \"tool_request\" ? \"tool_required\" : \"\",\n      actionType === \"handoff_to_human\" ? \"requires_human\" : \"\",\n      actionType === \"close_case\" ? \"case_close\" : \"\",\n      \"auto_reply_not_allowed\"\n    )\n  : null;\n\nconst sourceTable = pickFirst(\n  outCase.source_table,\n  orchCase.source_table,\n  serviceContext.source_table\n) || null;\n\nconst sourceId = pickFirstNumber(\n  outCase.source_id,\n  orchCase.source_id,\n  serviceContext.source_id\n);\n\nconst idOrder = pickFirstNumber(\n  outCase.id_order,\n  orchCase.id_order,\n  serviceContext.id_order,\n  serviceContext.assembly_context?.[0]?.id_order,\n  serviceContext.maintenance_context?.[0]?.id_order,\n  customerContext.id_order,\n  customerContext.last_order_id\n);\n\nconst idCustomer = pickFirstNumber(\n  outCase.id_customer,\n  orchCase.id_customer,\n  serviceContext.id_customer,\n  serviceContext.assembly_context?.[0]?.id_customer,\n  serviceContext.maintenance_context?.[0]?.id_customer,\n  customerContext.id_customer,\n  customerContext.customer_id\n);\n\nconst invoiceNumber = pickFirstNumber(\n  outCase.invoice_number,\n  orchCase.invoice_number,\n  serviceContext.invoice_number,\n  serviceContext.assembly_context?.[0]?.invoice_number,\n  serviceContext.maintenance_context?.[0]?.invoice_number,\n  customerContext.invoice_number\n);\n\nconst canonical = {\n  agent: {\n    name: agentName,\n    version\n  },\n\n  decision: {\n    action_type: actionType,\n    requires_human: requiresHuman,\n    confidence,\n    risk_level: riskLevel,\n    allowed_to_auto_reply: allowedToAutoReply\n  },\n\n  message: {\n    channel: \"whatsapp\",\n    text: allowedToAutoReply ? messageText : \"\",\n    template_required: bool(outMessage.template_required, false)\n  },\n\n  case_update: {\n    case_action: actionType === \"close_case\" ? \"close\" : \"open_or_continue\",\n    department,\n    service_code: serviceCode,\n    case_origin_type: caseOriginType,\n    case_type: caseType,\n    priority,\n    status,\n    source_table: sourceTable,\n    source_id: sourceId,\n    id_order: idOrder,\n    id_customer: idCustomer,\n    invoice_number: invoiceNumber\n  },\n\n  tool_request: {\n    required: actionType === \"tool_request\",\n    tool_name: actionType === \"tool_request\" ? toolName : null,\n    input: actionType === \"tool_request\" ? asObject(outTool.input) : {}\n  },\n\n  next_steps: {\n    target_workflow: targetWorkflow,\n    schedule_followup: bool(outNext.schedule_followup, false),\n    handoff_department: handoffDepartment\n  },\n\n  safety: {\n    blocked,\n    blocked_reason: blockedReason,\n    allowed_to_auto_reply: allowedToAutoReply,\n    suppress_mail: actionType === \"handoff_to_human\" ? false : true,\n    suppress_handoff: actionType === \"handoff_to_human\" ? false : true\n  },\n\n  _validation_error: false,\n  _validated_at: new Date().toISOString(),\n  normalized_input: normalizedInput,\n\n  raw_model_output: {\n    ...data,\n    normalized_input: undefined,\n    agent_config: undefined\n  }\n};\n\nif (data._parse_error) {\n  canonical._parse_error = true;\n  canonical._parse_error_message = data._parse_error_message || \"invalid_json\";\n}\n\nreturn [{ json: canonical }];"
+                                                           },
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             1024,
+                                                             0
+                                                         ],
+                                            "id":  "ff004a83-2b5f-4503-af1b-4610a8744c2b",
+                                            "name":  "Code - Validate Output"
+                                        },
+                                        {
+                                            "parameters":  {
+                                                               "jsCode":  "const AGENT_NAME = \"AI_AGENT_Postventa\";\n\nconst input = $json || {};\n\nconst cfg = {\n  version: \"0.3.0\",\n  department: \"Postventa\",\n  service_code: \"postventa_general\",\n  case_origin_type: \"postventa_general\",\n  case_type: \"postventa_general\",\n  priority: \"normal\",\n  default_status: \"human_required\",\n  default_action: \"handoff_to_human\",\n  default_target_workflow: \"OPS_Handoff_Manager\",\n  default_handoff_department: \"Postventa\",\n  role_prompt: `\nEres AI_AGENT_Postventa de PesasChile.\n\nNo saludes si ya existe conversación previa, si el cliente acaba de responder un botón/template, o si el mensaje actual no es un saludo puro.\nNo uses frases como “bienvenido”, “bienvenido de nuevo”, “hola de nuevo” ni “veo que tienes...” salvo que el cliente pregunte explícitamente por ese tema.\nResponde como continuidad natural de WhatsApp.\n\nTu función es preparar la gestión de solicitudes relacionadas con:\n- armado\n- instalación\n- mantención\n- seguimiento post compra\n- coordinación inicial de servicio\n\nNo puedes:\n- prometer fecha de visita\n- prometer costo final\n- confirmar agenda\n- asignar técnico\n- cerrar reclamos\n- resolver garantías complejas\n- inventar información operacional\n- responder automáticamente si se requiere coordinación humana\n\nReglas:\n1. Armado y mantención en productivo deben derivarse a humano.\n2. Si service_context.dominant_service = \"postventa_armado\":\n   - service_code=\"postventa_armado\"\n   - case_origin_type=\"postventa_armado\"\n   - case_type=\"coordinacion_armado\"\n   - department=\"Postventa\"\n   - action_type=\"handoff_to_human\"\n3. Si service_context.dominant_service = \"postventa_mantencion\":\n   - service_code=\"postventa_mantencion\"\n   - case_origin_type=\"postventa_mantencion\"\n   - case_type=\"coordinacion_mantencion\"\n   - department=\"Postventa\"\n   - action_type=\"handoff_to_human\"\n4. Si el cliente reclama daño, garantía, devolución o mala experiencia:\n   - department=\"SAC\"\n   - service_code=\"reclamo\" o \"garantia\"\n   - priority=\"high\"\n   - risk_level=\"high\"\n5. Mensajes ambiguos como \"sí\", \"me interesa\", \"ok\", \"dale\", \"cuánto sale\", \"quiero\", \"perfecto\" deben interpretarse usando service_context.\n`\n};\n\nconst contract = {\n  agent: {\n    name: AGENT_NAME,\n    version: cfg.version\n  },\n  decision: {\n    action_type: cfg.default_action,\n    requires_human: true,\n    confidence: 0.9,\n    risk_level: \"medium\",\n    allowed_to_auto_reply: false\n  },\n  message: {\n    channel: \"whatsapp\",\n    text: \"\",\n    template_required: false\n  },\n  case_update: {\n    case_action: \"open_or_continue\",\n    department: cfg.department,\n    service_code: cfg.service_code,\n    case_origin_type: cfg.case_origin_type,\n    case_type: cfg.case_type,\n    priority: cfg.priority,\n    status: cfg.default_status,\n    source_table: null,\n    source_id: null,\n    id_order: null,\n    id_customer: null,\n    invoice_number: null\n  },\n  tool_request: {\n    required: false,\n    tool_name: null,\n    input: {}\n  },\n  next_steps: {\n    target_workflow: cfg.default_target_workflow,\n    schedule_followup: false,\n    handoff_department: cfg.default_handoff_department\n  },\n  safety: {\n    blocked: true,\n    blocked_reason: \"postventa_requires_human_coordination\",\n    allowed_to_auto_reply: false,\n    suppress_mail: false,\n    suppress_handoff: false\n  }\n};\n\nconst systemPrompt = `\n${cfg.role_prompt}\n\nContrato obligatorio de salida:\n${JSON.stringify(contract, null, 2)}\n\nReglas estructurales obligatorias:\n1. Devuelve exclusivamente JSON válido. Sin markdown. Sin texto fuera del JSON.\n2. El JSON raíz debe tener exactamente estas claves principales:\n   agent, decision, message, case_update, tool_request, next_steps, safety.\n3. No agregues events, final_action, route_to, target_workflow en raíz, raw_input ni raw_model_output.\n4. decision.action_type permitido:\n   - reply\n   - handoff_to_human\n   - tool_request\n   - no_action\n   - close_case\n5. case_update.case_action permitido:\n   - open_or_continue\n   - close\n6. Si decision.requires_human=true:\n   - decision.allowed_to_auto_reply=false\n   - safety.allowed_to_auto_reply=false\n   - next_steps.target_workflow=\"OPS_Handoff_Manager\"\n   - next_steps.handoff_department debe tener el departamento receptor\n   - safety.suppress_mail=false\n   - safety.suppress_handoff=false\n7. Si decision.action_type=\"reply\":\n   - message.text no puede estar vacío\n   - next_steps.target_workflow=\"OPS_Response_Executor\"\n   - safety.suppress_mail=true\n   - safety.suppress_handoff=true\n8. Si tool_request.required=true:\n   - decision.action_type=\"tool_request\"\n   - decision.allowed_to_auto_reply=false\n   - safety.allowed_to_auto_reply=false\n9. Si risk_level=\"high\":\n   - requires_human=true\n   - allowed_to_auto_reply=false\n10. No inventes información no presente en el contexto.\n`;\n\nconst userPrompt = `\nContexto normalizado:\n${JSON.stringify(input, null, 2)}\n`;\n\nreturn [{\n  json: {\n    deepseek_payload: {\n      model: \"deepseek-chat\",\n      messages: [\n        { role: \"system\", content: systemPrompt },\n        { role: \"user\", content: userPrompt }\n      ],\n      temperature: 0,\n      max_tokens: 1200,\n      response_format: { type: \"json_object\" }\n    },\n    normalized_input: input,\n    agent_config: cfg\n  }\n}];"
+                                                           },
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             416,
+                                                             0
+                                                         ],
+                                            "id":  "81aae9eb-c0de-4f2b-9e9e-58d3309fe300",
+                                            "name":  "Code - Build DeepSeek Payload"
+                                        },
+                                        {
+                                            "parameters":  {
+                                                               "jsCode":  "const output = $json || {};\n\nlet normalizedInput = {};\ntry {\n  normalizedInput =\n    output.normalized_input ||\n    $(\"Code - Validate Output\").item.json.normalized_input ||\n    $(\"Code - Normalize Input\").item.json ||\n    {};\n} catch (e) {\n  normalizedInput = output.normalized_input || {};\n}\n\nfunction sqlString(value) {\n  if (value === null || value === undefined) return \"NULL\";\n  return `\u0027${String(value).replace(/\\\\/g, \"\\\\\\\\\").replace(/\u0027/g, \"\u0027\u0027\")}\u0027`;\n}\n\nfunction sqlNumber(value) {\n  const n = Number(value);\n  if (!Number.isFinite(n)) return \"NULL\";\n  return String(n);\n}\n\nfunction sqlBool(value) {\n  return value ? \"1\" : \"0\";\n}\n\nconst agent = output.agent || {};\nconst decision = output.decision || {};\nconst caseUpdate = output.case_update || {};\nconst customerContext = normalizedInput.customer_context || {};\nconst caseContext = normalizedInput.case_context || {};\nconst inputEvent = normalizedInput.input_event || {};\nconst serviceContext = normalizedInput.service_context || {};\nconst safety = output.safety || {};\n\nconst row = {\n  agent_name: agent.name || \"UNKNOWN_AGENT\",\n  agent_version: agent.version || \"0.3.0\",\n\n  customer_id:\n    caseUpdate.id_customer ??\n    serviceContext.id_customer ??\n    customerContext.id_customer ??\n    customerContext.customer_id ??\n    null,\n\n  case_id:\n    caseContext.case_id ??\n    caseContext.id ??\n    null,\n\n  conversation_message_id:\n    inputEvent.conversation_message_id ??\n    null,\n\n  source_table:\n    caseUpdate.source_table ||\n    serviceContext.source_table ||\n    \"whatsapp_agent\",\n\n  source_id:\n    caseUpdate.source_id ||\n    serviceContext.source_id ||\n    inputEvent.provider_message_id ||\n    inputEvent.wa_id ||\n    null,\n\n  model_provider: \"deepseek\",\n  model_name: \"deepseek-chat\",\n\n  intent:\n    caseUpdate.case_type ||\n    normalizedInput.orchestrator_decision?.classification?.intent ||\n    normalizedInput.classification?.intent ||\n    null,\n\n  confidence: decision.confidence ?? 0,\n  risk_level: decision.risk_level || \"medium\",\n  requires_human: decision.requires_human ? 1 : 0,\n  target_agent: agent.name || null,\n\n  input_json: JSON.stringify(normalizedInput),\n\n  output_json: JSON.stringify({\n    agent: output.agent,\n    decision: output.decision,\n    message: output.message,\n    case_update: output.case_update,\n    tool_request: output.tool_request,\n    next_steps: output.next_steps,\n    safety: output.safety\n  }),\n\n  status: output._validation_error ? \"validation_error\" : \"success\",\n  error: output._validation_error ? (safety.blocked_reason || \"validation_error\") : null\n};\n\nconst query = `\nINSERT INTO n8n_agent_runs (\n  agent_name,\n  agent_version,\n  customer_id,\n  case_id,\n  conversation_message_id,\n  source_table,\n  source_id,\n  model_provider,\n  model_name,\n  intent,\n  confidence,\n  risk_level,\n  requires_human,\n  target_agent,\n  input_json,\n  output_json,\n  status,\n  error,\n  created_at\n)\nVALUES (\n  ${sqlString(row.agent_name)},\n  ${sqlString(row.agent_version)},\n  ${sqlNumber(row.customer_id)},\n  ${sqlNumber(row.case_id)},\n  ${sqlNumber(row.conversation_message_id)},\n  ${sqlString(row.source_table)},\n  ${sqlString(row.source_id)},\n  ${sqlString(row.model_provider)},\n  ${sqlString(row.model_name)},\n  ${sqlString(row.intent)},\n  ${sqlNumber(row.confidence)},\n  ${sqlString(row.risk_level)},\n  ${sqlBool(row.requires_human)},\n  ${sqlString(row.target_agent)},\n  ${sqlString(row.input_json)},\n  ${sqlString(row.output_json)},\n  ${sqlString(row.status)},\n  ${sqlString(row.error)},\n  CONVERT_TZ(UTC_TIMESTAMP(), \u0027+00:00\u0027, \u0027-04:00\u0027)\n);\n`;\n\nreturn [{\n  json: {\n    ...output,\n    normalized_input: normalizedInput,\n    agent_run_insert_query: query\n  }\n}];"
+                                                           },
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             1216,
+                                                             0
+                                                         ],
+                                            "id":  "055141ec-9792-4d92-b53f-8a5c01a599a1",
+                                            "name":  "Code - Prepare n8n_agent_runs Insert"
+                                        },
+                                        {
+                                            "parameters":  {
+                                                               "jsCode":  "let raw =\n  $json.choices?.[0]?.message?.content ||\n  $json.text ||\n  $json.output ||\n  $json.response ||\n  \"\";\n\nlet buildPayload = {};\ntry {\n  buildPayload = $(\"Code - Build DeepSeek Payload\").item.json || {};\n} catch (e) {\n  buildPayload = {};\n}\n\nconst normalizedInput = buildPayload.normalized_input || {};\nconst agentConfig = buildPayload.agent_config || {};\nconst agentName =\n  buildPayload.deepseek_payload?.messages?.[0]?.content?.match(/Eres (AI_AGENT_[A-Za-z]+)/)?.[1] ||\n  agentConfig.agent_name ||\n  \"UNKNOWN_AGENT\";\n\nif (typeof raw !== \"string\") {\n  raw = JSON.stringify(raw);\n}\n\nraw = raw\n  .trim()\n  .replace(/^```json\\s*/i, \"\")\n  .replace(/^```\\s*/i, \"\")\n  .replace(/```$/i, \"\")\n  .trim();\n\nlet parsed;\n\ntry {\n  parsed = JSON.parse(raw);\n} catch (error) {\n  parsed = {\n    _parse_error: true,\n    _parse_error_message: error.message,\n    _raw_model_output: raw,\n\n    agent: {\n      name: agentName,\n      version: agentConfig.version || \"0.3.0\"\n    },\n\n    decision: {\n      action_type: \"handoff_to_human\",\n      requires_human: true,\n      confidence: 0,\n      risk_level: \"medium\",\n      allowed_to_auto_reply: false\n    },\n\n    message: {\n      channel: \"whatsapp\",\n      text: \"\",\n      template_required: false\n    },\n\n    case_update: {\n      case_action: \"open_or_continue\",\n      department: \"SAC\",\n      service_code: \"unknown\",\n      case_origin_type: \"organic_whatsapp\",\n      case_type: \"consulta_general\",\n      priority: \"normal\",\n      status: \"human_required\",\n      source_table: null,\n      source_id: null,\n      id_order: null,\n      id_customer: null,\n      invoice_number: null\n    },\n\n    tool_request: {\n      required: false,\n      tool_name: null,\n      input: {}\n    },\n\n    next_steps: {\n      target_workflow: \"OPS_Handoff_Manager\",\n      schedule_followup: false,\n      handoff_department: \"SAC\"\n    },\n\n    safety: {\n      blocked: true,\n      blocked_reason: \"invalid_json\",\n      allowed_to_auto_reply: false,\n      suppress_mail: false,\n      suppress_handoff: false\n    }\n  };\n}\n\nreturn [{\n  json: {\n    ...parsed,\n    normalized_input: normalizedInput,\n    agent_config: agentConfig,\n    deepseek_payload_meta: {\n      model: buildPayload.deepseek_payload?.model || \"deepseek-chat\"\n    }\n  }\n}];"
+                                                           },
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             832,
+                                                             0
+                                                         ],
+                                            "id":  "b9cffdfb-bda2-4728-8b23-3a75cbb8befc",
+                                            "name":  "Code - Parse DeepSeek JSON"
+                                        },
+                                        {
+                                            "parameters":  {
+                                                               "operation":  "executeQuery",
+                                                               "query":  "{{ $json.agent_run_insert_query }}",
+                                                               "options":  {
+
+                                                                           }
+                                                           },
+                                            "type":  "n8n-nodes-base.mySql",
+                                            "typeVersion":  2.5,
+                                            "position":  [
+                                                             1424,
+                                                             0
+                                                         ],
+                                            "id":  "7f0fca26-2b0b-449c-8523-8964cd365817",
+                                            "name":  "Execute a SQL query",
+                                            "credentials":  {
+                                                                "mySql":  {
+                                                                              "id":  "ZNcs8i15Wb7OEvNy",
+                                                                              "name":  "PC boss MM"
+                                                                          }
+                                                            }
+                                        },
+                                        {
+                                            "parameters":  {
+                                                               "content":  "## AI Agent Postventa\n",
+                                                               "height":  464,
+                                                               "width":  1968,
+                                                               "color":  4
+                                                           },
+                                            "type":  "n8n-nodes-base.stickyNote",
+                                            "typeVersion":  1,
+                                            "position":  [
+                                                             -128,
+                                                             -160
+                                                         ],
+                                            "id":  "c28952d4-da32-47c4-a043-0144c5e1474a",
+                                            "name":  "Sticky Note"
+                                        },
+                                        {
+                                            "parameters":  {
+                                                               "jsCode":  "let result = {};\n\ntry {\n  result = $(\"Code - Prepare n8n_agent_runs Insert\").item.json || {};\n} catch (e) {\n  result = $json || {};\n}\n\nfunction asObject(value) {\n  return value \u0026\u0026 typeof value === \"object\" \u0026\u0026 !Array.isArray(value) ? value : {};\n}\n\nfunction clean(value) {\n  if (value === null || value === undefined) return \"\";\n  return String(value).trim();\n}\n\nfunction pickFirst(...values) {\n  for (const value of values) {\n    const v = clean(value);\n    if (v) return v;\n  }\n  return \"\";\n}\n\nconst normalizedInput = asObject(\n  result.normalized_input ||\n  result.raw_model_output?.normalized_input ||\n  result.raw_input ||\n  {}\n);\n\nconst inputEvent = asObject(normalizedInput.input_event);\nconst customerContext = asObject(normalizedInput.customer_context);\nconst caseContext = asObject(normalizedInput.case_context);\nconst serviceContext = asObject(normalizedInput.service_context);\nconst businessContext = asObject(normalizedInput.business_context);\nconst conversationContext = asObject(normalizedInput.conversation_context);\nconst resolverMeta = asObject(normalizedInput.resolver_meta);\n\nconst finalOutput = {\n  agent: result.agent || {\n    name: \"UNKNOWN_AGENT\",\n    version: \"0.4.0\"\n  },\n\n  decision: result.decision || {\n    action_type: \"handoff_to_human\",\n    requires_human: true,\n    confidence: 0,\n    risk_level: \"medium\",\n    allowed_to_auto_reply: false\n  },\n\n  message: result.message || {\n    channel: \"whatsapp\",\n    text: \"\",\n    template_required: false\n  },\n\n  case_update: result.case_update || {\n    case_action: \"open_or_continue\",\n    department: \"SAC\",\n    service_code: \"unknown\",\n    case_origin_type: \"organic_whatsapp\",\n    case_type: \"consulta_general\",\n    priority: \"normal\",\n    status: \"human_required\",\n    source_table: null,\n    source_id: null,\n    id_order: null,\n    id_customer: null,\n    invoice_number: null\n  },\n\n  tool_request: result.tool_request || {\n    required: false,\n    tool_name: null,\n    input: {}\n  },\n\n  next_steps: result.next_steps || {\n    target_workflow: \"OPS_Handoff_Manager\",\n    schedule_followup: false,\n    handoff_department: \"SAC\"\n  },\n\n  safety: result.safety || {\n    blocked: true,\n    blocked_reason: \"missing_final_result\",\n    allowed_to_auto_reply: false,\n    suppress_mail: false,\n    suppress_handoff: false\n  },\n\n  /*\n    Contexto operativo obligatorio para Router/Switch/Executor.\n    Esto NO es contenido del modelo; es metadata de transporte.\n    Sin esto, OPS_Response_Executor no puede enviar WhatsApp.\n  */\n  input_event: {\n    ...inputEvent,\n\n    wa_id: pickFirst(\n      inputEvent.wa_id,\n      inputEvent.phone_normalized,\n      customerContext.phone,\n      customerContext.phone_normalized,\n      caseContext.wa_id\n    ),\n\n    phone_normalized: pickFirst(\n      inputEvent.phone_normalized,\n      inputEvent.wa_id,\n      customerContext.phone_normalized,\n      customerContext.phone,\n      caseContext.wa_id\n    ),\n\n    phone_number_id: pickFirst(\n      inputEvent.phone_number_id,\n      caseContext.phone_number_id,\n      serviceContext.phone_number_id,\n      businessContext.phone_number_id\n    ) || null,\n\n    contact_name: pickFirst(\n      inputEvent.contact_name,\n      customerContext.full_name,\n      customerContext.name,\n      caseContext.contact_name\n    ),\n\n    provider_message_id: pickFirst(\n      inputEvent.provider_message_id,\n      inputEvent.message_id,\n      inputEvent.id\n    ),\n\n    context_message_id: pickFirst(\n      inputEvent.context_message_id\n    ),\n\n    message_type: pickFirst(\n      inputEvent.message_type,\n      \"text\"\n    ),\n\n    message_text: pickFirst(\n      inputEvent.message_text,\n      inputEvent.text\n    ),\n\n    received_at: pickFirst(\n      inputEvent.received_at\n    ),\n\n    timestamp: pickFirst(\n      inputEvent.timestamp\n    ),\n\n    conversation_message_id:\n      inputEvent.conversation_message_id ??\n      null\n  },\n\n  customer_context: customerContext,\n  case_context: caseContext,\n  service_context: serviceContext,\n  business_context: businessContext,\n  conversation_context: conversationContext,\n  resolver_meta: resolverMeta\n};\n\nreturn [{ json: finalOutput }];"
+                                                           },
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             1632,
+                                                             0
+                                                         ],
+                                            "id":  "ce9cdb8f-d34e-495a-af0a-edde4217331d",
+                                            "name":  "Code - Return Agent Result"
+                                        }
+                                    ],
+                          "connections":  {
+                                              "When Executed by Another Workflow":  {
+                                                                                        "main":  [
+                                                                                                     [
+                                                                                                         {
+                                                                                                             "node":  "Code - Normalize Input",
+                                                                                                             "type":  "main",
+                                                                                                             "index":  0
+                                                                                                         }
+                                                                                                     ]
+                                                                                                 ]
+                                                                                    },
+                                              "Code - Normalize Input":  {
+                                                                             "main":  [
+                                                                                          [
+                                                                                              {
+                                                                                                  "node":  "Code - Build DeepSeek Payload",
+                                                                                                  "type":  "main",
+                                                                                                  "index":  0
+                                                                                              }
+                                                                                          ]
+                                                                                      ]
+                                                                         },
+                                              "HTTP Request":  {
+                                                                   "main":  [
+                                                                                [
+                                                                                    {
+                                                                                        "node":  "Code - Parse DeepSeek JSON",
+                                                                                        "type":  "main",
+                                                                                        "index":  0
+                                                                                    }
+                                                                                ]
+                                                                            ]
+                                                               },
+                                              "Code - Build DeepSeek Payload":  {
+                                                                                    "main":  [
+                                                                                                 [
+                                                                                                     {
+                                                                                                         "node":  "HTTP Request",
+                                                                                                         "type":  "main",
+                                                                                                         "index":  0
+                                                                                                     }
+                                                                                                 ]
+                                                                                             ]
+                                                                                },
+                                              "Code - Validate Output":  {
+                                                                             "main":  [
+                                                                                          [
+                                                                                              {
+                                                                                                  "node":  "Code - Prepare n8n_agent_runs Insert",
+                                                                                                  "type":  "main",
+                                                                                                  "index":  0
+                                                                                              }
+                                                                                          ]
+                                                                                      ]
+                                                                         },
+                                              "Code - Parse DeepSeek JSON":  {
+                                                                                 "main":  [
+                                                                                              [
+                                                                                                  {
+                                                                                                      "node":  "Code - Validate Output",
+                                                                                                      "type":  "main",
+                                                                                                      "index":  0
+                                                                                                  }
+                                                                                              ]
+                                                                                          ]
+                                                                             },
+                                              "Code - Prepare n8n_agent_runs Insert":  {
+                                                                                           "main":  [
+                                                                                                        [
+                                                                                                            {
+                                                                                                                "node":  "Execute a SQL query",
+                                                                                                                "type":  "main",
+                                                                                                                "index":  0
+                                                                                                            }
+                                                                                                        ]
+                                                                                                    ]
+                                                                                       },
+                                              "Execute a SQL query":  {
+                                                                          "main":  [
+                                                                                       [
+                                                                                           {
+                                                                                               "node":  "Code - Return Agent Result",
+                                                                                               "type":  "main",
+                                                                                               "index":  0
+                                                                                           }
+                                                                                       ]
+                                                                                   ]
+                                                                      }
+                                          },
+                          "authors":  "Felipe Porte",
+                          "name":  "Version 8b672c01",
+                          "description":  "",
+                          "autosaved":  true,
+                          "workflowPublishHistory":  [
+                                                         {
+                                                             "createdAt":  "2026-06-11T22:48:06.717Z",
+                                                             "id":  1091,
+                                                             "workflowId":  "LzIMwJOonu1MUxqP",
+                                                             "versionId":  "8b672c01-44e9-4e72-9d0c-41b7e7720822",
+                                                             "event":  "activated",
+                                                             "userId":  "bb5d7320-6094-433c-928d-2778b1101d2c"
+                                                         }
+                                                     ]
+                      }
+}
