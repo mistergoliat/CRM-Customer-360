@@ -1,0 +1,82 @@
+# MVP Roadmap
+
+Este roadmap reemplaza la narrativa handoff-first por una secuencia centrada en Customer, governance y AI SDR.
+
+## Secuencia estrategica
+
+1. Cerrar infraestructura critica.
+2. Formalizar el producto agentic y la gobernanza.
+3. Construir el AI SDR MVP.
+4. Elevar Customer 360 minimo.
+5. Activar Operator Copilot.
+6. Extender a AI Marketing.
+7. Preparar Voice/Call Tool.
+
+## Roadmap
+
+| Milestone | Objetivo | Resultado esperado |
+|---|---|---|
+| `P1I-010 Controlled End-to-End Manual Backend Send Test` | Cerrar el ciclo tecnico manual de envio backend sin automatizarlo por defecto. | Queda validado el pipeline minimo de infraestructura y rollback. |
+| `P1J-000 Agentic CRM Product Blueprint` | Congelar la vision de producto, limites y alcance. | Todo el equipo habla el mismo idioma: AI SDR + Agentic CRM + Customer 360. |
+| `P1J-001 Customer Identity / Customer Master minimo` | Definir identidad operativa, email primary cuando exista y map de aliases. | Existe Customer resoluble sin inventar master definitivo. |
+| `P1J-002 Customer Opportunity / Intent model` | Separar intent, opportunity, follow-up y case. | El sistema deja de pensar solo en casos. |
+| `P1J-003 Universal Agent Decision Contract` | Unificar la salida estructurada de todos los agentes. | Toda decision trae contexto, razon, riesgo, action mode y trace. |
+| `P1J-004 Agent Capability Matrix` | Definir que puede hacer cada agente. | Hay fronteras claras entre sales, quote, follow-up, postventa, SAC y copilot. |
+| `P1J-005 Action Governance Engine` | Definir approval, blocked, draft, internal task y send now low risk. | Las acciones sensibles quedan gobernadas y auditables. |
+| `P1J-006 Approval Queue desde HUB` | Crear la capa operativa para aprobar acciones sensibles. | Los humanos aprueban desde HUB, no desde workflows dispersos. |
+| `P1K AI SDR MVP` | Activar el primer recorrido comercial real del producto. | WhatsApp + email operan inbound y outbound con approvals donde toca. |
+| `P1L Customer 360 minimo` | Consolidar timeline, identity map, opportunities y approved actions. | Customer se vuelve el centro operativo estable. |
+| `P1M Operator Copilot` | Dar visibilidad de decisiones, logs, costos, tools y errores. | El humano puede supervisar y probar cambios controlados. |
+| `P2 AI Marketing` | Permitir investigacion y propuestas de campañas con approval. | El sistema propone campañas sin enviarlas automaticamente. |
+| `P3 Voice/Call Tool` | Introducir llamadas como tool modular futura. | Llamadas quedan aisladas por riesgo y gobernanza. |
+
+## Que cambia respecto del enfoque anterior
+
+- `P1J` ya no es handoff-first.
+- Handoff pasa a ser una accion gobernada dentro del modelo agentic.
+- La prioridad posterior a `P1I` es Product + Governance foundation.
+- `Customer` reemplaza a `case` como centro del modelo.
+- `Work Queue` queda como vista operativa, no como verdad del sistema.
+
+## Exit criteria por bloque
+
+### P1J
+
+- identity map estable,
+- decision contract unificado,
+- capability matrix publicada,
+- governance de acciones definida,
+- approval queue especificada.
+
+### P1K
+
+- AI SDR puede procesar inbound y outbound,
+- puede calificar y proponer,
+- puede crear drafts y tareas internas,
+- puede pedir aprobacion para acciones sensibles.
+
+### P1L
+
+- timeline unificada,
+- opportunity graph util,
+- approved actions visibles,
+- customer state navegable.
+
+### P1M
+
+- operadores ven decisiones, costos, tools y errores,
+- existen pruebas controladas,
+- el copilot explica antes de actuar.
+
+### P2
+
+- investigacion y draft de campañas sin envio directo,
+- approval before send,
+- trazabilidad de campanas y propuestas.
+
+### P3
+
+- voz queda como tool separada,
+- aprobacion obligatoria para llamadas sensibles,
+- logs y outcomes obligatorios.
+
