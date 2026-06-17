@@ -1,3 +1,4 @@
+P1Ka
 # AI SDR Implementation Blueprint
 
 Este documento fija el tramo comercial del backend IA para P1K. No introduce runtime, prompts, endpoints ni writes.
@@ -266,3 +267,865 @@ processInbound
 `P1K-007F` - `Commercial Evaluation` - DONE
 
 La evaluación comercial visible queda cerrada como superficie read-only.
+=======
+# AI SDR Implementation Blueprint / Runtime Sequencing
+
+## Purpose
+
+Este documento convierte los contratos existentes del AI SDR en una secuencia de implementacion runtime segura, incremental, observable, reversible y fail-closed.
+
+No define runtime funcional todavia. Define como implementarlo sin romper la preview actual, sin ejecutar acciones solo porque un LLM las propuso y sin mover la logica core a produccion antes de tiempo.
+
+## Runtime target
+
+La arquitectura objetivo es:
+
+```mermaid
+flowchart LR
+  A[Brain API] --> B[Context Engine]
+  B --> C[Commercial Context Builder]
+  C --> D[Sales Agent Runtime]
+  D --> E[Contract Validator]
+  E --> F[Commercial Policy Layer]
+  F --> G[Follow-up Policy Engine]
+  G --> H[Action Governance]
+  H --> I[Proposed Action Store]
+  I --> J[Operator Review]
+  J --> K[Execution Engine]
+  K --> L[Tool Registry]
+  L --> M[Outbox / Tool Adapter]
+  K --> N[Audit / Observability]
+  H --> N
+  F --> N
+  D --> N
+```
+
+### Component boundaries
+
+#### Commercial Context Builder
+
+- adapta Brain Context a `SalesAgentInput`;
+- no decide;
+- no ejecuta;
+- no muta entidades;
+- no lee ni escribe la capa persistente comercial futura;
+- solo prepara contexto comercial estructurado y sanitizado.
+
+#### Sales Agent Runtime
+
+- invoca el modelo;
+- produce una respuesta estructurada;
+- no ejecuta tools;
+- no muta Lead, Opportunity, Customer, Follow-up ni audit;
+- no define permisos;
+- no decide hard blocks.
+
+#### Contract Validator
+
+- valida estructura de salida;
+- rechaza valores fuera de contrato;
+- limita tamaño de texto, arrays y metadata;
+- sanitiza metadata;
+- degrada a `failed_safe` si la respuesta no es confiable.
+
+#### Commercial Policy Layer
+
+- aplica reglas determinísticas;
+- bloquea claims sensibles sin evidencia;
+- corrige, elimina o rebaja acciones no permitidas;
+- calcula approval requirement;
+- no depende del modelo para hard blocks.
+
+#### Follow-up Policy Engine
+
+- evalua elegibilidad, supresiones, canal y urgencia;
+- produce `FollowUpDecisionResult`;
+- no envía;
+- no agenda;
+- no programa jobs reales en esta fase.
+
+#### Action Governance
+
+- decide `allowed`, `blocked` o `requiresApproval`;
+- aplica hard blocks deterministas;
+- conserva trazabilidad;
+- no confia en el modelo para autorizar acciones.
+
+#### Proposed Action Store
+
+- puede ser primero read-only o in-memory;
+- despues se convierte en read model persistente;
+- guarda propuestas, aprobaciones y estados;
+- no es el ejecutor.
+
+#### Operator Review
+
+- representa revision humana sobre propuestas y acciones;
+- puede aprobar, rechazar o solicitar cambios;
+- no ejecuta por si mismo.
+
+#### Execution Engine
+
+- recibe solo acciones autorizadas;
+- aplica idempotencia;
+- usa Tool Registry y Outbox / Tool Adapter;
+- permanece deshabilitado al inicio.
+
+#### Outbox / Tool Adapter
+
+- ejecuta solo lo autorizado;
+- traduce comandos internos a integraciones;
+- no decide si la accion debe ocurrir.
+
+#### Audit / Observability
+
+- registra run ids, estados, errores, flags y versionado;
+- no puede ser modificado por el Copilot ni por el LLM;
+- conserva la historia de decisiones y ejecuciones.
+
+## Risk levels
+
+### Nivel 0
+
+- analisis;
+- clasificacion;
+- explicacion;
+- logging.
+
+### Nivel 1
+
+- recomendaciones;
+- next best action;
+- borradores;
+- dry-run commands.
+
+### Nivel 2
+
+- tareas internas;
+- revision humana;
+- cambios reversibles.
+
+### Nivel 3
+
+- mensajes WhatsApp aprobados manualmente;
+- quote drafts aprobados;
+- follow-up programado bajo supervision.
+
+### Nivel 4
+
+- acciones de bajo riesgo automaticas bajo policy.
+
+### Nivel 5
+
+- autonomia avanzada futura.
+
+El MVP debe comenzar en niveles 0 a 2.
+
+## Implementation phases
+
+### P1K-006A - Commercial Runtime Types and Boundaries
+
+Objetivo:
+
+- fijar tipos de runtime, correlation ids y boundaries entre capas.
+
+Entrega esperada:
+
+- contratos de runtime;
+- mapeo de campos;
+- metadata y versionado;
+- limites de scope y sanitizacion.
+
+### P1K-006B - Commercial Context Builder
+
+Objetivo:
+
+- transformar Brain Context en `SalesAgentInput` de forma deterministica.
+
+Entrega esperada:
+
+- adapter estructurado;
+- sanitizacion;
+- correlation ids;
+- snapshot de flags.
+
+### P1K-006C - Sales Agent Runtime Dry-Run
+
+Objetivo:
+
+- correr el Sales Agent en paralelo sin controlar Response Policy.
+
+Entrega esperada:
+
+- run dry-run;
+- resultado estructurado;
+- logs sanitizados;
+- sin outbound ni mutacion.
+
+### P1K-006D - Sales Agent Contract Validation
+
+Objetivo:
+
+- validar que la salida del modelo cumpla el contrato.
+
+Entrega esperada:
+
+- validator;
+- limites de tamanos;
+- manejo seguro de malformed outputs;
+- fail-safe.
+
+### P1K-006E - Commercial Policy Enforcement
+
+Objetivo:
+
+- aplicar hard blocks, evidence rules y approval requirement.
+
+Entrega esperada:
+
+- policy evaluator;
+- blocked claims;
+- blocked actions;
+- audit de reglas aplicadas.
+
+### P1K-006F - Follow-up Policy Evaluator
+
+Objetivo:
+
+- producir follow-up decision en modo dry-run.
+
+Entrega esperada:
+
+- eligibility;
+- suppression;
+- next best action;
+- no scheduler.
+
+### P1K-006G - Proposed Actions and Approval Read Model
+
+Objetivo:
+
+- representar propuestas, decisiones pendientes y approvals futuras.
+
+Entrega esperada:
+
+- read model de proposed actions;
+- estados;
+- referencias de evidencia y policy.
+
+### P1K-006H - Operator Copilot Read-Only Runtime
+
+Objetivo:
+
+- exponer vista de supervision y explicacion sobre resultados ya validados.
+
+Entrega esperada:
+
+- summaries;
+- explanations;
+- review items;
+- proposed commands dry-run.
+
+### P1K-006I - HUB Review Surface
+
+Objetivo:
+
+- dar al operador una superficie para aprobar, rechazar o editar propuestas.
+
+Entrega esperada:
+
+- review queue;
+- pending approvals;
+- audit trail de decisiones humanas.
+
+### P1K-006J - Controlled Commercial Execution
+
+Objetivo:
+
+- ejecutar acciones de bajo riesgo con approval y audit.
+
+Entrega esperada:
+
+- execution gate;
+- idempotencia;
+- rollback;
+- outbox / tool adapter.
+
+### P1K-006K - Opportunity Persistence
+
+Objetivo:
+
+- persistir Opportunity antes de automatizar ejecucion multietapa.
+
+Entrega esperada:
+
+- read model durable;
+- invariantes;
+- ownership;
+- transiciones;
+- estrategia de migracion.
+
+### P1K-006L - Lead Persistence
+
+Objetivo:
+
+- persistir Lead como entidad comercial durable cuando ya exista el modelo de opportunity y approvals.
+
+Entrega esperada:
+
+- lead durable;
+- relaciones con identity auxiliar;
+- compatibilidad con customer candidate.
+
+## Recommended ordering
+
+El orden mas seguro recomendado es:
+
+1. `P1K-006A` Commercial Runtime Types and Boundaries
+2. `P1K-006B` Commercial Context Builder
+3. `P1K-006C` Sales Agent Runtime Dry-Run
+4. `P1K-006D` Sales Agent Contract Validation
+5. `P1K-006E` Commercial Policy Enforcement
+6. `P1K-006F` Follow-up Policy Evaluator
+7. `P1K-006G` Proposed Actions and Approval Read Model
+8. `P1K-006H` Operator Copilot Read-Only Runtime
+9. `P1K-006K` Opportunity Persistence
+10. `P1K-006I` HUB Review Surface
+11. `P1K-006J` Controlled Commercial Execution
+12. `P1K-006L` Lead Persistence
+
+### Why Opportunity Persistence goes before Controlled Execution
+
+- sin Opportunity persistente no existe memoria comercial durable para decisiones multietapa;
+- pero persistencia prematura tambien puede congelar un modelo incorrecto;
+- por eso, el recommended path es primero validar el flujo read-only, luego fijar proposed actions y despues persistir Opportunity antes de habilitar ejecucion controlada;
+- Lead persistence puede ir despues, porque Opportunity es el centro operativo comercial del MVP.
+
+## First vertical slice
+
+### Slice 1: inbound commercial shadow
+
+Flow:
+
+message inbound
+→ Brain Context
+→ Commercial Context Builder
+→ Sales Agent dry-run
+→ Contract Validator
+→ Commercial Policy
+→ shadow/debug response
+→ no send
+→ no mutation
+→ no follow-up execution
+
+Inputs:
+
+- `waId`
+- inbound text
+- `conversationCaseId`
+- `messageId`
+- contextual identity auxiliary data if available
+
+Outputs:
+
+- sanitized `SalesAgentResult`
+- policy assessment
+- warnings
+- optional `commercial_analysis` in debug/shadow response
+
+Feature flags:
+
+- `BRAIN_COMMERCIAL_CONTEXT_ENABLED`
+- `BRAIN_SALES_AGENT_ENABLED`
+- `BRAIN_SALES_AGENT_DRY_RUN`
+- `BRAIN_COMMERCIAL_POLICY_ENABLED`
+
+All must remain false by default.
+
+Logs:
+
+- correlation id,
+- run ids,
+- contract version,
+- policy version,
+- feature flags snapshot,
+- latency,
+- warnings,
+- errors,
+- dry-run marker.
+
+Tests:
+
+- contract tests,
+- malformed output tests,
+- prompt injection tests,
+- stale context tests,
+- identity conflict tests,
+- hard-block bypass tests,
+- timeout tests.
+
+Approval criteria:
+
+- 100% outputs validated or fail-safe;
+- 0 sent messages;
+- 0 mutations;
+- 0 hard-block bypasses;
+- full observability;
+- acceptable latency and cost;
+- human review of fixtures.
+
+## Second vertical slice
+
+### Slice 2: dry-run recommendation to follow-up
+
+Flow:
+
+Sales Agent dry-run
+→ next best action
+→ Follow-up Policy dry-run
+→ Governance
+→ proposed action visible to operator
+→ no execution
+
+Purpose:
+
+- validate that commercial recommendation and follow-up can coexist without sending anything.
+
+## Third vertical slice
+
+### Slice 3: operator review of a proposal
+
+Flow:
+
+Operator views proposal
+→ approves or rejects
+→ command is recorded as dry-run audited proposal
+→ still no send
+
+Purpose:
+
+- validate human approval flow and audit visibility before execution is enabled.
+
+## Fourth vertical slice
+
+### Slice 4: controlled internal task execution
+
+Flow:
+
+human approval
+→ execution controller
+→ internal task creation only
+→ audit
+→ no WhatsApp outbound
+
+Why internal task first:
+
+- reversible,
+- low risk,
+- does not commit customer-facing messaging,
+- proves the approval and execution path without risking outbound damage.
+
+## Shadow mode
+
+```mermaid
+sequenceDiagram
+  participant N8N as Legacy n8n flow
+  participant Brain as Brain API
+  participant CCB as Commercial Context Builder
+  participant SA as Sales Agent Runtime
+  participant VAL as Contract Validator
+  participant POL as Commercial Policy
+  participant LOG as Shadow Log
+
+  N8N->>Brain: inbound event
+  Brain->>CCB: build commercial input
+  CCB->>SA: SalesAgentInput
+  SA-->>VAL: SalesAgentResult
+  VAL-->>POL: validated result
+  POL-->>LOG: sanitized shadow record
+  N8N->>N8N: legacy path continues
+```
+
+Shadow mode rules:
+
+- legacy flow keeps working;
+- Sales Agent runs in parallel;
+- no outbound;
+- no opportunity mutation;
+- no follow-up execution;
+- no double task creation;
+- sanitized comparison only.
+
+Exit conditions:
+
+- stable contracts,
+- valid outputs,
+- no hard-block bypass,
+- acceptable latency,
+- acceptable cost,
+- no incidents,
+- human review favorable.
+
+## Approval mode
+
+```mermaid
+sequenceDiagram
+  participant OP as Operator
+  participant HUB as HUB Review Surface
+  participant GOV as Action Governance
+  participant EXE as Execution Engine
+  participant OUT as Outbox/Tool Adapter
+
+  OP->>HUB: review proposal
+  HUB->>GOV: submit approval request
+  GOV-->>HUB: allowed or requiresApproval or blocked
+  HUB->>EXE: authorized command
+  EXE->>OUT: execute low-risk action
+```
+
+Rules:
+
+- approval must be human and authorized;
+- hard blocks remain blocked;
+- a command proposal is not an execution;
+- execution only happens after governance.
+
+## Controlled execution mode
+
+```mermaid
+sequenceDiagram
+  participant GOV as Governance
+  participant EXE as Execution Engine
+  participant OUT as Outbox/Tool Adapter
+  participant AUD as Audit
+
+  GOV->>EXE: approved low-risk action
+  EXE->>OUT: idempotent execution
+  OUT-->>AUD: execution record
+  EXE-->>AUD: status update
+```
+
+Execution requirements:
+
+- idempotency,
+- audit,
+- rollback marking,
+- tool allowlist,
+- feature flag gate,
+- failure closed.
+
+## Feature flags
+
+Proposed flags:
+
+- `BRAIN_COMMERCIAL_CONTEXT_ENABLED`
+- `BRAIN_SALES_AGENT_ENABLED`
+- `BRAIN_SALES_AGENT_DRY_RUN`
+- `BRAIN_COMMERCIAL_POLICY_ENABLED`
+- `BRAIN_FOLLOWUP_POLICY_ENABLED`
+- `BRAIN_COMMERCIAL_PROPOSALS_ENABLED`
+- `BRAIN_OPERATOR_COPILOT_ENABLED`
+- `BRAIN_COMMERCIAL_APPROVALS_ENABLED`
+- `BRAIN_COMMERCIAL_EXECUTION_ENABLED`
+- `BRAIN_COMMERCIAL_WHATSAPP_SEND_ENABLED`
+- `BRAIN_OPPORTUNITY_PERSISTENCE_ENABLED`
+- `BRAIN_LEAD_PERSISTENCE_ENABLED`
+
+Default:
+
+- all false by default.
+
+Dependency notes:
+
+- Sales Agent runtime requires Commercial Context Builder and Contract Validator.
+- Commercial Policy requires validated SalesAgentResult.
+- Follow-up Policy can run dry-run without scheduler.
+- Operator Copilot requires validated outputs and sanitized context only.
+- Execution requires governance, approvals, idempotency and audit.
+- WhatsApp send must remain disabled until controlled execution is proven.
+
+## Enforcement points
+
+Mandatory enforcement points:
+
+- Sales Agent input boundary,
+- Sales Agent output boundary,
+- sensitive claims,
+- tool requests,
+- proposed actions,
+- entity proposals,
+- follow-up eligibility,
+- approvals,
+- execution,
+- audit,
+- data access,
+- PII sanitization.
+
+The LLM never decides permissions, lifts hard blocks, approves its own actions, executes tools, marks execution complete, invents evidence, modifies logs, determines definitive identity or overwrites policy.
+
+## Adapters to introduce later
+
+- `SalesAgentInputAdapter`
+- `SalesAgentOutputValidator`
+- `CommercialPolicyEvaluator`
+- `FollowUpInputAdapter`
+- `FollowUpPolicyEvaluator`
+- `GovernanceAdapter`
+- `OperatorCopilotInputAdapter`
+- `ProposedActionAdapter`
+- `CommercialExecutionAdapter`
+
+## Recommended folder structure
+
+```text
+lib/brain/commercial/
+  context/
+  sales-agent/
+  policy/
+  follow-up/
+  governance/
+  proposals/
+  copilot/
+  execution/
+  observability/
+```
+
+No file moves are required in this phase.
+
+## Observability by run
+
+Minimum fields:
+
+- `correlationId`
+- `processInboundRunId`
+- `contextResolveRunId`
+- `salesAgentRunId`
+- `followUpRunId`
+- `governanceDecisionId`
+- `proposedActionIds`
+- `approvalReference`
+- `executionReference`
+- `status`
+- `durationMs`
+- `model`
+- `tokens`
+- `estimatedCost`
+- `warnings`
+- `errors`
+- `dryRun`
+- `featureFlagsSnapshot`
+- `contractVersion`
+- `policyVersion`
+
+## Observable events
+
+- `commercial_context_built`
+- `sales_agent_started`
+- `sales_agent_completed`
+- `sales_agent_invalid_output`
+- `commercial_policy_applied`
+- `followup_evaluated`
+- `proposed_action_created`
+- `proposed_action_blocked`
+- `approval_requested`
+- `approval_recorded`
+- `command_proposed`
+- `execution_requested`
+- `execution_completed`
+- `execution_failed`
+- `rollback_triggered`
+
+## MVP metrics
+
+- `sales_agent_valid_output_rate`
+- `sales_agent_failure_rate`
+- `average_agent_latency`
+- `average_agent_cost`
+- `sensitive_claim_block_rate`
+- `proposed_action_rate`
+- `human_review_rate`
+- `approval_rate`
+- `rejection_rate`
+- `followup_eligibility_rate`
+- `commercial_no_action_rate`
+- `execution_error_rate`
+- `operator_override_rate`
+
+## Quality gates
+
+Before moving from read-only dry-run to visible proposals:
+
+- 100% of outputs are valid or fail-safe;
+- 0 sensitive claims without evidence accepted;
+- 0 unexpected mutations;
+- 0 executions;
+- logs complete;
+- latency measured;
+- cost measured;
+- curated fixture set reviewed;
+- shadow comparison acceptable.
+
+## Test strategy
+
+- contract tests,
+- deterministic policy tests,
+- fixture-based agent tests,
+- malformed output tests,
+- prompt injection tests,
+- missing evidence tests,
+- hard-block bypass tests,
+- stale context tests,
+- identity conflict tests,
+- duplicate action tests,
+- approval bypass tests,
+- dry-run invariants,
+- timeout tests,
+- provider failure tests.
+
+## Fixture categories
+
+- pregunta de producto general,
+- solicitud de precio,
+- solicitud de stock,
+- cotizacion,
+- cliente de alta intencion,
+- objecion de precio,
+- rechazo explicito,
+- solicitud humana,
+- pedido existente,
+- mensaje ambiguo,
+- identity conflict,
+- oportunidad terminal,
+- follow-up no elegible,
+- follow-up elegible,
+- tool unavailable,
+- malformed agent output.
+
+## Fail-safe behavior
+
+### Sales Agent error
+
+- no responder automaticamente;
+- no emitir claim sensible;
+- no mutar;
+- return `failed_safe`;
+- preserve context and logs;
+- optionally propose human review.
+
+### Policy or Governance error
+
+- block the action;
+- do not execute;
+- log the error;
+- escalate to operator when appropriate.
+
+### Copilot error
+
+- no impact on original decision;
+- no execution;
+- return safe explanation or review guidance.
+
+## Rollout and rollback
+
+Rollout path:
+
+1. local fixtures,
+2. test environment,
+3. shadow with internal traffic,
+4. shadow with limited real traffic,
+5. operator-only visibility,
+6. manual review,
+7. internal tasks,
+8. approved outbound,
+9. limited automation.
+
+Rollback path:
+
+- disable feature flag,
+- return to legacy flow,
+- ignore pending proposals,
+- cancel not-yet-started execution,
+- preserve logs and audit,
+- mark runs as rolled_back.
+
+## Open decisions
+
+Classify these as `requires_validation` until data exists:
+
+- sales agent provider/model,
+- opportunity persistence shape,
+- proposed action storage,
+- approval storage,
+- persistent audit storage,
+- max accepted latency,
+- max accepted cost per conversation,
+- number of retries,
+- exact HUB integration point,
+- exact coexistence with n8n.
+
+Classify these as `provisional`:
+
+- dry-run first,
+- human approval before sensitive actions,
+- WhatsApp remains priority channel,
+- Opportunity is the commercial center,
+- Customer Candidate remains auxiliary context.
+
+Classify these as `decided`:
+
+- no action is executed just because an LLM proposed it,
+- all hard blocks are deterministic,
+- all sensitive claims need evidence,
+- runtime starts fail-closed.
+
+## Relationship with processInbound
+
+Future recommended flow:
+
+`processInbound`
+→ `resolveContext`
+→ `buildCommercialContext`
+→ `runSalesAgent` in dry-run
+→ `validate`
+→ `apply policy`
+→ optional `commercial_analysis` in debug/shadow response
+
+The public `processInbound` contract does not change in this phase.
+
+## Relationship with n8n
+
+- n8n remains the legacy integrator during transition;
+- Brain can run in parallel for comparison;
+- no double send;
+- no double task creation;
+- correlation ids must support side-by-side comparison;
+- migration should happen by capability, not by a hard cut.
+
+## Decision about Opportunity persistence
+
+Recommendation:
+
+- do not start controlled execution without either a durable Opportunity read model or a strongly defined proposed-opportunity snapshot;
+- do not force final persistence before the read-only and proposal surfaces are validated;
+- therefore, Opportunity persistence should be implemented before controlled execution beyond internal tasks, but after the read-only vertical slice proves the flow.
+
+## Decision about Lead persistence
+
+Lead persistence should come after Opportunity persistence or in the same tranche only if the commercial invariants are already stable.
+
+## Deliverables of P1K-006
+
+- blueprint tecnico,
+- secuencia runtime,
+- matriz de componentes,
+- matriz de flags,
+- matriz de riesgos,
+- vertical slices,
+- test strategy,
+- activation gates,
+- rollback plan,
+- backlog tecnico siguiente.
+
+## Final rule
+
+Ninguna accion comercial real debe ejecutarse solo porque un LLM la propuso.

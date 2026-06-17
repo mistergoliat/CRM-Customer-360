@@ -4,10 +4,13 @@ import { makeBrainTraceId, summarizeBrainContext } from "../instructions";
 import type { BrainError, BrainNormalizedProcessInboundRequest, BrainResolvedContext } from "../inbound/types";
 import { buildBotEligibility } from "./botEligibility";
 import { buildContextPacks } from "./contextPacks";
+import { resolveCustomerCandidate } from "../../customer-identity";
+import type { CustomerIdentityResolutionResult } from "../../customer-identity";
 import {
   buildBusinessContext,
   buildCaseContext,
   buildConversationContext,
+  buildCustomerCandidateContextRequest,
   buildCustomerContext,
   buildFallbackCustomerContext,
   buildInputEvent,
@@ -44,6 +47,11 @@ type LegacyFetchResult<T> = {
   errors: BrainError[];
 };
 
+type CustomerCandidateResolutionState = {
+  result: CustomerIdentityResolutionResult | null;
+  warnings: string[];
+};
+
 function makeContextRequestId(request: BrainContextResolveRequest) {
   return crypto
     .createHash("sha256")
@@ -70,6 +78,23 @@ function contextError(message: string, details?: Record<string, unknown>): Brain
     retryable: true,
     details
   };
+}
+
+async function resolveCustomerCandidateSafely(request: BrainContextResolveRequest): Promise<CustomerCandidateResolutionState> {
+  try {
+    const result = await resolveCustomerCandidate(buildCustomerCandidateContextRequest(request));
+
+    return {
+      result,
+      warnings: result.warnings
+    };
+  } catch (error) {
+    const warning = error instanceof Error ? error.message : String(error);
+    return {
+      result: null,
+      warnings: [`customer_candidate resolution failed: ${warning}`]
+    };
+  }
 }
 
 function normalizePhoneLikeId(value: string | number | undefined) {
@@ -297,6 +322,7 @@ export function resolveBrainContext(request: BrainNormalizedProcessInboundReques
 export async function resolveBackendBrainContext(request: BrainContextResolveRequest, startedAt = Date.now()): Promise<BrainContextResolveResponse> {
   const warnings: string[] = [];
   const errors: BrainError[] = [];
+  const customerCandidatePromise = resolveCustomerCandidateSafely(request);
 
   try {
     const [
@@ -386,6 +412,9 @@ export async function resolveBackendBrainContext(request: BrainContextResolveReq
     errors.push(...casesResult.errors, ...inboundMessagesResult.errors, ...conversationMessagesResult.errors, ...suppressionResult.errors);
     errors.push(...agentRunsResult.errors, ...postventaQueueResult.errors, ...mantencionesQueueResult.errors, ...ordersResult.errors);
 
+    const customerCandidateResult = await customerCandidatePromise;
+    warnings.push(...customerCandidateResult.warnings);
+
     const cases = mergeRowsDescending(casesResult.rows);
     const inboundMessages = mergeRowsDescending(inboundMessagesResult.rows);
     const conversationMessages = mergeRowsDescending(conversationMessagesResult.rows);
@@ -403,7 +432,8 @@ export async function resolveBackendBrainContext(request: BrainContextResolveReq
       suppression,
       cases,
       inboundMessages,
-      conversationMessages
+      conversationMessages,
+      customerCandidateResult.result
     );
     const caseContext = buildCaseContext(cases);
     const conversationContext = buildConversationContext(allMessages, agentRuns, {

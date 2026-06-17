@@ -17,6 +17,7 @@ import type {
   BrainResolverIdentity,
   BrainServiceContext
 } from "./types";
+import type { CustomerIdentityResolutionInput, CustomerIdentityResolutionResult } from "../../customer-identity";
 
 export const LEGACY_CASE_CLOSED_STATUSES = ["closed", "resolved", "done", "archived", "rejected", "rechazado", "cancelled", "canceled"];
 export const LEGACY_CASE_WAITING_HUMAN_STATUSES = ["waiting_human", "human_required", "waiting_company", "pending", "escalated"];
@@ -103,7 +104,8 @@ export function normalizeBrainContextResolveRequest(input: unknown): BrainValida
     maxAgentRuns: boundedInt(optionsInput.maxAgentRuns, 5, 1, 20),
     maxCases: boundedInt(optionsInput.maxCases, 5, 1, 20),
     includePostventa: asBoolean(optionsInput.includePostventa, true),
-    includeAgentRuns: asBoolean(optionsInput.includeAgentRuns, true)
+    includeAgentRuns: asBoolean(optionsInput.includeAgentRuns, true),
+    debug: asBoolean(optionsInput.debug, false)
   };
 
   return {
@@ -119,6 +121,8 @@ export function normalizeBrainContextResolveRequest(input: unknown): BrainValida
       idOrder: asOptionalStringOrNumber(input.idOrder),
       idCustomer: asOptionalStringOrNumber(input.idCustomer),
       invoiceNumber: asOptionalStringOrNumber(input.invoiceNumber),
+      email: asString(input.email) ?? undefined,
+      phone: asString(input.phone) ?? undefined,
       sourceWorkflow: asString(input.sourceWorkflow) ?? undefined,
       sourceNode: asString(input.sourceNode) ?? undefined,
       customerRef: isRecord(input.customerRef)
@@ -129,6 +133,7 @@ export function normalizeBrainContextResolveRequest(input: unknown): BrainValida
             idOrder: asOptionalStringOrNumber(input.customerRef.idOrder),
             invoiceNumber: asOptionalStringOrNumber(input.customerRef.invoiceNumber),
             email: asString(input.customerRef.email) ?? undefined,
+            phone: asString(input.customerRef.phone) ?? undefined,
             contactId: asOptionalStringOrNumber(input.customerRef.contactId)
           }
         : undefined,
@@ -150,6 +155,8 @@ export function adaptBrainInboundToContextRequest(request: BrainNormalizedProces
     idOrder: request.customerRef?.idOrder,
     idCustomer: request.customerRef?.idCustomer,
     invoiceNumber: request.customerRef?.invoiceNumber,
+    email: request.customerRef?.email,
+    phone: request.customerRef?.phone,
     sourceWorkflow: request.sourceWorkflow,
     sourceNode: request.sourceNode,
     customerRef: request.customerRef,
@@ -159,7 +166,8 @@ export function adaptBrainInboundToContextRequest(request: BrainNormalizedProces
       maxAgentRuns: 5,
       maxCases: 5,
       includePostventa: true,
-      includeAgentRuns: true
+      includeAgentRuns: true,
+      debug: request.options.debug
     }
   };
 }
@@ -416,7 +424,8 @@ export function buildCustomerContext(
   suppression: BrainLegacySuppressionSummary | null,
   cases: BrainLegacyCaseSummary[],
   inboundMessages: BrainLegacyMessageSummary[],
-  outboundMessages: BrainLegacyMessageSummary[]
+  outboundMessages: BrainLegacyMessageSummary[],
+  customerCandidate: CustomerIdentityResolutionResult | null = null
 ): BrainCustomerContext {
   const latestCase = cases[0] ?? null;
   const activeCase = firstMeaningfulCase(cases);
@@ -429,7 +438,7 @@ export function buildCustomerContext(
     wa_id: request.waId,
     phone_number_id: request.phoneNumberId,
     contact_name: null,
-    email: null,
+    email: request.email ?? request.customerRef?.email ?? null,
     contact_id: null,
     id_customer: request.idCustomer ?? activeCase?.id_customer ?? null,
     id_order: request.idOrder ?? activeCase?.id_order ?? null,
@@ -444,7 +453,37 @@ export function buildCustomerContext(
     open_cases_count: cases.filter((row) => !LEGACY_CASE_CLOSED_STATUSES.includes(normalizeLegacyStatus(row.status ?? row.lifecycle_status))).length,
     active_case_id: activeCase?.conversation_case_id ?? null,
     active_case_status: activeCase?.status ?? null,
-    latest_case_status: latestCase?.status ?? null
+    latest_case_status: latestCase?.status ?? null,
+    customer_candidate: customerCandidate
+  };
+}
+
+export function buildCustomerCandidateContextRequest(request: BrainContextResolveRequest) {
+  const rawInvoiceNumber = request.invoiceNumber ?? request.customerRef?.invoiceNumber ?? null;
+  const source: CustomerIdentityResolutionInput["source"] =
+    request.source === "n8n_meta_webhook"
+      ? "n8n"
+      : request.source === "hub_preview" || request.source === "manual_test"
+        ? "hub_operator"
+        : request.source === "system_job"
+          ? "brain"
+          : "unknown";
+
+  return {
+    waId: request.waId,
+    email: request.email ?? request.customerRef?.email ?? undefined,
+    phone: request.phone ?? request.customerRef?.phone ?? undefined,
+    idCustomer: request.idCustomer ?? request.customerRef?.idCustomer ?? null,
+    idOrder: request.idOrder ?? request.customerRef?.idOrder ?? null,
+    invoiceNumber: rawInvoiceNumber == null ? null : String(rawInvoiceNumber),
+    conversationCaseId: request.conversationCaseId ?? null,
+    messageId: request.messageId,
+    source,
+    options: {
+      readOnly: true,
+      allowProvisional: true,
+      debug: request.options.debug
+    }
   };
 }
 
@@ -622,7 +661,7 @@ export function buildFallbackCustomerContext(request: BrainContextResolveRequest
     wa_id: request.waId,
     phone_number_id: request.phoneNumberId,
     contact_name: null,
-    email: null,
+    email: request.email ?? request.customerRef?.email ?? null,
     contact_id: null,
     id_customer: request.idCustomer ?? null,
     id_order: request.idOrder ?? null,
@@ -637,6 +676,7 @@ export function buildFallbackCustomerContext(request: BrainContextResolveRequest
     open_cases_count: 0,
     active_case_id: null,
     active_case_status: null,
-    latest_case_status: null
+    latest_case_status: null,
+    customer_candidate: null
   };
 }
