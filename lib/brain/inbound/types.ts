@@ -2,6 +2,7 @@ import type { BrainBotEligibility } from "../context/types";
 import type { BrainAgentRunResponse } from "../agents/types";
 import type { BrainActionPolicy, BrainInstructionAction, BrainNormalizedAction } from "../actions/types";
 import type { BrainExecutionPlan } from "../messaging/types";
+import type { CommercialShadowResult } from "../commercial/shadow";
 
 export type { BrainBotEligibility };
 
@@ -227,6 +228,7 @@ export type BrainProcessInboundResponse = {
       decisionId: string | null;
       reason: string;
     };
+    commercialShadow?: CommercialShadowResult | null;
   };
   metadata: {
     version: string;

@@ -12,6 +12,13 @@ import { createOutboxPlannedRecord } from "./messaging/outbox";
 import type { BrainExecutionSource, BrainExecuteRequest } from "./messaging/types";
 import { makeBrainRequestId } from "./instructions";
 import type { BrainActionPolicy, BrainNormalizedAction } from "./actions/types";
+import { COMMERCIAL_POLICY_DEFAULT_FLAGS } from "./commercial/policy";
+import { COMMERCIAL_SHADOW_DEFAULT_FEATURE_FLAGS, COMMERCIAL_SHADOW_RUNTIME_TIMEOUT_MS } from "./commercial/shadow";
+import { createCommercialShadowFailedSafe } from "./commercial/shadow/createCommercialShadowFailedSafe";
+import { runCommercialShadowEvaluation } from "./commercial/shadow/runCommercialShadowEvaluation";
+import { COMMERCIAL_POLICY_VERSION } from "./commercial/policy";
+import type { CommercialShadowFeatureFlags, CommercialShadowInput, CommercialShadowResult } from "./commercial/shadow";
+import { SALES_AGENT_CONTRACT_VERSION, SALES_AGENT_PROMPT_VERSION } from "./commercial/sales-agent/runtimeTypes";
 import type {
   BrainContextSummary,
   BrainError,
@@ -21,6 +28,17 @@ import type {
   BrainProcessInboundResponse,
   BrainResolvedContext
 } from "./inbound/types";
+
+type BrainProcessInboundCommercialShadowDependencies = {
+  commercialShadowHook?: (input: CommercialShadowInput) => Promise<CommercialShadowResult>;
+  commercialShadowFlags?: Partial<CommercialShadowFeatureFlags>;
+};
+
+export type BrainProcessInboundDependencies = {
+  resolveBackendBrainContext?: typeof resolveBackendBrainContext;
+  resolveBrainAction?: typeof resolveBrainAction;
+  commercialShadow?: BrainProcessInboundCommercialShadowDependencies;
+};
 
 function mergeUniqueStrings(...groups: Array<string[] | undefined>): string[] {
   const values = new Set<string>();
@@ -624,7 +642,8 @@ function buildValidResponse(
   agentDraft: BrainAgentRunResponse["draft"] | null,
   executionPlan: BrainProcessInboundResponse["execution_plan"],
   outboxPlanResult: BrainInboundOutboxPlanResult | null,
-  outboxPlanWarnings: string[] = []
+  outboxPlanWarnings: string[] = [],
+  commercialShadowResult: CommercialShadowResult | null = null
 ): BrainProcessInboundResponse {
   const requestId = makeBrainRequestId(request);
   const context = resolveBrainContext(request);
@@ -679,7 +698,8 @@ function buildValidResponse(
         status: "deferred",
         decisionId: actionResponse.request_id,
         reason: "AI orchestrator remains deferred while the backend response policy and action router stay read-only."
-      }
+      },
+      commercialShadow: commercialShadowResult
     },
     metadata: {
       version: "brain.process-inbound.v2",
@@ -693,7 +713,73 @@ function buildValidResponse(
   };
 }
 
-export async function processInbound(input: unknown, startedAt = Date.now()): Promise<BrainProcessInboundResponse> {
+function buildCommercialShadowFlags(input: BrainProcessInboundCommercialShadowDependencies | undefined): CommercialShadowFeatureFlags {
+  return {
+    ...COMMERCIAL_SHADOW_DEFAULT_FEATURE_FLAGS,
+    ...(input?.commercialShadowFlags ?? {})
+  };
+}
+
+function buildCommercialShadowInput(
+  request: BrainNormalizedProcessInboundRequest,
+  contextResponse: BrainContextResolveResponse,
+  startedAt: number,
+  flags: CommercialShadowFeatureFlags
+): CommercialShadowInput {
+  return {
+    inboundMessage: request,
+    brainContext: contextResponse,
+    correlationId: makeBrainRequestId(request),
+    executionId: null,
+    currentTime: new Date(startedAt).toISOString(),
+    timezone: "UTC",
+    requestedMode: request.contextMode,
+    policyContext: undefined,
+    provider: null,
+    runtimeOptions: {
+      enabled: true,
+      mode: "dry_run",
+      timeoutMs: COMMERCIAL_SHADOW_RUNTIME_TIMEOUT_MS,
+      maxInputCharacters: 20000,
+      maxOutputCharacters: 12000,
+      strictValidation: true,
+      allowedCapabilities: [],
+      captureRawOutput: false,
+      includePromptPreview: false,
+      dryRun: true,
+      abortSignal: null
+    },
+    policyFlags: {
+      ...COMMERCIAL_POLICY_DEFAULT_FLAGS,
+      commercialPolicyEnabled: true,
+      allowDraftReplies: true,
+      allowToolRequests: true,
+      allowEntityProposals: true,
+      allowFollowUpEvaluation: true,
+      allowInternalTasks: true,
+      allowQuoteDraftRequests: true,
+      allowOperatorReviewRequests: true,
+      allowSensitiveClaims: false,
+      allowOutboundProposals: true
+    },
+    shadowFlags: flags,
+    contractVersion: SALES_AGENT_CONTRACT_VERSION,
+    promptVersion: SALES_AGENT_PROMPT_VERSION,
+    policyVersion: COMMERCIAL_POLICY_VERSION,
+    allowedCapabilities: [],
+    metadata: request.metadata
+  };
+}
+
+function sanitizeCommercialShadowErrorMessage(message: string) {
+  return message
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+    .replace(/\b(sk-[A-Za-z0-9_-]+)\b/gi, "[redacted]")
+    .replace(/\b(authorization|api[-_]?key|token|secret|password|cookie)\s*[:=]?\s*[^\s,;]+/gi, "$1=[redacted]")
+    .trim();
+}
+
+export async function processInbound(input: unknown, startedAt = Date.now(), dependencies: BrainProcessInboundDependencies = {}): Promise<BrainProcessInboundResponse> {
   const normalizedResult = normalizeBrainInboundRequest(input);
   if (!normalizedResult.ok) {
     const fallbackRequest = buildFallbackBrainInboundRequest(input);
@@ -708,6 +794,11 @@ export async function processInbound(input: unknown, startedAt = Date.now()): Pr
   }
 
   const request = normalizedResult.value;
+  const resolveContext = dependencies.resolveBackendBrainContext ?? resolveBackendBrainContext;
+  const resolveAction = dependencies.resolveBrainAction ?? resolveBrainAction;
+  const commercialShadowHook = dependencies.commercialShadow?.commercialShadowHook ?? runCommercialShadowEvaluation;
+  const commercialShadowFlags = buildCommercialShadowFlags(dependencies.commercialShadow);
+
   if (request.options.executeActions) {
     return buildFailClosedResponse(
       request,
@@ -726,11 +817,34 @@ export async function processInbound(input: unknown, startedAt = Date.now()): Pr
   }
 
   const contextRequest = adaptBrainInboundToContextRequest(request);
-  const contextResponse = await resolveBackendBrainContext(contextRequest, startedAt);
+  const contextResponse = await resolveContext(contextRequest, startedAt);
   const requestId = makeBrainRequestId(request);
   const contextSummary = buildContextSummary(requestId, request, contextResponse);
+  let commercialShadowResult: CommercialShadowResult | null = null;
+  if (commercialShadowFlags.commercialShadowEnabled) {
+    try {
+      commercialShadowResult = await commercialShadowHook(buildCommercialShadowInput(request, contextResponse, startedAt, commercialShadowFlags));
+    } catch (error) {
+      const message = error instanceof Error ? sanitizeCommercialShadowErrorMessage(error.message) : "Commercial shadow hook failed.";
+      commercialShadowResult = createCommercialShadowFailedSafe({
+        input: buildCommercialShadowInput(request, contextResponse, startedAt, commercialShadowFlags),
+        status: "failed_safe",
+        failureStage: "shadow_complete",
+        reason: "Commercial shadow hook failed.",
+        warnings: ["shadow_result_sanitized"],
+        eligible: true,
+        executionDisposition: "discard_after_observation",
+        error: {
+          code: error instanceof Error && error.name ? error.name : "unknown_error",
+          message,
+          stage: "shadow_complete",
+          details: {}
+        }
+      });
+    }
+  }
   const actionRequest = buildActionRequest(request, requestId, contextSummary, contextResponse);
-  const actionResponse = await resolveBrainAction(actionRequest, startedAt);
+  const actionResponse = await resolveAction(actionRequest, startedAt);
   let agentDraft: BrainAgentRunResponse["draft"] | null = null;
   let executionPlan: BrainProcessInboundResponse["execution_plan"] = null;
   let outboxPlanResult: BrainInboundOutboxPlanResult | null = null;
@@ -777,6 +891,7 @@ export async function processInbound(input: unknown, startedAt = Date.now()): Pr
     agentDraft,
     executionPlan,
     outboxPlanResult,
-    outboxPlanWarnings
+    outboxPlanWarnings,
+    commercialShadowResult
   );
 }
