@@ -60,8 +60,10 @@ Estas acciones pueden existir desde el inicio sin approval para el caso correcto
 - crear tarea interna,
 - crear oportunidad,
 - sugerir follow-up,
-- crear campaña borrador,
+- crear campana borrador,
 - explicar decision.
+
+En el AI SDR MVP, estas acciones se interpretan como propuestas o internal tasks, no como ejecuciones autonomas de alto riesgo.
 
 ## Actions requiring approval initially
 
@@ -81,6 +83,8 @@ Estas acciones deben pasar por aprobacion humana en el MVP.
 - modificar pedido,
 - cancelar pedido,
 - emitir devolucion.
+
+Para el operating model comercial, tambien requieren approval inicial los borradores que impliquen compromiso de precio, stock, despacho o fecha, aunque se presenten como quote draft.
 
 ## Governance rules
 
@@ -123,6 +127,55 @@ Las siguientes acciones son forbidden si no existe una policy clara, aprobacion 
 - alterar permisos de agente desde flujo n8n,
 - usar Work Queue como fuente maestra de negocio.
 
+## AI SDR governance notes
+
+1. `answer_now` puede ejecutar solo respuestas bajo riesgo y dentro de policy.
+2. `ask_clarifying_question` y `qualify_lead` son acciones internas de bajo riesgo.
+3. `create_quote_draft` puede existir, pero el envio de cotizacion final requiere approval.
+4. `propose_followup` y `schedule_followup` son gobernadas por estado, urgencia e intencion.
+5. `escalate_to_operator` es la salida esperada cuando la confianza es baja o la accion es sensible.
+6. `pause_contact`, `mark_stalled` y `mark_lost_candidate` son decisiones de estado, no de envio.
+7. `recommend_products` y `suggest upsell/cross-sell` son permitidas solo como recomendacion o borrador.
+8. `propose_whatsapp_followup` no equivale a ejecucion.
+9. `phone_call` requiere aprobacion explicita del operador.
+10. La identidad conflictiva bloquea follow-up sensible hacia afuera.
+11. Varios intentos elevan el requisito de revision humana.
+12. El follow-up no puede prometer descuentos, stock, despacho ni cotizacion final.
+
+## Sales Agent governance notes
+
+1. Las decisiones del Sales Agent son propuestas, no mutaciones.
+2. Los claims sensibles requieren evidencia de una fuente o tool autorizada.
+3. Tool request implica autorizacion del backend, no ejecucion garantizada.
+4. Entity proposal no muta Lead ni Opportunity.
+5. Cambios de alto riesgo requieren approval.
+6. El Sales Agent no puede marcar `won` o `lost` sin evidencia autorizada.
+7. El Sales Agent no puede inventar precio, stock, despacho, entrega o garantia.
+
+## Operator Copilot governance notes
+
+1. El Operator Copilot solo propone comandos; no ejecuta ni aprueba.
+2. Todo `CommandProposal` debe salir en `dryRun=true` por defecto.
+3. La aprobacion debe provenir de un humano autorizado dentro del HUB o de un flujo externo de governance.
+4. Ningun comando propuesto por el Copilot puede saltarse governance.
+5. Los hard blocks estructurales no pueden levantarse desde el Copilot.
+6. La auditoria futura es obligatoria para cualquier aprobacion humana derivada del Copilot.
+7. El Copilot no puede presentar Customer Candidate como Customer Master ni filtrar PII fuera de scope.
+8. Si el contexto es stale, insuficiente o restringido, la salida debe degradar a `insufficient_context`, `access_restricted` o `failed_safe`.
+
+## Next Best Action contract
+
+Toda recomendacion comercial debe poder explicarse con:
+
+- `current_state`
+- `detected_signal`
+- `recommended_action`
+- `recommended_channel`
+- `urgency`
+- `confidence`
+- `rationale`
+- `requires_human_approval`
+
 ## Operational pattern
 
 1. El agente propone.
@@ -131,3 +184,12 @@ Las siguientes acciones son forbidden si no existe una policy clara, aprobacion 
 4. Solo entonces se ejecuta la accion.
 5. Todo queda en timeline y audit log.
 
+## Runtime sequencing constraints
+
+1. Ningun LLM puede decidir permisos, levantar hard blocks o autorizarse a si mismo.
+2. El Contract Validator va antes de policy y governance.
+3. Commercial Policy se aplica antes de que una propuesta sea visible al operador.
+4. Follow-up Policy puede correr en dry-run y no requiere scheduler.
+5. Operator Copilot consume salidas ya validadas; no aprueba ni ejecuta.
+6. Execution Engine permanece deshabilitado hasta que governance, audit e idempotencia esten probados.
+7. WhatsApp outbound no es el primer modo de ejecucion; primero van analysis, proposals y tareas internas reversibles.

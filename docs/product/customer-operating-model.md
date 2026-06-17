@@ -18,7 +18,13 @@ Everything important must hang off Customer:
 - approved actions
 - timeline events
 
+In the P1K stage, Customer must already support the AI SDR commercial model: lead, opportunity, conversation, follow-up, and quote draft. The system can operate with provisional identity while Customer Master is still pending.
+
+The detailed Lead and Opportunity contract lives in `docs/product/lead-opportunity-contract.md`.
+
 This document is the conceptual operating model. The technical minimum spec lives in `docs/customer-identity-spec.md`, the resolver contract lives in `docs/customer-identity-contract.md`, and the source ownership map lives in `docs/customer-identity-source-mapping.md`.
+
+The AI SDR commercial operating model lives in `docs/product/ai-sdr-operating-model.md`.
 
 ## Identity rule
 
@@ -91,13 +97,20 @@ Timeline events must be append-only at the conceptual level. Any future storage 
 | Customer identity | A single identifier in the identity map | Customer Master |
 | Conversation | Channel interaction thread | Customer identity |
 | Intent | Commercial or service signal | Opportunity |
+| Lead | Pre-opportunity commercial signal | Customer |
 | Opportunity | Commercial chance with state | Conversation |
 | Quote | Commercial proposal or draft | Case |
 | Follow-up | Next operational step | Campaign |
+| FollowUpPlan | Planned next step with governance | Task queue |
+| QuoteDraft | Draft commercial proposal | Final quote |
+| CommercialTask | Internal operational work item | Customer |
+| AgentDecision | Structured reasoning output | Executed action |
+| OperatorReview | Human approval or edit | AgentDecision |
 | Case | Support, incident, or post-sale flow | Customer |
 | Campaign | Future marketing action | Opportunity |
-| Agent Decision | Structured reasoning output | Executed action |
 | Work Queue | Operational view of pending work | Source of truth |
+
+Lead and Opportunity are separate commercial layers. Lead captures provisional interest and identity quality; Opportunity captures a concrete sales chance with its own lifecycle.
 
 ## Work Queue rule
 
@@ -113,6 +126,8 @@ They can be used for:
 They must not become the deterministic center of the model.
 
 Leads from WhatsApp can exist before a persistent Customer Master exists.
+
+Opportunity state, follow-up plan, and quote draft are commercial layers under Customer, not replacements for Customer.
 
 ## Operational layers
 
