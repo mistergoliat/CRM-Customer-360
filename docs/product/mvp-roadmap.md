@@ -18,7 +18,9 @@ Este roadmap reemplaza la narrativa handoff-first por una secuencia centrada en 
 |---|---|---|
 | `P1I-010 Controlled End-to-End Manual Backend Send Test` | Cerrar el ciclo tecnico manual de envio backend sin automatizarlo por defecto. | Queda validado el pipeline minimo de infraestructura y rollback. |
 | `P1J-000 Agentic CRM Product Blueprint` | Congelar la vision de producto, limites y alcance. | Todo el equipo habla el mismo idioma: AI SDR + Agentic CRM + Customer 360. |
-| `P1J-001 Customer Identity / Customer Master minimo` | Definir identidad operativa, email primary cuando exista y map de aliases. | Existe Customer resoluble sin inventar master definitivo. |
+| `P1J-001-AUDIT Customer Identity Source Mapping & Ownership` | Mapear fuentes, ownership y precedencia antes de persistir master. | Existe un mapa claro de fuentes confiables, parciales, transicionales y manuales. |
+| `P1J-001-READONLY Customer Candidate Resolver from existing sources` | Definir el puente read-only entre fuentes existentes y candidato CRM. | Existe un Customer Candidate Read Model sin writes ni merges destructivos. |
+| `P1J-001 Customer Identity / Customer Master minimo` | Definir Customer Master, identity map, timeline minimo y reglas de merge. | Existe base tecnica de identidad lista para contract/spec y futura implementacion. |
 | `P1J-002 Customer Opportunity / Intent model` | Separar intent, opportunity, follow-up y case. | El sistema deja de pensar solo en casos. |
 | `P1J-003 Universal Agent Decision Contract` | Unificar la salida estructurada de todos los agentes. | Toda decision trae contexto, razon, riesgo, action mode y trace. |
 | `P1J-004 Agent Capability Matrix` | Definir que puede hacer cada agente. | Hay fronteras claras entre sales, quote, follow-up, postventa, SAC y copilot. |
@@ -27,7 +29,7 @@ Este roadmap reemplaza la narrativa handoff-first por una secuencia centrada en 
 | `P1K AI SDR MVP` | Activar el primer recorrido comercial real del producto. | WhatsApp + email operan inbound y outbound con approvals donde toca. |
 | `P1L Customer 360 minimo` | Consolidar timeline, identity map, opportunities y approved actions. | Customer se vuelve el centro operativo estable. |
 | `P1M Operator Copilot` | Dar visibilidad de decisiones, logs, costos, tools y errores. | El humano puede supervisar y probar cambios controlados. |
-| `P2 AI Marketing` | Permitir investigacion y propuestas de campañas con approval. | El sistema propone campañas sin enviarlas automaticamente. |
+| `P2 AI Marketing` | Permitir investigacion y propuestas de campanas con approval. | El sistema propone campanas sin enviarlas automaticamente. |
 | `P3 Voice/Call Tool` | Introducir llamadas como tool modular futura. | Llamadas quedan aisladas por riesgo y gobernanza. |
 
 ## Que cambia respecto del enfoque anterior
@@ -42,7 +44,11 @@ Este roadmap reemplaza la narrativa handoff-first por una secuencia centrada en 
 
 ### P1J
 
-- identity map estable,
+- customer_master y identity map definidos,
+- source mapping y ownership definidos,
+- Customer Candidate Read Model definido,
+- timeline minimo definido,
+- rules de create/merge/confidence definidas,
 - decision contract unificado,
 - capability matrix publicada,
 - governance de acciones definida,
@@ -57,7 +63,7 @@ Este roadmap reemplaza la narrativa handoff-first por una secuencia centrada en 
 
 ### P1L
 
-- timeline unificada,
+- timeline minimo util,
 - opportunity graph util,
 - approved actions visibles,
 - customer state navegable.
@@ -70,7 +76,7 @@ Este roadmap reemplaza la narrativa handoff-first por una secuencia centrada en 
 
 ### P2
 
-- investigacion y draft de campañas sin envio directo,
+- investigacion y draft de campanas sin envio directo,
 - approval before send,
 - trazabilidad de campanas y propuestas.
 
