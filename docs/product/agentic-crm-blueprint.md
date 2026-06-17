@@ -43,6 +43,8 @@ AI SDR debe cubrir:
 - propuesta: sugerir cotizacion, agenda, follow-up o derivacion,
 - supervision: pedir aprobacion cuando el riesgo operativo lo exija.
 
+El detalle operativo del AI SDR MVP vive en `docs/product/ai-sdr-operating-model.md`.
+
 ## Base paralela necesaria
 
 La base paralela del producto es AI CRM Operacional.
@@ -54,6 +56,8 @@ AI CRM Operacional existe para:
 - registrar conversaciones, intents, oportunidades y acciones,
 - mantener customer state util para decisiones de ventas y postventa,
 - servir de base para aprobaciones y auditoria.
+
+AI CRM Operacional no reemplaza al AI SDR. Lo habilita.
 
 ## AI Marketing
 
@@ -86,6 +90,12 @@ Todo lo demas debe colgar desde Customer:
 - timeline events.
 
 Customer 360 aqui significa una vista operativa unificada del cliente para vender y operar, no una promesa de master data final.
+
+El Customer 360 definitivo depende de `customer_master`. Antes de eso, el sistema opera con identidad provisional y Customer Candidate.
+
+La secuencia runtime concreta para activar el AI SDR MVP vive en `docs/product/ai-sdr-implementation-blueprint.md`.
+
+Ese blueprint separa shadow mode, approval mode y controlled execution para que el sistema arranque fail-closed y avance por capas.
 
 ## Canales iniciales
 
@@ -152,6 +162,8 @@ Responde preguntas, busca contexto y ayuda a reducir incertidumbre operacional.
 
 Interfaz para humanos dentro del HUB que explica decisiones, logs, costos, tools, errores y recomendaciones.
 
+Su foco inicial es revisar el AI SDR, no administrar tickets.
+
 ### Call/Voice Tool futura
 
 Tool modular futura para llamadas de voz. Debe tratarse como una capability sensible y separada.
@@ -188,4 +200,6 @@ Para llegar ahi, el producto debe quedar basado en:
 - trazabilidad completa,
 - identidad migrable,
 - integracion desacoplada con n8n.
+
+La primera capa reusable para escalar a SaaS/AaaS es el operating model comercial, no la UI ni el case flow.
 

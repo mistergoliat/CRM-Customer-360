@@ -26,6 +26,16 @@ Este roadmap reemplaza la narrativa handoff-first por una secuencia centrada en 
 | `P1J-004 Agent Capability Matrix` | Definir que puede hacer cada agente. | Hay fronteras claras entre sales, quote, follow-up, postventa, SAC y copilot. |
 | `P1J-005 Action Governance Engine` | Definir approval, blocked, draft, internal task y send now low risk. | Las acciones sensibles quedan gobernadas y auditables. |
 | `P1J-006 Approval Queue desde HUB` | Crear la capa operativa para aprobar acciones sensibles. | Los humanos aprueban desde HUB, no desde workflows dispersos. |
+| `P1K-001 AI SDR Operating Model (DONE)` | Operating model comercial ya definido para inbound, outbound y follow-up gobernado. | Existe un modelo operativo claro de entidades, estados, senales, decisiones y supervision. |
+| `P1K-002 Opportunity/Lead model contract (DONE)` | Contrato documental y TypeScript para lead y opportunity. | El backend puede razonar comercialmente sin depender de case-centric design. |
+| `P1K-003 Follow-up decision policy (DONE)` | Politica documental y TypeScript del follow-up comercial contextual. | Las reglas de follow-up quedan gobernadas y auditables. |
+| `P1K-004 Sales Agent contract (DONE)` | Contrato documental y TypeScript del Sales Agent. | Sales Agent queda listo como agente comercial que propone, analiza y explica sin ejecutar. |
+| `P1K-005 Operator Copilot contract (DONE)` | Definir la interfaz operativa humana para revisar, aprobar y forzar seguimiento. | El operador puede supervisar, editar y preparar comandos gobernados sin ejecutar acciones. |
+| `P1K-006 AI SDR Implementation Blueprint / Runtime Sequencing (ACTIVE)` | Definir el orden de activacion, enforcement points y rollout seguro del runtime agentic. | Existe un blueprint de implementacion para activar capacidades sin romper la preview ni la gobernanza. |
+| `P1K-007 Primer vertical slice runtime read-only` | Activar el primer recorrido end-to-end en shadow mode sin envio ni mutacion. | El sistema puede analizar un inbound comercial y devolver resultados validos y auditables sin ejecutar. |
+| `P1K-008 Operator review and approval slice` | Habilitar propuestas visibles y revision humana controlada. | El operador puede revisar propuestas y aprobar o rechazar comandos dry-run. |
+| `P1K-009 Controlled internal task execution` | Ejecutar una accion de bajo riesgo con approval e idempotencia. | La primera ejecucion real es una tarea interna reversible y auditada. |
+| `P1K-010 Controlled WhatsApp execution` | Habilitar envio WhatsApp aprobado manualmente. | El sistema envia solo cuando governance y approvals estan probados. |
 | `P1K AI SDR MVP` | Activar el primer recorrido comercial real del producto. | WhatsApp + email operan inbound y outbound con approvals donde toca. |
 | `P1L Customer 360 minimo` | Consolidar timeline, identity map, opportunities y approved actions. | Customer se vuelve el centro operativo estable. |
 | `P1M Operator Copilot` | Dar visibilidad de decisiones, logs, costos, tools y errores. | El humano puede supervisar y probar cambios controlados. |
@@ -57,6 +67,11 @@ Este roadmap reemplaza la narrativa handoff-first por una secuencia centrada en 
 ### P1K
 
 - AI SDR puede procesar inbound y outbound,
+- el operating model comercial esta definido,
+- lead y opportunity estan separados conceptualmente,
+- el contrato Lead/Opportunity es la capa actual en trabajo,
+- la politica Follow-up esta cerrada,
+- el contrato Sales Agent es la etapa actual en trabajo,
 - puede calificar y proponer,
 - puede crear drafts y tareas internas,
 - puede pedir aprobacion para acciones sensibles.
