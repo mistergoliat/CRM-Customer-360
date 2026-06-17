@@ -1,0 +1,147 @@
+{
+  "generatedAt": "2026-06-16T00:00:00.000Z",
+  "reviewedByHuman": false,
+  "limit": 7,
+  "cases": [
+    {
+      "caseId": "review-prestashop-001",
+      "source": "prestashop",
+      "sourceCategories": ["high-confidence-partial", "transactional"],
+      "signals": {
+        "waId": false,
+        "email": true,
+        "phone": true,
+        "idCustomer": true,
+        "idOrder": false,
+        "invoiceNumber": false,
+        "conversationCaseId": false,
+        "messageId": false
+      },
+      "inputHash": "casehash-example-01",
+      "reviewedByHuman": false,
+      "reviewNote": null,
+      "expectedResolution": null,
+      "expectedCustomerReference": null
+    },
+    {
+      "caseId": "review-whatsapp-001",
+      "source": "whatsapp",
+      "sourceCategories": ["engagement", "lead"],
+      "signals": {
+        "waId": true,
+        "email": false,
+        "phone": true,
+        "idCustomer": false,
+        "idOrder": false,
+        "invoiceNumber": false,
+        "conversationCaseId": false,
+        "messageId": true
+      },
+      "inputHash": "casehash-example-02",
+      "reviewedByHuman": false,
+      "reviewNote": null,
+      "expectedResolution": null,
+      "expectedCustomerReference": null
+    },
+    {
+      "caseId": "review-n8n-conflict-001",
+      "source": "n8n",
+      "sourceCategories": ["technical", "transitional"],
+      "signals": {
+        "waId": true,
+        "email": true,
+        "phone": true,
+        "idCustomer": true,
+        "idOrder": true,
+        "invoiceNumber": true,
+        "conversationCaseId": true,
+        "messageId": true
+      },
+      "inputHash": "casehash-example-03",
+      "reviewedByHuman": false,
+      "reviewNote": null,
+      "expectedResolution": null,
+      "expectedCustomerReference": null
+    },
+    {
+      "caseId": "review-malformed-phone-001",
+      "source": "whatsapp",
+      "sourceCategories": ["engagement", "lead"],
+      "signals": {
+        "waId": true,
+        "email": false,
+        "phone": true,
+        "idCustomer": false,
+        "idOrder": false,
+        "invoiceNumber": false,
+        "conversationCaseId": false,
+        "messageId": true
+      },
+      "inputHash": "casehash-example-04",
+      "reviewedByHuman": false,
+      "reviewNote": null,
+      "expectedResolution": null,
+      "expectedCustomerReference": null
+    },
+    {
+      "caseId": "review-outside-prestashop-001",
+      "source": "whatsapp",
+      "sourceCategories": ["engagement", "lead"],
+      "signals": {
+        "waId": true,
+        "email": true,
+        "phone": false,
+        "idCustomer": false,
+        "idOrder": false,
+        "invoiceNumber": false,
+        "conversationCaseId": false,
+        "messageId": true
+      },
+      "inputHash": "casehash-example-05",
+      "reviewedByHuman": false,
+      "reviewNote": null,
+      "expectedResolution": null,
+      "expectedCustomerReference": null
+    },
+    {
+      "caseId": "review-prestashop-order-001",
+      "source": "prestashop",
+      "sourceCategories": ["high-confidence-partial", "transactional"],
+      "signals": {
+        "waId": false,
+        "email": true,
+        "phone": true,
+        "idCustomer": false,
+        "idOrder": true,
+        "invoiceNumber": true,
+        "conversationCaseId": false,
+        "messageId": false
+      },
+      "inputHash": "casehash-example-06",
+      "reviewedByHuman": false,
+      "reviewNote": null,
+      "expectedResolution": null,
+      "expectedCustomerReference": null
+    },
+    {
+      "caseId": "review-lead-manual-001",
+      "source": "hub_operator",
+      "sourceCategories": ["manual-trusted"],
+      "signals": {
+        "waId": false,
+        "email": true,
+        "phone": true,
+        "idCustomer": false,
+        "idOrder": false,
+        "invoiceNumber": false,
+        "conversationCaseId": false,
+        "messageId": false
+      },
+      "inputHash": "casehash-example-07",
+      "reviewedByHuman": false,
+      "reviewNote": null,
+      "expectedResolution": null,
+      "expectedCustomerReference": null
+    }
+  ]
+}

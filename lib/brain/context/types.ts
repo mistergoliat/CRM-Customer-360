@@ -1,4 +1,5 @@
 import type { BrainChannel, BrainCustomerRef, BrainError, BrainInboundSource } from "../inbound/types";
+import type { CustomerIdentityResolutionResult } from "../../customer-identity";
 
 export type BrainContextResolveOptions = {
   dryRun: boolean;
@@ -7,6 +8,7 @@ export type BrainContextResolveOptions = {
   maxCases: number;
   includePostventa: boolean;
   includeAgentRuns: boolean;
+  debug: boolean;
 };
 
 export const DEFAULT_BRAIN_CONTEXT_RESOLVE_OPTIONS: BrainContextResolveOptions = {
@@ -15,7 +17,8 @@ export const DEFAULT_BRAIN_CONTEXT_RESOLVE_OPTIONS: BrainContextResolveOptions =
   maxAgentRuns: 5,
   maxCases: 5,
   includePostventa: true,
-  includeAgentRuns: true
+  includeAgentRuns: true,
+  debug: false
 };
 
 export type BrainContextResolveRequest = {
@@ -29,6 +32,8 @@ export type BrainContextResolveRequest = {
   idOrder?: string | number;
   idCustomer?: string | number;
   invoiceNumber?: string | number;
+  email?: string;
+  phone?: string;
   sourceWorkflow?: string;
   sourceNode?: string;
   customerRef?: BrainCustomerRef;
@@ -200,6 +205,7 @@ export type BrainCustomerContext = {
   active_case_id: string | number | null;
   active_case_status: string | null;
   latest_case_status: string | null;
+  customer_candidate: CustomerIdentityResolutionResult | null;
 };
 
 export type BrainCaseContext = {

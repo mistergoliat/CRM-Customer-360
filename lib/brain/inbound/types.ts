@@ -21,6 +21,7 @@ export type BrainCustomerRef = {
   idOrder?: string | number;
   invoiceNumber?: string | number;
   email?: string;
+  phone?: string;
   contactId?: string | number;
 };
 

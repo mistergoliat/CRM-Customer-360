@@ -34,6 +34,8 @@ En P1F, `POST /api/brain/process-inbound` sigue sin ejecutar side effects, pero 
 - bloquea `executeActions=true`
 - preserva `continueLegacyFlow` segun policy
 
+En la siguiente fase de contexto, `customer_context.customer_candidate` se agrega como una resolución compuesta read-only. Eso enriquece el razonamiento del agente sin implicar un `customer_master` persistente.
+
 La politica de respuesta y el router de accion viven en `docs/brain-action-policy.md` y en `POST /api/brain/actions/resolve`.
 
 ## Request
@@ -88,6 +90,7 @@ La respuesta incluye:
 - `bot_eligibility`
 - `context_packs_available`
 - `suggested_next_step`
+- `customer_candidate` via `context.customer_context`
 - `agent_draft` cuando `runAgentDryRun=true`
 - `instructions`
 - `outbox_plan_result` cuando `persistOutboxPlan=true` y el gate estricto permite crear o reutilizar un plan `planned`

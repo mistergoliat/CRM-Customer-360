@@ -1,166 +1,133 @@
 # Customer Operating Model
 
-## Principio central
+## Core principle
 
-Customer es la entidad central del modelo operativo.
+Customer is the central entity of the operating model.
 
-Todo lo importante debe poder resolverse desde Customer:
+Everything important must hang off Customer:
 
-- quien es,
-- como se identifica,
-- que conversaciones tiene,
-- que intenciones muestra,
-- que oportunidades existen,
-- que cotizaciones se generaron,
-- que follow-ups estan pendientes,
-- que casos o reclamos existen,
-- que campañas recibio,
-- que decisiones tomo un agente,
-- que acciones fueron aprobadas,
-- que eventos quedaron en su timeline.
+- identity
+- conversations
+- intents
+- opportunities
+- quotes
+- follow-ups
+- cases
+- campaigns
+- agent decisions
+- approved actions
+- timeline events
 
-## Identidad primaria
+This document is the conceptual operating model. The technical minimum spec lives in `docs/customer-identity-spec.md`, the resolver contract lives in `docs/customer-identity-contract.md`, and the source ownership map lives in `docs/customer-identity-source-mapping.md`.
 
-Cuando existe email util, email es la primary identity del Customer.
+## Identity rule
 
-Si no existe email, la identidad provisional debe apoyarse en la mejor clave disponible, normalmente:
+Email is the primary identity when it exists and is usable.
+
+When email does not exist, the system must fall back to the best available provisional identity, usually:
 
 1. `wa_id`
 2. `phone`
-3. `id_customer` PrestaShop
-4. `id_order`
+3. `prestashop_customer_id`
+4. `order_id`
 5. `invoice_number`
-6. `contact_id`
-7. futuros ids de AppSheet
+6. `rut`
+7. `contact_id`
+8. future AppSheet ids
 
-Esto no crea un Customer Master definitivo. Solo define una estrategia de resolucion operativa hasta que exista `customer_master`.
+This is a provisional identity map, not a final Customer Master implementation.
+
+CRM is the target source of record for centralized customer information, but it is not yet implemented as persistent master.
 
 ## Identity map
 
-Cada Customer puede tener multiples identidades.
+A Customer can have many identities.
 
-| Identidad | Rol | Uso principal |
+| Identity type | Role | Notes |
 |---|---|---|
-| `email` | Primary identity cuando existe | Unificacion comercial y contacto multicanal. |
-| `wa_id` | Anchor inicial frecuente | Ingreso por WhatsApp e identidad provisional. |
-| `phone` | Identidad de soporte | Normalizacion y matching parcial. |
-| `id_customer` | Identidad ecommerce | Cruce con PrestaShop / MariaDB. |
-| `id_order` | Identidad de transaccion | Contexto de compra y postventa. |
-| `invoice_number` | Identidad documental | Soporte, conciliacion y trazabilidad. |
-| `contact_id` | Identidad externa | Integraciones y fuentes futuras. |
-| AppSheet ids futuros | Identidad extendida | Migracion futura sin romper el nucleo. |
+| `email` | Primary identity when available | Best cross-channel anchor for sales and CRM. |
+| `wa_id` | WhatsApp anchor | Common first touch from inbound WhatsApp. |
+| `phone` | Supporting identity | Useful after normalization and dedupe. |
+| `prestashop_customer_id` | Ecommerce identity | Links customer data from PrestaShop / MariaDB. |
+| `order_id` | Transaction identity | Supports purchase and post-sale context. |
+| `invoice_number` | Document identity | Supports support and reconciliation. |
+| `rut` | Regional legal identity | Useful where present and trustworthy. |
+| `appsheet_customer_id` | Future external identity | Reserved for later operational sources. |
 
-## Customer timeline
+PrestaShop should be treated as a strong partial source, not as a copy of the future CRM master.
 
-El timeline de Customer es la secuencia canonica de eventos observables y decisiones relevantes.
+## Timeline
 
-Debe incluir, como minimo:
+Customer timeline is the canonical operational history.
 
-- inbound messages,
-- outbound messages,
-- conversations,
-- intent changes,
-- opportunity changes,
-- quote drafts and approvals,
-- follow-up tasks,
-- case events,
-- campaign events,
-- agent decisions,
-- approved actions,
-- manual operator actions.
+Minimum event types:
 
-El timeline no debe depender de una sola fuente ni de una sola entidad legacy.
+- inbound message
+- outbound message
+- conversation started
+- conversation updated
+- intent detected
+- opportunity created
+- opportunity updated
+- quote drafted
+- quote approved
+- follow-up proposed
+- follow-up approved
+- case created
+- case updated
+- campaign drafted
+- campaign approved
+- agent decision recorded
+- approved action recorded
+- operator action recorded
 
-## Customer opportunity and intent graph
+Timeline events must be append-only at the conceptual level. Any future storage layer should preserve original events and not overwrite history.
 
-Customer no es una ficha estatica. Es un grafo operacional.
+## Difference between entities
 
-### Nodos principales
-
-- Customer
-- Identity
-- Conversation
-- Intent
-- Opportunity
-- Quote
-- Follow-up
-- Case
-- Campaign
-- Agent Decision
-- Approved Action
-- Timeline Event
-
-### Relaciones
-
-- Un Customer puede tener muchas Conversations.
-- Una Conversation puede expresar uno o varios Intents.
-- Un Intent puede abrir o actualizar una Opportunity.
-- Una Opportunity puede generar Quotes y Follow-ups.
-- Una Case puede coexistir con una Opportunity, pero no reemplazarla.
-- Un Campaign puede impactar multiples Customers.
-- Un Agent Decision puede proponer acciones, pero no ejecutarlas por si sola.
-- Un Approved Action es el paso que valida una accion sensible antes de ejecucion.
-
-## Diferencias canonicas
-
-| Concepto | Definicion | No es |
+| Concept | Meaning | Not a substitute for |
 |---|---|---|
-| Customer | Entidad central con identidad, contexto y estado comercial. | No es un caso, ni una conversacion, ni una cola. |
-| Conversation | Intercambio de mensajes en un canal y ventana concreta. | No es la identidad del cliente. |
-| Opportunity | Oportunidad comercial concreta y medible. | No es una simple intencion ni un mensaje aislado. |
-| Quote | Propuesta formal o borrador de precio/condicion. | No es un chat, ni un caso, ni una campaña. |
-| Follow-up | Proxima accion comercial o de atencion a ejecutar. | No es un estado final. |
-| Case | Incidencia, reclamo, soporte o flujo de resolucion. | No es el centro del producto. |
-| Campaign | Secuencia o accion de marketing orientada a segmento. | No es una oportunidad individual. |
-| Agent Decision | Salida estructurada de un agente con razon y policy. | No es una accion ejecutada por defecto. |
-| Work Queue | Vista operativa de tareas pendientes. | No es la entidad maestra del modelo. |
+| Customer | Central commercial entity | Case, conversation, queue |
+| Customer identity | A single identifier in the identity map | Customer Master |
+| Conversation | Channel interaction thread | Customer identity |
+| Intent | Commercial or service signal | Opportunity |
+| Opportunity | Commercial chance with state | Conversation |
+| Quote | Commercial proposal or draft | Case |
+| Follow-up | Next operational step | Campaign |
+| Case | Support, incident, or post-sale flow | Customer |
+| Campaign | Future marketing action | Opportunity |
+| Agent Decision | Structured reasoning output | Executed action |
+| Work Queue | Operational view of pending work | Source of truth |
 
-## Work Queue como vista operativa
+## Work Queue rule
 
-Work Queue y Work Item existen solo como vista operativa.
+Work Queue and Work Item are only operational views.
 
-Sirven para:
+They can be used for:
 
-- priorizar pendientes,
-- asignar responsables,
-- revisar aprobaciones,
-- ordenar tareas internas.
+- prioritization
+- assignment
+- approvals
+- internal task management
 
-No deben ser el centro deterministico del sistema ni reemplazar a Customer.
+They must not become the deterministic center of the model.
+
+Leads from WhatsApp can exist before a persistent Customer Master exists.
 
 ## Operational layers
 
-### Layer 1: Identity
+1. Identity
+2. Conversation
+3. Intent
+4. Opportunity
+5. Governance
+6. Approved execution
 
-Resolver quien es el Customer.
+## Modeling principles
 
-### Layer 2: Conversation
-
-Entender que esta pasando en el canal.
-
-### Layer 3: Intent
-
-Clasificar la necesidad o senal comercial.
-
-### Layer 4: Opportunity
-
-Convertir la senal en una oportunidad accionable.
-
-### Layer 5: Decision and governance
-
-Determinar que puede hacer un agente, que debe quedar en borrador y que requiere aprobacion.
-
-### Layer 6: Approved execution
-
-Ejecutar lo aprobado y registrar el evento en timeline.
-
-## Princpios de modelado
-
-1. Customer primero.
-2. Identity map antes que Customer Master definitivo.
-3. Conversations, intents y opportunities como entidades separadas.
-4. Cases como subdominio operacional, no como centro.
-5. Work Queue como vista, no como verdad.
-6. Timeline como auditabilidad operacional.
-7. Agent Decision y Approved Action como entidades obligatorias para trazabilidad.
-
+1. Customer first.
+2. Identity map before final Customer Master.
+3. Separate conversation, intent, opportunity, and case.
+4. Treat queue as view, not truth.
+5. Preserve timeline as audit history.
+6. Record agent decisions and approved actions explicitly.
