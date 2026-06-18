@@ -1,6 +1,7 @@
 import { getCaseById, getCaseTimeline, type TimelineEntry } from "./cases";
 import type { DbRow } from "./db";
 import { safeQueryRows } from "./db";
+import { buildCommercialShadowReview, type CommercialShadowReviewAvailableInput, type CommercialShadowReviewIdentifiers, type CommercialShadowReviewInput, type CommercialShadowReviewViewModel } from "./brain/commercial/review";
 
 export type SourceQueueDetail = {
   source_domain: string | null;
@@ -55,7 +56,174 @@ export type CaseDetailData = {
   timeline: { ok: true; rows: TimelineEntry[]; source: string } | { ok: false; rows: TimelineEntry[]; source: string; error: string };
   sourceQueue: SourceQueueDetail | null;
   notes: CaseCompatibilityNote[];
+  commercialShadowReview: CommercialShadowReviewViewModel;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asText(value: unknown) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number" || typeof value === "bigint") return String(value);
+  return null;
+}
+
+function asId(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "bigint") return value.toString();
+  return null;
+}
+
+function firstRecordValue(row: DbRow, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && value !== null) return value;
+  }
+  return null;
+}
+
+function buildCommercialShadowReviewIdentifiers(caseRow: DbRow, sourceQueue: SourceQueueDetail | null): CommercialShadowReviewIdentifiers {
+  return {
+    correlationId: asText(firstRecordValue(caseRow, ["commercial_shadow_correlation_id", "shadow_correlation_id", "correlation_id"])) ?? null,
+    processInboundRunId: asText(firstRecordValue(caseRow, ["process_inbound_run_id", "inbound_run_id", "brain_run_id"])) ?? null,
+    salesAgentRunId: asText(firstRecordValue(caseRow, ["sales_agent_run_id", "commercial_run_id", "agent_run_id"])) ?? null,
+    caseId: asId(caseRow.conversation_case_id ?? caseRow.case_id ?? caseRow.id ?? null),
+    conversationCaseId: asId(caseRow.conversation_case_id ?? caseRow.id ?? null),
+    waId: asText(caseRow.wa_id ?? null),
+    email: asText(caseRow.email ?? null),
+    phone: asText(caseRow.phone ?? sourceQueue?.phone_normalized ?? null),
+    idCustomer: asId(caseRow.id_customer ?? sourceQueue?.id_customer ?? null),
+    idOrder: asId(caseRow.id_order ?? sourceQueue?.id_order ?? null),
+    invoiceNumber: asId(caseRow.invoice_number ?? sourceQueue?.invoice_number ?? null)
+  };
+}
+
+function readCommercialShadowReviewSource(caseRow: DbRow) {
+  const candidates = [
+    "commercial_shadow_review",
+    "commercial_shadow_result",
+    "commercial_evaluation",
+    "ai_sdr_review",
+    "ai_sdr_shadow_review",
+    "shadow_review"
+  ];
+
+  for (const candidate of candidates) {
+    const value = caseRow[candidate];
+    if (!isRecord(value)) continue;
+    const status = asText(value.status);
+    if (status === "available" || status === "disabled" || status === "not_found" || status === "error") {
+      return value;
+    }
+    if (value.shadowResult || value.shadow_result) {
+      return { status: "available", ...value };
+    }
+  }
+
+  const metadata = isRecord(caseRow.metadata) ? caseRow.metadata : null;
+  if (metadata) {
+    for (const candidate of candidates) {
+      const value = metadata[candidate];
+      if (!isRecord(value)) continue;
+      const status = asText(value.status);
+      if (status === "available" || status === "disabled" || status === "not_found" || status === "error") {
+        return value;
+      }
+      if (value.shadowResult || value.shadow_result) {
+        return { status: "available", ...value };
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildCommercialShadowReviewForCase(caseRow: DbRow, sourceQueue: SourceQueueDetail | null): CommercialShadowReviewViewModel {
+  const source = readCommercialShadowReviewSource(caseRow);
+  const identifiers = buildCommercialShadowReviewIdentifiers(caseRow, sourceQueue);
+
+  if (!source) {
+    const input: CommercialShadowReviewInput = {
+      status: "not_found",
+      identifiers,
+      observedAt: null,
+      reason: "No persisted commercial shadow source is available for this case.",
+      warnings: [],
+      metadata: {
+        source: "case_detail_read_adapter"
+      }
+    };
+    return buildCommercialShadowReview(input);
+  }
+
+  if (asText(source.status) === "disabled") {
+    const input: CommercialShadowReviewInput = {
+      status: "disabled",
+      identifiers,
+      observedAt: asText(source.observedAt ?? source.observed_at ?? null) ?? null,
+      correlationId: asText(source.correlationId ?? source.correlation_id ?? null) ?? null,
+      processInboundRunId: asText(source.processInboundRunId ?? source.process_inbound_run_id ?? null) ?? null,
+      salesAgentRunId: asText(source.salesAgentRunId ?? source.sales_agent_run_id ?? null) ?? null,
+      reason: asText(source.reason ?? source.message ?? null),
+      warnings: Array.isArray(source.warnings) ? source.warnings.map((warning) => asText(warning) ?? "").filter(Boolean) : [],
+      metadata: isRecord(source.metadata) ? source.metadata : { source: "case_detail_read_adapter" }
+    };
+    return buildCommercialShadowReview(input);
+  }
+
+  if (asText(source.status) === "error") {
+    const input: CommercialShadowReviewInput = {
+      status: "error",
+      identifiers,
+      observedAt: asText(source.observedAt ?? source.observed_at ?? null) ?? null,
+      correlationId: asText(source.correlationId ?? source.correlation_id ?? null) ?? null,
+      processInboundRunId: asText(source.processInboundRunId ?? source.process_inbound_run_id ?? null) ?? null,
+      salesAgentRunId: asText(source.salesAgentRunId ?? source.sales_agent_run_id ?? null) ?? null,
+      reason: asText(source.reason ?? source.message ?? null),
+      error: source.error ?? source.details ?? null,
+      warnings: Array.isArray(source.warnings) ? source.warnings.map((warning) => asText(warning) ?? "").filter(Boolean) : [],
+      metadata: isRecord(source.metadata) ? source.metadata : { source: "case_detail_read_adapter" }
+    };
+    return buildCommercialShadowReview(input);
+  }
+
+  const shadowResult = source.shadowResult ?? source.shadow_result ?? null;
+  const evaluationResult = source.evaluationResult ?? source.evaluation_result ?? null;
+  if (!isRecord(shadowResult)) {
+    return buildCommercialShadowReview({
+      status: "not_found",
+      identifiers,
+      observedAt: null,
+      reason: "Commercial shadow read adapter found no structured shadow result.",
+      warnings: [],
+      metadata: {
+        source: "case_detail_read_adapter"
+      }
+    });
+  }
+
+  return buildCommercialShadowReview({
+    status: "available",
+    identifiers,
+    observedAt: asText(source.observedAt ?? source.observed_at ?? caseRow.updated_at ?? caseRow.last_message_at ?? null) ?? null,
+    correlationId: asText(source.correlationId ?? source.correlation_id ?? null) ?? null,
+    processInboundRunId: asText(source.processInboundRunId ?? source.process_inbound_run_id ?? null) ?? null,
+    salesAgentRunId: asText(source.salesAgentRunId ?? source.sales_agent_run_id ?? null) ?? null,
+    shadowResult: shadowResult as CommercialShadowReviewAvailableInput["shadowResult"],
+    evaluationResult: isRecord(evaluationResult) ? (evaluationResult as CommercialShadowReviewAvailableInput["evaluationResult"]) : null,
+    warnings: Array.isArray(source.warnings) ? source.warnings.map((warning) => asText(warning) ?? "").filter(Boolean) : [],
+    metadata: isRecord(source.metadata) ? source.metadata : { source: "case_detail_read_adapter" }
+  });
+}
 
 function toPositiveNumber(value: unknown) {
   const num = Number(value);
@@ -227,13 +395,16 @@ export async function getCaseDetailData(caseId: string | number): Promise<
     body: "El legacy consultaba ps_orders, ps_customer, ps_address y ps_order_detail con otra credencial. Esos datos comerciales no existen en el schema actual conectado."
   });
 
+  const commercialShadowReview = buildCommercialShadowReviewForCase(caseResult.row, sourceQueueResult.ok ? sourceQueueResult.row : null);
+
   return {
     ok: true,
     data: {
       caseRow: caseResult.row,
       timeline,
       sourceQueue: sourceQueueResult.ok ? sourceQueueResult.row : null,
-      notes
+      notes,
+      commercialShadowReview
     }
   };
 }

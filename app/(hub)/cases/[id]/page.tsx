@@ -4,6 +4,7 @@ import { isDbWriteEnabled } from "@/lib/write-access";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { CaseConsoleHeader } from "@/components/cases/CaseConsoleHeader";
 import { CaseOperationalSidebar } from "@/components/cases/CaseOperationalSidebar";
+import { AiSdrReviewPanel } from "@/components/cases/ai-sdr/AiSdrReviewPanel";
 import { CaseConversationPanel } from "@/components/cases/CaseConversationPanel";
 import { CaseActionsPanel } from "@/components/cases/CaseActionsPanel";
 import { CaseTechnicalPanel } from "@/components/cases/CaseTechnicalPanel";
@@ -23,7 +24,7 @@ export default async function CaseDetailPage({ params }: CaseDetailProps) {
   }
   if (!result.data) notFound();
 
-  const { caseRow, timeline, sourceQueue, notes } = result.data;
+  const { caseRow, timeline, sourceQueue, notes, commercialShadowReview } = result.data;
   const closed = ["closed", "resolved", "done"].includes(String(caseRow.status ?? "").toLowerCase());
   const writeEnabled = isDbWriteEnabled();
 
@@ -45,6 +46,7 @@ export default async function CaseDetailPage({ params }: CaseDetailProps) {
         </div>
 
         <div className="space-y-6">
+          <AiSdrReviewPanel caseId={id} review={commercialShadowReview} />
           {timeline.ok ? (
             <CaseConversationPanel
               caseId={id}

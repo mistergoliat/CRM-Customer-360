@@ -1,4 +1,3 @@
-P1Ka
 # AI SDR Implementation Blueprint
 
 Este documento fija el tramo comercial del backend IA para P1K. No introduce runtime, prompts, endpoints ni writes.
@@ -232,12 +231,14 @@ Estado actual del tramo comercial:
 - `P1K-007D` DONE
 - `P1K-007E` DONE
 - `P1K-007F` DONE
+- `P1K-008A` DONE
 
 `P1K-007A` implementa `buildCommercialContext(...)` como adaptador puro.
 `P1K-007B` implementa `validateSalesAgentOutput(...)` como boundary fail-closed para output desconocido.
 `P1K-007C` implementa `runSalesAgentDryRun(...)` con provider inyectable, timeout y observabilidad.
 `P1K-007D` implementa la `Commercial Policy` deterministica posterior al validator.
 `P1K-007F` implementa la evaluación comercial visible, offline y sin activar automatización productiva.
+`P1K-008A` implementa la superficie read-only de review dentro de `/cases/[id]`, con DTO sanitizado, side effects visibles en cero y formulario humano local efimero.
 
 ## 12. Runtime y policy
 
@@ -264,11 +265,28 @@ processInbound
 
 ## 13. Siguiente milestone
 
-`P1K-007F` - `Commercial Evaluation` - DONE
+`P1K-008B` - `Controlled Shadow Dataset` - NEXT
 
-La evaluación comercial visible queda cerrada como superficie read-only.
-=======
-# AI SDR Implementation Blueprint / Runtime Sequencing
+La evaluación comercial visible queda cerrada como superficie read-only y la siguiente pieza es el dataset controlado para revisión humana.
+
+## 14. P1K-008A Commercial Shadow Review Surface
+
+La primera superficie visible de AI SDR vive dentro del detalle de caso `/cases/[id]` como un panel o pestaña `AI SDR`.
+
+La UI solo consume un DTO de presentación sanitizado y read-only. Si no existe observación shadow, la superficie muestra `not_found` o `disabled` sin romper el caso ni la conversación.
+
+La superficie muestra:
+
+- propuesta del Sales Agent;
+- resultado posterior a Commercial Policy;
+- claims, acciones, tool requests y entidades propuestas;
+- observabilidad, warnings, issues y trazabilidad;
+- invariantes de side effects en cero;
+- borrador local de evaluación humana sin persistencia.
+
+No ejecuta tools, no llama modelos, no escribe DB, no muta Case y no controla Response Policy.
+
+## 15. AI SDR Implementation Blueprint / Runtime Sequencing
 
 ## Purpose
 
