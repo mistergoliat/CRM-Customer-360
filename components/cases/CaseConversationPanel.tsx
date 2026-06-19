@@ -13,9 +13,9 @@ function isTruthy(value: unknown) {
 }
 
 function bubbleClass(direction: TimelineEntry["direction"]) {
-  if (direction === "inbound") return "mr-auto max-w-[88%] rounded-2xl rounded-bl-sm border border-slate-200 bg-white";
-  if (direction === "system") return "mx-auto max-w-[78%] rounded-2xl border border-slate-200 bg-slate-100";
-  return "ml-auto max-w-[88%] rounded-2xl rounded-br-sm border border-sky-100 bg-sky-50";
+  if (direction === "inbound") return "mr-auto max-w-[88%] rounded-[24px] rounded-bl-sm border border-slate-200 bg-white shadow-sm";
+  if (direction === "system") return "mx-auto max-w-[78%] rounded-[24px] border border-slate-200 bg-white/85 shadow-sm";
+  return "ml-auto max-w-[88%] rounded-[24px] rounded-br-sm border border-emerald-100 bg-emerald-50 shadow-sm";
 }
 
 function directionTone(direction: TimelineEntry["direction"]) {
@@ -52,11 +52,12 @@ export function CaseConversationPanel({
   }, [messages]);
 
   return (
-    <section className="hub-card flex h-[calc(100vh-8.75rem)] min-h-[780px] flex-col overflow-hidden border-l-4 border-l-primary-container">
-      <div className="border-b border-slate-200 px-5 py-4">
+    <section className="hub-card flex h-[calc(100vh-8.75rem)] min-h-[780px] flex-col overflow-hidden rounded-[28px] border border-emerald-100 bg-[#efeae2] shadow-[0_24px_90px_-45px_rgba(15,23,42,0.45)]">
+      <div className="border-b border-white/70 bg-white/85 px-5 py-4 backdrop-blur">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
+              <StatusChip label="Chat WhatsApp" tone="green" />
               <p className="text-headline-md text-on-surface">{asText(row.contact_name, "Conversacion")}</p>
               <StatusChip label={`${row.message_count ?? messages.length} mensajes`} tone="gray" />
             </div>
@@ -70,16 +71,16 @@ export function CaseConversationPanel({
         </div>
       </div>
 
-      <div className={`border-b px-5 py-3 text-body-md ${windowOpen ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+      <div className={`border-b px-5 py-3 text-body-md ${windowOpen ? "border-emerald-200 bg-emerald-50/90 text-emerald-900" : "border-amber-200 bg-amber-50/90 text-amber-900"}`}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span>Ventana WhatsApp {windowOpen ? "abierta" : "cerrada"}</span>
           <span>Ultimo mensaje cliente: {asText(row.hours_since_last_customer_message, "sin datos")} horas</span>
         </div>
       </div>
 
-      <div ref={viewportRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-slate-50/80 px-5 py-5">
+      <div ref={viewportRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#efeae2] px-4 py-5 md:px-5">
         {messages.length === 0 ? (
-          <div className="rounded-xl border border-slate-200 bg-white p-6 text-body-md text-slate-500">
+          <div className="rounded-xl border border-slate-200 bg-white p-6 text-body-md text-slate-500 shadow-sm">
             Sin mensajes disponibles en tablas conversacionales.
           </div>
         ) : (
@@ -119,7 +120,7 @@ export function CaseConversationPanel({
         )}
       </div>
 
-      <div className="border-t border-slate-200 bg-white px-5 py-4">
+      <div className="border-t border-white/70 bg-white/85 px-5 py-4 backdrop-blur">
         <div className="mb-3 flex items-center gap-2">
           <Icon name="edit_square" className="text-slate-500" />
           <p className="text-label-bold uppercase text-slate-500">Reply manual</p>

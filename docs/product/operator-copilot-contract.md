@@ -16,6 +16,24 @@ It helps the operator:
 
 It is not an execution engine and it is not an approval engine.
 
+## P1K-010 shell
+
+P1K-010 adds a compact operator shell inside case detail for the AI SDR loop.
+
+The shell:
+
+- shows the next governed action in read-only form,
+- shows known and missing information,
+- keeps operator controls blocked by design,
+- does not persist approvals,
+- does not execute tools or outbound,
+- does not mutate Case or Opportunity.
+
+P1K-011A defines the action lifecycle contract behind that shell.
+The shell continues to consume `next_action_json` as a read-only recommendation surface until a durable action entity is justified and available.
+P1K-011B adds a dry-run follow-up planner on top of that read-only recommendation surface, but it still does not persist or execute anything.
+P1K-012A introduces `crm_agent_actions` as the durable action queue boundary, and P1K-012B exposes it in a read-only queue surface. The copilot still treats it as reviewable and non-executable until the execution gate exists.
+
 ## What it is
 
 Operator Copilot is a structured assistant for supervision and control.
@@ -251,6 +269,11 @@ It does not change windows, suppressions or plan status by itself.
 All command proposals must pass through governance outside the copilot.
 
 The copilot cannot override hard blocks or approval requirements.
+
+P1K-011A clarifies the boundary between a proposed next action, a human review draft and any future executable command. The copilot may present the lifecycle, but it does not persist approvals or execute commands.
+P1K-011B keeps follow-up planning in dry-run only, so the copilot can explain a plan without turning it into a durable action yet.
+P1K-012A adds the durable queue that can later hold approved, blocked or scheduled actions, but the copilot still cannot execute them.
+P1K-012B-UI2 places the copilot in a right-side case detail panel, with chat as the main surface and diagnostics collapsed below the operational cards.
 
 ## Relationship with Agent Runtime
 

@@ -3,6 +3,7 @@ import type { BrainAgentRunResponse } from "../agents/types";
 import type { BrainActionPolicy, BrainInstructionAction, BrainNormalizedAction } from "../actions/types";
 import type { BrainExecutionPlan } from "../messaging/types";
 import type { CommercialShadowResult } from "../commercial/shadow";
+import type { CommercialOperationalLoopResult } from "../commercial/operational-loop";
 
 export type { BrainBotEligibility };
 
@@ -229,6 +230,7 @@ export type BrainProcessInboundResponse = {
       reason: string;
     };
     commercialShadow?: CommercialShadowResult | null;
+    commercialOperationalLoop?: CommercialOperationalLoopResult | null;
   };
   metadata: {
     version: string;

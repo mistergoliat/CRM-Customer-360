@@ -51,7 +51,38 @@ El resultado puede quedar en:
 - `P1K-007D` ACTIVE
 - `P1K-007E` NEXT
 - `P1K-007F` PENDING
-=======
+- `P1K-011A` DONE
+- `P1K-011B` DONE
+- `P1K-012A` DONE
+- `P1K-012B` NEXT
+## Action lifecycle contract
+
+La decision comercial valida vive primero como `next_action_json` dentro de `crm_agent_decisions`.
+
+Eso basta cuando:
+
+- solo se necesita mostrar recomendacion;
+- no hay aprobacion persistente;
+- no hay ejecucion futura;
+- no hay scheduler ni outbox;
+- no se requiere editar, aprobar o rechazar una accion como entidad durable.
+
+Una entidad durable futura de accion solo se vuelve necesaria cuando exista necesidad real de:
+
+- persistir aprobaciones o rechazos;
+- programar ejecucion posterior;
+- conectar la accion con `brain_message_outbox`;
+- cancelar o replanificar follow-up;
+- auditar lifecycle completo de la accion.
+
+La secuencia conceptual es:
+
+`Decision -> NextAction -> ProposedAction -> OperatorReview -> ApprovedAction -> ExecutableCommand -> ExecutionResult`
+
+En `P1K-011A` no se implementa persistencia de acciones ni ejecucion.
+En `P1K-011B` se agrega el planner puro de follow-up en dry-run, que puede sugerir seguimiento sin crear una accion durable.
+En `P1K-012A` aparece `crm_agent_actions` como cola durable de acciones gobernadas, sin habilitar ejecucion ni outbox.
+
 ## Objetivo
 
 Definir como un agente propone, clasifica, bloquea o ejecuta acciones dentro del CRM agentic.

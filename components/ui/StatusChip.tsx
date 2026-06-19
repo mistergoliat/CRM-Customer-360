@@ -1,6 +1,9 @@
+import React from "react";
 import clsx from "clsx";
 import type { ChipTone } from "@/lib/status";
 import { toneForStatus } from "@/lib/status";
+
+void React;
 
 const toneClasses: Record<ChipTone, string> = {
   red: "bg-red-50 text-red-700 ring-red-200",
