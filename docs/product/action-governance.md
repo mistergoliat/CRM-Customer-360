@@ -259,6 +259,20 @@ Toda recomendacion comercial debe poder explicarse con:
 - `rationale`
 - `requires_human_approval`
 
+## Sandbox autonomy boundary
+
+P1K-012C introduces a sandbox-only eligibility gate for autonomous WhatsApp replies.
+
+That gate:
+
+- requires exact-match whitelist in sandbox;
+- stays read-only;
+- never writes outbox;
+- never calls Meta;
+- never replaces policy or governance.
+
+Future production autonomy must not depend on whitelist. It must depend on policy, risk, rollout and control operacional.
+
 ## Operational pattern
 
 1. El agente propone.

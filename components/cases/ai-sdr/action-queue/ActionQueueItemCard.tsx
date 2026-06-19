@@ -14,6 +14,7 @@ export function ActionQueueItemCard({ item }: { item: ActionQueueItemViewModel }
           <ActionQueueStatusBadge label={item.source} />
           <ActionQueueStatusBadge label={item.persisted ? "persisted" : "preview"} />
           <ActionQueueStatusBadge label="executable false" />
+          <ActionQueueStatusBadge label={item.sandboxAutonomy.status} />
         </div>
         {item.idempotencyKey ? <span className="text-label-sm text-slate-500 break-all">{item.idempotencyKey}</span> : null}
       </div>
@@ -47,6 +48,19 @@ export function ActionQueueItemCard({ item }: { item: ActionQueueItemViewModel }
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
           <p className="text-label-bold uppercase text-slate-500">Cancel reason</p>
           <p className="mt-1 break-words text-body-md text-on-surface">{item.cancelReason ?? "sin cancelacion"}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-lg border border-slate-200 bg-sky-50 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-label-bold uppercase text-slate-500">Sandbox eligibility</p>
+          <ActionQueueStatusBadge label={item.sandboxAutonomy.status} />
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <CaseDetailField label="Recipient" value={item.sandboxAutonomy.recipientMasked ?? "sin dato"} />
+          <CaseDetailField label="Risk" value={item.sandboxAutonomy.riskLevel} />
+          <CaseDetailField label="Whitelist" value={item.sandboxAutonomy.blockReasons.includes("recipient_not_whitelisted") ? "not matched" : "matched"} />
+          <CaseDetailField label="Execution" value="disabled in current milestone" />
         </div>
       </div>
     </article>

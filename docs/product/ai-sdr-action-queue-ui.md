@@ -53,6 +53,7 @@ P1K-012B-UI2 reshapes the case detail into a chat-first layout and keeps the que
 
 P1K-012C will define the whitelisted autonomous reply sandbox contract.
 That future milestone will still require a separate execution gate before any outbound action can happen.
+The UI may surface read-only sandbox eligibility for each action, including masked recipient and whitelist match state, but it still does not execute.
 
 ## Criteria for P1K-012C
 

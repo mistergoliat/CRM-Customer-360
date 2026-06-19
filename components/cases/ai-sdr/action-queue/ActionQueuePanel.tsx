@@ -36,8 +36,13 @@ export function ActionQueuePanel({
           <CaseDetailField label="Tabla" value={actionQueue.diagnostics.tableAvailable === null ? "desconocida" : actionQueue.diagnostics.tableAvailable ? "disponible" : "no disponible"} />
           <CaseDetailField label="Permiso" value={actionQueue.diagnostics.permissionError ? "error" : "ok"} />
           <CaseDetailField label="Fallback preview" value={actionQueue.diagnostics.usedPreviewFallback ? "si" : "no"} />
+          <CaseDetailField label="Sandbox eligibility" value={actionQueue.sandboxAutonomy.status} />
           <CaseDetailField label="Observed at" value={actionQueue.observedAt ?? "sin dato"} date={Boolean(actionQueue.observedAt)} />
         </div>
+
+        {actionQueue.sandboxAutonomy.status !== "eligible" ? (
+          <CaseInlineNote tone={actionQueue.sandboxAutonomy.status === "disabled" ? "info" : "warning"} title="Sandbox autonomy" body={actionQueue.sandboxAutonomy.note} />
+        ) : null}
 
         {actionQueue.status === "error" ? (
           <CaseInlineNote tone="warning" title="Error seguro" body={actionQueue.error ?? "No se pudo leer la cola de acciones de forma segura."} />

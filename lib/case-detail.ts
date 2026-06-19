@@ -4,6 +4,7 @@ import { safeQueryRows } from "./db";
 import { buildActionQueueViewModel, type ActionQueueViewModel } from "./brain/commercial/action-queue";
 import { buildCommercialShadowReview, type CommercialShadowReviewAvailableInput, type CommercialShadowReviewIdentifiers, type CommercialShadowReviewInput, type CommercialShadowReviewViewModel } from "./brain/commercial/review";
 import { buildAiSdrOperatorPilotViewModel, type AiSdrOperatorPilotViewModel } from "./brain/commercial/operator-pilot";
+import { buildSandboxAutonomyConfig, parseAutonomousTestWaIds, COMMERCIAL_SANDBOX_AUTONOMY_ALLOWED_ACTION_TYPES } from "./brain/commercial/autonomy-sandbox";
 
 export type SourceQueueDetail = {
   source_domain: string | null;
@@ -94,6 +95,29 @@ function asDateInput(value: unknown): string | Date | null {
   }
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   return null;
+}
+
+function parseBooleanEnv(value: string | undefined, fallback: boolean) {
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return fallback;
+  return ["1", "true", "yes", "on"].includes(normalized);
+}
+
+function parseAllowedActionTypes(raw: string | undefined) {
+  if (typeof raw !== "string" || !raw.trim()) return [...COMMERCIAL_SANDBOX_AUTONOMY_ALLOWED_ACTION_TYPES];
+  const values = raw.split(",").map((item) => item.trim()).filter(Boolean);
+  return values.length > 0 ? [...new Set(values)] : [...COMMERCIAL_SANDBOX_AUTONOMY_ALLOWED_ACTION_TYPES];
+}
+
+function readSandboxAutonomyConfig() {
+  return buildSandboxAutonomyConfig({
+    sandboxEnabled: parseBooleanEnv(process.env.BRAIN_AUTONOMOUS_SANDBOX_ENABLED, false),
+    autonomousReplyEnabled: parseBooleanEnv(process.env.BRAIN_AUTONOMOUS_REPLY_ENABLED, false),
+    whitelistedWaIds: parseAutonomousTestWaIds(process.env.BRAIN_AUTONOMOUS_TEST_WA_IDS),
+    allowedActionTypes: parseAllowedActionTypes(process.env.BRAIN_AUTONOMOUS_ALLOWED_ACTION_TYPES),
+    maxRiskLevel: (process.env.BRAIN_AUTONOMOUS_MAX_RISK_LEVEL?.trim() || "low").toLowerCase()
+  });
 }
 
 function firstRecordValue(row: DbRow, keys: string[]) {
@@ -444,7 +468,8 @@ export async function getCaseDetailData(caseId: string | number): Promise<
     sourceQueue: sourceQueueResult.ok ? sourceQueueResult.row : null,
     commercialOperationalResult,
     currentTime: asDateInput(caseResult.row.updated_at ?? caseResult.row.last_message_at ?? null),
-    timezone: "America/Santiago"
+    timezone: "America/Santiago",
+    sandboxAutonomyConfig: readSandboxAutonomyConfig()
   });
   const commercialOperatorPilot = buildAiSdrOperatorPilotViewModel({
     caseId,

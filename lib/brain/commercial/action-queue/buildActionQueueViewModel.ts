@@ -1,6 +1,12 @@
 import { buildAgentActionFromFollowUpPlan, buildAgentActionFromNextAction } from "./buildAgentAction";
 import { loadAgentActions } from "./loadAgentActions";
 import { COMMERCIAL_AGENT_ACTION_QUEUE_MAX_TEXT_LENGTH, COMMERCIAL_AGENT_ACTION_QUEUE_VIEW_MODEL_MAX_ITEMS } from "./constants";
+import {
+  buildSandboxAutonomyConfig,
+  evaluateAgentActionForSandbox,
+  type SandboxAutonomyConfig,
+  type SandboxAutonomyEligibilityStatus
+} from "../autonomy-sandbox";
 import type {
   ActionQueueBuildInput,
   ActionQueueItemSource,
@@ -213,7 +219,44 @@ function buildActionContext(input: ActionQueueBuildInput, overrides: Partial<Crm
   };
 }
 
-function buildItem(action: CrmAgentAction, source: ActionQueueItemSource, persisted: boolean): ActionQueueItemViewModel {
+type SandboxActionEnvelope = {
+  action: CrmAgentAction;
+  source: ActionQueueItemSource;
+  persisted: boolean;
+  sandboxAutonomy: ReturnType<typeof evaluateAgentActionForSandbox>;
+};
+
+function normalizeSandboxConfig(config?: SandboxAutonomyConfig | null): SandboxAutonomyConfig {
+  return buildSandboxAutonomyConfig({
+    sandboxEnabled: config?.sandboxEnabled ?? false,
+    autonomousReplyEnabled: config?.autonomousReplyEnabled ?? false,
+    whitelistedWaIds: Array.isArray(config?.whitelistedWaIds) ? [...config.whitelistedWaIds] : [],
+    allowedActionTypes: Array.isArray(config?.allowedActionTypes) && config.allowedActionTypes.length > 0
+      ? [...config.allowedActionTypes]
+      : [...buildSandboxAutonomyConfig().allowedActionTypes],
+    maxRiskLevel: typeof config?.maxRiskLevel === "string" && config.maxRiskLevel.trim() ? config.maxRiskLevel.trim() : "low"
+  });
+}
+
+function buildSandboxReadinessSummary(config: SandboxAutonomyConfig): { status: SandboxAutonomyEligibilityStatus; note: string } {
+  if (!config.sandboxEnabled) {
+    return { status: "disabled", note: "Sandbox autonomy disabled." };
+  }
+  if (!config.autonomousReplyEnabled) {
+    return { status: "disabled", note: "Autonomous reply disabled." };
+  }
+  if (config.maxRiskLevel.trim().toLowerCase() !== "low") {
+    return { status: "invalid", note: "Sandbox autonomy config is fail-closed until max risk is low." };
+  }
+  return { status: "eligible", note: "Sandbox autonomy preview only. Execution disabled in the current milestone." };
+}
+
+function buildItem(
+  action: CrmAgentAction,
+  source: ActionQueueItemSource,
+  persisted: boolean,
+  sandboxAutonomy: ReturnType<typeof evaluateAgentActionForSandbox>
+): ActionQueueItemViewModel {
   return {
     actionId: action.actionId,
     actionType: action.actionType,
@@ -228,7 +271,8 @@ function buildItem(action: CrmAgentAction, source: ActionQueueItemSource, persis
     idempotencyKey: action.idempotencyKey,
     persisted,
     executable: false,
-    source
+    source,
+    sandboxAutonomy
   };
 }
 
@@ -261,9 +305,9 @@ function actionSource(action: CrmAgentAction, persistedIds: Set<string>) {
   return "next_action_json" as const;
 }
 
-function dedupeActions(items: Array<{ action: CrmAgentAction; source: ActionQueueItemSource; persisted: boolean }>) {
+function dedupeActions<T extends { action: CrmAgentAction; source: ActionQueueItemSource; persisted: boolean }>(items: T[]) {
   const seen = new Set<string>();
-  const output: Array<{ action: CrmAgentAction; source: ActionQueueItemSource; persisted: boolean }> = [];
+  const output: T[] = [];
   for (const item of items) {
     const key = item.action.idempotencyKey || item.action.actionId;
     if (!key || seen.has(key)) continue;
@@ -450,21 +494,76 @@ function buildFollowUpPreview(input: ActionQueueBuildInput): { action: CrmAgentA
   };
 }
 
-function buildPersistedActionItems(result: LoadAgentActionsResult) {
+function buildPersistedActionItems(result: LoadAgentActionsResult, sandboxConfig: SandboxAutonomyConfig, input: ActionQueueBuildInput): SandboxActionEnvelope[] {
   const persistedIds = new Set(result.actions.map((action) => action.actionId));
   return result.actions.map((action) => ({
     action,
     source: actionSource(action, persistedIds),
-    persisted: true
+    persisted: true,
+    sandboxAutonomy: evaluateAgentActionForSandbox(
+      action,
+      {
+        now: buildCurrentTime(input),
+        caseId: asText(readCandidate(input.caseRow, ["conversation_case_id", "case_id", "id"])) ?? null,
+        caseStatus: asText(readCandidate(input.caseRow, ["status"])) ?? null,
+        lifecycleStatus: asText(readCandidate(input.caseRow, ["lifecycle_status", "estado_caso"])) ?? null,
+        humanOwnerActive: Boolean(readCandidate(input.caseRow, ["requires_human", "requires_human_review", "requiere_contacto_humano"])),
+        aiBlocked: Boolean(readCandidate(input.caseRow, ["ai_blocked", "aiBlocked"])),
+        requiresHuman: Boolean(readCandidate(input.caseRow, ["requires_human", "requires_human_review", "requiere_contacto_humano"])),
+        policyStatus: asText(action.policyStatus) ?? null,
+        conflictingActionExists: action.blockReasons.some((reason) => /duplicate|conflict/i.test(reason))
+      },
+      sandboxConfig
+    )
   }));
 }
 
-function buildPreviewItems(input: ActionQueueBuildInput) {
-  const items: Array<{ action: CrmAgentAction; source: ActionQueueItemSource; persisted: boolean }> = [];
+function buildPreviewItems(input: ActionQueueBuildInput, sandboxConfig: SandboxAutonomyConfig): SandboxActionEnvelope[] {
+  const items: SandboxActionEnvelope[] = [];
   const nextAction = buildNextActionPreview(input);
-  if (nextAction) items.push({ ...nextAction, persisted: false });
+  if (nextAction) {
+    items.push({
+      ...nextAction,
+      persisted: false,
+      sandboxAutonomy: evaluateAgentActionForSandbox(
+        nextAction.action,
+        {
+          now: buildCurrentTime(input),
+          caseId: asText(readCandidate(input.caseRow, ["conversation_case_id", "case_id", "id"])) ?? null,
+          caseStatus: asText(readCandidate(input.caseRow, ["status"])) ?? null,
+          lifecycleStatus: asText(readCandidate(input.caseRow, ["lifecycle_status", "estado_caso"])) ?? null,
+          humanOwnerActive: Boolean(readCandidate(input.caseRow, ["requires_human", "requires_human_review", "requiere_contacto_humano"])),
+          aiBlocked: Boolean(readCandidate(input.caseRow, ["ai_blocked", "aiBlocked"])),
+          requiresHuman: Boolean(readCandidate(input.caseRow, ["requires_human", "requires_human_review", "requiere_contacto_humano"])),
+          policyStatus: asText(nextAction.action.policyStatus) ?? null,
+          conflictingActionExists: nextAction.action.blockReasons.some((reason) => /duplicate|conflict/i.test(reason))
+        },
+        sandboxConfig
+      )
+    });
+  }
   const followUp = buildFollowUpPreview(input);
-  if (followUp) items.push({ ...followUp, persisted: false });
+  if (followUp) {
+    items.push({
+      ...followUp,
+      persisted: false,
+      sandboxAutonomy: evaluateAgentActionForSandbox(
+        followUp.action,
+        {
+          now: buildCurrentTime(input),
+          caseId: asText(readCandidate(input.caseRow, ["conversation_case_id", "case_id", "id"])) ?? null,
+          caseStatus: asText(readCandidate(input.caseRow, ["status"])) ?? null,
+          lifecycleStatus: asText(readCandidate(input.caseRow, ["lifecycle_status", "estado_caso"])) ?? null,
+          humanOwnerActive: Boolean(readCandidate(input.caseRow, ["requires_human", "requires_human_review", "requiere_contacto_humano"])),
+          aiBlocked: Boolean(readCandidate(input.caseRow, ["ai_blocked", "aiBlocked"])),
+          requiresHuman: Boolean(readCandidate(input.caseRow, ["requires_human", "requires_human_review", "requiere_contacto_humano"])),
+          policyStatus: asText(followUp.action.policyStatus) ?? null,
+          conflictingActionExists: followUp.action.blockReasons.some((reason) => /duplicate|conflict/i.test(reason))
+        },
+        sandboxConfig
+      )
+    });
+  }
   return items;
 }
 
@@ -473,6 +572,7 @@ function buildViewModel(
   origin: ActionQueueViewModelOrigin,
   actions: ActionQueueItemViewModel[],
   diagnostics: ActionQueueViewModel["diagnostics"],
+  sandboxAutonomy: ActionQueueViewModel["sandboxAutonomy"],
   disabledReason: string | null,
   error: string | null,
   observedAt: string | null
@@ -482,6 +582,7 @@ function buildViewModel(
     origin,
     actions,
     diagnostics,
+    sandboxAutonomy,
     disabledReason,
     error,
     observedAt
@@ -499,6 +600,8 @@ function sanitizeDiagnosticsSource(values: string[]) {
 export async function buildActionQueueViewModel(input: ActionQueueBuildInput): Promise<ActionQueueViewModel> {
   const observedAt = buildCurrentTime(input);
   const limit = Math.max(1, Math.min(COMMERCIAL_AGENT_ACTION_QUEUE_VIEW_MODEL_MAX_ITEMS, input.limit ?? COMMERCIAL_AGENT_ACTION_QUEUE_VIEW_MODEL_MAX_ITEMS));
+  const sandboxConfig = normalizeSandboxConfig(input.sandboxAutonomyConfig ?? null);
+  const sandboxAutonomy = buildSandboxReadinessSummary(sandboxConfig);
 
   try {
     const loadResult = await loadAgentActions(
@@ -526,19 +629,20 @@ export async function buildActionQueueViewModel(input: ActionQueueBuildInput): P
           usedPreviewFallback: false,
           source: "crm_agent_actions"
         },
+        sandboxAutonomy,
         "No se pudo leer crm_agent_actions de forma segura.",
         loadResult.error ? sanitizeError(loadResult.error) : null,
         observedAt
       );
     }
 
-    const persistedItems = loadResult.status === "loaded" ? buildPersistedActionItems(loadResult).slice(0, limit) : [];
-    const previewItems = buildPreviewItems(input).slice(0, limit);
+    const persistedItems = loadResult.status === "loaded" ? buildPersistedActionItems(loadResult, sandboxConfig, input).slice(0, limit) : [];
+    const previewItems = buildPreviewItems(input, sandboxConfig).slice(0, limit);
     const combined = dedupeActions([...persistedItems, ...previewItems]).slice(0, limit);
     const hasPersisted = persistedItems.length > 0;
     const hasPreview = combined.some((item) => !item.persisted);
     const origin: ActionQueueViewModelOrigin = hasPersisted && hasPreview ? "mixed" : hasPersisted ? "persisted" : hasPreview ? "preview" : "none";
-    const mappedItems = combined.map((item) => buildItem(item.action, item.source, item.persisted));
+    const mappedItems = combined.map((item) => buildItem(item.action, item.source, item.persisted, item.sandboxAutonomy));
     const source = sourceLabel(combined);
 
     if (mappedItems.length > 0) {
@@ -552,6 +656,7 @@ export async function buildActionQueueViewModel(input: ActionQueueBuildInput): P
           usedPreviewFallback: !hasPersisted && hasPreview,
           source
         },
+        sandboxAutonomy,
         hasPersisted ? "Disponible cuando Action Persistence y Execution Gate esten habilitados." : "Vista previa read-only hasta que exista persistencia duradera.",
         null,
         observedAt
@@ -569,6 +674,7 @@ export async function buildActionQueueViewModel(input: ActionQueueBuildInput): P
           usedPreviewFallback: false,
           source: "crm_agent_actions"
         },
+        sandboxAutonomy,
         "Disponible cuando Action Persistence y Execution Gate esten habilitados.",
         null,
         observedAt
@@ -585,6 +691,7 @@ export async function buildActionQueueViewModel(input: ActionQueueBuildInput): P
         usedPreviewFallback: false,
         source: "crm_agent_actions"
       },
+      sandboxAutonomy,
       "No hay acciones ni previews comerciales disponibles.",
       null,
       observedAt
@@ -600,6 +707,7 @@ export async function buildActionQueueViewModel(input: ActionQueueBuildInput): P
         usedPreviewFallback: false,
         source: "crm_agent_actions"
       },
+      sandboxAutonomy,
       "La lectura de la cola de acciones fallo de forma segura.",
       sanitizeError(error),
       observedAt

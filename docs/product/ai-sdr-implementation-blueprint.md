@@ -259,6 +259,7 @@ Siguiente milestone despues de P1K-010:
 `P1K-011B` - `Follow-up Planning Engine Dry Run` - DONE
 `P1K-012A` - `Durable Agent Action Queue Schema` - DONE
 `P1K-012B` - `Action Queue UI Preview / Operator Queue Surface` - DONE
+`P1K-012C` - `Whitelisted Autonomous Reply Sandbox Contract` - NEXT
 `P1K-012B-UI2` - `Chat-first Case Detail + AI SDR Copilot Layout` - DONE
 `P1K-012C` - `Whitelisted Autonomous Reply Sandbox Contract` - NEXT
 
@@ -305,6 +306,11 @@ Siguiente milestone despues de P1K-010:
 `P1K-011A` - `Approval/Action Lifecycle Contract` - DONE
 `P1K-011B` - `Follow-up Planning Engine Dry Run` - DONE
 `P1K-012A` - `Durable Agent Action Queue Schema` - DONE
+`P1K-012B` - `Action Queue UI Preview / Operator Queue Surface` - DONE
+`P1K-012B-UI2` - `Chat-first Case Detail + AI SDR Copilot Layout` - DONE
+`P1K-012C` - `Whitelisted Autonomous Reply Sandbox Contract` - NEXT
+
+`P1K-012C` adds a sandbox-only eligibility preview for whitelisted identities. It does not execute replies, does not replace governance and does not imply production autonomy.
 
 La vida util de `next_action_json` termina en la superficie read-only y en la decision operativa resumida. El planner de follow-up de P1K-011B puede sugerir seguimiento en modo dry-run, pero la cola durable de acciones queda en `crm_agent_actions` a partir de P1K-012A, una vez que la lectura y el permiso DB esten validados.
 
