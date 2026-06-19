@@ -274,6 +274,7 @@ P1K-011A clarifies the boundary between a proposed next action, a human review d
 P1K-011B keeps follow-up planning in dry-run only, so the copilot can explain a plan without turning it into a durable action yet.
 P1K-012A adds the durable queue that can later hold approved, blocked or scheduled actions, but the copilot still cannot execute them.
 P1K-012B-UI2 places the copilot in a right-side case detail panel, with chat as the main surface and diagnostics collapsed below the operational cards.
+P1K-012C adds a sandbox-only autonomy preview for whitelisted test identities. The copilot may show the eligibility result, but it still cannot execute the reply or treat the whitelist as permanent production logic.
 
 ## Relationship with Agent Runtime
 

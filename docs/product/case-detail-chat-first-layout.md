@@ -52,3 +52,4 @@ The layout does not:
 
 P1K-012C will define the whitelisted autonomous reply sandbox contract.
 This layout only prepares the shell around that future boundary.
+When the sandbox contract is active, the Action Queue may surface read-only eligibility details for each action, but the layout still does not execute anything.

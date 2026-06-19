@@ -178,6 +178,9 @@ It gives the backend a durable action queue that can later be gated by:
 - scheduler,
 - whitelist/autonomy controls.
 
+P1K-012C introduces the sandbox-only eligibility contract that reads from this queue and marks eligible actions read-only.
+That sandbox whitelist is temporary and must not be treated as permanent production logic.
+
 ## Future milestones
 
 - `P1K-012B` exposes the queue in the read-only operator surface.

@@ -4,6 +4,11 @@ import type {
   CommercialActionRiskLevel as BaseCommercialActionRiskLevel,
   CommercialActionStatus
 } from "../action-lifecycle";
+import type {
+  SandboxAutonomyConfig,
+  SandboxAutonomyEvaluationResult,
+  SandboxAutonomyEligibilityStatus
+} from "../autonomy-sandbox";
 import type { CommercialChannelReference } from "../types";
 import type { CommercialNextAction } from "../operational-loop";
 import type { CommercialFollowUpPlan } from "../follow-up-planner";
@@ -215,6 +220,7 @@ export type ActionQueueItemViewModel = {
   persisted: boolean;
   executable: false;
   source: ActionQueueItemSource;
+  sandboxAutonomy: SandboxAutonomyEvaluationResult;
 };
 
 export type ActionQueueViewModelDiagnostics = {
@@ -229,6 +235,10 @@ export type ActionQueueViewModel = {
   origin: ActionQueueViewModelOrigin;
   actions: ActionQueueItemViewModel[];
   diagnostics: ActionQueueViewModelDiagnostics;
+  sandboxAutonomy: {
+    status: SandboxAutonomyEligibilityStatus;
+    note: string;
+  };
   disabledReason: string | null;
   error: string | null;
   observedAt: string | null;
@@ -244,4 +254,5 @@ export type ActionQueueBuildInput = {
   timezone?: string | null;
   limit?: number;
   adapter?: AgentActionQueueDatabaseAdapter | null;
+  sandboxAutonomyConfig?: SandboxAutonomyConfig | null;
 };
