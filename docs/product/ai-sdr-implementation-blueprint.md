@@ -1,4 +1,3 @@
-P1Ka
 # AI SDR Implementation Blueprint
 
 Este documento fija el tramo comercial del backend IA para P1K. No introduce runtime, prompts, endpoints ni writes.
@@ -232,14 +231,38 @@ Estado actual del tramo comercial:
 - `P1K-007D` DONE
 - `P1K-007E` DONE
 - `P1K-007F` DONE
+- `P1K-008A` DONE
+- `P1K-009` DONE
+- `P1K-010` DONE
 
 `P1K-007A` implementa `buildCommercialContext(...)` como adaptador puro.
 `P1K-007B` implementa `validateSalesAgentOutput(...)` como boundary fail-closed para output desconocido.
 `P1K-007C` implementa `runSalesAgentDryRun(...)` con provider inyectable, timeout y observabilidad.
 `P1K-007D` implementa la `Commercial Policy` deterministica posterior al validator.
 `P1K-007F` implementa la evaluación comercial visible, offline y sin activar automatización productiva.
+`P1K-008A` implementa la superficie read-only de review dentro de `/cases/[id]`, con DTO sanitizado, side effects visibles en cero y formulario humano local efimero.
+`P1K-011A` define el contrato de lifecycle entre decision, proposed action, operator review y future execution command, sin persistencia ni ejecucion.
+`P1K-011B` define el motor puro de follow-up planning en dry-run, sin persistencia ni ejecucion.
+`P1K-012B` expone la cola de acciones en una superficie read-only de operador dentro de `/cases/[id]`, sin ejecutar nada.
 
-## 12. Runtime y policy
+## 12. P1K-009 Operational Loop
+
+`P1K-009` agrega memoria comercial durable, reduccion deterministica de estado, seleccion de una unica proxima accion y persistencia transaccional opcional.
+
+La continuacion del flujo legacy sigue activa y no hay outbound, tools ni follow-up automatico.
+
+La base de lectura y persistencia del loop queda documentada en `docs/product/ai-sdr-operational-loop.md` y hoy usa `crm_opportunities` y `crm_agent_decisions`.
+
+Siguiente milestone despues de P1K-010:
+
+`P1K-011A` - `Approval/Action Lifecycle Contract` - DONE
+`P1K-011B` - `Follow-up Planning Engine Dry Run` - DONE
+`P1K-012A` - `Durable Agent Action Queue Schema` - DONE
+`P1K-012B` - `Action Queue UI Preview / Operator Queue Surface` - DONE
+`P1K-012B-UI2` - `Chat-first Case Detail + AI SDR Copilot Layout` - DONE
+`P1K-012C` - `Whitelisted Autonomous Reply Sandbox Contract` - NEXT
+
+## 13. Runtime y policy
 
 La secuencia contractual actual es:
 
@@ -262,13 +285,50 @@ processInbound
 `commercial evaluation` agrega trazabilidad offline y readiness sobre la salida ya observada, sin introducir side effects ni cambiar el flujo inbound.
 `processInbound` incorpora el vertical comercial en modo shadow, sin side effects y sin alterar la respuesta actual del cliente.
 
-## 13. Siguiente milestone
+## 13. P1K-010 Controlled Operator Pilot Shell
 
-`P1K-007F` - `Commercial Evaluation` - DONE
+`P1K-010` agrega una superficie operacional compacta en `/cases/[id]` para revisar la siguiente accion propuesta por el AI SDR sin ejecutar nada.
 
-La evaluación comercial visible queda cerrada como superficie read-only.
-=======
-# AI SDR Implementation Blueprint / Runtime Sequencing
+La superficie:
+
+- lee el resultado operativo persistido cuando existe;
+- degrada a observacion shadow o `not_found` cuando el resultado no esta disponible;
+- muestra estado comercial, etapa, resumen, informacion conocida, informacion faltante y proxima accion;
+- expone controles piloto bloqueados por diseno;
+- mantiene la vista tecnica como detalle secundario o colapsable;
+- no escribe DB, no llama modelos y no ejecuta tools.
+
+La salida se consume mediante un DTO de presentacion estable, `AiSdrOperatorPilotViewModel`, separado de los contratos internos.
+
+Siguiente milestone despues de P1K-010:
+
+`P1K-011A` - `Approval/Action Lifecycle Contract` - DONE
+`P1K-011B` - `Follow-up Planning Engine Dry Run` - DONE
+`P1K-012A` - `Durable Agent Action Queue Schema` - DONE
+
+La vida util de `next_action_json` termina en la superficie read-only y en la decision operativa resumida. El planner de follow-up de P1K-011B puede sugerir seguimiento en modo dry-run, pero la cola durable de acciones queda en `crm_agent_actions` a partir de P1K-012A, una vez que la lectura y el permiso DB esten validados.
+
+La vista tecnica read-only queda disponible para depuracion, pero la interaccion humana diaria vive en el shell operacional.
+`P1K-012B-UI2` reorganiza la pagina hacia un layout de tres columnas: contexto a la izquierda, chat WhatsApp al centro y AI SDR Copilot a la derecha, con Action Queue y diagnostico tecnico colapsado dentro del copiloto.
+
+## 14. P1K-008A Commercial Shadow Review Surface
+
+La primera superficie visible de AI SDR vive dentro del detalle de caso `/cases/[id]` como un panel o pestaña `AI SDR`.
+
+La UI solo consume un DTO de presentación sanitizado y read-only. Si no existe observación shadow, la superficie muestra `not_found` o `disabled` sin romper el caso ni la conversación.
+
+La superficie muestra:
+
+- propuesta del Sales Agent;
+- resultado posterior a Commercial Policy;
+- claims, acciones, tool requests y entidades propuestas;
+- observabilidad, warnings, issues y trazabilidad;
+- invariantes de side effects en cero;
+- borrador local de evaluación humana sin persistencia.
+
+No ejecuta tools, no llama modelos, no escribe DB, no muta Case y no controla Response Policy.
+
+## 15. AI SDR Implementation Blueprint / Runtime Sequencing
 
 ## Purpose
 
@@ -1129,3 +1189,4 @@ Lead persistence should come after Opportunity persistence or in the same tranch
 ## Final rule
 
 Ninguna accion comercial real debe ejecutarse solo porque un LLM la propuso.
+

@@ -205,7 +205,7 @@ export type BrainCustomerContext = {
   active_case_id: string | number | null;
   active_case_status: string | null;
   latest_case_status: string | null;
-  customer_candidate: CustomerIdentityResolutionResult | null;
+  customer_candidate?: CustomerIdentityResolutionResult | null;
 };
 
 export type BrainCaseContext = {

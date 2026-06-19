@@ -1,0 +1,184 @@
+# AI SDR Agent Action Queue
+
+## Purpose
+
+`crm_agent_decisions.next_action_json` is enough for read-only recommendation and operator inspection.
+`crm_agent_actions` becomes necessary when the product needs a durable, idempotent queue of governed actions that can survive review, scheduling, cancellation and eventual outbox execution.
+
+This document defines the contract for that queue. It does not define execution.
+
+## Why this table exists
+
+The durable queue is needed because the system now needs to distinguish between:
+
+- a recommendation,
+- a reviewable proposal,
+- an approved action,
+- a future executable command,
+- and the eventual execution record.
+
+Without a durable action row, the product cannot safely support:
+
+- operator approval/rejection/edit,
+- delayed execution,
+- cancellation when the customer replies,
+- queue previews,
+- action-level idempotency,
+- lifecycle audit beyond the decision log.
+
+## Why not `crm_followup_tasks`
+
+Follow-up is an action type, not a separate table yet.
+
+`crm_followup_tasks` would only be justified once the repository has a real scheduler with:
+
+- due jobs,
+- retries,
+- cancellation rules,
+- expiry,
+- executor semantics.
+
+P1K-012A keeps follow-up inside `crm_agent_actions` so the lifecycle stays unified.
+
+## Schema
+
+The physical table is `crm_agent_actions`.
+
+Key columns:
+
+- `action_id`
+- `idempotency_key`
+- `opportunity_id`
+- `decision_id`
+- `decision_row_id`
+- `conversation_case_id`
+- `message_id`
+- `wa_id`
+- `channel`
+- `action_type`
+- `status`
+- `risk_level`
+- `approval_requirement`
+- `draft_payload_json`
+- `final_payload_json`
+- `execution_payload_json`
+- `draft_message`
+- `final_message`
+- `scheduled_for`
+- `expires_at`
+- `attempt_number`
+- `max_attempts`
+- `block_reasons_json`
+- `cancel_reason`
+- `failure_reason`
+- `policy_status`
+- `policy_notes_json`
+- `source`
+- `created_by`
+- `approved_by`
+- `approved_at`
+- `executed_at`
+- `cancelled_at`
+- `outbox_message_id`
+- `lifecycle_version`
+- `policy_version`
+- `runtime_version`
+- timestamps
+
+The table has unique constraints on:
+
+- `action_id`
+- `idempotency_key`
+
+It also indexes the foreign-key-ish and lookup columns needed for queue views and future executors.
+
+## Lifecycle
+
+Conceptually:
+
+`Decision -> NextAction -> ProposedAction -> OperatorReview -> ApprovedAction -> ExecutableCommand -> ExecutionResult`
+
+Queue rows can represent:
+
+- proposed actions,
+- reviewable actions,
+- blocked actions,
+- cancelled actions,
+- scheduled actions that are still non-executable.
+
+In P1K-012A:
+
+- `executable` remains `false`,
+- `persisted` remains `false` at the planning layer,
+- `canExecute` remains `false` at the command preview layer,
+- outbox is not written,
+- nothing is sent.
+
+## Idempotency
+
+`idempotency_key` is the primary guard against duplicate queue rows.
+
+Same key means:
+
+- no duplicate insert,
+- update the existing non-terminal row if needed,
+- leave terminal rows unchanged.
+
+## Flags
+
+Defaults remain off:
+
+- `BRAIN_AGENT_ACTION_QUEUE_ENABLED=false`
+- `BRAIN_AGENT_ACTION_PERSISTENCE_ENABLED=false`
+
+Behavior:
+
+- queue disabled -> no runtime creation/persistence,
+- persistence disabled -> dry-run only,
+- enabled with persistence -> durable queue writes are allowed, but still no execution.
+
+## Persistence safety
+
+This milestone allows only writes to `crm_agent_actions`.
+
+It does not write to:
+
+- `crm_opportunities`
+- `crm_agent_decisions`
+- `brain_message_outbox`
+- `n8n_*`
+
+Permission errors must fail safe and preserve the legacy flow.
+
+## Relation to outbox
+
+Future chain:
+
+`crm_agent_decisions.next_action_json -> crm_agent_actions -> approved action -> brain_message_outbox -> worker -> Meta send`
+
+No non-approved action may write directly to outbox.
+
+## Relation to scheduler
+
+Scheduling is only a future concern.
+
+`scheduled_for` is a durable hint, not a running scheduler.
+
+The queue only becomes executable after a separate execution gate and future executor are validated.
+
+## Relation to autonomy
+
+This table is a prerequisite for controlled autonomy, not autonomy itself.
+
+It gives the backend a durable action queue that can later be gated by:
+
+- policy,
+- approval,
+- outbox,
+- scheduler,
+- whitelist/autonomy controls.
+
+## Future milestones
+
+- `P1K-012B` exposes the queue in the read-only operator surface.
+- `P1K-012C` will define the execution gate and the whitelisted sandbox reply contract.

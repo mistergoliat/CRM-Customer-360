@@ -1,6 +1,9 @@
+import React from "react";
 import clsx from "clsx";
 import type { ReactNode } from "react";
 import { asText, formatDateTime } from "@/lib/format";
+
+void React;
 
 type PanelAccent = "red" | "slate" | "amber" | "blue";
 

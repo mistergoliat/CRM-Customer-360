@@ -121,6 +121,23 @@ Conversation no reemplaza Opportunity. Case no reemplaza Opportunity. Opportunit
 
 Ambos no deben usarse como sinonimos. Si el estado ya expresa suficiente informacion, `stage` puede quedar derivado o nulo en implementaciones futuras.
 
+## Operational loop contract
+
+P1K-009 introduces a durable operational loop around `Opportunity`.
+
+Rules:
+
+- `Case` is not the commercial state store.
+- `Conversation` is not a lead substitute.
+- `crm_opportunities` holds the current durable state.
+- `crm_agent_decisions` holds immutable append-only decisions.
+- `opportunity_key` must be stable and idempotent.
+- a message never creates a new opportunity by default.
+- terminal opportunities are not reopened automatically.
+- `won` still requires authorized evidence.
+
+This loop is governed separately from Case detail and from the read-only shadow review surface.
+
 ## Lead source
 
 - `whatsapp_inbound`

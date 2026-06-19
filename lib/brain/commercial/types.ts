@@ -1,4 +1,3 @@
-P1Ka
 import type { CommercialContextCompleteness, CommercialContextWarning } from "./constants";
 import type { SalesAgentRequestedMode, SalesAgentToolName, SalesAgentInput, SalesAgentPolicyContext } from "./salesAgentTypes";
 
@@ -93,7 +92,7 @@ export type CommercialContextBuilderInput = {
   policyContext?: SalesAgentPolicyContext;
   metadata?: Record<string, unknown>;
 };
-=======
+
 export type LeadId = string;
 export type OpportunityId = string;
 

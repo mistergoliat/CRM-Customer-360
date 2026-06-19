@@ -23,7 +23,7 @@ export type CommercialContextCompleteness = (typeof COMMERCIAL_CONTEXT_COMPLETEN
 
 export const COMMERCIAL_CONTEXT_RESULT_STATUSES = ["success", "insufficient_context", "invalid_input"] as const;
 export type CommercialContextBuilderStatus = (typeof COMMERCIAL_CONTEXT_RESULT_STATUSES)[number];
-=======
+
 import type {
   CommercialIntent,
   CommercialPriority,

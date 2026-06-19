@@ -246,6 +246,21 @@ The detailed contract lives in `docs/product/operator-copilot-contract.md`.
 
 In the MVP, Operator Copilot consumes validated Sales Agent and Follow-up outputs, presents review items and dry-run command proposals, and never executes or approves actions by itself.
 
+## Operational loop
+
+P1K-009 adds a durable commercial loop that reduces previous state plus current evidence into a governed next action.
+
+The loop:
+
+- keeps `Customer` as the anchor;
+- keeps `Case` and `Conversation` outside the commercial state model;
+- stores an append-only decision log;
+- persists opportunity state only when the dedicated loop is enabled;
+- never executes outbound, tools, or automatic follow-up;
+- fails closed internally and fails open for the legacy inbound flow.
+
+The detailed runtime contract lives in `docs/product/ai-sdr-operational-loop.md`.
+
 The runtime sequencing blueprint for the AI SDR MVP lives in `docs/product/ai-sdr-implementation-blueprint.md`.
 
 ## Relationship with Customer Identity
