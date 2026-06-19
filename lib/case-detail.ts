@@ -1,7 +1,9 @@
 import { getCaseById, getCaseTimeline, type TimelineEntry } from "./cases";
 import type { DbRow } from "./db";
 import { safeQueryRows } from "./db";
+import { buildActionQueueViewModel, type ActionQueueViewModel } from "./brain/commercial/action-queue";
 import { buildCommercialShadowReview, type CommercialShadowReviewAvailableInput, type CommercialShadowReviewIdentifiers, type CommercialShadowReviewInput, type CommercialShadowReviewViewModel } from "./brain/commercial/review";
+import { buildAiSdrOperatorPilotViewModel, type AiSdrOperatorPilotViewModel } from "./brain/commercial/operator-pilot";
 
 export type SourceQueueDetail = {
   source_domain: string | null;
@@ -56,7 +58,9 @@ export type CaseDetailData = {
   timeline: { ok: true; rows: TimelineEntry[]; source: string } | { ok: false; rows: TimelineEntry[]; source: string; error: string };
   sourceQueue: SourceQueueDetail | null;
   notes: CaseCompatibilityNote[];
+  commercialOperatorPilot: AiSdrOperatorPilotViewModel;
   commercialShadowReview: CommercialShadowReviewViewModel;
+  commercialActionQueue: ActionQueueViewModel;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -80,6 +84,15 @@ function asId(value: unknown) {
   }
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "bigint") return value.toString();
+  return null;
+}
+
+function asDateInput(value: unknown): string | Date | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   return null;
 }
 
@@ -141,6 +154,34 @@ function readCommercialShadowReviewSource(caseRow: DbRow) {
       if (value.shadowResult || value.shadow_result) {
         return { status: "available", ...value };
       }
+    }
+  }
+
+  return null;
+}
+
+function readCommercialOperationalResultSource(caseRow: DbRow) {
+  const candidates = [
+    "commercial_operational_result",
+    "commercialOperationalResult",
+    "commercial_operational_loop",
+    "commercialOperationalLoop",
+    "commercial_operational_loop_result",
+    "commercialOperationalLoopResult",
+    "operational_result",
+    "operationalResult"
+  ];
+
+  for (const candidate of candidates) {
+    const value = caseRow[candidate];
+    if (value !== undefined && value !== null) return value;
+  }
+
+  const metadata = isRecord(caseRow.metadata) ? caseRow.metadata : null;
+  if (metadata) {
+    for (const candidate of candidates) {
+      const value = metadata[candidate];
+      if (value !== undefined && value !== null) return value;
     }
   }
 
@@ -396,6 +437,22 @@ export async function getCaseDetailData(caseId: string | number): Promise<
   });
 
   const commercialShadowReview = buildCommercialShadowReviewForCase(caseResult.row, sourceQueueResult.ok ? sourceQueueResult.row : null);
+  const commercialOperationalResult = readCommercialOperationalResultSource(caseResult.row);
+  const commercialActionQueue = await buildActionQueueViewModel({
+    caseId,
+    caseRow: caseResult.row,
+    sourceQueue: sourceQueueResult.ok ? sourceQueueResult.row : null,
+    commercialOperationalResult,
+    currentTime: asDateInput(caseResult.row.updated_at ?? caseResult.row.last_message_at ?? null),
+    timezone: "America/Santiago"
+  });
+  const commercialOperatorPilot = buildAiSdrOperatorPilotViewModel({
+    caseId,
+    caseRow: caseResult.row,
+    sourceQueue: sourceQueueResult.ok ? sourceQueueResult.row : null,
+    commercialShadowReview,
+    commercialOperationalResult
+  });
 
   return {
     ok: true,
@@ -404,7 +461,9 @@ export async function getCaseDetailData(caseId: string | number): Promise<
       timeline,
       sourceQueue: sourceQueueResult.ok ? sourceQueueResult.row : null,
       notes,
-      commercialShadowReview
+      commercialOperatorPilot,
+      commercialShadowReview,
+      commercialActionQueue
     }
   };
 }

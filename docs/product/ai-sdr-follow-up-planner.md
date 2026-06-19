@@ -1,0 +1,156 @@
+# AI SDR Follow-up Planner
+
+## Purpose
+
+The follow-up planner is a pure dry-run engine that decides whether a commercial opportunity should get a follow-up recommendation, when it should happen, and what safe draft could be suggested.
+
+It does not persist anything and it does not execute anything.
+
+## Planning vs persistence vs execution
+
+- Planning: compute a follow-up recommendation, draft, risk, approval requirement, block or cancel reason.
+- Persistence: store a durable action or task in DB.
+- Execution: send a message, schedule a worker, or touch outbox.
+
+P1K-011B covers only planning.
+
+## Input
+
+`planCommercialFollowUp(input)` consumes a pure snapshot:
+
+- current time and timezone,
+- opportunity state,
+- case context,
+- conversation context,
+- last decision,
+- follow-up policy.
+
+It does not read DB by itself.
+
+## Output
+
+The main output is `CommercialFollowUpPlan`.
+
+It always keeps:
+
+- `executable = false`
+- `persisted = false`
+
+The planner can return:
+
+- `not_needed`
+- `recommended`
+- `requires_operator_review`
+- `blocked`
+- `cancelled`
+- `expired`
+- `invalid`
+
+## Cancellation
+
+If the customer replied after the last agent message, the plan becomes `cancelled`.
+
+That means the pending follow-up should be reevaluated by the operational loop instead of being sent.
+
+## Cooldown
+
+If the last agent message is still inside the cooldown window, the plan is `blocked`.
+
+The planner can still suggest a future `scheduledFor` value, but that does not mean a scheduler exists.
+
+## Risk and blocking
+
+The planner blocks follow-up when it sees signals like:
+
+- complaint,
+- warranty,
+- return,
+- exchange,
+- refund,
+- legal,
+- angry_customer,
+- human_request.
+
+It also blocks when:
+
+- WhatsApp identity is missing,
+- the channel is missing,
+- the case is closed,
+- AI is blocked,
+- a human owner is active and policy requires blocking or review,
+- max attempts were reached,
+- the opportunity is terminal.
+
+## Draft safety
+
+Draft text must be short and non-invasive.
+
+It must not invent:
+
+- price,
+- stock,
+- delivery,
+- dispatch,
+- discount,
+- warranty promises.
+
+## Relation to `next_action_json`
+
+`crm_agent_decisions.next_action_json` remains the canonical read-only proposal from the operational loop.
+
+The follow-up planner consumes that context and can refine it into a planning result, but it does not replace the decision log.
+
+## Relation to `crm_agent_actions`
+
+`crm_agent_actions` now provides the durable queue boundary for approved or reviewable follow-up actions.
+
+The planner still does not write to it directly, but the queue is the correct destination when the product must:
+
+- persist operator review,
+- persist approvals or edits,
+- schedule execution,
+- cancel or reschedule actions,
+- audit the lifecycle of an action.
+
+P1K-012A creates that table for the action queue. P1K-011B remains read-only planning only.
+
+## Relation to `brain_message_outbox`
+
+The future path is:
+
+`next_action_json -> follow-up plan -> future durable action -> approved action -> brain_message_outbox -> worker -> Meta send`
+
+No non-approved plan may write to outbox directly.
+
+## Why no `crm_followup_tasks` yet
+
+`crm_followup_tasks` is only useful once a real scheduler exists.
+
+Today the planner needs to:
+
+- recommend,
+- explain,
+- be tested,
+- stay read-only.
+
+That is not enough to justify another durable table.
+
+## When to move to persistence
+
+Move to persistence when the repo can prove:
+
+- permissioned writes work,
+- idempotency is stable,
+- action lifecycle is contractually clear,
+- review and approval have a durable target,
+- retries do not duplicate work.
+
+## When to move to execution control
+
+Move to execution control only after:
+
+- persistence is validated,
+- approval lifecycle exists,
+- outbox integration is ready,
+- scheduler semantics are explicit,
+- the operator can review the action before send.
