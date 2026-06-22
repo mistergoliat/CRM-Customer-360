@@ -1,0 +1,297 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.persistAgentAction = persistAgentAction;
+const db_1 = require("../../../db");
+const constants_1 = require("./constants");
+const serializeAgentAction_1 = require("./serializeAgentAction");
+const validateAgentAction_1 = require("./validateAgentAction");
+function toIsoString(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
+}
+function uniqueStrings(values) {
+    return [...new Set(values.filter((value) => typeof value === "string" && value.trim().length > 0))];
+}
+function toExecuteValues(values) {
+    return values;
+}
+function sanitizeError(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return message
+        .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+        .replace(/\b(sk-[A-Za-z0-9_-]+)\b/gi, "[redacted]")
+        .replace(/\b(authorization|api[-_]?key|token|secret|password|cookie)\s*[:=]?\s*[^\s,;]+/gi, "$1=[redacted]")
+        .trim();
+}
+async function defaultHasTable(tableName) {
+    try {
+        return await (0, db_1.hasTable)(tableName);
+    }
+    catch {
+        return false;
+    }
+}
+function normalizeFeatureFlags(featureFlags) {
+    return {
+        queueEnabled: featureFlags?.queueEnabled ?? constants_1.COMMERCIAL_AGENT_ACTION_QUEUE_DEFAULT_FEATURE_FLAGS.queueEnabled,
+        persistenceEnabled: featureFlags?.persistenceEnabled ?? constants_1.COMMERCIAL_AGENT_ACTION_QUEUE_DEFAULT_FEATURE_FLAGS.persistenceEnabled
+    };
+}
+async function loadExistingActionByIdempotencyKey(connection, idempotencyKey) {
+    const [rows] = await connection.execute(`SELECT * FROM ${constants_1.CRM_AGENT_ACTIONS_TABLE} WHERE idempotency_key = ? LIMIT 1`, toExecuteValues([idempotencyKey]));
+    const first = rows[0];
+    if (!first)
+        return null;
+    return (0, serializeAgentAction_1.deserializeAgentActionRow)(first);
+}
+async function insertAction(connection, action, currentTime) {
+    const row = (0, serializeAgentAction_1.buildAgentActionStorageRow)(action);
+    const [result] = await connection.execute(`
+      INSERT INTO ${constants_1.CRM_AGENT_ACTIONS_TABLE} (
+        action_id,
+        idempotency_key,
+        opportunity_id,
+        decision_id,
+        decision_row_id,
+        conversation_case_id,
+        message_id,
+        wa_id,
+        channel,
+        action_type,
+        status,
+        risk_level,
+        approval_requirement,
+        draft_payload_json,
+        final_payload_json,
+        execution_payload_json,
+        draft_message,
+        final_message,
+        scheduled_for,
+        expires_at,
+        attempt_number,
+        max_attempts,
+        block_reasons_json,
+        cancel_reason,
+        failure_reason,
+        policy_status,
+        policy_notes_json,
+        source,
+        created_by,
+        approved_by,
+        approved_at,
+        executed_at,
+        cancelled_at,
+        outbox_message_id,
+        lifecycle_version,
+        policy_version,
+        runtime_version,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, toExecuteValues([
+        row.action_id,
+        row.idempotency_key,
+        row.opportunity_id,
+        row.decision_id,
+        row.decision_row_id,
+        row.conversation_case_id,
+        row.message_id,
+        row.wa_id,
+        row.channel,
+        row.action_type,
+        row.status,
+        row.risk_level,
+        row.approval_requirement,
+        JSON.stringify(row.draft_payload_json ?? null),
+        JSON.stringify(row.final_payload_json ?? null),
+        JSON.stringify(row.execution_payload_json ?? null),
+        row.draft_message,
+        row.final_message,
+        row.scheduled_for,
+        row.expires_at,
+        row.attempt_number,
+        row.max_attempts,
+        JSON.stringify(row.block_reasons_json ?? []),
+        row.cancel_reason,
+        row.failure_reason,
+        row.policy_status,
+        JSON.stringify(row.policy_notes_json ?? []),
+        row.source,
+        row.created_by,
+        row.approved_by,
+        row.approved_at,
+        row.executed_at,
+        row.cancelled_at,
+        row.outbox_message_id,
+        row.lifecycle_version,
+        row.policy_version,
+        row.runtime_version,
+        row.created_at ?? currentTime,
+        row.updated_at ?? currentTime
+    ]));
+    return result.insertId ?? null;
+}
+async function updateExistingAction(connection, action, currentTime, existingRowId) {
+    const row = (0, serializeAgentAction_1.buildAgentActionStorageRow)({
+        ...action,
+        id: existingRowId,
+        updatedAt: currentTime
+    });
+    await connection.execute(`
+      UPDATE ${constants_1.CRM_AGENT_ACTIONS_TABLE}
+      SET
+        opportunity_id = ?,
+        decision_id = ?,
+        decision_row_id = ?,
+        conversation_case_id = ?,
+        message_id = ?,
+        wa_id = ?,
+        channel = ?,
+        action_type = ?,
+        status = ?,
+        risk_level = ?,
+        approval_requirement = ?,
+        draft_payload_json = ?,
+        final_payload_json = ?,
+        execution_payload_json = ?,
+        draft_message = ?,
+        final_message = ?,
+        scheduled_for = ?,
+        expires_at = ?,
+        attempt_number = ?,
+        max_attempts = ?,
+        block_reasons_json = ?,
+        cancel_reason = ?,
+        failure_reason = ?,
+        policy_status = ?,
+        policy_notes_json = ?,
+        source = ?,
+        created_by = ?,
+        approved_by = ?,
+        approved_at = ?,
+        executed_at = ?,
+        cancelled_at = ?,
+        outbox_message_id = ?,
+        lifecycle_version = ?,
+        policy_version = ?,
+        runtime_version = ?,
+        updated_at = ?
+      WHERE idempotency_key = ?
+    `, toExecuteValues([
+        row.opportunity_id,
+        row.decision_id,
+        row.decision_row_id,
+        row.conversation_case_id,
+        row.message_id,
+        row.wa_id,
+        row.channel,
+        row.action_type,
+        row.status,
+        row.risk_level,
+        row.approval_requirement,
+        JSON.stringify(row.draft_payload_json ?? null),
+        JSON.stringify(row.final_payload_json ?? null),
+        JSON.stringify(row.execution_payload_json ?? null),
+        row.draft_message,
+        row.final_message,
+        row.scheduled_for,
+        row.expires_at,
+        row.attempt_number,
+        row.max_attempts,
+        JSON.stringify(row.block_reasons_json ?? []),
+        row.cancel_reason,
+        row.failure_reason,
+        row.policy_status,
+        JSON.stringify(row.policy_notes_json ?? []),
+        row.source,
+        row.created_by,
+        row.approved_by,
+        row.approved_at,
+        row.executed_at,
+        row.cancelled_at,
+        row.outbox_message_id,
+        row.lifecycle_version,
+        row.policy_version,
+        row.runtime_version,
+        row.updated_at ?? currentTime,
+        action.idempotencyKey
+    ]));
+}
+function normalizeResult(status, action, rowId, error, dryRun, warnings) {
+    return {
+        status,
+        action,
+        rowId,
+        error,
+        dryRun,
+        warnings: uniqueStrings(warnings)
+    };
+}
+async function persistAgentAction(input) {
+    const currentTime = toIsoString(input.currentTime);
+    const featureFlags = normalizeFeatureFlags(input.featureFlags);
+    const validation = (0, validateAgentAction_1.validateAgentAction)(input.action);
+    const validatedAction = validation.action ?? input.action;
+    if (!validation.valid || !validation.action) {
+        return normalizeResult("failed", validatedAction, null, validation.reason, true, validation.warnings);
+    }
+    if (!featureFlags.queueEnabled) {
+        return normalizeResult("skipped_by_flag", validation.action, null, "Agent action queue is disabled.", true, validation.warnings);
+    }
+    if (!featureFlags.persistenceEnabled) {
+        return normalizeResult("dry_run", validation.action, null, "Agent action persistence is disabled.", true, validation.warnings);
+    }
+    const adapter = input.dataAccess ?? {
+        hasTable: defaultHasTable,
+        withConnection: async (fn) => (0, db_1.withConnection)((connection) => fn(connection))
+    };
+    try {
+        const tableExists = adapter.hasTable ? await adapter.hasTable(constants_1.CRM_AGENT_ACTIONS_TABLE) : await defaultHasTable(constants_1.CRM_AGENT_ACTIONS_TABLE);
+        if (!tableExists) {
+            return normalizeResult("failed", validation.action, null, "crm_agent_actions table is not available.", true, ["agent_action_queue_missing"]);
+        }
+        if (!adapter.withConnection) {
+            return normalizeResult("failed", validation.action, null, "No connection adapter available.", true, ["agent_action_queue_missing_connection"]);
+        }
+        return await adapter.withConnection(async (connection) => {
+            try {
+                await connection.beginTransaction();
+                const existing = await loadExistingActionByIdempotencyKey(connection, validation.action.idempotencyKey);
+                if (existing) {
+                    if (["executed", "cancelled", "expired", "failed"].includes(existing.status)) {
+                        await connection.rollback();
+                        return normalizeResult("duplicate_ignored", existing, existing.id, "Existing terminal action was left unchanged.", false, validation.warnings);
+                    }
+                    await updateExistingAction(connection, validation.action, currentTime, existing.id);
+                    await connection.commit();
+                    return normalizeResult("updated_existing", {
+                        ...validation.action,
+                        id: existing.id,
+                        createdAt: existing.createdAt ?? validation.action.createdAt,
+                        updatedAt: currentTime
+                    }, existing.id, null, false, validation.warnings);
+                }
+                const rowId = await insertAction(connection, validation.action, currentTime);
+                await connection.commit();
+                return normalizeResult("inserted", {
+                    ...validation.action,
+                    id: typeof rowId === "number" ? rowId : null,
+                    createdAt: validation.action.createdAt ?? currentTime,
+                    updatedAt: currentTime
+                }, typeof rowId === "number" ? rowId : null, null, false, validation.warnings);
+            }
+            catch (error) {
+                try {
+                    await connection.rollback();
+                }
+                catch {
+                    // ignore rollback issues
+                }
+                return normalizeResult("failed", validation.action, null, sanitizeError(error), false, validation.warnings);
+            }
+        });
+    }
+    catch (error) {
+        return normalizeResult("failed", validation.action, null, sanitizeError(error), false, validation.warnings);
+    }
+}

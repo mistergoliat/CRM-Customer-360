@@ -1,0 +1,15 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.CaseDetailShell = exports.CaseContextSidebar = exports.CaseChatPanel = exports.AiSdrSuggestedReplyCard = exports.AiSdrDiagnosticsDrawer = exports.AiSdrCopilotPanel = void 0;
+var AiSdrCopilotPanel_1 = require("./AiSdrCopilotPanel");
+Object.defineProperty(exports, "AiSdrCopilotPanel", { enumerable: true, get: function () { return AiSdrCopilotPanel_1.AiSdrCopilotPanel; } });
+var AiSdrDiagnosticsDrawer_1 = require("./AiSdrDiagnosticsDrawer");
+Object.defineProperty(exports, "AiSdrDiagnosticsDrawer", { enumerable: true, get: function () { return AiSdrDiagnosticsDrawer_1.AiSdrDiagnosticsDrawer; } });
+var AiSdrSuggestedReplyCard_1 = require("./AiSdrSuggestedReplyCard");
+Object.defineProperty(exports, "AiSdrSuggestedReplyCard", { enumerable: true, get: function () { return AiSdrSuggestedReplyCard_1.AiSdrSuggestedReplyCard; } });
+var CaseChatPanel_1 = require("./CaseChatPanel");
+Object.defineProperty(exports, "CaseChatPanel", { enumerable: true, get: function () { return CaseChatPanel_1.CaseChatPanel; } });
+var CaseContextSidebar_1 = require("./CaseContextSidebar");
+Object.defineProperty(exports, "CaseContextSidebar", { enumerable: true, get: function () { return CaseContextSidebar_1.CaseContextSidebar; } });
+var CaseDetailShell_1 = require("./CaseDetailShell");
+Object.defineProperty(exports, "CaseDetailShell", { enumerable: true, get: function () { return CaseDetailShell_1.CaseDetailShell; } });
