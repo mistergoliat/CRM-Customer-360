@@ -49,5 +49,71 @@ export {
   validateCommercialProposedAction
 } from "./action-lifecycle";
 export * from "./follow-up-planner";
+export * from "./follow-up-scheduling";
+export * from "./follow-up-replanning";
 export * from "./action-queue";
 export * from "./autonomy-sandbox";
+export * from "./execution-gate";
+export * from "./autonomous-loop";
+export * from "./scenario-simulator";
+export * from "../messaging/whatsapp-transport";
+export {
+  OUTBOX_MESSAGE_STATUSES,
+  OUTBOX_MESSAGE_TERMINAL_STATUSES,
+  OUTBOX_WORKER_AUDIT_EVENT_TYPES,
+  OUTBOX_WORKER_PLAN_REASONS,
+  OUTBOX_WORKER_PLAN_TYPES,
+  OUTBOX_WORKER_RECOVERABLE_LEASE_STATUSES,
+  OUTBOX_WORKER_RECLAIMABLE_STATUSES,
+  OUTBOX_WORKER_RETRYABLE_FAILURE_CODES,
+  OUTBOX_WORKER_TERMINAL_STATUSES,
+  OUTBOX_WORKER_VERSION,
+  addSecondsToIso,
+  buildFakeProviderMessageId,
+  buildOutboxAuditEventId,
+  buildOutboxWorkerPlanId,
+  buildOutboxWorkerPlanKey,
+  calculateOutboxRetrySchedule,
+  clone,
+  evaluateOutboxCandidate,
+  isPermanentTransportErrorCode,
+  isRecoverableLeaseStatus,
+  isReclaimableOutboxStatus,
+  isRetryableTransportErrorCode,
+  isTerminalOutboxStatus,
+  maskRecipientForAudit,
+  normalizeCommandText,
+  normalizeIsoTimestamp,
+  sanitizeOutboxWorkerErrorMessage
+} from "../messaging/outbox-worker";
+export type {
+  FakeMessageTransportConfig,
+  FakeTransportCall,
+  FakeTransportScenario,
+  MessageTransport,
+  MessageTransportErrorCode,
+  MessageTransportResult,
+  MessageTransportResultStatus,
+  OutboxCandidateDecision,
+  OutboxCandidateEvaluation,
+  OutboxMessageRecord,
+  OutboxMessageStatus,
+  OutboxWorkerApplyResult,
+  OutboxWorkerAuditEventDraft,
+  OutboxWorkerAuditEventType,
+  OutboxWorkerBatchDependencies,
+  OutboxWorkerBatchInput,
+  OutboxWorkerBatchItemResult,
+  OutboxWorkerBatchResult,
+  OutboxWorkerConfig,
+  OutboxWorkerDependencies,
+  OutboxWorkerInput,
+  OutboxWorkerMemoryState,
+  OutboxWorkerMutationOperationType,
+  OutboxWorkerMutationPlan,
+  OutboxWorkerPlanInput,
+  OutboxWorkerPlanReason,
+  OutboxWorkerPlanType,
+  OutboxWorkerProcessResult,
+  OutboxWorkerRepositorySnapshot
+} from "../messaging/outbox-worker";

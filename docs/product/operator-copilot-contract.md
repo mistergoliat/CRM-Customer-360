@@ -275,6 +275,8 @@ P1K-011B keeps follow-up planning in dry-run only, so the copilot can explain a 
 P1K-012A adds the durable queue that can later hold approved, blocked or scheduled actions, but the copilot still cannot execute them.
 P1K-012B-UI2 places the copilot in a right-side case detail panel, with chat as the main surface and diagnostics collapsed below the operational cards.
 P1K-012C adds a sandbox-only autonomy preview for whitelisted test identities. The copilot may show the eligibility result, but it still cannot execute the reply or treat the whitelist as permanent production logic.
+P1K-012D-A adds the storage-agnostic execution gate contract that can link an allowed action to an outbox command, but the copilot still cannot trigger the send itself.
+P1K-012D-B fixes the persistence split: legacy case/message data stays in MariaDB, and the new brain domain moves to PostgreSQL/Supabase. The copilot must continue to treat that as a storage boundary, not an execution shortcut.
 
 ## Relationship with Agent Runtime
 

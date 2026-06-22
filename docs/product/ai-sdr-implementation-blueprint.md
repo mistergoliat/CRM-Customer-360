@@ -244,6 +244,8 @@ Estado actual del tramo comercial:
 `P1K-011A` define el contrato de lifecycle entre decision, proposed action, operator review y future execution command, sin persistencia ni ejecucion.
 `P1K-011B` define el motor puro de follow-up planning en dry-run, sin persistencia ni ejecucion.
 `P1K-012B` expone la cola de acciones en una superficie read-only de operador dentro de `/cases/[id]`, sin ejecutar nada.
+`P1K-012E-A` define el decision engine puro de scheduling para follow-up y separa la reprogramacion de la proposal original.
+`P1K-012E-B` define el contract de mutacion pura para cancel, expire, block, replan y replacement sobre resultados ya evaluados por `P1K-012E-A`.
 
 ## 12. P1K-009 Operational Loop
 
@@ -260,8 +262,10 @@ Siguiente milestone despues de P1K-010:
 `P1K-012A` - `Durable Agent Action Queue Schema` - DONE
 `P1K-012B` - `Action Queue UI Preview / Operator Queue Surface` - DONE
 `P1K-012C` - `Whitelisted Autonomous Reply Sandbox Contract` - NEXT
+`P1K-012D-A` - `Storage-Agnostic Execution Gate Contract` - NEXT
+`P1K-012D-B` - `Persistence Architecture Decision` - DONE
+`P1K-012D-C` - `PostgreSQL/Supabase Repository Adapters` - NEXT
 `P1K-012B-UI2` - `Chat-first Case Detail + AI SDR Copilot Layout` - DONE
-`P1K-012C` - `Whitelisted Autonomous Reply Sandbox Contract` - NEXT
 
 ## 13. Runtime y policy
 
@@ -309,8 +313,19 @@ Siguiente milestone despues de P1K-010:
 `P1K-012B` - `Action Queue UI Preview / Operator Queue Surface` - DONE
 `P1K-012B-UI2` - `Chat-first Case Detail + AI SDR Copilot Layout` - DONE
 `P1K-012C` - `Whitelisted Autonomous Reply Sandbox Contract` - NEXT
+`P1K-012D-A` - `Storage-Agnostic Execution Gate Contract` - NEXT
+`P1K-012D-B` - `Persistence Architecture Decision` - DONE
+`P1K-012E-A` - `Follow-up Scheduling Decision Engine` - DONE
+`P1K-012D-C` - `PostgreSQL/Supabase Repository Adapters` - NEXT
 
 `P1K-012C` adds a sandbox-only eligibility preview for whitelisted identities. It does not execute replies, does not replace governance and does not imply production autonomy.
+`P1K-012D-A` adds the storage-agnostic execution gate that persists canonical outbox intent, but it still does not call Meta or execute the worker.
+`P1K-012F-A` adds the pure outbox worker contract that consumes that canonical outbox row later and keeps transport classification separate from the gate.
+`P1K-012F-B` adds the WhatsApp transport adapter contract that translates the canonical message command into a provider request without exposing credentials or requiring a real Meta client.
+`P1K-012D-B` closes the persistence decision by separating MariaDB legacy from the PostgreSQL/Supabase brain store.
+`P1K-012E-A` adds the pure follow-up scheduling decision engine that sits after planning and before execution. It decides ready, wait, cancel, expire, replan, block or invalid without touching persistence.
+`P1K-012E-B` adds the follow-up cancellation and replanning mutation contract that consumes the scheduling result and describes logical writes without executing them.
+`P1K-012D-C` is the next technical milestone: repository adapters for that chosen storage split.
 
 La vida util de `next_action_json` termina en la superficie read-only y en la decision operativa resumida. El planner de follow-up de P1K-011B puede sugerir seguimiento en modo dry-run, pero la cola durable de acciones queda en `crm_agent_actions` a partir de P1K-012A, una vez que la lectura y el permiso DB esten validados.
 
@@ -435,6 +450,7 @@ flowchart LR
 - recibe solo acciones autorizadas;
 - aplica idempotencia;
 - usa Tool Registry y Outbox / Tool Adapter;
+- se conecta al execution gate storage-agnostic definido en P1K-012D-A;
 - permanece deshabilitado al inicio.
 
 #### Outbox / Tool Adapter
@@ -615,6 +631,7 @@ Entrega esperada:
 - execution gate;
 - idempotencia;
 - rollback;
+- outbox worker contract;
 - outbox / tool adapter.
 
 ### P1K-006K - Opportunity Persistence
@@ -1196,3 +1213,10 @@ Lead persistence should come after Opportunity persistence or in the same tranch
 
 Ninguna accion comercial real debe ejecutarse solo porque un LLM la propuso.
 
+## P1K-012G
+
+`P1K-012G` is the autonomous commercial loop orchestrator. It composes the existing contracts in memory, but it does not add live persistence, live transport or scheduler runtime.
+
+## P1K-012H
+
+`P1K-012H` adds the end-to-end scenario simulator on top of the orchestrator. It runs synthetic multi-step scenarios, captures safe snapshots and validates expectations and invariants without introducing production writes.

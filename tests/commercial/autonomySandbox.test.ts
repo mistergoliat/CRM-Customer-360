@@ -362,6 +362,18 @@ test("eligible low-risk reply stays eligible", () => {
   assert.equal(result.executionPreview.canExecute, false);
 });
 
+test("planned low-risk reply stays eligible", () => {
+  const result = evaluate({
+    action: {
+      status: "planned",
+      outboxMessageId: null
+    }
+  });
+
+  assert.equal(result.status, "eligible");
+  assert.equal(result.executionPreview.canExecute, false);
+});
+
 test("eligible request_more_context stays eligible", () => {
   const result = evaluate({
     action: {
