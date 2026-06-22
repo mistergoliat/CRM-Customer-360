@@ -14,7 +14,7 @@ import type {
 import { parseAutonomousTestWaIds } from "./parseWhitelist";
 
 const CLOSED_CASE_STATUSES = new Set(["closed", "resolved", "done", "cancelled", "expired", "archived", "finalized"]);
-const BLOCKED_STATUSES = new Set(["blocked", "cancelled", "failed", "executed", "rejected", "draft", "scheduled", "planned", "executing"]);
+const BLOCKED_STATUSES = new Set(["blocked", "cancelled", "failed", "executed", "rejected", "draft", "executing"]);
 const REVIEW_STATUSES = new Set(["requires_review"]);
 const ALLOWED_STATUSES = new Set(["proposed", "approved", "edited", "requires_review", "planned", "scheduled"]);
 
@@ -158,7 +158,7 @@ export function validateAutonomousReplyCandidate(input: SandboxAutonomyEvaluatio
   const normalizedStatus = asText(input.action.status)?.toLowerCase() ?? "";
   if (!normalizedStatus || (!ALLOWED_STATUSES.has(normalizedStatus) && !BLOCKED_STATUSES.has(normalizedStatus) && !REVIEW_STATUSES.has(normalizedStatus))) {
     blockedReasons.push("action_not_ready");
-  } else if (BLOCKED_STATUSES.has(normalizedStatus) || normalizedStatus === "scheduled" || normalizedStatus === "planned") {
+  } else if (BLOCKED_STATUSES.has(normalizedStatus) || normalizedStatus === "scheduled") {
     blockedReasons.push("action_not_ready");
   } else if (normalizedStatus === "requires_review") {
     reviewReasons.push("approval_required");

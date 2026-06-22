@@ -158,11 +158,22 @@ Future chain:
 
 No non-approved action may write directly to outbox.
 
+## Persistence decision
+
+P1K-012D-B defines the storage boundary for the queue and the outbox:
+
+- legacy cases and messages stay in MariaDB for P1;
+- the new brain domain, including `crm_agent_actions` and `brain_message_outbox`, targets PostgreSQL/Supabase;
+- the queue contract itself remains storage-agnostic until `P1K-012D-C` ships;
+- no same-entity dual-write is allowed.
+
 ## Relation to scheduler
 
 Scheduling is only a future concern.
 
 `scheduled_for` is a durable hint, not a running scheduler.
+The follow-up scheduling decision engine decides whether that hint is ready, waiting, cancelled, expired, replanned or blocked.
+The follow-up cancellation and replanning contract then turns that decision into a deterministic mutation plan for the next runtime layer.
 
 The queue only becomes executable after a separate execution gate and future executor are validated.
 
@@ -180,8 +191,21 @@ It gives the backend a durable action queue that can later be gated by:
 
 P1K-012C introduces the sandbox-only eligibility contract that reads from this queue and marks eligible actions read-only.
 That sandbox whitelist is temporary and must not be treated as permanent production logic.
+P1K-012D-A introduces the storage-agnostic execution gate that turns an eligible action into a canonical outbox command without sending anything yet.
+P1K-012F-A defines the outbox worker contract that later consumes that canonical outbox row without collapsing the queue, the gate and the transport into one layer.
+P1K-012F-B defines the WhatsApp transport adapter contract that maps the canonical message command into a provider request via an injected HTTP client.
 
 ## Future milestones
 
 - `P1K-012B` exposes the queue in the read-only operator surface.
 - `P1K-012C` will define the execution gate and the whitelisted sandbox reply contract.
+- `P1K-012D-A` defines the storage-agnostic execution gate contract and the canonical outbox bridge.
+- `P1K-012F-A` defines the outbox worker contract after the bridge, before any live send.
+- `P1K-012F-B` defines the WhatsApp transport adapter under the worker, before any real Meta integration.
+## P1K-012G
+
+The autonomous commercial loop consumes action queue items and routes them to sandbox, execution gate, transport and follow-up stages. It does not redefine queue semantics or persistence rules.
+
+## P1K-012H
+
+The scenario simulator can seed queue-like synthetic states to replay complete flows. It does not mutate the real queue model and keeps the action queue contract read-only.

@@ -1,0 +1,452 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.evaluateCommercialPolicy = evaluateCommercialPolicy;
+const policyConstants_1 = require("./policyConstants");
+const createCommercialPolicyFailedSafe_1 = require("./createCommercialPolicyFailedSafe");
+const evaluateCommercialActions_1 = require("./evaluateCommercialActions");
+const evaluateCommercialClaims_1 = require("./evaluateCommercialClaims");
+const evaluateCommercialEntityProposals_1 = require("./evaluateCommercialEntityProposals");
+const evaluateCommercialToolRequests_1 = require("./evaluateCommercialToolRequests");
+const policyUtils_1 = require("./policyUtils");
+function isValidCurrentTime(value) {
+    return (0, policyUtils_1.parseTime)(value) > 0;
+}
+function mapApprovalToSalesAgentApproval(requirement) {
+    if (requirement === "blocked")
+        return "blocked";
+    if (requirement === "explicit_operator_approval")
+        return "operator_review";
+    if (requirement === "operator_review")
+        return "operator_review";
+    return "none";
+}
+function buildStatus(blockedCount, reviewCount, hasFatalIssue, hasAllowedContent, channelReview, channelBlock) {
+    if (channelBlock)
+        return "blocked";
+    if (hasFatalIssue)
+        return "blocked";
+    if (blockedCount > 0 && !hasAllowedContent && reviewCount === 0)
+        return "blocked";
+    if (reviewCount > 0 || channelReview)
+        return "requires_review";
+    if (blockedCount > 0 && hasAllowedContent)
+        return "allowed_with_restrictions";
+    return "allowed";
+}
+function buildOverallDecision(status, requiresApproval) {
+    if (status === "failed_safe")
+        return "failed_safe";
+    if (status === "blocked")
+        return "block";
+    if (status === "requires_review")
+        return requiresApproval === "none" ? "downgrade_to_review" : "allow_with_approval";
+    if (status === "allowed_with_restrictions")
+        return requiresApproval === "none" ? "allow" : "allow_with_approval";
+    return requiresApproval === "none" ? "allow" : "allow_with_approval";
+}
+function computeChannelSignals(input) {
+    const channel = input.channelContext;
+    const channelBlock = Boolean(channel.optOut || channel.aiBlocked || channel.identityConflict);
+    const channelReview = Boolean(channel.humanOwnerActive || channel.recentCustomerReply || channel.quietHoursActive || channel.manualApprovalRequired);
+    return { channelBlock, channelReview };
+}
+function buildPolicyMetadata(input, issues, warnings) {
+    const sanitizedMetadata = (0, policyUtils_1.sanitizePolicyRecord)(input.metadata ?? {});
+    const sanitizedCommercialContext = (0, policyUtils_1.sanitizePolicyRecord)(input.commercialContext ?? {});
+    return {
+        policyVersion: input.policyVersion,
+        contractVersion: input.contractVersion,
+        currentTime: typeof input.currentTime === "string" ? input.currentTime : input.currentTime.toISOString(),
+        validatedAt: typeof input.currentTime === "string" ? input.currentTime : input.currentTime.toISOString(),
+        allowedCapabilities: [...input.allowedCapabilities],
+        featureFlags: { ...input.featureFlags },
+        issueCount: issues.length + sanitizedMetadata.issues.length + sanitizedCommercialContext.issues.length,
+        warningCount: warnings.length,
+        appliedRuleCount: 0,
+        sanitized: sanitizedMetadata.sanitized || sanitizedCommercialContext.sanitized || sanitizedMetadata.issues.length > 0 || sanitizedCommercialContext.issues.length > 0,
+        sanitizedFields: (0, policyUtils_1.uniqueStrings)([...sanitizedMetadata.sanitizedFields, ...sanitizedCommercialContext.sanitizedFields]),
+        safeMetadata: {
+            ...sanitizedMetadata.value,
+            commercialContext: sanitizedCommercialContext.value
+        },
+        commercialContext: sanitizedCommercialContext.value
+    };
+}
+function buildSummary(originalOutcome, governedOutcome, claimBlocked, actionBlocked, toolBlocked, entityBlocked, reviewRequired, blocked, notes) {
+    return {
+        originalOutcome,
+        governedOutcome,
+        allowedClaims: 0,
+        blockedClaims: claimBlocked,
+        allowedActions: 0,
+        blockedActions: actionBlocked,
+        allowedToolRequests: 0,
+        blockedToolRequests: toolBlocked,
+        allowedEntityProposals: 0,
+        blockedEntityProposals: entityBlocked,
+        reviewRequired,
+        blocked,
+        notes
+    };
+}
+function evaluateCommercialPolicy(input) {
+    const inputRecord = (0, policyUtils_1.isPlainRecord)(input) ? input : null;
+    if (!inputRecord || !(0, policyUtils_1.isPlainRecord)(inputRecord.salesAgentResult) || !(0, policyUtils_1.isPlainRecord)(inputRecord.channelContext) || !(0, policyUtils_1.isPlainRecord)(inputRecord.featureFlags)) {
+        const fallbackInput = {
+            salesAgentResult: inputRecord && (0, policyUtils_1.isPlainRecord)(inputRecord.salesAgentResult)
+                ? inputRecord.salesAgentResult
+                : {
+                    runId: "failed-safe",
+                    contractVersion: policyConstants_1.COMMERCIAL_POLICY_CONTRACT_VERSION,
+                    outcome: "failed_safe",
+                    analysis: {
+                        summary: "Invalid input.",
+                        qualificationState: "unknown",
+                        customerReadiness: "unknown",
+                        productFit: "unknown",
+                        confidence: "low",
+                        riskLevel: "blocked",
+                        reasonCodes: []
+                    },
+                    decision: {
+                        type: "failed_safe",
+                        reason: "Invalid input.",
+                        confidence: "low",
+                        riskLevel: "blocked",
+                        requiresApproval: "blocked",
+                        errorCode: "invalid_output",
+                        reasonCodes: [],
+                        policyTags: []
+                    },
+                    shouldRespondNow: false,
+                    shouldRequestTool: false,
+                    shouldRequestHuman: true,
+                    shouldEvaluateFollowUp: false,
+                    proposedActions: [],
+                    toolRequests: [],
+                    entityProposals: [],
+                    responseProposal: null,
+                    evidence: [],
+                    policyAssessment: {
+                        status: "blocked",
+                        blocked: true,
+                        reason: "Invalid input.",
+                        confidence: "low",
+                        riskLevel: "blocked",
+                        approvalRequirement: "blocked",
+                        errorCode: "invalid_output",
+                        reasonCodes: [],
+                        policyTags: []
+                    },
+                    warnings: [],
+                    rationale: {
+                        summary: "Invalid input.",
+                        evidence: [],
+                        counterEvidence: [],
+                        assumptions: [],
+                        riskFlags: [],
+                        missingInformation: [],
+                        policyRulesApplied: []
+                    },
+                    metadata: {}
+                },
+            currentTime: inputRecord?.currentTime ?? new Date(0),
+            contractVersion: inputRecord?.contractVersion ?? policyConstants_1.COMMERCIAL_POLICY_CONTRACT_VERSION,
+            policyVersion: inputRecord?.policyVersion ?? policyConstants_1.COMMERCIAL_POLICY_VERSION,
+            allowedCapabilities: inputRecord?.allowedCapabilities ?? [],
+            commercialContext: inputRecord?.commercialContext ?? {},
+            channelContext: inputRecord?.channelContext ?? {
+                channel: null,
+                available: false,
+                outboundAllowed: false,
+                manualApprovalRequired: false,
+                optOut: false,
+                quietHoursActive: false,
+                humanOwnerActive: false,
+                aiBlocked: false,
+                identityConflict: false,
+                recentCustomerReply: false,
+                recentHumanContact: false
+            },
+            featureFlags: inputRecord?.featureFlags ?? {
+                commercialPolicyEnabled: false,
+                allowDraftReplies: false,
+                allowToolRequests: false,
+                allowEntityProposals: false,
+                allowFollowUpEvaluation: false,
+                allowInternalTasks: false,
+                allowQuoteDraftRequests: false,
+                allowOperatorReviewRequests: false,
+                allowSensitiveClaims: false,
+                allowOutboundProposals: false
+            },
+            metadata: inputRecord?.metadata ?? {}
+        };
+        return (0, createCommercialPolicyFailedSafe_1.createCommercialPolicyFailedSafe)(fallbackInput, "invalid_input", [
+            (0, policyUtils_1.buildPolicyIssue)("invalid_input", "Commercial policy input is not a valid object.", [], "POLICY-GOVERNANCE-FAIL-CLOSED", null, "fatal")
+        ]);
+    }
+    if (!isValidCurrentTime(input.currentTime)) {
+        return (0, createCommercialPolicyFailedSafe_1.createCommercialPolicyFailedSafe)(input, "invalid_input", [
+            (0, policyUtils_1.buildPolicyIssue)("invalid_input", "Commercial policy currentTime is not valid.", ["currentTime"], "POLICY-GOVERNANCE-FAIL-CLOSED", null, "fatal")
+        ]);
+    }
+    if (input.contractVersion !== policyConstants_1.COMMERCIAL_POLICY_CONTRACT_VERSION || input.policyVersion !== policyConstants_1.COMMERCIAL_POLICY_VERSION) {
+        return (0, createCommercialPolicyFailedSafe_1.createCommercialPolicyFailedSafe)(input, "policy_version_mismatch", [
+            (0, policyUtils_1.buildPolicyIssue)("policy_version_mismatch", "Commercial policy version or contract version mismatch.", ["policyVersion"], "POLICY-VERSION-MISMATCH", {
+                expectedPolicyVersion: policyConstants_1.COMMERCIAL_POLICY_VERSION,
+                expectedContractVersion: policyConstants_1.COMMERCIAL_POLICY_CONTRACT_VERSION,
+                receivedPolicyVersion: input.policyVersion,
+                receivedContractVersion: input.contractVersion
+            }, "fatal")
+        ]);
+    }
+    if (!input.featureFlags.commercialPolicyEnabled) {
+        return (0, createCommercialPolicyFailedSafe_1.createCommercialPolicyFailedSafe)(input, "policy_disabled", [
+            (0, policyUtils_1.buildPolicyIssue)("policy_disabled", "Commercial policy is disabled by feature flags.", ["featureFlags", "commercialPolicyEnabled"], "POLICY-DISABLED", null, "fatal")
+        ]);
+    }
+    const salesAgentResult = (0, policyUtils_1.cloneSalesAgentResult)(input.salesAgentResult);
+    const claimEvaluation = (0, evaluateCommercialClaims_1.evaluateCommercialClaims)(input);
+    const actionEvaluation = (0, evaluateCommercialActions_1.evaluateCommercialActions)(input);
+    const toolRequestEvaluation = (0, evaluateCommercialToolRequests_1.evaluateCommercialToolRequests)(input);
+    const entityProposalEvaluation = (0, evaluateCommercialEntityProposals_1.evaluateCommercialEntityProposals)(input);
+    const channelSignals = computeChannelSignals(input);
+    const issues = [
+        ...claimEvaluation.issues,
+        ...actionEvaluation.issues,
+        ...toolRequestEvaluation.issues,
+        ...entityProposalEvaluation.issues
+    ];
+    const warnings = (0, policyUtils_1.uniqueStrings)([
+        ...claimEvaluation.warnings,
+        ...actionEvaluation.warnings,
+        ...toolRequestEvaluation.warnings,
+        ...entityProposalEvaluation.warnings,
+        ...(channelSignals.channelBlock ? ["outbound_blocked"] : []),
+        ...(channelSignals.channelReview ? ["human_owner_active"] : [])
+    ]);
+    const channelIssues = [];
+    if (input.channelContext.optOut) {
+        channelIssues.push((0, policyUtils_1.buildPolicyIssue)("opt_out_active", "Outbound proposal is blocked by opt-out state.", ["channelContext", "optOut"], "POLICY-OUTBOUND-OPTOUT", null, "fatal"));
+    }
+    if (input.channelContext.aiBlocked) {
+        channelIssues.push((0, policyUtils_1.buildPolicyIssue)("ai_blocked", "Outbound proposal is blocked because AI is disabled for this channel.", ["channelContext", "aiBlocked"], "POLICY-OUTBOUND-AI-BLOCKED", null, "fatal"));
+    }
+    if (input.channelContext.identityConflict) {
+        channelIssues.push((0, policyUtils_1.buildPolicyIssue)("identity_conflict", "Outbound proposal is blocked because of an identity conflict.", ["channelContext", "identityConflict"], "POLICY-OUTBOUND-IDENTITY-CONFLICT", null, "fatal"));
+    }
+    if (input.channelContext.humanOwnerActive) {
+        channelIssues.push((0, policyUtils_1.buildPolicyIssue)("human_owner_active", "Human owner is active and requires review.", ["channelContext", "humanOwnerActive"], "POLICY-OUTBOUND-HUMAN-OWNER", null, "warning"));
+    }
+    const channelAppliedRules = [];
+    if (channelSignals.channelBlock)
+        channelAppliedRules.push("POLICY-OUTBOUND-OPTOUT");
+    if (channelSignals.channelReview)
+        channelAppliedRules.push("POLICY-OUTBOUND-HUMAN-OWNER");
+    const appliedRules = (0, policyUtils_1.uniqueRuleIds)([
+        ...claimEvaluation.appliedRules,
+        ...actionEvaluation.appliedRules,
+        ...toolRequestEvaluation.appliedRules,
+        ...entityProposalEvaluation.appliedRules,
+        ...channelAppliedRules
+    ]);
+    const blockedClaims = [...claimEvaluation.blockedClaims];
+    const blockedActions = [...actionEvaluation.blockedActions];
+    const blockedToolRequests = [...toolRequestEvaluation.blockedToolRequests];
+    const blockedEntityProposals = [...entityProposalEvaluation.blockedEntityProposals];
+    const allIssues = [...issues, ...channelIssues];
+    const hasFatalIssue = allIssues.some((issue) => issue.level === "fatal");
+    const keptClaims = claimEvaluation.keptClaims;
+    const keptActions = actionEvaluation.keptActions;
+    const keptToolRequests = toolRequestEvaluation.keptToolRequests;
+    const keptEntityProposals = entityProposalEvaluation.keptEntityProposals;
+    if (salesAgentResult.responseProposal) {
+        const blockedClaimTypes = Array.from(new Set([
+            ...salesAgentResult.responseProposal.blockedClaims,
+            ...blockedClaims.map((claim) => claim.type)
+        ]));
+        salesAgentResult.responseProposal = {
+            ...salesAgentResult.responseProposal,
+            claims: keptClaims,
+            blockedClaims: blockedClaimTypes
+        };
+    }
+    salesAgentResult.proposedActions = keptActions;
+    salesAgentResult.toolRequests = keptToolRequests;
+    salesAgentResult.entityProposals = keptEntityProposals;
+    const hasAllowedContent = keptClaims.length > 0 ||
+        keptActions.length > 0 ||
+        keptToolRequests.length > 0 ||
+        keptEntityProposals.length > 0 ||
+        salesAgentResult.responseProposal !== null;
+    const blockedCount = blockedClaims.length + blockedActions.length + blockedToolRequests.length + blockedEntityProposals.length;
+    const reviewCount = claimEvaluation.assessments.filter((assessment) => assessment.status === "review").length +
+        actionEvaluation.assessments.filter((assessment) => assessment.status === "review").length +
+        toolRequestEvaluation.assessments.filter((assessment) => assessment.status === "review").length +
+        entityProposalEvaluation.assessments.filter((assessment) => assessment.status === "review").length;
+    const status = buildStatus(blockedCount, reviewCount, hasFatalIssue, hasAllowedContent, channelSignals.channelReview, channelSignals.channelBlock);
+    const requiresApproval = (0, policyUtils_1.maxApproval)((0, policyUtils_1.maxApproval)(claimEvaluation.requiresApproval, actionEvaluation.requiresApproval), (0, policyUtils_1.maxApproval)(toolRequestEvaluation.requiresApproval, entityProposalEvaluation.requiresApproval));
+    const riskLevel = (0, policyUtils_1.maxRisk)((0, policyUtils_1.maxRisk)(claimEvaluation.riskLevel, actionEvaluation.riskLevel), (0, policyUtils_1.maxRisk)(toolRequestEvaluation.riskLevel, entityProposalEvaluation.riskLevel));
+    const overallDecision = buildOverallDecision(status, requiresApproval);
+    if (status === "blocked") {
+        salesAgentResult.outcome = "blocked_by_policy";
+        salesAgentResult.shouldRespondNow = false;
+        salesAgentResult.shouldRequestTool = false;
+        salesAgentResult.shouldRequestHuman = true;
+        salesAgentResult.shouldEvaluateFollowUp = false;
+        salesAgentResult.responseProposal = null;
+        salesAgentResult.proposedActions = [];
+        salesAgentResult.toolRequests = [];
+        salesAgentResult.entityProposals = [];
+        salesAgentResult.decision = {
+            ...salesAgentResult.decision,
+            type: "blocked_by_policy",
+            reason: "Commercial policy blocked the proposal.",
+            confidence: "low",
+            riskLevel: "blocked",
+            requiresApproval: "blocked",
+            errorCode: "blocked_by_policy",
+            reasonCodes: [...appliedRules],
+            policyTags: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.decision.policyTags, "commercial_policy_blocked"])
+        };
+        salesAgentResult.policyAssessment = {
+            ...salesAgentResult.policyAssessment,
+            status: "blocked",
+            blocked: true,
+            reason: "Commercial policy blocked the proposal.",
+            confidence: "low",
+            riskLevel: "blocked",
+            approvalRequirement: "blocked",
+            errorCode: "blocked_by_policy",
+            reasonCodes: [...appliedRules],
+            policyTags: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.policyAssessment.policyTags, "commercial_policy_blocked"])
+        };
+    }
+    else if (status === "requires_review") {
+        salesAgentResult.shouldRespondNow = false;
+        salesAgentResult.shouldRequestHuman = true;
+        salesAgentResult.shouldRequestTool = keptToolRequests.length > 0;
+        salesAgentResult.shouldEvaluateFollowUp = false;
+        salesAgentResult.decision = {
+            ...salesAgentResult.decision,
+            type: "request_human",
+            reason: "Commercial policy requires operator review.",
+            confidence: "medium",
+            riskLevel: riskLevel === "blocked" ? "blocked" : riskLevel,
+            requiresApproval: mapApprovalToSalesAgentApproval(requiresApproval),
+            errorCode: "none",
+            reasonCodes: [...appliedRules],
+            policyTags: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.decision.policyTags, "commercial_policy_review"])
+        };
+        salesAgentResult.policyAssessment = {
+            ...salesAgentResult.policyAssessment,
+            status: "review",
+            blocked: false,
+            reason: "Commercial policy requires operator review.",
+            confidence: "medium",
+            riskLevel: riskLevel === "blocked" ? "high" : riskLevel,
+            approvalRequirement: mapApprovalToSalesAgentApproval(requiresApproval),
+            errorCode: "none",
+            reasonCodes: [...appliedRules],
+            policyTags: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.policyAssessment.policyTags, "commercial_policy_review"])
+        };
+    }
+    else {
+        salesAgentResult.shouldRespondNow = salesAgentResult.responseProposal !== null ? salesAgentResult.shouldRespondNow : false;
+        salesAgentResult.shouldRequestTool = keptToolRequests.length > 0;
+        salesAgentResult.shouldRequestHuman = requiresApproval !== "none";
+        salesAgentResult.shouldEvaluateFollowUp = salesAgentResult.shouldEvaluateFollowUp && !channelSignals.channelBlock;
+        salesAgentResult.decision = {
+            ...salesAgentResult.decision,
+            type: salesAgentResult.decision.type === "blocked_by_policy" ? "no_commercial_action" : salesAgentResult.decision.type,
+            reason: salesAgentResult.decision.reason,
+            confidence: salesAgentResult.decision.confidence,
+            riskLevel: riskLevel === "blocked" ? "high" : riskLevel,
+            requiresApproval: mapApprovalToSalesAgentApproval(requiresApproval),
+            errorCode: salesAgentResult.decision.errorCode,
+            reasonCodes: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.decision.reasonCodes, ...appliedRules]),
+            policyTags: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.decision.policyTags, "commercial_policy_governed"])
+        };
+        salesAgentResult.policyAssessment = {
+            ...salesAgentResult.policyAssessment,
+            status: requiresApproval === "none" ? "allowed" : "review",
+            blocked: false,
+            reason: "Commercial policy governed the proposal.",
+            confidence: "medium",
+            riskLevel: riskLevel === "blocked" ? "high" : riskLevel,
+            approvalRequirement: mapApprovalToSalesAgentApproval(requiresApproval),
+            errorCode: "none",
+            reasonCodes: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.policyAssessment.reasonCodes, ...appliedRules]),
+            policyTags: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.policyAssessment.policyTags, "commercial_policy_governed"])
+        };
+    }
+    salesAgentResult.analysis = {
+        ...salesAgentResult.analysis,
+        riskLevel: riskLevel === "blocked" ? "high" : riskLevel,
+        reasonCodes: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.analysis.reasonCodes, ...appliedRules])
+    };
+    salesAgentResult.warnings = (0, policyUtils_1.uniqueStrings)([
+        ...salesAgentResult.warnings,
+        ...warnings,
+        ...(blockedCount > 0 ? ["commercial_policy_blocked_items"] : []),
+        ...(reviewCount > 0 ? ["commercial_policy_review_items"] : [])
+    ]);
+    salesAgentResult.rationale = {
+        ...salesAgentResult.rationale,
+        policyRulesApplied: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.rationale.policyRulesApplied, ...appliedRules]),
+        riskFlags: (0, policyUtils_1.uniqueStrings)([...salesAgentResult.rationale.riskFlags, ...(blockedCount > 0 ? ["commercial_policy_blocked_items"] : []), ...(reviewCount > 0 ? ["commercial_policy_review_items"] : [])])
+    };
+    salesAgentResult.metadata = {
+        ...salesAgentResult.metadata,
+        commercialPolicy: {
+            version: input.policyVersion,
+            contractVersion: input.contractVersion,
+            status,
+            overallDecision,
+            requiresApproval,
+            riskLevel,
+            blockedCount,
+            reviewCount,
+            appliedRules
+        }
+    };
+    const metadata = buildPolicyMetadata(input, allIssues, warnings);
+    metadata.appliedRuleCount = appliedRules.length;
+    const summary = buildSummary(input.salesAgentResult.outcome, salesAgentResult.outcome, blockedClaims.length, blockedActions.length, blockedToolRequests.length, blockedEntityProposals.length, status === "requires_review", status === "blocked", [
+        ...(status === "blocked" ? ["commercial_policy_blocked"] : []),
+        ...(status === "requires_review" ? ["commercial_policy_review"] : []),
+        ...(blockedCount > 0 ? ["blocked_items_removed"] : []),
+        ...(reviewCount > 0 ? ["review_items_retained"] : [])
+    ]);
+    summary.allowedClaims = status === "blocked" ? 0 : keptClaims.length;
+    summary.allowedActions = status === "blocked" ? 0 : keptActions.length;
+    summary.allowedToolRequests = status === "blocked" ? 0 : keptToolRequests.length;
+    summary.allowedEntityProposals = status === "blocked" ? 0 : keptEntityProposals.length;
+    return {
+        status,
+        overallDecision,
+        riskLevel,
+        requiresApproval,
+        originalResultReference: {
+            runId: input.salesAgentResult.runId,
+            contractVersion: input.salesAgentResult.contractVersion,
+            outcome: input.salesAgentResult.outcome,
+            decisionType: input.salesAgentResult.decision.type
+        },
+        governedResult: salesAgentResult,
+        claimAssessments: claimEvaluation.assessments,
+        actionAssessments: actionEvaluation.assessments,
+        toolRequestAssessments: toolRequestEvaluation.assessments,
+        entityProposalAssessments: entityProposalEvaluation.assessments,
+        blockedClaims,
+        blockedActions,
+        blockedToolRequests,
+        blockedEntityProposals,
+        appliedRules,
+        issues: allIssues,
+        warnings,
+        summary,
+        metadata
+    };
+}

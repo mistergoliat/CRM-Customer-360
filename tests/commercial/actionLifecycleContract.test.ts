@@ -137,10 +137,21 @@ test("allows the contractual lifecycle transitions", () => {
     ["requires_review", "rejected"],
     ["requires_review", "edited"],
     ["edited", "approved"],
+    ["proposed", "planned"],
     ["approved", "planned"],
     ["planned", "scheduled"],
+    ["scheduled", "scheduled"],
+    ["proposed", "blocked"],
+    ["approved", "blocked"],
+    ["planned", "blocked"],
+    ["scheduled", "blocked"],
+    ["proposed", "cancelled"],
+    ["approved", "cancelled"],
     ["planned", "cancelled"],
     ["scheduled", "cancelled"],
+    ["proposed", "expired"],
+    ["approved", "expired"],
+    ["planned", "expired"],
     ["scheduled", "expired"]
   ] as const;
 

@@ -31,7 +31,8 @@ Future production autonomy:
 - no depende de whitelist;
 - depende de policy, risk, action type, rollout and operational control;
 - requiere execution gate separado;
-- requiere audit y observability completas.
+- requiere audit y observability completas;
+- debe vivir fuera del sandbox-only contract.
 
 ## Configuracion
 
@@ -168,10 +169,15 @@ La validacion pura bloquea:
 La cola durable puede transportar la evaluacion como preview read-only.
 
 P1K-012C no agrega ejecucion, no cambia status a `executing` y no escribe outbox.
+La decision de scheduling sigue siendo previa y pura: el follow-up scheduling decision engine decide si la accion sigue esperando, queda lista, se cancela, expira, se replantea o se bloquea.
 
 ## Relacion futura con Execution Gate
 
 P1K-012C solo define elegibilidad.
+P1K-012D-A define el execution gate agnostico de storage que recibe esa elegibilidad y construye el comando outbox canonico.
+P1K-012D-B fija la frontera de persistencia para ese gate: MariaDB queda para el legado y PostgreSQL/Supabase para el nuevo brain.
+P1K-012E-A define la decision pura de scheduling.
+P1K-012E-B define el contrato puro de mutacion de follow-up antes de cualquier runtime persistente.
 
 P1K-012D debera introducir:
 

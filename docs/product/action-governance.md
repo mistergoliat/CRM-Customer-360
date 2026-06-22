@@ -55,6 +55,9 @@ El resultado puede quedar en:
 - `P1K-011B` DONE
 - `P1K-012A` DONE
 - `P1K-012B` NEXT
+- `P1K-012D-B` DONE
+- `P1K-012D-A` NEXT
+- `P1K-012D-C` NEXT
 ## Action lifecycle contract
 
 La decision comercial valida vive primero como `next_action_json` dentro de `crm_agent_decisions`.
@@ -262,6 +265,10 @@ Toda recomendacion comercial debe poder explicarse con:
 ## Sandbox autonomy boundary
 
 P1K-012C introduces a sandbox-only eligibility gate for autonomous WhatsApp replies.
+P1K-012D-A defines the storage-agnostic execution gate that takes that sandbox preview and persists a canonical outbox command without calling Meta.
+P1K-012D-B closes the persistence decision: MariaDB stays as the legacy surface for cases and messages, while PostgreSQL/Supabase becomes the brain store for opportunities, decisions, actions and outbox. No uncontrolled dual-write is allowed.
+P1K-012F-A defines the pure outbox worker contract that will consume that outbox row later, classify delivery outcomes and keep Meta outside the core.
+P1K-012F-B defines the WhatsApp transport adapter contract that translates the canonical command into a provider request through an injected HTTP client.
 
 That gate:
 
@@ -287,6 +294,17 @@ Future production autonomy must not depend on whitelist. It must depend on polic
 2. El Contract Validator va antes de policy y governance.
 3. Commercial Policy se aplica antes de que una propuesta sea visible al operador.
 4. Follow-up Policy puede correr en dry-run y no requiere scheduler.
-5. Operator Copilot consume salidas ya validadas; no aprueba ni ejecuta.
-6. Execution Engine permanece deshabilitado hasta que governance, audit e idempotencia esten probados.
-7. WhatsApp outbound no es el primer modo de ejecucion; primero van analysis, proposals y tareas internas reversibles.
+5. The Follow-up Scheduling Decision Engine decides ready, wait, cancel, expire, replan, block or invalid before any execution gate.
+6. The follow-up cancellation and replanning contract converts that scheduling result into pure mutation plans before any repository runtime.
+7. The outbox worker contract consumes canonical outbox rows after the gate and still does not call Meta.
+8. The WhatsApp transport adapter translates the command into provider-specific HTTP and keeps redaction, validation and classification outside the worker.
+9. Operator Copilot consume salidas ya validadas; no aprueba ni ejecuta.
+10. Execution Engine permanece deshabilitado hasta que governance, audit e idempotencia esten probados.
+11. WhatsApp outbound no es el primer modo de ejecucion; primero van analysis, proposals, scheduling decisions, mutation plans, outbox worker contract, transport adapter y tareas internas reversibles.
+## P1K-012G
+
+The autonomous commercial loop orchestrator composes sandbox, execution gate, outbox, worker, transport and follow-up contracts in a deterministic in-memory pipeline. Governance rules stay centralized in the specialized modules.
+
+## P1K-012H
+
+The scenario simulator exercises governance end to end using synthetic scenarios only. It is read-only, deterministic and intended for acceptance evidence, not for live operator writes.

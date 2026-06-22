@@ -167,6 +167,37 @@ export type BrainOutboxResult = {
   error?: string;
 };
 
+export const BRAIN_OUTBOX_COMMAND_TYPES = ["whatsapp_text"] as const;
+export type BrainOutboxCommandType = (typeof BRAIN_OUTBOX_COMMAND_TYPES)[number];
+
+export type BrainCanonicalOutboxCommand = {
+  commandId: string;
+  idempotencyKey: string;
+
+  actionId: string;
+  opportunityId: number | string | null;
+  decisionId: string | null;
+  conversationCaseId: number | string | null;
+
+  channel: "whatsapp";
+  commandType: BrainOutboxCommandType;
+
+  recipient: string;
+  messageText: string;
+
+  metadata: {
+    source: "ai_sdr";
+    sandbox: true;
+    riskLevel: string;
+    approvalRequirement: string;
+    lifecycleVersion: string | null;
+    policyVersion: string | null;
+    runtimeVersion: string | null;
+  };
+
+  createdAt: string;
+};
+
 export const BRAIN_OUTBOX_WORKER_STATUSES = ["disabled", "planned", "locked", "sending", "sent", "noop", "blocked", "failed"] as const;
 export type BrainOutboxWorkerStatus = (typeof BRAIN_OUTBOX_WORKER_STATUSES)[number];
 
@@ -227,6 +258,64 @@ export const BRAIN_CANONICAL_OUTBOUND_PERSIST_STATUSES = [
   "warning"
 ] as const;
 export type BrainCanonicalOutboundPersistStatus = (typeof BRAIN_CANONICAL_OUTBOUND_PERSIST_STATUSES)[number];
+
+export type {
+  OutboxCandidateDecision,
+  OutboxCandidateEvaluation,
+  OutboxMessageRecord,
+  OutboxMessageStatus,
+  OutboxWorkerApplyResult,
+  OutboxWorkerAuditEventDraft,
+  OutboxWorkerBatchDependencies,
+  OutboxWorkerBatchInput,
+  OutboxWorkerBatchItemResult,
+  OutboxWorkerBatchResult,
+  OutboxWorkerConfig,
+  OutboxWorkerDependencies,
+  OutboxWorkerInput,
+  OutboxWorkerMemoryState,
+  OutboxWorkerMutationOperationType,
+  OutboxWorkerMutationPlan,
+  OutboxWorkerPlanInput,
+  OutboxWorkerPlanReason,
+  OutboxWorkerPlanType,
+  OutboxWorkerProcessResult,
+  OutboxWorkerRepositorySnapshot,
+  OutboxWorkerAuditEventType,
+  MessageTransportErrorCode,
+  MessageTransportResult,
+  MessageTransportResultStatus
+} from "./outbox-worker";
+
+export type {
+  FakeWhatsAppHttpClientCall,
+  FakeWhatsAppHttpClientConfig,
+  FakeWhatsAppHttpClientSafeLogEntry,
+  FakeWhatsAppHttpClientScenario,
+  WhatsAppHttpClient,
+  WhatsAppHttpResponse,
+  WhatsAppProviderRequest,
+  WhatsAppTransportConfig,
+  WhatsAppTransportErrorDetails,
+  WhatsAppTransportSafeRequestSummary,
+  WhatsAppTransportSendInput,
+  WhatsAppTransportTrace,
+  WhatsAppTransportValidationResult
+} from "./whatsapp-transport";
+
+export {
+  FakeWhatsAppHttpClient,
+  WhatsAppMessageTransport,
+  buildSafeWhatsAppRequestSummary,
+  buildWhatsAppRequestId,
+  buildWhatsAppTextRequest,
+  classifyWhatsAppClientException,
+  classifyWhatsAppResponse,
+  extractSafeWhatsAppProviderError,
+  normalizeWhatsAppRecipient,
+  sanitizeWhatsAppProviderError,
+  validateWhatsAppTransportInput
+} from "./whatsapp-transport";
 
 export type BrainCanonicalOutboundPersistResult = {
   status: BrainCanonicalOutboundPersistStatus;
