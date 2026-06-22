@@ -44,4 +44,4 @@ No hay persistencia real, no hay scheduler real, no hay Meta real, no hay operat
 
 ## Relacion con P1K
 
-Esta capa valida que el pipeline comercial sea demostrable como sistema y prepara el terreno para `P1K-012I — Operator Controls Contract + UI`.
+Esta capa valida que el pipeline comercial sea demostrable como sistema y prepara el terreno para la aceptacion final de P1K y el inicio de la fase CRM visual.
