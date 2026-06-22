@@ -7,14 +7,39 @@ Este documento es backlog de trabajo, no arquitectura completa ni brief de produ
 La secuencia prioritaria ya no es handoff-first.
 
 1. `P1I-010` cierra la infraestructura manual de envio backend.
-2. `P1J` define el foundation de Agentic CRM Product + Governance.
-3. `P1K` activa el AI SDR MVP y sus contratos operativos.
-4. `P1L` consolida Customer 360 minimo.
-5. `P1M` introduce Operator Copilot.
-6. `P2` habilita AI Marketing.
-7. `P3` prepara Voice/Call Tool.
+2. `P1K` quedo `ACCEPTED AND CLOSED` como Brain MVP demostrable.
+3. `P1L` es `Production Foundation`.
+4. `P1M` es `CRM Product Experience`.
+5. `P2` habilita AI Marketing.
+6. `P3` prepara Voice/Call Tool.
 
 `Handoff` queda redefinido como una accion gobernada dentro del modelo agentic, no como el centro del producto.
+
+## Canonical phase model
+
+P1K - ACCEPTED AND CLOSED
+
+P1L - Production Foundation
+
+P1M - CRM Product Experience
+
+Historical planning entries below are retained for traceability. The canonical phase model above is the source of truth.
+
+## P1M - CRM Product Experience
+
+| Task | Status | Purpose |
+|---|---|---|
+| TASK-P1M-000 Documentation and Product State Reconciliation | DONE | Reconcile the current product state, the canonical phase model and the CRM-first direction. |
+| TASK-P1M-001 Existing CRM UI and Read Model Audit | DESIGN | Audit the current CRM surfaces, read models and gaps before adding new views. |
+| TASK-P1M-002 CRM Information Architecture | DESIGN | Define the initial navigation and page structure for the CRM product. |
+| TASK-P1M-003 CRM Presentation Contracts | DESIGN | Freeze the read-model contracts needed by the visual CRM. |
+| TASK-P1M-004 CRM Shell and Navigation | DESIGN | Prepare the CRM shell and navigation chrome using existing surfaces. |
+| TASK-P1M-005 Operational Home | DESIGN | Define the operational home / dashboard entry point for the CRM. |
+| TASK-P1M-006 Cases and Conversation Workspace Consolidation | DESIGN | Align case and conversation surfaces without making Case the domain center. |
+| TASK-P1M-007 Customer Candidate Directory and Profile | DESIGN | Expose a provisional customer workspace without inventing Customer Master. |
+| TASK-P1M-008 Opportunity Workspace | DESIGN | Shape the commercial workspace around opportunity state and next action. |
+| TASK-P1M-009 Agent Action Queue Workspace | DESIGN | Present governed actions as a visual workspace, not a source of truth. |
+| TASK-P1M-010 CRM Product Experience Acceptance | PENDING | Validate the CRM discovery phase and close the first visual slice. |
 
 ## P0 - Stabilization
 
@@ -194,17 +219,17 @@ Referencia arquitectonica: `docs/product/ai-sdr-implementation-blueprint.md`
 | TASK-P1K-012F-A Outbox Worker Contract | DONE | AI SDR / Commercial CRM | Crear el contrato puro del outbox worker que reclama filas, aplica lease, invoca transporte fake o real inyectable y clasifica delivery, retry y dead-letter sin llamar Meta ni escribir persistencia real. | `lib/brain/messaging/outbox-worker/*`, `lib/brain/messaging/index.ts`, `lib/brain/messaging/types.ts`, `tests/commercial/outboxWorker.test.ts`, `docs/product/ai-sdr-outbox-worker-contract.md`, `docs/product/ai-sdr-execution-gate.md`, `docs/product/ai-sdr-implementation-blueprint.md`, `docs/product/action-governance.md`, `docs/product/ai-sdr-agent-action-queue.md`, `docs/backlog.md`, `.env.example`. | DB writes reales, SQL, scheduler, cron, Meta, WhatsApp real, worker runtime productivo, n8n, adapters de persistencia reales. | Contrato puro del worker, fake transport, retry schedule, batch runtime in-memory, tests y docs sincronizadas. | TASK-P1K-012D-A, TASK-P1K-012E-B, contratos de action lifecycle y outbox command. | Existe una capa deterministica que consume outbox canonico, aplica lease/idempotencia y clasifica delivery o failure sin side effects reales. | `npm run build`, `npm run typecheck`, `npm run lint`, `npx --yes tsx --test tests/commercial/outboxWorker.test.ts` | Reportar tipos, lease, retry, batch processing, atomicidad simulada, pureza y siguiente milestone recomendado: `P1K-012F-B — WhatsApp Transport Adapter Contract`. |
 | TASK-P1K-012F-B WhatsApp Transport Adapter Contract | DONE | AI SDR / Commercial CRM | Crear el adapter puro e inyectable que traduce el comando canonico de mensajeria WhatsApp en un request del proveedor y clasifica respuestas sin llamar Meta. | `lib/brain/messaging/whatsapp-transport/*`, `lib/brain/messaging/index.ts`, `lib/brain/messaging/types.ts`, `lib/brain/messaging/outbox-worker/*`, `tests/commercial/whatsappTransport.test.ts`, `docs/product/ai-sdr-whatsapp-transport-contract.md`, `docs/product/ai-sdr-outbox-worker-contract.md`, `docs/product/ai-sdr-execution-gate.md`, `docs/product/ai-sdr-implementation-blueprint.md`, `docs/product/action-governance.md`, `docs/product/ai-sdr-agent-action-queue.md`, `docs/backlog.md`, `.env.example`. | fetch, axios, Meta SDK, HTTP real, DB writes, SQL, scheduler, cron, WhatsApp production send, templates/media, n8n, adapters de persistencia reales. | Contrato HTTP abstracto, adapter WhatsApp, fake HTTP client, validacion, clasificacion, sanitizacion, tests y docs sincronizadas. | TASK-P1K-012F-A, contrato de message transport, worker agnostico de provider. | Existe un adapter deterministico que construye requests canónicos de WhatsApp, clasifica respuestas y oculta credenciales o payloads sensibles sin realizar llamadas reales. | `npm run build`, `npm run typecheck`, `npm run lint`, `npx --yes tsx --test tests/commercial/whatsappTransport.test.ts` | Reportar contrato HTTP, request canonico, clasificacion, sanitizacion, fake client, pureza y siguiente milestone recomendado: `P1K-012G — Autonomous Commercial Loop Orchestrator`. |
 
-## P1L - Customer 360 minimo
+## P1L - Customer 360 minimo (legacy planning note)
 
 | Task | Status | Module | Objective | Allowed scope | Out of scope | Expected files/tables/nodes | Dependencies | Acceptance criteria | Validation commands | Reporting requirements |
 |---|---|---|---|---|---|---|---|---|---|---|
-| TASK-P1L-000 Customer 360 minimo | DESIGN | Customer 360 | Consolidar timeline, identity map, opportunity graph y approved actions. | Docs, contracts, vistas de lectura. | Customer Master definitivo completo. | Docs de producto. | P1J/P1K. | Customer se vuelve el centro navegable del producto. | Documental o validacion segun alcance. | Reportar campos minimos y gaps. |
+| TASK-P1L-HIST-000 Customer 360 minimo | DESIGN | Customer 360 | Historical note retained for traceability. | Docs, contracts, vistas de lectura. | Customer Master definitivo completo. | Docs de producto. | P1J/P1K. | Customer se vuelve el centro navegable del producto. | Documental o validacion segun alcance. | Reportar campos minimos y gaps. |
 
-## P1M - Operator Copilot
+## P1M - Operator Copilot (legacy planning note)
 
 | Task | Status | Module | Objective | Allowed scope | Out of scope | Expected files/tables/nodes | Dependencies | Acceptance criteria | Validation commands | Reporting requirements |
 |---|---|---|---|---|---|---|---|---|---|---|
-| TASK-P1M-000 Operator Copilot | DESIGN | Agent Control Center / HUB | Dar visibilidad a decisiones, logs, costos, tools, errores y recomendaciones. | Docs, contracts, UI brief. | Autonomia total o RBAC total. | Docs de producto y governance. | P1J/P1L. | El operador entiende, prueba y controla acciones. | Documental o validacion segun alcance. | Reportar vistas y controles requeridos. |
+| TASK-P1M-HIST-000 Operator Copilot | DESIGN | Agent Control Center / HUB | Historical note retained for traceability. | Docs, contracts, UI brief. | Autonomia total o RBAC total. | Docs de producto y governance. | P1J/P1L. | El operador entiende, prueba y controla acciones. | Documental o validacion segun alcance. | Reportar vistas y controles requeridos. |
 
 ## P2 - AI Marketing
 
