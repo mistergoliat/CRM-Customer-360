@@ -3,6 +3,8 @@
 P1Ka
 Este documento describe la capa deterministica de Commercial Policy que opera sobre una salida del Sales Agent ya validada.
 
+P1K is already accepted and closed. The roadmap markers below are kept for historical traceability and do not mean P1K is still active.
+
 ## Boundary
 
 La secuencia contractual es:

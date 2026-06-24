@@ -14,6 +14,16 @@ El sistema debe:
 - dejar trazabilidad completa de decisiones, tools, costos y resultados,
 - evolucionar hacia SaaS y luego AaaS sin reescribir el nucleo.
 
+## Phase alignment
+
+El repositorio esta alineado asi:
+
+- `P1K` esta `ACCEPTED AND CLOSED`.
+- `P1L` es `Production Foundation`.
+- `P1M` es `CRM Product Experience`.
+
+P1M usa la UI como herramienta de discovery para validar read models, jerarquias operativas y contratos faltantes antes de fijar nueva persistencia o ejecucion.
+
 ## Que es
 
 1. Una plataforma de ventas asistidas y autonomia comercial.
@@ -92,6 +102,8 @@ Todo lo demas debe colgar desde Customer:
 Customer 360 aqui significa una vista operativa unificada del cliente para vender y operar, no una promesa de master data final.
 
 El Customer 360 definitivo depende de `customer_master`. Antes de eso, el sistema opera con identidad provisional y Customer Candidate.
+
+Durante P1M, el Customer 360 provisional puede construirse como experiencia visual read-only para descubrir gaps de identidad, timeline y relaciones comerciales sin fingir un master persistente.
 
 La secuencia runtime concreta para activar el AI SDR MVP vive en `docs/product/ai-sdr-implementation-blueprint.md`.
 
@@ -202,4 +214,6 @@ Para llegar ahi, el producto debe quedar basado en:
 - integracion desacoplada con n8n.
 
 La primera capa reusable para escalar a SaaS/AaaS es el operating model comercial, no la UI ni el case flow.
+
+La UI de P1M es una capa de modelado y validacion del producto, no el lugar donde se resuelven los side effects productivos.
 

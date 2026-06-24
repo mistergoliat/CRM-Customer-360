@@ -2,6 +2,8 @@
 
 Este documento fija el tramo comercial del backend IA para P1K. No introduce runtime, prompts, endpoints ni writes.
 
+P1K is already accepted and closed. The `P1K-*` markers in this document are historical and retained for traceability only.
+
 ## 1. Objetivo
 
 Construir una capa deterministica que convierta el contexto de Brain + inbound en un `SalesAgentInput` seguro, estable y serializable.

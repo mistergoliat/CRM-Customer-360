@@ -4,6 +4,8 @@
 
 Customer is the central entity of the operating model.
 
+P1K is already closed; this model now guides the P1M CRM product experience and the P1L production foundation.
+
 Everything important must hang off Customer:
 
 - identity

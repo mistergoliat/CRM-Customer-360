@@ -9,18 +9,26 @@ Webapp independiente para continuidad operacional del HUB WhatsApp/Casos. La app
 - MySQL/MariaDB vía `mysql2`
 - Docker separado de n8n
 
-## Rutas funcionales fase 1
+## Rutas visuales P1M
 
-- `/dashboard`: métricas reales o estados `query_error`.
-- `/cases`: listado real desde `n8n_vw_hub_cases`.
-- `/cases/[id]`: detalle, timeline, respuesta manual, cerrar, reabrir, bloquear IA, prioridad.
-- `/whatsapp`: lectura parcial de inbound/outbound y estado Meta.
-- `/audit`: lectura de `hub_audit_log`.
-- `/system`: salud básica DB, Meta config y n8n opcional.
+- `/dashboard`: centro operacional.
+- `/conversations` y `/conversations/[id]`: inbox y workspace conversacional.
+- `/cases` y `/cases/[id]`: dominio operativo separado de Conversations.
+- `/customers` y `/customers/[id]`: directorio y perfil provisional.
+- `/opportunities` y `/opportunities/[id]`: inbox y workspace comercial.
+- `/actions` y `/actions/[id]`: cola global de acciones.
+- `/marketing`: overview del módulo de crecimiento.
+- `/marketing/copilot`, `/marketing/segments`, `/marketing/campaigns/new`, `/marketing/campaigns/[id]`, `/marketing/automations/[id]`: subrutas visuales de Marketing.
+- `/knowledge`: biblioteca y artículo de conocimiento.
+- `/analytics`: BI transversal.
+- `/integrations`: salud de integraciones.
+- `/settings`: gobernanza y configuración.
 
-## Módulos preview
+## Rutas legacy
 
-`/customers`, `/customer-master`, `/mailing`, `/knowledge`, `/agents`, `/analytics` y `/settings` son pantallas de producto en preview. No tienen backend falso ni métricas inventadas.
+- `/chats` redirige a `/conversations`.
+- `/mailing` redirige a `/marketing`.
+- `/system` redirige a `/integrations`.
 
 ## Configuración
 

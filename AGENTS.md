@@ -14,49 +14,77 @@ La meta estrategica es:
 
 ## Estado actual
 
-1. Existe una preview funcional del HUB.
-2. La UI ya es propia.
-3. La fuente de verdad operativa sigue viviendo en tablas y vistas `n8n_*`.
-4. n8n hoy actua como productor y poseedor del modelo de datos.
-5. El HUB lee casos, mensajes, salud y auditoria desde MySQL/MariaDB.
-6. Hay acciones operativas server-side para respuestas manuales, cierre, reapertura, cambio de prioridad y bloqueo de IA.
-7. La seccion Customer 360 definitiva no existe todavia y no debe construirse en esta fase.
+1. `P1K` esta `ACCEPTED AND CLOSED`.
+2. `P1L` es la fase de `Production Foundation`.
+3. `P1M` es la fase activa de `CRM Product Experience`.
+4. MariaDB/n8n siguen coexistiendo como legado operativo.
+5. El Brain productivo aun no esta completo.
+6. La experiencia visual del CRM es ahora el foco activo de discovery y validacion.
+7. La identidad continua siendo provisional mientras no exista `customer_master`.
 
-## Fase 0
+## Fases activas
 
-Fase 0 significa estabilizacion, documentacion rectora y preparacion de la transicion.
+### P1K - Brain MVP y demostracion
 
-Objetivos de Fase 0:
+P1K ya quedo cerrado. Incluye razonamiento comercial, governance, simulacion de ejecucion, follow-up, outbox, transporte simulado, auditoria y scenario simulator.
 
-1. Dejar claro que existe y que no existe.
-2. Evitar que futuros agentes inventen arquitectura o entidades.
-3. Proteger la preview actual del HUB.
-4. Preparar la migracion progresiva desde n8n sin reescritura total.
-5. Establecer contratos para outputs IA, logging y trazabilidad.
+No debe reabrirse salvo correccion critica demostrada.
 
-## Modulos objetivo del producto
+### P1L - Production Foundation
 
-1. Inbox / Conversational Hub
-2. Case Management
-3. AI Routing & Agents
-4. Commercial Follow-up Engine
-5. Customer 360 provisional
-6. Marketing Automation futura
-7. Agent Control Center
-8. Intelligence & Dashboards
+P1L concentra la base de produccion:
+
+1. adapters PostgreSQL/Supabase;
+2. persistencia real del Brain;
+3. scheduler;
+4. outbox worker productivo;
+5. transporte HTTP real;
+6. reconciliacion de delivery;
+7. piloto controlado.
+
+### P1M - CRM Product Experience
+
+P1M concentra la experiencia visual y operativa del CRM:
+
+1. CRM shell y navegacion;
+2. Cases inbox y chat-first workspace;
+3. Customer 360 provisional;
+4. Opportunity workspace;
+5. AI SDR Copilot;
+6. Action Queue;
+7. analitica visual;
+8. settings visual;
+9. operator controls y estados visuales.
 
 ## Reglas no negociables
 
-1. No construir Customer 360 definitivo mientras `customer_master` no exista.
-2. No crear features aisladas que no mapeen a modulo, entidad o KPI.
-3. No duplicar vistas innecesarias.
-4. No mover todo de n8n de golpe.
-5. No romper la preview actual del HUB.
-6. Toda logica core nueva debe ser versionable, auditable y testeable.
-7. Todo output de agente debe ser estructurado.
-8. Toda accion relevante debe dejar log.
-9. No tocar schema DB salvo que la tarea lo pida de forma explicita en una fase posterior.
-10. No mezclar documentacion rectora con refactors funcionales en la misma entrega salvo que la tarea lo autorice.
+1. Customer es el centro del modelo.
+2. Opportunity es separada de Case y Conversation.
+3. No side effects no autorizados.
+4. No Customer Master inventado.
+5. No datos ficticios presentados como reales.
+6. No logica sensible dentro de componentes UI.
+7. No decisiones de permisos delegadas al LLM.
+8. No refactors masivos sin auditoria previa.
+9. No convertir Case o Work Queue en el centro del dominio.
+10. No presentar Customer Candidate como Customer Master definitivo.
+
+## Estrategia UI-first
+
+P1M puede construir superficies visuales antes de que toda la logica productiva, persistencia o integracion este terminada.
+
+Esto esta permitido cuando:
+
+1. la superficie es read-only;
+2. no inventa datos como si fueran reales;
+3. degrada claramente cuando falta informacion;
+4. distingue mock, fixture, read model real y dato no disponible;
+5. no habilita side effects;
+6. no acopla la arquitectura futura a una solucion visual temporal;
+7. revela gaps de producto y genera tareas posteriores;
+8. mantiene estable la frontera entre visualizacion y ejecucion.
+
+La UI en P1M es una herramienta de modelamiento y validacion del producto, no solo una capa final.
 
 ## Que esta permitido en esta fase
 
@@ -66,15 +94,18 @@ Objetivos de Fase 0:
 4. Preparar DTOs y reglas de salida a nivel documental.
 5. Alinear nomenclatura entre HUB, n8n y futuro backend.
 6. Aclarar limites entre identidad provisional y Customer Master futuro.
+7. Diseñar superficies read-only que usen read models, fixtures o mocks identificados.
 
 ## Que esta prohibido en esta fase
 
-1. Implementar Customer 360 definitivo.
-2. Crear tablas nuevas de produccion.
+1. Implementar Customer Master definitivo.
+2. Crear tablas nuevas de produccion sin tarea explicita.
 3. Reescribir workflows n8n de forma masiva.
-4. Cambiar auth, routing, cases, chats, dashboard o APIs en esta tarea documental.
+4. Cambiar auth, routing, cases, chats, dashboard o APIs en una tarea documental.
 5. Introducir marketing automation funcional.
 6. Inventar fuentes de datos no observadas en el repo.
+7. Presentar un mock como si fuera dato real.
+8. Delegar permisos o aprobaciones al LLM.
 
 ## Como trabajar con n8n durante la transicion
 
@@ -94,26 +125,35 @@ Objetivos de Fase 0:
 
 ## Roadmap por fases
 
-### P0 - Estabilizacion
+### P0 - Stabilization
 
 1. Blindar auth y variables criticas.
 2. Alinear documentacion y contratos.
 3. Validar preview, build y typecheck.
 4. Reducir ambiguedad sobre fuentes de verdad.
 
-### P1 - Refactor minimo
+### P1 - CRM foundation
 
-1. Unificar paneles duplicados.
-2. Normalizar DTOs de caso, chat y auditoria.
-3. Consolidar logs y acciones operativas.
-4. Reducir polling y consultas innecesarias.
+1. Cerrar el brain MVP demostrable.
+2. Separar la foundation de produccion de la experiencia visual.
+3. Usar la UI como herramienta para descubrir gaps y fijar contratos de lectura.
 
-### P2 - Migracion desde n8n
+### P1L - Production Foundation
 
-1. Sacar del workflow lo que sea decision, estado o persistencia core.
-2. Mantener n8n solo como integracion donde aporte valor.
-3. Versionar contratos de entrada y salida.
-4. Preparar follow-up comercial y routing estructurado.
+1. Persistencia real.
+2. Scheduler real.
+3. Outbox worker real.
+4. Transporte real.
+5. Reconciliacion real.
+
+### P1M - CRM Product Experience
+
+1. Shell de CRM.
+2. Navegacion y superficies visuales.
+3. Read models y fixtures identificados.
+4. Customer 360 provisional.
+5. Opportunity workspace.
+6. Action Queue y Copilot visuales.
 
 ## Comandos de validacion
 
@@ -124,17 +164,18 @@ npm run build
 npm run typecheck
 ```
 
-Para lint, usar el mecanismo disponible en el repo en ese momento. Si el script aun usa `next lint`, no forzar interaccion; registrar el problema como deuda tecnica y validar con la migracion a ESLint CLI antes de confiar en ese comando.
+Para tareas solo documentales, no es obligatorio ejecutar build o typecheck.
 
 Si una tarea toca front o API, validar adicionalmente que la preview sigue funcionando en local o en Docker.
 
 ## Criterios de aceptacion
 
 1. No hay cambios funcionales accidentales cuando la tarea es documental.
-2. Las restricciones de Fase 0 quedan explicitas.
-3. La estrategia n8n -> backend queda clara.
-4. La identidad provisional queda claramente separada del Customer Master futuro.
-5. Las dependencias y riesgos quedan documentados sin inventar features.
+2. P1K queda tratado como cerrado y no reabierto salvo correccion critica.
+3. P1L y P1M quedan separados con responsabilidades claras.
+4. La estrategia UI-first queda autorizada y limitada.
+5. La identidad provisional queda claramente separada del Customer Master futuro.
+6. Las dependencias y riesgos quedan documentados sin inventar features.
 
 ## Como reportar cambios
 

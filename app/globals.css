@@ -13,7 +13,10 @@
 html,
 body {
   min-height: 100%;
-  background: #f3f4f6;
+  background:
+    radial-gradient(circle at top left, rgba(190, 0, 57, 0.08), transparent 30%),
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.06), transparent 24%),
+    #f3f4f6;
 }
 
 body {
@@ -37,8 +40,8 @@ body {
 }
 
 @layer components {
-  .hub-card {
-    @apply rounded-lg border border-slate-200 bg-white shadow-card;
+.hub-card {
+    @apply rounded-2xl border border-slate-200 bg-white shadow-card;
   }
 
   .hub-input {
@@ -50,15 +53,15 @@ body {
   }
 
   .hub-button-primary {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary-container px-4 text-label-bold uppercase text-white transition hover:bg-primary disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-primary-container px-4 text-label-bold uppercase text-white transition hover:bg-primary disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .hub-button-secondary {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md border border-primary bg-white px-4 text-label-bold uppercase text-primary transition hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-primary bg-white px-4 text-label-bold uppercase text-primary transition hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .hub-button-ghost {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md px-3 text-label-bold uppercase text-primary transition hover:bg-primary-fixed/70 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-xl px-3 text-label-bold uppercase text-primary transition hover:bg-primary-fixed/70 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .hub-table {
