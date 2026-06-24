@@ -1,4 +1,4 @@
-import { getColumns, insertExistingColumns, queryRows, safeQueryRows, updateExistingColumns, type DbRow } from "./db";
+import { getColumns, insertExistingColumns, safeQueryRows, updateExistingColumns, type DbRow } from "./db";
 
 export type CaseFilters = {
   q?: string;

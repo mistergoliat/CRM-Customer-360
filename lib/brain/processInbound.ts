@@ -12,6 +12,7 @@ import { createOutboxPlannedRecord } from "./messaging/outbox";
 import type { BrainExecutionSource, BrainExecuteRequest } from "./messaging/types";
 import { makeBrainRequestId } from "./instructions";
 import type { BrainActionPolicy, BrainNormalizedAction } from "./actions/types";
+import { runCustomerOnboardingLoop } from "./commercial/customer-onboarding";
 import { COMMERCIAL_POLICY_DEFAULT_FLAGS } from "./commercial/policy";
 import { COMMERCIAL_SHADOW_DEFAULT_FEATURE_FLAGS, COMMERCIAL_SHADOW_RUNTIME_TIMEOUT_MS } from "./commercial/shadow";
 import { createCommercialShadowFailedSafe } from "./commercial/shadow/createCommercialShadowFailedSafe";
@@ -654,7 +655,8 @@ function buildValidResponse(
   outboxPlanResult: BrainInboundOutboxPlanResult | null,
   outboxPlanWarnings: string[] = [],
   commercialShadowResult: CommercialShadowResult | null = null,
-  commercialOperationalLoopResult: CommercialOperationalLoopResult | null = null
+  commercialOperationalLoopResult: CommercialOperationalLoopResult | null = null,
+  customerOnboardingResult: Awaited<ReturnType<typeof runCustomerOnboardingLoop>> | null = null
 ): BrainProcessInboundResponse {
   const requestId = makeBrainRequestId(request);
   const context = resolveBrainContext(request);
@@ -712,7 +714,8 @@ function buildValidResponse(
         reason: "AI orchestrator remains deferred while the backend response policy and action router stay read-only."
       },
       commercialShadow: commercialShadowResult,
-      commercialOperationalLoop: commercialOperationalLoopResult
+      commercialOperationalLoop: commercialOperationalLoopResult,
+      customerOnboarding: customerOnboardingResult
     },
     metadata: {
       version: "brain.process-inbound.v2",
@@ -787,6 +790,22 @@ function buildCommercialOperationalLoopInput(
       correlationId,
       shadowStatus: commercialShadowResult.status
     }
+  };
+}
+
+function buildCustomerOnboardingDraft(responseText: string, customerOnboardingResult: Awaited<ReturnType<typeof runCustomerOnboardingLoop>>) {
+  return {
+    outputSchema: "brain.agent.knowledge.output.v1",
+    agentName: "knowledge",
+    agentVersion: "brain.agent.customer-onboarding.v1",
+    decision: "answer" as const,
+    answer_type: "generic" as const,
+    message: responseText,
+    confidence: customerOnboardingResult.decision.confidence,
+    sources_used: ["customer_onboarding"],
+    safety_flags: ["customer_onboarding", ...(customerOnboardingResult.warnings.length > 0 ? ["warnings_present"] : [])],
+    tool_requests: [],
+    warnings: customerOnboardingResult.warnings
   };
 }
 
@@ -895,6 +914,7 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
   const contextSummary = buildContextSummary(requestId, request, contextResponse);
   let commercialShadowResult: CommercialShadowResult | null = null;
   let commercialOperationalLoopResult: CommercialOperationalLoopResult | null = null;
+  let customerOnboardingResult: Awaited<ReturnType<typeof runCustomerOnboardingLoop>> | null = null;
   if (commercialShadowFlags.commercialShadowEnabled) {
     try {
       commercialShadowResult = await commercialShadowHook(buildCommercialShadowInput(request, contextResponse, startedAt, commercialShadowFlags));
@@ -937,6 +957,31 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
       const message = error instanceof Error ? error.message : "Knowledge Agent dry-run failed.";
       actionResponse.warnings.push(message);
     }
+  }
+
+  try {
+    customerOnboardingResult = await runCustomerOnboardingLoop({
+      conversationCaseId: request.conversationCaseId ?? contextResponse.case_context?.active_case?.conversation_case_id ?? null,
+      waId: request.waId ?? contextResponse.customer_context?.wa_id ?? null,
+      messageId: request.messageId ?? null,
+      messageText: request.messageText,
+      currentTime: new Date(startedAt).toISOString(),
+      correlationId: request.messageId,
+      brainContext: contextResponse as unknown as Record<string, unknown>,
+      writeEnabled: process.env.DB_WRITE_ENABLED === "true",
+      source: request.source
+    });
+
+    if (customerOnboardingResult.responseText) {
+      const onboardingDraft = buildCustomerOnboardingDraft(customerOnboardingResult.responseText, customerOnboardingResult);
+      agentDraft = onboardingDraft as unknown as BrainAgentRunResponse["draft"];
+      if (customerOnboardingResult.decision.requiresHumanApproval) {
+        actionResponse.warnings.push("customer_onboarding_handoff_required");
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Customer onboarding loop failed.";
+    actionResponse.warnings.push(message);
   }
 
   if (agentDraft && shouldBuildExecutionPlan(request, actionResponse, agentDraft, contextResponse, contextSummary)) {
@@ -987,6 +1032,7 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
     outboxPlanResult,
     outboxPlanWarnings,
     commercialShadowResult,
-    commercialOperationalLoopResult
+    commercialOperationalLoopResult,
+    customerOnboardingResult
   );
 }
