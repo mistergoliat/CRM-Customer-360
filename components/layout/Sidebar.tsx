@@ -21,13 +21,18 @@ export function Sidebar() {
   return (
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-sidebar-width flex-col border-r border-white/10 bg-sidebar text-white shadow-[12px_0_40px_-28px_rgba(15,23,42,0.7)] lg:flex">
       <div className="px-5 pb-5 pt-6">
-        <div className="flex items-center gap-3">
+        <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-white shadow-lg shadow-primary/35">
             <Icon name="hub" />
           </div>
-          <div>
-            <h1 className="text-headline-lg text-white">PesasChile HUB</h1>
-            <p className="text-body-md text-surface-variant/70">AI Operations</p>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-headline-md text-white">PesasChile HUB</h1>
+              <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-200">
+                P1M
+              </span>
+            </div>
+            <p className="mt-0.5 text-body-md font-medium text-surface-variant/80">AI Operations</p>
           </div>
         </div>
       </div>
@@ -71,6 +76,17 @@ export function Sidebar() {
       <div className="mx-4 mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
         <p className="text-label-bold uppercase text-slate-300">Continuidad operacional</p>
         <p className="mt-2 text-label-sm text-slate-400">Webapp independiente de flujos n8n para casos críticos.</p>
+      </div>
+
+      <div className="mx-4 my-4 rounded-2xl border border-white/10 bg-sidebar-soft px-4 py-3">
+        <p className="text-label-bold uppercase text-slate-300">Usuario</p>
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-body-md font-semibold text-white">Admin User</p>
+            <p className="text-label-sm text-slate-400">Operador · Producción</p>
+          </div>
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-fixed text-primary font-bold">AU</div>
+        </div>
       </div>
     </aside>
   );

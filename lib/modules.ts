@@ -11,17 +11,17 @@ export type HubModule = {
 };
 
 export const modules: HubModule[] = [
-  { key: "dashboard", label: "Home", href: "/dashboard", status: "active", icon: "home", group: "operations", navVisible: true },
+  { key: "dashboard", label: "Centro", href: "/dashboard", status: "active", icon: "home", group: "operations", navVisible: true },
   { key: "conversations", label: "Conversaciones", href: "/conversations", status: "preview", icon: "forum", group: "operations", navVisible: true },
   { key: "cases", label: "Casos", href: "/cases", status: "active", icon: "assignment", group: "operations", navVisible: true },
   { key: "customers", label: "Clientes", href: "/customers", status: "preview", icon: "groups", group: "crm", navVisible: true },
   { key: "opportunities", label: "Oportunidades", href: "/opportunities", status: "preview", icon: "point_of_sale", group: "crm", navVisible: true },
   { key: "actions", label: "Acciones", href: "/actions", status: "preview", icon: "playlist_add_check", group: "crm", navVisible: true },
   { key: "marketing", label: "Marketing", href: "/marketing", status: "preview", icon: "campaign", group: "growth", navVisible: true },
-  { key: "knowledge", label: "Knowledge", href: "/knowledge", status: "preview", icon: "book_5", group: "intelligence", navVisible: true },
-  { key: "analytics", label: "Analytics", href: "/analytics", status: "preview", icon: "monitoring", group: "intelligence", navVisible: true },
+  { key: "knowledge", label: "Conocimiento", href: "/knowledge", status: "preview", icon: "book_5", group: "intelligence", navVisible: true },
+  { key: "analytics", label: "Analítica", href: "/analytics", status: "preview", icon: "monitoring", group: "intelligence", navVisible: true },
   { key: "integrations", label: "Integraciones", href: "/integrations", status: "partial", icon: "hub", group: "system", navVisible: true },
-  { key: "settings", label: "Settings", href: "/settings", status: "partial", icon: "settings", group: "system", navVisible: true },
+  { key: "settings", label: "Configuración", href: "/settings", status: "partial", icon: "settings", group: "system", navVisible: true },
   { key: "chats", label: "Chats", href: "/chats", status: "partial", icon: "chat", group: "legacy", navVisible: false },
   { key: "whatsapp", label: "WhatsApp", href: "/whatsapp", status: "partial", icon: "sms", group: "legacy", navVisible: false },
   { key: "customer-master", label: "Customer Master", href: "/customer-master", status: "preview", icon: "badge", group: "legacy", navVisible: false },
