@@ -7,7 +7,11 @@ export const BRAIN_TOOL_NAMES = [
   "searchProducts",
   "getProductStock",
   "getOrderByInvoice",
-  "explainAgentDecision"
+  "explainAgentDecision",
+  "lookupCustomerByEmail",
+  "createCustomer",
+  "linkCustomerToConversation",
+  "getCustomerContext"
 ] as const;
 
 export type BrainToolName = (typeof BRAIN_TOOL_NAMES)[number];

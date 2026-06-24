@@ -1,4 +1,3 @@
-import type { DbRow } from "./db";
 import { queryRows, safeQueryRows } from "./db";
 import { getCaseById, getCaseTimeline, type TimelineEntry } from "./cases";
 

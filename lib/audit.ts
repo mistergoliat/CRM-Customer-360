@@ -11,7 +11,18 @@ export type AuditAction =
   | "ai_blocked"
   | "api_error"
   | "meta_send_error"
-  | "db_query_error";
+  | "db_query_error"
+  | "customer.created"
+  | "ai_sdr.decision.created"
+  | "ai_sdr.tool.requested"
+  | "ai_sdr.tool.executed"
+  | "ai_sdr.tool.failed"
+  | "customer.lookup.completed"
+  | "customer.creation.offered"
+  | "customer.creation.confirmed"
+  | "customer.linked"
+  | "customer.link.failed"
+  | "ai_sdr.handoff.requested";
 
 export async function ensureAuditTable() {
   await queryRows(`
