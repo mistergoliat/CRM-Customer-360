@@ -10,6 +10,8 @@ export type ConversationRow = TableRow & {
   related: string;
   last_message: string;
   summary: string;
+  source?: string;
+  direction?: string;
   tone?: "green" | "amber" | "red" | "blue" | "gray";
 };
 
@@ -25,6 +27,7 @@ export type ConversationWorkspace = {
   source_systems: KeyValueField[];
   notes: string[];
   signals: KeyValueField[];
+  attachments?: { name: string; type: string; size: string }[];
   messages: { id: string; direction: "inbound" | "outbound" | "system"; author: string; body: string; time: string; tone?: "green" | "amber" | "red" | "blue" | "gray"; chips?: { label: string; tone?: "green" | "amber" | "red" | "blue" | "gray" }[] }[];
   action_queue: { id: string; title: string; due: string; status: string; preview: string; disabled: boolean }[];
   copilot: {
@@ -48,6 +51,8 @@ export type CustomerRow = TableRow & {
   activity: string;
   status: string;
   region: string;
+  ltv?: string;
+  risk?: string;
 };
 
 export type CustomerProfile = {
@@ -59,6 +64,8 @@ export type CustomerProfile = {
   rut: string;
   region: string;
   last_activity: string;
+  ltv?: string;
+  operational_health?: string;
   summary: string;
   commercial_summary: string;
   notes: string[];
@@ -198,6 +205,91 @@ export const conversationInboxFixture = {
       id_label: "CONV-7709",
       tone: "blue",
       href: "/conversations/demo-conversation-3"
+    },
+    {
+      id: "demo-conversation-4",
+      client: "Renata Soto",
+      wa_id: "56974455661",
+      channel: "WhatsApp",
+      status: "Revisión requerida",
+      owner: "Laura Perez",
+      waiting: "28m",
+      related: "OPP-2010 · Mantenimiento anual",
+      last_message: "Necesito confirmar condiciones y cobertura del plan.",
+      summary: "Requiere validar elegibilidad antes de avanzar a propuesta.",
+      priority: "P1",
+      unread: "1",
+      id_label: "CONV-7711",
+      tone: "amber",
+      href: "/conversations/demo-conversation-1"
+    },
+    {
+      id: "demo-conversation-5",
+      client: "Andrés Ibarra",
+      wa_id: "56952233441",
+      channel: "Email",
+      status: "Esperando cliente",
+      owner: "Admin User",
+      waiting: "1.2h",
+      related: "OPP-2011 · CrossFit Pro",
+      last_message: "Te envié el resumen comercial con el catálogo.",
+      summary: "Pendiente de respuesta para seguir con la negociación.",
+      priority: "P2",
+      unread: "0",
+      id_label: "CONV-7712",
+      tone: "blue",
+      href: "/conversations/demo-conversation-3"
+    },
+    {
+      id: "demo-conversation-6",
+      client: "Marta León",
+      wa_id: "56931122449",
+      channel: "WhatsApp",
+      status: "Requerimos humano",
+      owner: "Laura Perez",
+      waiting: "3h",
+      related: "CAS-4470 · Garantía de producto",
+      last_message: "Adjunté fotos del producto con falla.",
+      summary: "El caso necesita revisión humana y documentación extra.",
+      priority: "P0",
+      unread: "3",
+      id_label: "CONV-7713",
+      tone: "red",
+      href: "/conversations/demo-conversation-2"
+    },
+    {
+      id: "demo-conversation-7",
+      client: "José Fuentes",
+      wa_id: "56966778899",
+      channel: "WhatsApp",
+      status: "Esperando cliente",
+      owner: "Admin User",
+      waiting: "5h",
+      related: "OPP-2012 · Winback 30d",
+      last_message: "¿Puedo retomar la compra con despacho express?",
+      summary: "Tiene intención de reactivar la compra con condiciones de envío.",
+      priority: "P2",
+      unread: "1",
+      id_label: "CONV-7714",
+      tone: "blue",
+      href: "/conversations/demo-conversation-1"
+    },
+    {
+      id: "demo-conversation-8",
+      client: "Valentina Cruz",
+      wa_id: "56922334455",
+      channel: "Email",
+      status: "Revisión requerida",
+      owner: "Laura Perez",
+      waiting: "7h",
+      related: "CAS-4480 · Garantía",
+      last_message: "Necesito el detalle de cobertura de garantía.",
+      summary: "La respuesta necesita validación antes de salir.",
+      priority: "P1",
+      unread: "0",
+      id_label: "CONV-7715",
+      tone: "amber",
+      href: "/conversations/demo-conversation-3"
     }
   ] satisfies ConversationRow[],
   selectedId: "demo-conversation-1",
@@ -222,11 +314,19 @@ export const conversationInboxFixture = {
         { label: "Risk", value: "Moderado", tone: "amber" },
         { label: "Approval", value: "No requerida", tone: "green" }
       ],
+      attachments: [
+        { name: "cotizacion-preliminar.pdf", type: "PDF", size: "1.2 MB" },
+        { name: "captura-stock.png", type: "Imagen", size: "480 KB" }
+      ],
       messages: [
         { id: "msg-1", direction: "inbound", author: "Mauricio Lopez", body: "Hola, ¿tienen stock de trotadora profesional para entrega esta semana?", time: "09:14", tone: "gray", chips: [{ label: "inbound", tone: "gray" }] },
         { id: "msg-2", direction: "system", author: "CRM Brain", body: "AI SDR detectó intención comercial y sugiere validar stock antes de cotizar.", time: "09:15", tone: "amber", chips: [{ label: "system", tone: "amber" }, { label: "review", tone: "blue" }] },
         { id: "msg-3", direction: "outbound", author: "Admin User", body: "Hola Mauricio, reviso inventario y te confirmo disponibilidad hoy mismo.", time: "09:17", tone: "blue", chips: [{ label: "outbound", tone: "blue" }] },
-        { id: "msg-4", direction: "inbound", author: "Mauricio Lopez", body: "Perfecto, quedo atento.", time: "09:21", tone: "gray", chips: [{ label: "client follow-up", tone: "gray" }] }
+        { id: "msg-4", direction: "inbound", author: "Mauricio Lopez", body: "Perfecto, quedo atento.", time: "09:21", tone: "gray", chips: [{ label: "client follow-up", tone: "gray" }] },
+        { id: "msg-5", direction: "system", author: "CRM Brain", body: "Se detectó posible oportunidad secundaria en accesorios de alto margen.", time: "09:23", tone: "blue", chips: [{ label: "signal", tone: "blue" }] },
+        { id: "msg-6", direction: "outbound", author: "Admin User", body: "También puedo revisar accesorios compatibles y enviarte un solo resumen.", time: "09:24", tone: "blue" },
+        { id: "msg-7", direction: "inbound", author: "Mauricio Lopez", body: "Sí, me sirve. Si tienen banco ajustable también.", time: "09:27", tone: "gray" },
+        { id: "msg-8", direction: "system", author: "Sistema", body: "Documento adjunto: cotizacion-preliminar.pdf", time: "09:28", tone: "green", chips: [{ label: "attachment", tone: "green" }] }
       ],
       action_queue: [
         { id: "aq-1", title: "Confirmar stock", due: "15m", status: "preview", preview: "Revisar disponibilidad antes de cotizar.", disabled: true },
@@ -339,9 +439,14 @@ export const customerDirectoryFixture = {
     { key: "activity", title: "Última actividad", value: "2m", description: "Actualizado", icon: "update", tone: "blue" }
   ] satisfies MetricCard[],
   rows: [
-    { id: "demo-customer-1", client: "Camila Rojas", identity_state: "Provisional", source: "WhatsApp + PrestaShop", activity: "2m", status: "Activo", region: "Santiago", href: "/customers/demo-customer-1" },
-    { id: "demo-customer-2", client: "Gimnasio Pacific", identity_state: "Resuelto", source: "PrestaShop + SAP", activity: "15m", status: "Atención", region: "Valparaíso", href: "/customers/demo-customer-2" },
-    { id: "demo-customer-3", client: "Mauricio Lopez", identity_state: "Conflicto", source: "WhatsApp + Email", activity: "1h", status: "Revisión", region: "Rancagua", href: "/customers/demo-customer-3" }
+    { id: "demo-customer-1", client: "Camila Rojas", identity_state: "Provisional", source: "WhatsApp + PrestaShop", activity: "2m", status: "Activo", region: "Santiago", ltv: "CLP $2.7M", risk: "Medio", href: "/customers/demo-customer-1" },
+    { id: "demo-customer-2", client: "Gimnasio Pacific", identity_state: "Resuelto", source: "PrestaShop + SAP", activity: "15m", status: "Atención", region: "Valparaíso", ltv: "CLP $8.4M", risk: "Bajo", href: "/customers/demo-customer-2" },
+    { id: "demo-customer-3", client: "Mauricio Lopez", identity_state: "Conflicto", source: "WhatsApp + Email", activity: "1h", status: "Revisión", region: "Rancagua", ltv: "CLP $1.8M", risk: "Alto", href: "/customers/demo-customer-3" },
+    { id: "demo-customer-4", client: "Renata Soto", identity_state: "Provisional", source: "WhatsApp + PrestaShop", activity: "28m", status: "Atención", region: "Santiago", ltv: "CLP $1.2M", risk: "Medio", href: "/customers/demo-customer-1" },
+    { id: "demo-customer-5", client: "Andrés Ibarra", identity_state: "Resuelto", source: "Email + SAP", activity: "1.2h", status: "Activo", region: "Concepción", ltv: "CLP $4.6M", risk: "Bajo", href: "/customers/demo-customer-2" },
+    { id: "demo-customer-6", client: "Marta León", identity_state: "Conflicto", source: "WhatsApp + POS", activity: "3h", status: "Revisión", region: "Puerto Montt", ltv: "CLP $1.5M", risk: "Alto", href: "/customers/demo-customer-3" },
+    { id: "demo-customer-7", client: "José Fuentes", identity_state: "Provisional", source: "WhatsApp", activity: "5h", status: "Activo", region: "Talca", ltv: "CLP $900K", risk: "Medio", href: "/customers/demo-customer-1" },
+    { id: "demo-customer-8", client: "Valentina Cruz", identity_state: "Resuelto", source: "Email + PrestaShop", activity: "8h", status: "Activo", region: "Viña del Mar", ltv: "CLP $6.1M", risk: "Bajo", href: "/customers/demo-customer-2" }
   ] satisfies CustomerRow[],
   selectedId: "demo-customer-1",
   profiles: {
@@ -354,6 +459,8 @@ export const customerDirectoryFixture = {
       rut: "12.345.678-9",
       region: "Santiago",
       last_activity: "2m",
+      ltv: "CLP $2.7M",
+      operational_health: "Alta",
       summary: "Cliente con identidad provisional pero alta confianza operativa.",
       commercial_summary: "Interés por equipamiento profesional y cotización formal.",
       notes: ["No existe customer master todavía.", "Confirmar vínculo entre WhatsApp y orden PrestaShop."],
@@ -365,16 +472,20 @@ export const customerDirectoryFixture = {
       ],
       conversations: [
         { id: "conv-c1", title: "Conversación WhatsApp", subtitle: "Solicitud de cotización formal", time: "2m ago", tone: "green" },
-        { id: "conv-c2", title: "Email", subtitle: "Catálogo actualizado", time: "1h ago", tone: "blue" }
+        { id: "conv-c2", title: "Email", subtitle: "Catálogo actualizado", time: "1h ago", tone: "blue" },
+        { id: "conv-c5", title: "WhatsApp seguimiento", subtitle: "Pide banco ajustable", time: "3h ago", tone: "amber" }
       ],
       opportunities: [
-        { id: "opp-c1", title: "Home Gym Pro", subtitle: "Quote pending", time: "hoy", tone: "amber" }
+        { id: "opp-c1", title: "Home Gym Pro", subtitle: "Quote pending", time: "hoy", tone: "amber" },
+        { id: "opp-c2", title: "Accesorios compatibles", subtitle: "Cross-sell sugerido", time: "3h ago", tone: "blue" }
       ],
       cases: [
-        { id: "case-c1", title: "Trotadora con falla", subtitle: "Postventa", time: "ayer", tone: "red" }
+        { id: "case-c1", title: "Trotadora con falla", subtitle: "Postventa", time: "ayer", tone: "red" },
+        { id: "case-c2", title: "Garantía de motor", subtitle: "En revisión", time: "3d ago", tone: "amber" }
       ],
       actions: [
-        { id: "action-c1", title: "Preparar cotización", subtitle: "Preview only", time: "15m", tone: "blue" }
+        { id: "action-c1", title: "Preparar cotización", subtitle: "Preview only", time: "15m", tone: "blue" },
+        { id: "action-c2", title: "Validar stock", subtitle: "Preview only", time: "1h", tone: "amber" }
       ]
     },
     "demo-customer-2": {
@@ -386,6 +497,8 @@ export const customerDirectoryFixture = {
       rut: "76.543.210-5",
       region: "Valparaíso",
       last_activity: "15m",
+      ltv: "CLP $8.4M",
+      operational_health: "Alta",
       summary: "Cliente resuelto con trazabilidad clara entre venta y postventa.",
       commercial_summary: "Cuenta con oportunidad activa y caso en progreso.",
       notes: ["Alinear inventario con despacho.", "Mantener un solo registro principal."],
@@ -409,6 +522,8 @@ export const customerDirectoryFixture = {
       rut: "77.123.456-1",
       region: "Rancagua",
       last_activity: "1h",
+      ltv: "CLP $1.8M",
+      operational_health: "Atención",
       summary: "Se detectó conflicto entre señales de contacto y order mapping.",
       commercial_summary: "Requiere revisión de identidad antes de nuevas acciones.",
       notes: ["Duplicado posible.", "Necesita merge review."],
@@ -436,7 +551,12 @@ export const opportunityInboxFixture = {
   rows: [
     { id: "demo-opportunity-1", customer: "Camila Rojas", stage: "Quote pending", status: "Revisión requerida", estimated_value: "CLP $2.7M", activity: "2m", next_action: "Aprobar cotización", owner: "Admin User", risk: "Medio", href: "/opportunities/demo-opportunity-1" },
     { id: "demo-opportunity-2", customer: "Home Gym Pro", stage: "Qualifying", status: "En progreso", estimated_value: "CLP $3.4M", activity: "15m", next_action: "Validar inventario", owner: "Laura Perez", risk: "Bajo", href: "/opportunities/demo-opportunity-2" },
-    { id: "demo-opportunity-3", customer: "Equipamiento CrossFit", stage: "Negotiation", status: "Esperando cliente", estimated_value: "CLP $2.0M", activity: "1h", next_action: "Enviar propuesta", owner: "Admin User", risk: "Medio", href: "/opportunities/demo-opportunity-3" }
+    { id: "demo-opportunity-3", customer: "Equipamiento CrossFit", stage: "Negotiation", status: "Esperando cliente", estimated_value: "CLP $2.0M", activity: "1h", next_action: "Enviar propuesta", owner: "Admin User", risk: "Medio", href: "/opportunities/demo-opportunity-3" },
+    { id: "demo-opportunity-4", customer: "Renata Soto", stage: "New", status: "En progreso", estimated_value: "CLP $1.4M", activity: "5m", next_action: "Calificar necesidad", owner: "Laura Perez", risk: "Bajo", href: "/opportunities/demo-opportunity-2" },
+    { id: "demo-opportunity-5", customer: "Andrés Ibarra", stage: "Engaged", status: "En progreso", estimated_value: "CLP $1.8M", activity: "25m", next_action: "Enviar comparativa", owner: "Admin User", risk: "Bajo", href: "/opportunities/demo-opportunity-3" },
+    { id: "demo-opportunity-6", customer: "Marta León", stage: "Quote pending", status: "Revisión requerida", estimated_value: "CLP $2.1M", activity: "45m", next_action: "Solicitar aprobación", owner: "Laura Perez", risk: "Medio", href: "/opportunities/demo-opportunity-1" },
+    { id: "demo-opportunity-7", customer: "José Fuentes", stage: "Waiting customer", status: "Esperando cliente", estimated_value: "CLP $1.1M", activity: "3h", next_action: "Recordatorio", owner: "Admin User", risk: "Medio", href: "/opportunities/demo-opportunity-2" },
+    { id: "demo-opportunity-8", customer: "Valentina Cruz", stage: "Won", status: "Cerrada", estimated_value: "CLP $4.0M", activity: "1d", next_action: "Upsell", owner: "Laura Perez", risk: "Bajo", href: "/opportunities/demo-opportunity-3" }
   ] satisfies OpportunityRow[],
   selectedId: "demo-opportunity-1",
   workspaces: {
@@ -459,7 +579,10 @@ export const opportunityInboxFixture = {
       timeline: [
         { id: "opp-t1", title: "Lead recibido", subtitle: "WhatsApp inbound", time: "09:10", tone: "green" },
         { id: "opp-t2", title: "Stage actualizado", subtitle: "Quote pending", time: "09:14", tone: "blue" },
-        { id: "opp-t3", title: "Revisión humana", subtitle: "Discount guardrail hit", time: "09:16", tone: "amber" }
+        { id: "opp-t3", title: "Revisión humana", subtitle: "Discount guardrail hit", time: "09:16", tone: "amber" },
+        { id: "opp-t4", title: "Borrador preparado", subtitle: "Cotización condicionada", time: "09:22", tone: "blue" },
+        { id: "opp-t5", title: "Follow-up programado", subtitle: "Recordatorio de aprobación", time: "09:40", tone: "gray" },
+        { id: "opp-t6", title: "Propuesta revisada", subtitle: "Pendiente de envío", time: "10:05", tone: "amber" }
       ],
       quote: { number: "Q-1008", status: "Draft", amount: "CLP $2.7M", issued: "Hoy", expiry: "48h" },
       copilot: {
@@ -558,7 +681,12 @@ export const actionQueueFixture = {
   rows: [
     { id: "demo-action-1", client: "Camila Rojas", related_entity: "OPP-1008", status: "Revisión requerida", risk: "Medio", approval: "Requerida", origin: "AI SDR", schedule: "Ahora", owner: "Admin User", href: "/actions/demo-action-1" },
     { id: "demo-action-2", client: "Mauricio Lopez", related_entity: "CONV-5567", status: "Preview", risk: "Bajo", approval: "No requerida", origin: "Follow-up planner", schedule: "15m", owner: "Laura Perez", href: "/actions/demo-action-2" },
-    { id: "demo-action-3", client: "Vanessa Reyes", related_entity: "ACT-7709", status: "Blocked", risk: "Bajo", approval: "No requerida", origin: "Marketing", schedule: "1h", owner: "Admin User", href: "/actions/demo-action-3" }
+    { id: "demo-action-3", client: "Vanessa Reyes", related_entity: "ACT-7709", status: "Blocked", risk: "Bajo", approval: "No requerida", origin: "Marketing", schedule: "1h", owner: "Admin User", href: "/actions/demo-action-3" },
+    { id: "demo-action-4", client: "Renata Soto", related_entity: "OPP-2010", status: "Preview", risk: "Bajo", approval: "No requerida", origin: "AI SDR", schedule: "30m", owner: "Laura Perez", href: "/actions/demo-action-1" },
+    { id: "demo-action-5", client: "Andrés Ibarra", related_entity: "CONV-7712", status: "Revisión requerida", risk: "Medio", approval: "Requerida", origin: "Campaign manager", schedule: "45m", owner: "Admin User", href: "/actions/demo-action-1" },
+    { id: "demo-action-6", client: "Marta León", related_entity: "CASE-4470", status: "Blocked", risk: "Alto", approval: "Requerida", origin: "Case bot", schedule: "1h", owner: "Laura Perez", href: "/actions/demo-action-3" },
+    { id: "demo-action-7", client: "José Fuentes", related_entity: "OPP-2011", status: "Preview", risk: "Bajo", approval: "No requerida", origin: "Follow-up planner", schedule: "2h", owner: "Admin User", href: "/actions/demo-action-2" },
+    { id: "demo-action-8", client: "Valentina Cruz", related_entity: "KB-101", status: "Programada", risk: "Bajo", approval: "No requerida", origin: "Knowledge", schedule: "Hoy 18:00", owner: "Laura Perez", href: "/actions/demo-action-2" }
   ] satisfies ActionRow[],
   selectedId: "demo-action-1",
   details: {

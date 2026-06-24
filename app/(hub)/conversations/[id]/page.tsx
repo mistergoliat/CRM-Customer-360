@@ -37,6 +37,7 @@ export default async function ConversationDetailPage({ params }: ConversationDet
                   { label: "Caso vinculado", value: conversation.linked_case },
                   { label: "Oportunidad", value: conversation.linked_opportunity }
                 ]}
+                columns={3}
               />
               <div>
                 <p className="text-label-bold uppercase text-slate-500">Sistemas fuente</p>
@@ -63,6 +64,19 @@ export default async function ConversationDetailPage({ params }: ConversationDet
                   ))}
                 </div>
               </div>
+              {conversation.attachments?.length ? (
+                <div>
+                  <p className="text-label-bold uppercase text-slate-500">Documentos</p>
+                  <div className="mt-2 space-y-2">
+                    {conversation.attachments.map((attachment) => (
+                      <div key={attachment.name} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                        <p className="text-body-md font-semibold text-on-surface">{attachment.name}</p>
+                        <p className="text-label-sm text-slate-500">{attachment.type} · {attachment.size}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </SectionCard>
         }
@@ -110,6 +124,11 @@ export default async function ConversationDetailPage({ params }: ConversationDet
                     {template}
                   </button>
                 ))}
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <StatusChip label="Adjuntar documento" tone="gray" />
+                <StatusChip label="Nota interna" tone="gray" />
+                <StatusChip label="Plantilla" tone="gray" />
               </div>
             </div>
           </SectionCard>
