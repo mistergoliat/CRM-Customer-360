@@ -20,3 +20,10 @@ export function labelForModuleStatus(status: ModuleStatus) {
   };
   return labels[status];
 }
+
+export function stateForTone(tone?: ChipTone) {
+  if (tone === "green") return "ok" as const;
+  if (tone === "red") return "error" as const;
+  if (tone === "amber") return "warning" as const;
+  return "muted" as const;
+}
