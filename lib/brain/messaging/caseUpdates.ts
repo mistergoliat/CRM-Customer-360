@@ -1,8 +1,6 @@
-import type { ResultSetHeader } from "mysql2/promise";
-import { chileNowSql, getColumns, safeQueryRows, withConnection } from "@/lib/db";
+import { queryRows, safeQueryRows } from "@/lib/db";
 import type { BrainCanonicalOutboundPersistResult, BrainCaseUpdateResult } from "./types";
 
-export const BRAIN_CASE_UPDATE_TABLE = "n8n_conversation_cases";
 export const BRAIN_UPDATE_CASE_AFTER_BACKEND_SEND_FLAG = "BRAIN_UPDATE_CASE_AFTER_BACKEND_SEND";
 
 export type UpdateCaseAfterBackendOutboundInput = {
@@ -29,98 +27,37 @@ function buildResult(
   return result;
 }
 
-function buildUpdateValues(
-  columns: string[],
-  input: UpdateCaseAfterBackendOutboundInput
-): { values: Record<string, unknown>; updatedFields: string[]; warnings: string[] } {
-  const values: Record<string, unknown> = {};
-  const updatedFields: string[] = [];
-  const warnings: string[] = [];
-  const canonicalMessageId = input.canonicalMessageId ?? null;
-
-  if (columns.includes("updated_at")) {
-    values.updated_at = "__CHILE_NOW__";
-    updatedFields.push("updated_at");
+function asText(value: unknown) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
   }
-
-  if (columns.includes("last_message_at")) {
-    values.last_message_at = "__CHILE_NOW__";
-    updatedFields.push("last_message_at");
-  }
-
-  if (columns.includes("last_outbound_at")) {
-    values.last_outbound_at = "__CHILE_NOW__";
-    updatedFields.push("last_outbound_at");
-  }
-
-  if (columns.includes("bot_replied")) {
-    values.bot_replied = 1;
-    updatedFields.push("bot_replied");
-  }
-
-  if (columns.includes("final_action")) {
-    values.final_action = "reply";
-    updatedFields.push("final_action");
-  }
-
-  if (columns.includes("last_message_id") && canonicalMessageId !== null) {
-    values.last_message_id = canonicalMessageId;
-    updatedFields.push("last_message_id");
-  } else if (input.canonicalPersistenceEnabled && canonicalMessageId === null) {
-    warnings.push("canonical_message_id no disponible; last_message_id no fue actualizado.");
-  }
-
-  return { values, updatedFields, warnings };
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "bigint") return value.toString();
+  return null;
 }
 
-function buildUpdateSql(values: Record<string, unknown>) {
-  const assignments: string[] = [];
-  const params: Array<string | number | null> = [];
-
-  for (const [column, value] of Object.entries(values)) {
-    if (value === undefined) continue;
-    if (value === "__CHILE_NOW__") {
-      assignments.push(`\`${column}\` = ${chileNowSql()}`);
-      continue;
-    }
-    assignments.push(`\`${column}\` = ?`);
-    params.push(value as string | number | null);
+function toConversationId(value: string | number | null) {
+  if (value === null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
   }
-
-  return { assignments, params };
+  return null;
 }
 
-async function updateCaseRow(caseId: string | number, values: Record<string, unknown>, columns: string[]) {
-  const whereColumn = columns.includes("conversation_case_id") ? "conversation_case_id" : columns.includes("id") ? "id" : null;
-  if (!whereColumn) {
-    return { ok: false as const, warning: `No existe columna WHERE utilizable en ${BRAIN_CASE_UPDATE_TABLE}` };
+async function resolveConversation(conversationCaseId: string | number | null) {
+  const numeric = toConversationId(conversationCaseId);
+  if (numeric !== null) {
+    const rows = await safeQueryRows<{ id: number; public_id: string }>("SELECT id, public_id FROM conversation WHERE id = ? LIMIT 1", [numeric]);
+    if (rows.ok && rows.rows[0]) return rows.rows[0];
   }
-
-  const existence = await safeQueryRows(
-    `SELECT 1 AS exists_row FROM \`${BRAIN_CASE_UPDATE_TABLE}\` WHERE \`${whereColumn}\` = ? LIMIT 1`,
-    [caseId]
-  );
-  if (!existence.ok) {
-    return { ok: false as const, warning: existence.error };
-  }
-  if (existence.rows.length === 0) {
-    return { ok: false as const, warning: `Caso ${caseId} no encontrado en ${BRAIN_CASE_UPDATE_TABLE}` };
-  }
-
-  const { assignments, params } = buildUpdateSql(values);
-  if (assignments.length === 0) {
-    return { ok: false as const, warning: `Sin columnas actualizables en ${BRAIN_CASE_UPDATE_TABLE}` };
-  }
-
-  const sql = `UPDATE \`${BRAIN_CASE_UPDATE_TABLE}\` SET ${assignments.join(", ")} WHERE \`${whereColumn}\` = ?`;
-
-  return withConnection(async (connection) => {
-    const [updateResult] = await connection.execute<ResultSetHeader>(sql, [...params, caseId]);
-    return {
-      ok: true as const,
-      affectedRows: updateResult.affectedRows
-    };
-  });
+  const text = asText(conversationCaseId);
+  if (!text) return null;
+  const rows = await safeQueryRows<{ id: number; public_id: string }>("SELECT id, public_id FROM conversation WHERE public_id = ? LIMIT 1", [text]);
+  if (!rows.ok) return null;
+  return rows.rows[0] ?? null;
 }
 
 export async function updateCaseAfterBackendOutbound(
@@ -143,26 +80,23 @@ export async function updateCaseAfterBackendOutbound(
     }
   }
 
-  const columns = await getColumns(BRAIN_CASE_UPDATE_TABLE);
-  if (columns.length === 0) {
-    return buildResult("warning", caseId, [], `Tabla ${BRAIN_CASE_UPDATE_TABLE} no disponible`);
+  const conversation = await resolveConversation(caseId);
+  if (!conversation) {
+    return buildResult("warning", caseId, [], "Conversation not found.");
   }
 
-  const { values, updatedFields, warnings } = buildUpdateValues(columns, input);
-  const updateResult = await updateCaseRow(caseId, values, columns);
-  if (!updateResult.ok) {
-    return buildResult("warning", caseId, updatedFields, updateResult.warning);
-  }
-
-  const resultWarnings = [...warnings];
-  if (input.debug && updateResult.affectedRows === 0) {
-    resultWarnings.push("Case update executed but MySQL reported 0 affected rows; this can be idempotent when values were unchanged.");
-  }
-
-  return buildResult(
-    "updated",
-    caseId,
-    updatedFields,
-    resultWarnings.length > 0 ? resultWarnings.join(" ") : undefined
+  const updatedFields = ["last_message_at", "last_outbound_at", "updated_at"];
+  await queryRows(
+    `
+      UPDATE conversation
+      SET
+        last_message_at = CURRENT_TIMESTAMP(3),
+        last_outbound_at = CURRENT_TIMESTAMP(3),
+        updated_at = CURRENT_TIMESTAMP(3)
+      WHERE id = ?
+    `,
+    [conversation.id]
   );
+
+  return buildResult("updated", caseId, updatedFields);
 }

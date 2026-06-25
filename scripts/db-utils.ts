@@ -46,7 +46,7 @@ export function getTargetDatabaseName(target: DatabaseTarget) {
       return "crm_legacy_fixture";
     case "dev":
     default:
-      return "crm_dev";
+      return "main_management";
   }
 }
 

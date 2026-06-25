@@ -1,4 +1,5 @@
 import type { ModuleDataMode } from "../runtime/data-source-status";
+import type { SalesNeedProfile } from "@/lib/brain/commercial/sales-consultative/types";
 
 export type ConversationListInput = {
   page?: number;
@@ -51,6 +52,38 @@ export type ConversationDetailReadModel = {
   customerEmail: string | null;
   customerName: string | null;
   customerPlatformOrigin: string | null;
+  opportunity?: {
+    id: string | number | null;
+    opportunityKey: string;
+    status: string;
+    stage: string | null;
+    currentSummary: string | null;
+    nextActionType: string | null;
+    nextActionDueAt: string | null;
+    humanOwnerActive: boolean;
+    aiBlocked: boolean;
+  } | null;
+  salesNeedProfile?: SalesNeedProfile | null;
+  lastDecision?: {
+    id: number;
+    decisionId: string;
+    nextStatus: string;
+    nextStage: string | null;
+    rationale: string;
+    createdAt: string;
+    warnings: string[];
+  } | null;
+  actions?: Array<{
+    id: number;
+    actionId: string;
+    actionType: string;
+    status: string;
+    scheduledFor: string | null;
+    finalMessage: string | null;
+    draftMessage: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }>;
   customer: {
     state: "real" | "partial" | "fixture" | "disabled" | "unavailable" | "error";
     source: string;

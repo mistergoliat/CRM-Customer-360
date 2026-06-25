@@ -2,6 +2,7 @@ import { buildMetaWhatsAppTextPayloadPreview } from "./metaPayload";
 import {
   getMetaAccessToken,
   getMetaDefaultPhoneNumberId,
+  isMetaSendEnabled,
   postMetaWhatsAppTextMessage
 } from "./metaClient";
 import type {
@@ -21,7 +22,7 @@ function asTrimmedString(value: unknown): string | null {
 }
 
 function getMetaSendAdapterStatus(): BrainMetaSendAdapterStatus {
-  if (process.env.BRAIN_META_SEND_ENABLED?.trim() !== "true") {
+  if (!isMetaSendEnabled()) {
     return "disabled";
   }
 

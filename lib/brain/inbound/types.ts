@@ -5,6 +5,7 @@ import type { BrainExecutionPlan } from "../messaging/types";
 import type { CommercialShadowResult } from "../commercial/shadow";
 import type { CommercialOperationalLoopResult } from "../commercial/operational-loop";
 import type { CustomerOnboardingRunResult } from "../commercial/customer-onboarding";
+import type { SalesConsultativeResult } from "../commercial/sales-consultative";
 
 export type { BrainBotEligibility };
 
@@ -233,6 +234,7 @@ export type BrainProcessInboundResponse = {
     commercialShadow?: CommercialShadowResult | null;
     commercialOperationalLoop?: CommercialOperationalLoopResult | null;
     customerOnboarding?: CustomerOnboardingRunResult | null;
+    salesConsultative?: SalesConsultativeResult | null;
   };
   metadata: {
     version: string;

@@ -22,7 +22,7 @@ export default async function ConversationDetailPage({ params }: ConversationDet
       <PageHeader
         eyebrow="Operación"
         title={`Conversación #${id}`}
-        description="Workspace real con timeline legado y data quality visible."
+        description="Workspace real con timeline nativo, oportunidad y perfil visibles."
         status={result.dataQuality.status}
         actions={<SurfaceBadge kind={result.dataQuality.status === "valid" ? "real" : "fixture"} />}
       />
@@ -59,6 +59,73 @@ export default async function ConversationDetailPage({ params }: ConversationDet
             />
           </SectionCard>
 
+          {result.opportunity ? (
+            <SectionCard title="Oportunidad" eyebrow="CRM" description={result.opportunity.opportunityKey}>
+              <InfoGrid
+                items={[
+                  { label: "Estado", value: result.opportunity.status },
+                  { label: "Etapa", value: result.opportunity.stage ?? "—" },
+                  { label: "Próxima acción", value: result.opportunity.nextActionType ?? "—" },
+                  { label: "Vence", value: result.opportunity.nextActionDueAt ?? "—" },
+                  { label: "Handoff", value: result.opportunity.humanOwnerActive ? "Sí" : "No" },
+                  { label: "AI bloqueada", value: result.opportunity.aiBlocked ? "Sí" : "No" }
+                ]}
+                columns={3}
+              />
+              <p className="mt-3 text-body-md text-slate-700">{result.opportunity.currentSummary ?? "Sin resumen"}</p>
+            </SectionCard>
+          ) : null}
+
+          {result.salesNeedProfile ? (
+            <SectionCard title="SalesNeedProfile" eyebrow="Perfil" description={result.salesNeedProfile.useCase ?? "Perfil nativo"}>
+              <InfoGrid
+                items={[
+                  { label: "Caso de uso", value: result.salesNeedProfile.useCase ?? "—" },
+                  { label: "Tipo cliente", value: result.salesNeedProfile.customerType ?? "—" },
+                  { label: "Presupuesto", value: [result.salesNeedProfile.budgetMin, result.salesNeedProfile.budgetMax].filter((item) => item !== null).map(String).join(" - ") || "—" },
+                  { label: "Urgencia", value: result.salesNeedProfile.purchaseUrgency ?? "—" },
+                  { label: "Preparación", value: result.salesNeedProfile.decisionReadiness ?? "—" },
+                  { label: "Experiencia", value: result.salesNeedProfile.experienceLevel ?? "—" }
+                ]}
+                columns={3}
+              />
+            </SectionCard>
+          ) : null}
+
+          {result.lastDecision ? (
+            <SectionCard title="Última decisión" eyebrow="AI SDR" description={result.lastDecision.decisionId}>
+              <div className="space-y-2">
+                <InfoGrid
+                  items={[
+                    { label: "Próximo estado", value: result.lastDecision.nextStatus },
+                    { label: "Próxima etapa", value: result.lastDecision.nextStage ?? "—" },
+                    { label: "Creada", value: formatDateTime(result.lastDecision.createdAt) }
+                  ]}
+                  columns={3}
+                />
+                <p className="text-body-md text-slate-700">{result.lastDecision.rationale}</p>
+                {result.lastDecision.warnings.length > 0 ? <p className="text-label-sm text-slate-500">{result.lastDecision.warnings.join(", ")}</p> : null}
+              </div>
+            </SectionCard>
+          ) : null}
+
+          {result.actions && result.actions.length > 0 ? (
+            <SectionCard title="Acciones" eyebrow="Queue" description={`${result.actions.length} registradas`}>
+              <div className="space-y-3">
+                {result.actions.map((action) => (
+                  <div key={action.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <StatusChip label={action.actionType} tone="blue" />
+                      <StatusChip label={action.status} tone={action.status === "cancelled" ? "amber" : "gray"} />
+                      <span className="text-label-sm text-slate-500">{formatDateTime(action.createdAt)}</span>
+                    </div>
+                    <p className="text-body-md text-slate-700">{action.finalMessage ?? action.draftMessage ?? "Sin mensaje"}</p>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          ) : null}
+
           <SectionCard title="Data quality" eyebrow="Checks" description={result.dataQuality.source}>
             <div className="space-y-3">
               <p className="text-body-md text-slate-700">{result.customer.summary}</p>
@@ -75,13 +142,10 @@ export default async function ConversationDetailPage({ params }: ConversationDet
             </div>
           </SectionCard>
 
-          <SectionCard title="Acciones" eyebrow="Navigation" description="Navegación al caso y al inbox.">
+          <SectionCard title="Acciones" eyebrow="Navigation" description="Navegación al inbox.">
             <div className="space-y-2">
               <Link href="/conversations" className="hub-button-secondary w-full">
                 Volver al inbox
-              </Link>
-              <Link href={`/cases/${id}`} className="hub-button-primary w-full">
-                Ver caso relacionado
               </Link>
             </div>
           </SectionCard>
