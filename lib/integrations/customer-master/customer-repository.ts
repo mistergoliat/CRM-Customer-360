@@ -1,4 +1,4 @@
-import { hasTable, queryRows, safeQueryRows } from "@/lib/db";
+import { queryRows, safeQueryRows } from "@/lib/db";
 import { isDbWriteEnabled } from "@/lib/write-access";
 import { normalizeMasterCustomerEmail, parseMasterCustomerPlatformOrigin } from "./mappers";
 import type { MasterCustomerCreateInput, MasterCustomerListQuery, MasterCustomerRow } from "./types";
@@ -82,19 +82,7 @@ export async function createMasterCustomer(input: MasterCustomerCreateInput): Pr
     return { ok: false, error: "DB_WRITE_DISABLED", warnings: [] };
   }
 
-  const hasMasterTable = await hasTable("master_customer");
-  if (!hasMasterTable) {
-    return { ok: false, error: "master_customer_unavailable", warnings: [] };
-  }
-
   const email = normalizeMasterCustomerEmail(input.email);
-  const duplicate = await findMasterCustomerByEmail(email);
-  if (!duplicate.ok) {
-    return duplicate;
-  }
-  if (duplicate.data) {
-    return { ok: false, error: "customer_email_duplicate", warnings: [] };
-  }
 
   try {
     await queryRows(

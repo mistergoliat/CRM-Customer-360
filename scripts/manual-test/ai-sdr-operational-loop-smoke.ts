@@ -290,8 +290,8 @@ async function main() {
   loadEnv();
   const options = parseArgs(process.argv.slice(2));
 
-  if (!process.env.DATABASE_URL) {
-    throw new Error("DATABASE_URL no configurado. Carga .env o exporta DATABASE_URL antes de ejecutar el smoke test.");
+  if (!process.env.DATABASE_URL && !process.env.DB_HOST && !process.env.DB_NAME) {
+    throw new Error("Configura DATABASE_URL o DB_HOST/DB_NAME antes de ejecutar el smoke test.");
   }
 
   await printLoopChecklist(options.mode);

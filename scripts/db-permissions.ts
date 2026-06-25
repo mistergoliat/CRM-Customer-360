@@ -39,10 +39,10 @@ async function testAppPermissions() {
 async function testAdminPermissions() {
   const connection = await connectAsRoot();
   try {
-    await connection.query("USE crm_dev");
+    await connection.query("USE main_management");
     await connection.query("CREATE TABLE IF NOT EXISTS crm_permission_probe (id INT PRIMARY KEY)");
     await connection.query("DROP TABLE IF EXISTS crm_permission_probe");
-    console.log("crm_dev_admin/root permissions: ok");
+    console.log("main_management admin/root permissions: ok");
   } finally {
     await connection.end();
   }

@@ -19,6 +19,15 @@ function clean(value: string | undefined | null) {
   return text.length > 0 ? text : null;
 }
 
+function resolveWithAlias(env: DatabaseEnvShape, key: string, aliases: string[] = []) {
+  const candidates = [...aliases, key];
+  for (const candidate of candidates) {
+    const value = clean(env[candidate]);
+    if (value) return value;
+  }
+  return null;
+}
+
 export function parseDatabaseUrl(url: string) {
   const parsed = new URL(url);
   const database = clean(parsed.pathname.replace(/^\/+/, ""));
@@ -65,8 +74,53 @@ export function resolveDatabaseConnectionFromEnv(
   const passwordKey = options.passwordKey ?? "DATABASE_PASSWORD";
   const defaultPort = options.defaultPort ?? 3306;
   const requireDatabase = options.requireDatabase ?? true;
+  const aliasMap = new Map<string, string[]>([
+    ["DATABASE_URL", ["DB_URL"]],
+    ["DATABASE_HOST", ["DB_HOST"]],
+    ["DATABASE_PORT", ["DB_PORT"]],
+    ["DATABASE_NAME", ["DB_NAME"]],
+    ["DATABASE_USER", ["DB_USER"]],
+    ["DATABASE_PASSWORD", ["DB_PASSWORD"]],
+    ["MIGRATION_DATABASE_URL", ["DB_URL"]],
+    ["MIGRATION_DATABASE_HOST", ["DB_HOST"]],
+    ["MIGRATION_DATABASE_PORT", ["DB_PORT"]],
+    ["MIGRATION_DATABASE_NAME", ["DB_NAME"]],
+    ["MIGRATION_DATABASE_USER", ["DB_USER"]],
+    ["MIGRATION_DATABASE_PASSWORD", ["DB_PASSWORD"]],
+    ["TEST_DATABASE_URL", ["DB_URL"]],
+    ["TEST_DATABASE_HOST", ["DB_HOST"]],
+    ["TEST_DATABASE_PORT", ["DB_PORT"]],
+    ["TEST_DATABASE_NAME", ["DB_NAME"]],
+    ["TEST_DATABASE_USER", ["DB_USER"]],
+    ["TEST_DATABASE_PASSWORD", ["DB_PASSWORD"]],
+    ["LEGACY_DATABASE_URL", ["DB_URL"]],
+    ["LEGACY_DATABASE_HOST", ["DB_HOST"]],
+    ["LEGACY_DATABASE_PORT", ["DB_PORT"]],
+    ["LEGACY_DATABASE_NAME", ["DB_NAME"]],
+    ["LEGACY_DATABASE_USER", ["DB_USER"]],
+    ["LEGACY_DATABASE_PASSWORD", ["DB_PASSWORD"]]
+  ]);
 
-  const rawUrl = clean(env[urlKey]);
+  const urlAliases = aliasMap.get(urlKey) ?? [];
+  const hostAliases = aliasMap.get(hostKey) ?? [];
+  const portAliases = aliasMap.get(portKey) ?? [];
+  const databaseAliases = aliasMap.get(databaseKey) ?? [];
+  const userAliases = aliasMap.get(userKey) ?? [];
+  const passwordAliases = aliasMap.get(passwordKey) ?? [];
+  const hasLocalDbOverride = ["DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"].some((key) => clean(env[key]));
+
+  const rawAliasUrl = clean(env.DB_URL);
+  if (rawAliasUrl) {
+    const parsed = parseDatabaseUrl(rawAliasUrl);
+    if (env.NODE_ENV === "test" && parsed.database !== "crm_test") {
+      throw new Error(`NODE_ENV=test requires crm_test, received ${parsed.database ?? "missing"}`);
+    }
+    return {
+      ...parsed
+    };
+  }
+
+  const rawUrl = !hasLocalDbOverride ? resolveWithAlias(env, urlKey, urlAliases) : null;
   if (rawUrl) {
     const parsed = parseDatabaseUrl(rawUrl);
     if (env.NODE_ENV === "test" && parsed.database !== "crm_test") {
@@ -77,11 +131,11 @@ export function resolveDatabaseConnectionFromEnv(
     };
   }
 
-  const host = clean(env[hostKey]) ?? "127.0.0.1";
-  const port = parsePort(env[portKey], defaultPort);
-  const database = clean(env[databaseKey]);
-  const user = clean(env[userKey]);
-  const password = clean(env[passwordKey]);
+  const host = resolveWithAlias(env, hostKey, hostAliases) ?? clean(env.DB_HOST) ?? "127.0.0.1";
+  const port = parsePort(resolveWithAlias(env, portKey, portAliases) ?? env.DB_PORT, defaultPort);
+  const database = resolveWithAlias(env, databaseKey, databaseAliases) ?? clean(env.DB_NAME);
+  const user = resolveWithAlias(env, userKey, userAliases) ?? clean(env.DB_USER);
+  const password = resolveWithAlias(env, passwordKey, passwordAliases) ?? clean(env.DB_PASSWORD);
 
   if (requireDatabase && !database) {
     throw new Error(`Missing ${databaseKey}`);
@@ -140,8 +194,8 @@ export function resolveNamedDatabaseConnection(
       });
     case "root":
       return {
-        host: clean(env.MIGRATION_DATABASE_HOST) ?? clean(env.DATABASE_HOST) ?? "127.0.0.1",
-        port: parsePort(env.MIGRATION_DATABASE_PORT ?? env.DATABASE_PORT, 3306),
+        host: clean(env.MIGRATION_DATABASE_HOST) ?? clean(env.DATABASE_HOST) ?? clean(env.DB_HOST) ?? "127.0.0.1",
+        port: parsePort(env.MIGRATION_DATABASE_PORT ?? env.DATABASE_PORT ?? env.DB_PORT, 3306),
         database: null,
         user: "root",
         password: clean(env.MARIADB_ROOT_PASSWORD),
@@ -166,7 +220,7 @@ export function isLocalHost(host: string) {
 }
 
 export function assertAllowedLocalDatabaseName(database: string) {
-  const allowed = new Set(["crm_dev", "crm_test", "crm_legacy_fixture"]);
+  const allowed = new Set(["main_management", "crm_dev", "crm_test", "crm_legacy_fixture"]);
   if (!allowed.has(database)) {
     throw new Error(`Database not allowed for local reset: ${database}`);
   }

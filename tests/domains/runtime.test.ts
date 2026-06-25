@@ -61,3 +61,34 @@ test("test environment rejects non-crm_test database targets", () => {
     /NODE_ENV=test requires crm_test/
   );
 });
+
+test("db aliases resolve main_management local development config", () => {
+  const connection = resolveDatabaseConnectionFromEnv({
+    DB_HOST: "127.0.0.1",
+    DB_PORT: "3306",
+    DB_NAME: "main_management",
+    DB_USER: "crm_app",
+    DB_PASSWORD: "una_clave_local"
+  });
+
+  assert.equal(connection.host, "127.0.0.1");
+  assert.equal(connection.port, 3306);
+  assert.equal(connection.database, "main_management");
+  assert.equal(connection.user, "crm_app");
+  assert.equal(connection.password, "una_clave_local");
+});
+
+test("local db aliases override remote DATABASE_URL", () => {
+  const connection = resolveDatabaseConnectionFromEnv({
+    DATABASE_URL: "mysql://remote_user:remote_pass@remote.example.com:3306/remote_db",
+    DB_HOST: "127.0.0.1",
+    DB_PORT: "3306",
+    DB_NAME: "main_management",
+    DB_USER: "crm_app",
+    DB_PASSWORD: "una_clave_local"
+  });
+
+  assert.equal(connection.host, "127.0.0.1");
+  assert.equal(connection.database, "main_management");
+  assert.equal(connection.user, "crm_app");
+});

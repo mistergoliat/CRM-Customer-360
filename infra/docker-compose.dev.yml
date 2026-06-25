@@ -4,18 +4,18 @@ services:
     container_name: crm-customer-360-mariadb
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3307:3306"
+      - "127.0.0.1:3306:3306"
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
-      MARIADB_DATABASE: crm_dev
-      MARIADB_USER: crm_app
-      MARIADB_PASSWORD: ${CRM_APP_PASSWORD}
+      MARIADB_DATABASE: main_management
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
       CRM_DEV_ADMIN_PASSWORD: ${CRM_DEV_ADMIN_PASSWORD}
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     volumes:
-      - crm_mariadb_data:/var/lib/mysql
+      - main_management_mariadb_data:/var/lib/mysql
       - ./mariadb/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD"]
@@ -25,4 +25,4 @@ services:
       start_period: 15s
 
 volumes:
-  crm_mariadb_data:
+  main_management_mariadb_data:

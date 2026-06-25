@@ -31,7 +31,7 @@ export default async function ConversationsPage({ searchParams }: ConversationsP
       <PageHeader
         eyebrow="Operación"
         title="Conversaciones"
-        description="Inbox real sobre `n8n_vw_hub_cases` encapsulado por el dominio de Conversations."
+        description="Inbox real sobre conversaciones nativas en MariaDB."
         status="Real"
         actions={<SurfaceBadge kind="real" />}
       />
@@ -108,9 +108,6 @@ export default async function ConversationsPage({ searchParams }: ConversationsP
               <div className="flex gap-2">
                 <Link href={`/conversations/${selectedConversation.id}`} className="hub-button-primary">
                   Abrir workspace
-                </Link>
-                <Link href={`/cases/${selectedConversation.id}`} className="hub-button-secondary">
-                  Ver caso
                 </Link>
               </div>
             </div>

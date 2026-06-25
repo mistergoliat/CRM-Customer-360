@@ -1,4 +1,5 @@
 import { buildMetaWhatsAppTextPayloadPreview } from "./metaPayload";
+import { normalizeWhatsAppRecipientDigits } from "./whatsapp-transport/constants";
 import type { BrainMetaSendRequest, BrainMetaSendResponse } from "./types";
 
 export const DEFAULT_META_SEND_TIMEOUT_MS = 8000;
@@ -29,6 +30,22 @@ export function getMetaAccessToken() {
 
 export function getMetaDefaultPhoneNumberId() {
   return process.env.META_WHATSAPP_DEFAULT_PHONE_NUMBER_ID?.trim() || null;
+}
+
+function parseAllowlist(value: string | undefined | null) {
+  if (!value) return [];
+  return value
+    .split(/[\s,]+/g)
+    .map((item) => normalizeWhatsAppRecipientDigits(item) ?? item.trim())
+    .filter((item): item is string => Boolean(item));
+}
+
+function getAllowedRecipients() {
+  return [...new Set([...parseAllowlist(process.env.BRAIN_WHATSAPP_ALLOWED_WA_IDS), ...parseAllowlist(process.env.BRAIN_AUTONOMOUS_TEST_WA_IDS)])];
+}
+
+export function isMetaSendEnabled() {
+  return process.env.BRAIN_META_SEND_ENABLED?.trim() === "true";
 }
 
 export function buildMetaGraphUrl(phoneNumberId: string) {
@@ -68,6 +85,19 @@ function buildMissingCredentialsResponse(metaPayloadPreview: BrainMetaSendRespon
     error_code: "missing_credentials" as const,
     error_message: detail,
     blocked_reasons: ["missing_credentials"],
+    warnings: [detail],
+    meta_payload_preview: metaPayloadPreview ?? null,
+    response_body: null
+  };
+}
+
+function buildPolicyRejectedResponse(metaPayloadPreview: BrainMetaSendResponse["meta_payload_preview"], detail: string) {
+  return {
+    ok: false as const,
+    status: "blocked_by_policy" as const,
+    error_code: "blocked_by_policy" as const,
+    error_message: detail,
+    blocked_reasons: ["recipient_not_whitelisted"],
     warnings: [detail],
     meta_payload_preview: metaPayloadPreview ?? null,
     response_body: null
@@ -117,12 +147,22 @@ export async function postMetaWhatsAppTextMessage(input: BrainMetaSendRequest): 
   const metaPayloadPreview =
     waId && messageText ? buildMetaWhatsAppTextPayloadPreview({ waId, messageText }) : null;
 
-  if (process.env.BRAIN_META_SEND_ENABLED?.trim() !== "true") {
+  if (!isMetaSendEnabled()) {
     return buildDisabledResponse(metaPayloadPreview);
   }
 
   if (!waId || !phoneNumberId || !messageText) {
     return buildInvalidPayloadResponse("waId, phoneNumberId y messageText son obligatorios.", metaPayloadPreview);
+  }
+
+  const allowedRecipients = getAllowedRecipients();
+  if (allowedRecipients.length === 0) {
+    return buildPolicyRejectedResponse(metaPayloadPreview, "Recipient allowlist is required before enabling Meta send.");
+  }
+
+  const normalizedRecipient = normalizeWhatsAppRecipientDigits(waId) ?? waId.trim();
+  if (!allowedRecipients.includes(normalizedRecipient)) {
+    return buildPolicyRejectedResponse(metaPayloadPreview, "Recipient is not whitelisted.");
   }
 
   const accessToken = getMetaAccessToken();

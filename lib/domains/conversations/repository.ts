@@ -1,5 +1,5 @@
 import { safeQueryRows } from "@/lib/db";
-import { createLegacyN8nConversationRepository } from "@/lib/integrations/legacy-n8n/conversation-repository";
+import { loadNativeConversationDetailByPublicId } from "@/lib/brain/native-whatsapp";
 import type { ConversationRepository } from "./contracts";
 import type { ConversationDetailReadModel } from "./types";
 
@@ -12,44 +12,46 @@ function asText(value: unknown) {
   return null;
 }
 
-async function loadCustomerResolution(caseId: string) {
-  const linkResult = await safeQueryRows<{ customer_id: string; link_status: string; link_source: string; confidence: string }>(
-    "SELECT customer_id, link_status, link_source, confidence FROM customer_conversation_link WHERE conversation_case_id = ? LIMIT 1",
-    [caseId]
-  );
-
-  if (!linkResult.ok) {
-    return {
-      status: "unknown" as const,
-      customerId: null as string | null,
-      customerEmail: null as string | null,
-      customerName: null as string | null,
-      customerPlatformOrigin: null as string | null,
-      warnings: [linkResult.error]
-    };
+function asNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
   }
+  return null;
+}
 
-  const link = linkResult.rows[0] ?? null;
-  if (!link) {
+function asBoolean(value: unknown) {
+  if (typeof value === "boolean") return value;
+  const numeric = asNumber(value);
+  if (numeric !== null) return numeric !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "yes";
+  }
+  return false;
+}
+
+async function loadCustomerResolution(customerId: number | null) {
+  if (!customerId) {
     return {
       status: "unresolved" as const,
       customerId: null as string | null,
       customerEmail: null as string | null,
       customerName: null as string | null,
       customerPlatformOrigin: null as string | null,
-      warnings: []
+      warnings: [] as string[]
     };
   }
 
-  const customerResult = await safeQueryRows<{ id: string; firstname: string; lastname: string; email: string; platform_origin: string | null }>(
+  const customerResult = await safeQueryRows<{ id: number | string; firstname: string; lastname: string; email: string; platform_origin: string | null }>(
     "SELECT id, firstname, lastname, email, platform_origin FROM master_customer WHERE id = ? LIMIT 1",
-    [link.customer_id]
+    [customerId]
   );
-
   if (!customerResult.ok) {
     return {
       status: "unknown" as const,
-      customerId: link.customer_id,
+      customerId: String(customerId),
       customerEmail: null as string | null,
       customerName: null as string | null,
       customerPlatformOrigin: null as string | null,
@@ -60,7 +62,7 @@ async function loadCustomerResolution(caseId: string) {
   const customer = customerResult.rows[0] ?? null;
   return {
     status: customer ? ("linked" as const) : ("found" as const),
-    customerId: customer ? String(customer.id) : link.customer_id,
+    customerId: customer ? String(customer.id) : String(customerId),
     customerEmail: customer ? asText(customer.email) : null,
     customerName: customer ? `${customer.firstname ?? ""} ${customer.lastname ?? ""}`.trim() || null : null,
     customerPlatformOrigin: customer?.platform_origin ?? null,
@@ -68,111 +70,203 @@ async function loadCustomerResolution(caseId: string) {
   };
 }
 
+function isRecentWindowOpen(lastMessageAt: string | null) {
+  if (!lastMessageAt) return false;
+  const date = new Date(lastMessageAt);
+  if (Number.isNaN(date.getTime())) return false;
+  return Date.now() - date.getTime() < 24 * 60 * 60 * 1000;
+}
+
 export function createDefaultConversationRepository(): ConversationRepository {
-  const adapter = createLegacyN8nConversationRepository();
   return {
     async list(input) {
-      const result = await adapter.list(input);
+      const pageSize = 25;
+      const page = Math.max(1, Number(input.page ?? 1));
+      const offset = (page - 1) * pageSize;
+      const search = input.q?.trim() ?? "";
+      const where: string[] = [];
+      const params: Array<string | number> = [];
+
+      if (search) {
+        const term = `%${search.toLowerCase()}%`;
+        where.push("(LOWER(c.external_contact_id) LIKE ? OR LOWER(c.public_id) LIKE ? OR LOWER(CONCAT_WS(' ', mc.firstname, mc.lastname)) LIKE ? OR LOWER(mc.email) LIKE ?)");
+        params.push(term, term, term, term);
+      }
+
+      const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+      const countResult = await safeQueryRows<{ total: number }>(
+        `
+          SELECT COUNT(*) AS total
+          FROM conversation c
+          LEFT JOIN master_customer mc ON mc.id = c.customer_id
+          ${whereSql}
+        `,
+        params
+      );
+
+      const rowsResult = await safeQueryRows<Record<string, unknown>>(
+        `
+          SELECT
+            c.id,
+            c.public_id,
+            c.channel,
+            c.provider,
+            c.channel_account_id,
+            c.external_contact_id,
+            c.external_thread_id,
+            c.customer_id,
+            c.status,
+            c.owner_type,
+            c.owner_id,
+            c.ai_enabled,
+            c.human_owner_active,
+            c.last_message_at,
+            c.last_inbound_at,
+            c.last_outbound_at,
+            c.created_at,
+            c.updated_at,
+            mc.firstname AS customer_firstname,
+            mc.lastname AS customer_lastname,
+            mc.email AS customer_email,
+            mc.platform_origin AS customer_platform_origin,
+            (
+              SELECT cm.body
+              FROM conversation_message cm
+              WHERE cm.conversation_id = c.id
+              ORDER BY cm.created_at DESC, cm.id DESC
+              LIMIT 1
+            ) AS last_message
+          FROM conversation c
+          LEFT JOIN master_customer mc ON mc.id = c.customer_id
+          ${whereSql}
+          ORDER BY COALESCE(c.last_message_at, c.updated_at, c.created_at) DESC, c.id DESC
+          LIMIT ${pageSize} OFFSET ${offset}
+        `,
+        params
+      );
+
+      const items = (rowsResult.ok ? rowsResult.rows : []).map((row) => ({
+        id: asText(row.public_id) ?? String(row.id),
+        contactName: ([asText(row.customer_firstname), asText(row.customer_lastname)].filter(Boolean).join(" ").trim() || asText(row.external_contact_id)) ?? null,
+        waId: asText(row.external_contact_id),
+        status: asText(row.status),
+        priority: asBoolean(row.human_owner_active) ? "high" : asBoolean(row.ai_enabled) ? "normal" : "low",
+        department: asBoolean(row.human_owner_active) ? "human_handoff" : "ai_sdr",
+        serviceCode: asText(row.channel),
+        requiresHuman: asBoolean(row.human_owner_active) || !asBoolean(row.ai_enabled),
+        whatsappWindowOpen: isRecentWindowOpen(asText(row.last_message_at)),
+        lastMessage: asText(row.last_message),
+        lastMessageAt: asText(row.last_message_at),
+        owner: asText(row.owner_type),
+        source: "native_mariadb",
+        href: `/conversations/${asText(row.public_id) ?? row.id}`
+      }));
+
       return {
-        items: result.items.map((item) => ({
-          id: String(item.conversation_case_id),
-          contactName: item.contact_name,
-          waId: item.wa_id,
-          status: item.status,
-          priority: item.priority,
-          department: item.department,
-          serviceCode: item.service_code,
-          requiresHuman: Boolean(item.requires_human),
-          whatsappWindowOpen: Boolean(item.whatsapp_window_open),
-          lastMessage: item.last_message,
-          lastMessageAt: item.last_message_at,
-          owner: item.department,
-          source: "legacy_n8n",
-          href: `/conversations/${item.conversation_case_id}`
-        })),
+        items,
         pagination: {
-          page: result.page,
-          pageSize: result.pageSize,
-          total: result.total
+          page,
+          pageSize,
+          total: countResult.ok ? Number(countResult.rows[0]?.total ?? items.length) : items.length
         },
         meta: {
-          mode: "real",
-          source: "n8n_vw_hub_cases",
-          warnings: result.warnings
+          mode: "real" as const,
+          source: "conversation",
+          warnings: rowsResult.ok ? [] : [rowsResult.error]
         }
       };
     },
     async getById(id: string) {
-      const result = await adapter.getById(id);
-      if (!result) return null;
+      const detail = await loadNativeConversationDetailByPublicId(id);
+      if (!detail) return null;
 
-      const resolution = await loadCustomerResolution(id);
-      const conversation = result.listItem
-        ? {
-            id: String(result.listItem.conversation_case_id),
-            contactName: result.listItem.contact_name,
-            waId: result.listItem.wa_id,
-            status: result.listItem.status,
-            priority: result.listItem.priority,
-            department: result.listItem.department,
-            serviceCode: result.listItem.service_code,
-            requiresHuman: Boolean(result.listItem.requires_human),
-            whatsappWindowOpen: Boolean(result.listItem.whatsapp_window_open),
-            lastMessage: result.listItem.last_message,
-            lastMessageAt: result.listItem.last_message_at,
-            owner: result.listItem.department,
-            source: "legacy_n8n",
-            href: `/conversations/${result.listItem.conversation_case_id}`,
-            customerResolutionStatus: resolution.status,
-            customerId: resolution.customerId,
-            customerEmail: resolution.customerEmail,
-            customerName: resolution.customerName,
-            customerPlatformOrigin: resolution.customerPlatformOrigin
-          }
-        : null;
+      const customerResolution = await loadCustomerResolution(detail.conversation.customer_id);
+      const conversation = {
+        id: detail.conversation.public_id,
+        contactName: detail.customer ? `${detail.customer.firstname} ${detail.customer.lastname}`.trim() : detail.conversation.external_contact_id,
+        waId: detail.conversation.external_contact_id,
+        status: detail.conversation.status,
+        priority: detail.conversation.human_owner_active ? "high" : detail.conversation.ai_enabled ? "normal" : "low",
+        department: detail.conversation.human_owner_active ? "human_handoff" : "ai_sdr",
+        serviceCode: detail.conversation.channel,
+        requiresHuman: Boolean(detail.conversation.human_owner_active) || !Boolean(detail.conversation.ai_enabled),
+        whatsappWindowOpen: isRecentWindowOpen(detail.conversation.last_message_at),
+        lastMessage: detail.messages[detail.messages.length - 1]?.body ?? null,
+        lastMessageAt: detail.conversation.last_message_at,
+        owner: detail.conversation.owner_type,
+        source: "native_mariadb",
+        href: `/conversations/${detail.conversation.public_id}`,
+        customerResolutionStatus: customerResolution.status,
+        customerId: customerResolution.customerId,
+        customerEmail: customerResolution.customerEmail,
+        customerName: customerResolution.customerName,
+        customerPlatformOrigin: customerResolution.customerPlatformOrigin
+      };
 
-      const dataQualityWarnings = [...result.warnings, ...resolution.warnings];
-      if (!result.context) {
-        dataQualityWarnings.push("conversation_context_missing");
+      const messages = detail.messages.map((message) => ({
+        key: message.public_id,
+        source: message.provider,
+        direction: message.direction,
+        body: message.body ?? "",
+        occurredAt: message.provider_timestamp ?? message.created_at,
+        status: message.status,
+        timelineSource: message.provider
+      }));
+
+      const dataQualityWarnings = [...(detail.customer ? [] : ["customer_not_linked"])];
+      if (!detail.conversation.customer_id) {
+        dataQualityWarnings.push("customer_resolution_missing");
       }
 
       return {
         conversation,
-        messages: result.messages.map((message) => ({
-          key: message.key,
-          source: message.source,
-          direction: message.direction,
-          body: message.body,
-          occurredAt: message.occurredAt,
-          status: message.status,
-          timelineSource: message.source
-        })),
-        customerResolutionStatus: resolution.status,
-        customerId: resolution.customerId,
-        customerEmail: resolution.customerEmail,
-        customerName: resolution.customerName,
-        customerPlatformOrigin: resolution.customerPlatformOrigin,
+        messages,
+        customerResolutionStatus: customerResolution.status,
+        customerId: customerResolution.customerId,
+        customerEmail: customerResolution.customerEmail,
+        customerName: customerResolution.customerName,
+        customerPlatformOrigin: customerResolution.customerPlatformOrigin,
+        opportunity: detail.opportunity
+          ? {
+              id: detail.opportunity.id,
+              opportunityKey: detail.opportunity.opportunityKey,
+              status: detail.opportunity.status,
+              stage: detail.opportunity.stage,
+              currentSummary: detail.opportunity.currentSummary,
+              nextActionType: detail.opportunity.nextActionType,
+              nextActionDueAt: detail.opportunity.nextActionDueAt,
+              humanOwnerActive: detail.opportunity.humanOwnerActive,
+              aiBlocked: detail.opportunity.aiBlocked
+            }
+          : null,
+        salesNeedProfile: detail.profile ?? null,
+        lastDecision: detail.lastDecision ?? null,
+        actions: detail.actions ?? [],
         customer: {
-          state: conversation ? "partial" : "unavailable",
-          source: "legacy_n8n",
+          state: detail.customer ? "real" : "partial",
+          source: "native_mariadb",
           warnings: dataQualityWarnings,
-          summary: conversation ? `Conversacion ${conversation.id} encontrada.` : "Conversacion no encontrada."
+          summary: detail.customer
+            ? `Cliente ${detail.customer.firstname} ${detail.customer.lastname} resuelto en MariaDB.`
+            : "Cliente provisional sin resolver."
         },
         case: {
-          state: result.caseRow ? "real" : "partial",
-          source: "legacy_n8n",
-          warnings: result.caseRow ? [] : ["case_row_missing"],
-          summary: result.caseRow ? `Caso ${asText(result.caseRow.conversation_case_id ?? result.caseRow.id) ?? id} vinculado.` : "Caso relacionado no disponible."
+          state: detail.opportunity ? "real" : "partial",
+          source: "native_mariadb",
+          warnings: detail.opportunity ? [] : ["opportunity_missing"],
+          summary: detail.opportunity
+            ? `Oportunidad ${detail.opportunity.opportunityKey} vinculada a la conversación.`
+            : "No hay oportunidad activa asociada."
         },
         dataQuality: {
           status: dataQualityWarnings.length > 0 ? "partial" : "valid",
           warnings: dataQualityWarnings,
-          source: "legacy_n8n"
+          source: "native_mariadb"
         },
         warnings: dataQualityWarnings,
         meta: {
           mode: "real",
-          source: "n8n_vw_hub_cases",
+          source: "conversation",
           warnings: dataQualityWarnings
         }
       } satisfies ConversationDetailReadModel;
