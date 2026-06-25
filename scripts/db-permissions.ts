@@ -1,7 +1,7 @@
-import { connectAsRoot, connectToTargetDatabase, loadLocalEnv } from "./db-utils";
+import { connectAsRoot, createConnection, loadLocalEnv, resolveAppConnection } from "./db-utils";
 
 async function testAppPermissions() {
-  const connection = await connectToTargetDatabase("dev");
+  const connection = await createConnection(resolveAppConnection(), true);
   const probeEmail = `permission-probe-${Date.now()}@example.test`;
   try {
     await connection.query("SELECT 1");
@@ -39,6 +39,7 @@ async function testAppPermissions() {
 async function testAdminPermissions() {
   const connection = await connectAsRoot();
   try {
+    await connection.query("USE crm_dev");
     await connection.query("CREATE TABLE IF NOT EXISTS crm_permission_probe (id INT PRIMARY KEY)");
     await connection.query("DROP TABLE IF EXISTS crm_permission_probe");
     console.log("crm_dev_admin/root permissions: ok");
