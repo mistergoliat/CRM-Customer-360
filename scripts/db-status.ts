@@ -66,7 +66,7 @@ async function showStatus(target: Target) {
     const [versionRows] = await connection.query<RowDataPacket[]>("SELECT VERSION() AS version");
     const [databaseRows] = await connection.query<
       RowDataPacket[]
-    >("SELECT DATABASE() AS selected_database, CURRENT_USER() AS current_user, USER() AS login_user, @@read_only AS read_only");
+    >("SELECT DATABASE() AS selected_database, CURRENT_USER() AS db_current_user, USER() AS login_user, @@read_only AS read_only");
     const [migrationsRows] = await connection.query<RowDataPacket[]>("SELECT COUNT(*) AS total FROM schema_migrations");
     const applied = Number(migrationsRows[0]?.total ?? 0);
     const pending = (await countMigrationFiles()) - applied;
@@ -77,7 +77,7 @@ async function showStatus(target: Target) {
     console.log(`selected database: ${databaseRows[0]?.selected_database ?? "unknown"}`);
     console.log(`applied migrations: ${applied}`);
     console.log(`pending migrations: ${Math.max(0, pending)}`);
-    console.log(`current user: ${databaseRows[0]?.current_user ?? "unknown"}`);
+    console.log(`current user: ${databaseRows[0]?.db_current_user ?? "unknown"}`);
     console.log(`write capability: ${writeCapability}`);
   } finally {
     await connection.end();
