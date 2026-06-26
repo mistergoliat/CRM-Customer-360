@@ -32,6 +32,24 @@ export async function withConnection<T>(fn: (connection: PoolConnection) => Prom
   }
 }
 
+export async function withTransaction<T>(fn: (connection: PoolConnection) => Promise<T>) {
+  return withConnection(async (connection) => {
+    await connection.beginTransaction();
+    try {
+      const result = await fn(connection);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch {
+        // ignore rollback failures so the original error survives
+      }
+      throw error;
+    }
+  });
+}
+
 export async function queryRows<T = DbRow>(sql: string, params: unknown[] = []): Promise<T[]> {
   const [rows] = await getPool().execute<RowDataPacket[]>(sql, params as Parameters<Pool["execute"]>[1]);
   return rows as T[];

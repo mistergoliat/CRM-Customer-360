@@ -22,7 +22,8 @@ export type AuditAction =
   | "customer.creation.confirmed"
   | "customer.linked"
   | "customer.link.failed"
-  | "ai_sdr.handoff.requested";
+  | "ai_sdr.handoff.requested"
+  | "whatsapp.delivery_status.applied";
 
 export async function ensureAuditTable() {
   await queryRows(`
@@ -54,9 +55,17 @@ export async function auditLog(input: {
     if (!auditTableExists) return;
 
     await ensureAuditTable();
-    const headerBag = await headers();
-    const ip = headerBag.get("x-forwarded-for")?.split(",")[0]?.trim() ?? headerBag.get("x-real-ip") ?? null;
-    const userAgent = headerBag.get("user-agent") ?? null;
+    let ip: string | null = null;
+    let userAgent: string | null = null;
+    try {
+      const headerBag = await headers();
+      ip = headerBag.get("x-forwarded-for")?.split(",")[0]?.trim() ?? headerBag.get("x-real-ip") ?? null;
+      userAgent = headerBag.get("user-agent") ?? null;
+    } catch (error) {
+      if (!(error instanceof Error) || !/outside a request scope/i.test(error.message)) {
+        throw error;
+      }
+    }
 
     await insertExistingColumns("hub_audit_log", {
       action: input.action,

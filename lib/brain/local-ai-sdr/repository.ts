@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { queryRows, safeQueryRows } from "@/lib/db";
 import { normalizePlatformOrigin } from "@/lib/domains/customers/platform-origin";
 import type {
@@ -496,11 +497,89 @@ export async function appendConversationMessage(input: {
   body: string;
   status?: string | null;
   occurredAt?: string | Date | null;
-}) {
-  const conversationResult = await safeQueryRows<{ id: number }>("SELECT id FROM conversation WHERE public_id = ? LIMIT 1", [input.conversationPublicId]);
-  if (!conversationResult.ok) return { ok: false as const, error: conversationResult.error };
-  const conversation = conversationResult.rows[0] ?? null;
+}, connection?: PoolConnection) {
+  const conversation = connection
+    ? await loadConversationByPublicIdOnConnection(connection, input.conversationPublicId)
+    : await loadConversationByPublicId(input.conversationPublicId);
   if (!conversation) return { ok: false as const, error: "conversation_not_found" };
+
+  const messagePublicId = `msg-${createHash("sha256").update([input.conversationPublicId, input.providerMessageId, input.direction].join("|")).digest("hex").slice(0, 24)}`;
+  await insertConversationMessage(connection ?? null, conversation.id, messagePublicId, input);
+
+  return {
+    ok: true as const,
+    messageId: await loadConversationMessageId(input.provider, input.providerMessageId, connection),
+    messagePublicId
+  };
+}
+
+async function loadConversationByPublicIdOnConnection(connection: PoolConnection, publicId: string) {
+  const [rows] = await connection.execute<RowDataPacket[]>("SELECT id, public_id FROM conversation WHERE public_id = ? LIMIT 1", [publicId]);
+  return (rows[0] ?? null) as { id: number; public_id: string } | null;
+}
+
+async function loadConversationByPublicId(publicId: string) {
+  const result = await safeQueryRows<{ id: number; public_id: string }>("SELECT id, public_id FROM conversation WHERE public_id = ? LIMIT 1", [publicId]);
+  if (!result.ok) return null;
+  return result.rows[0] ?? null;
+}
+
+async function insertConversationMessage(
+  connection: PoolConnection | null,
+  conversationId: number,
+  messagePublicId: string,
+  input: {
+    conversationPublicId: string;
+    provider: string;
+    providerMessageId: string;
+    direction: "inbound" | "outbound";
+    senderType: string;
+    messageType?: string;
+    body: string;
+    status?: string | null;
+    occurredAt?: string | Date | null;
+  }
+) {
+  if (connection) {
+    await connection.execute(
+      `
+        INSERT INTO conversation_message (
+          public_id,
+          conversation_id,
+          provider,
+          provider_message_id,
+          direction,
+          sender_type,
+          message_type,
+          body,
+          status,
+          provider_timestamp,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          body = VALUES(body),
+          status = VALUES(status),
+          provider_timestamp = VALUES(provider_timestamp),
+          updated_at = VALUES(updated_at)
+      `,
+      [
+        messagePublicId,
+        conversationId,
+        input.provider,
+        input.providerMessageId,
+        input.direction,
+        input.senderType,
+        input.messageType ?? "text",
+        input.body,
+        input.status ?? (input.direction === "inbound" ? "received" : "sent"),
+        toMysqlDatetime(input.occurredAt),
+        toMysqlDatetime(new Date()),
+        toMysqlDatetime(new Date())
+      ]
+    );
+    return;
+  }
 
   await queryRows(
     `
@@ -525,8 +604,8 @@ export async function appendConversationMessage(input: {
         updated_at = VALUES(updated_at)
     `,
     [
-      `msg-${createHash("sha256").update([input.conversationPublicId, input.providerMessageId, input.direction].join("|")).digest("hex").slice(0, 24)}`,
-      conversation.id,
+      messagePublicId,
+      conversationId,
       input.provider,
       input.providerMessageId,
       input.direction,
@@ -539,8 +618,23 @@ export async function appendConversationMessage(input: {
       toMysqlDatetime(new Date())
     ]
   );
+}
 
-  return { ok: true as const };
+async function loadConversationMessageId(provider: string, providerMessageId: string, connection?: PoolConnection) {
+  if (connection) {
+    const [rows] = await connection.execute<RowDataPacket[]>(
+      "SELECT id FROM conversation_message WHERE provider = ? AND provider_message_id = ? LIMIT 1",
+      [provider, providerMessageId]
+    );
+    return typeof rows[0]?.id === "number" ? rows[0].id : Number(rows[0]?.id ?? 0) || null;
+  }
+
+  const result = await safeQueryRows<{ id: number }>(
+    "SELECT id FROM conversation_message WHERE provider = ? AND provider_message_id = ? LIMIT 1",
+    [provider, providerMessageId]
+  );
+  if (!result.ok) return null;
+  return result.rows[0]?.id ?? null;
 }
 
 export async function loadConversationRuntimeState(conversationPublicId: string): Promise<LocalAiSdrConversationState | null> {
