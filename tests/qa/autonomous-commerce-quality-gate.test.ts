@@ -737,6 +737,7 @@ qualityGateTest("Autonomous commerce quality gate", async (t) => {
     assert.equal(invalidJson.status, 400);
     assert.equal(invalidJsonBody.error, "invalid_json");
 
+    const mutableProcessEnv = process.env as Record<string, string | undefined>;
     const missingSecretPrevious = {
       meta: process.env.META_WHATSAPP_APP_SECRET,
       brainMeta: process.env.BRAIN_META_WHATSAPP_APP_SECRET,
@@ -744,7 +745,7 @@ qualityGateTest("Autonomous commerce quality gate", async (t) => {
     };
     delete process.env.META_WHATSAPP_APP_SECRET;
     delete process.env.BRAIN_META_WHATSAPP_APP_SECRET;
-    process.env.NODE_ENV = "production";
+    mutableProcessEnv.NODE_ENV = "production";
 
     try {
       const failClosed = await POST(
@@ -758,7 +759,7 @@ qualityGateTest("Autonomous commerce quality gate", async (t) => {
     } finally {
       if (missingSecretPrevious.meta) process.env.META_WHATSAPP_APP_SECRET = missingSecretPrevious.meta;
       if (missingSecretPrevious.brainMeta) process.env.BRAIN_META_WHATSAPP_APP_SECRET = missingSecretPrevious.brainMeta;
-      if (missingSecretPrevious.nodeEnv) process.env.NODE_ENV = missingSecretPrevious.nodeEnv;
+      if (missingSecretPrevious.nodeEnv) mutableProcessEnv.NODE_ENV = missingSecretPrevious.nodeEnv;
     }
 
     const afterMessageCount = await countRows("SELECT COUNT(*) AS total FROM conversation_message WHERE provider_message_id = ?", [providerMessageId]);
