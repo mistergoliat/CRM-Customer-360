@@ -1,6 +1,8 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { connectAsRoot, createConnection, loadLocalEnv, resolveAppConnection } from "./db-utils";
 
-async function testAppPermissions() {
+export async function testAppPermissions() {
   const connection = await createConnection(resolveAppConnection(), true);
   const probeEmail = `permission-probe-${Date.now()}@example.test`;
   try {
@@ -36,7 +38,7 @@ async function testAppPermissions() {
   }
 }
 
-async function testAdminPermissions() {
+export async function testAdminPermissions() {
   const connection = await connectAsRoot();
   try {
     await connection.query("USE main_management");
@@ -54,7 +56,11 @@ async function main() {
   await testAdminPermissions();
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+const isDirectRun = process.argv[1] ? fileURLToPath(import.meta.url) === path.resolve(process.argv[1]) : false;
+
+if (isDirectRun) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

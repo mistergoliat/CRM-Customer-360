@@ -4,6 +4,7 @@ CREATE DATABASE IF NOT EXISTS crm_test CHARACTER SET utf8mb4 COLLATE utf8mb4_uni
 CREATE DATABASE IF NOT EXISTS crm_legacy_fixture CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE USER IF NOT EXISTS 'crm_dev_admin'@'%' IDENTIFIED BY '';
+CREATE USER IF NOT EXISTS 'crm_app'@'%' IDENTIFIED BY '';
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON main_management.* TO 'crm_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON crm_dev.* TO 'crm_app'@'%';

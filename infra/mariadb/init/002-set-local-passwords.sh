@@ -11,13 +11,13 @@ if [ -z "${CRM_DEV_ADMIN_PASSWORD:-}" ]; then
   exit 1
 fi
 
-if [ -z "${DB_PASSWORD:-}" ]; then
-  echo "DB_PASSWORD is required" >&2
+if [ -z "${CRM_APP_PASSWORD:-}" ]; then
+  echo "CRM_APP_PASSWORD is required" >&2
   exit 1
 fi
 
-mysql --protocol=socket -uroot -p"${MARIADB_ROOT_PASSWORD}" <<SQL
-ALTER USER 'crm_app'@'%' IDENTIFIED BY '${DB_PASSWORD}';
+mariadb --protocol=socket -uroot -p"${MARIADB_ROOT_PASSWORD}" <<SQL
+ALTER USER 'crm_app'@'%' IDENTIFIED BY '${CRM_APP_PASSWORD}';
 REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'crm_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON main_management.* TO 'crm_app'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON crm_dev.* TO 'crm_app'@'%';
