@@ -2,6 +2,8 @@
 
 This backlog converts the PRD and the current repository state into a sequence of independent PRs that can carry the product to the first functional vertical.
 
+> **Integration status (architecture-owner review):** `INFRA-01`, `PR-02A`, `PR-02B`, `PR-03A` are **accepted** and integrated. Evidence: `docs/product/autonomous-commerce-qa-report-infra01-pr02a-02b-03a.md` (first pass) and `docs/product/autonomous-commerce-integration-handoff.md` (independent re-verification, gap closure, and decision record). `PR-04` is unblocked.
+
 ## 1. Consistency check
 
 ### Contradictions found
@@ -754,12 +756,63 @@ Evidence required:
 - file paths;
 - code references for current names.
 
+### INFRA-01 - Reproducible MariaDB bootstrap
+
+- ID: `INFRA-01`
+- Title: `Reproducible local MariaDB bootstrap from an empty volume`
+- Capacity: `developer environment / CI reproducibility`
+- Priority: `highest`
+- Status: **accepted**. Fixed and verified from a truly empty Docker volume (`docker compose down -v` equivalent + recreate): single env contract (`DB_HOST`/`DB_PORT` shared; `DATABASE_*`/`MIGRATION_DATABASE_*`/`TEST_DATABASE_*`/`LEGACY_DATABASE_*` keep their own per-target `*_USER`/`*_PASSWORD` — `DB_USER`/`DB_PASSWORD` are deliberately *not* set generically, since `lib/database-config.ts`'s alias resolution would make them win over `MIGRATION_DATABASE_USER` and make `crm_dev_admin` unreachable; `CRM_APP_PASSWORD` is infra-only, consumed by `infra/mariadb/init/002-set-local-passwords.sh`); `crm_app` now actually created in `001-create-databases-and-users.sql`; fixed a CRLF/shebang bug (`.gitattributes` added) and a `mysql` -> `mariadb` CLI rename in `002-set-local-passwords.sh` that silently broke first-boot password/grant provisioning. `npm run db:bootstrap:smoke` provisions+migrates+verifies in one command.
+  - Independently re-verified (architecture-owner review, second clean-volume run): `npm run db:down && docker volume rm infra_main_management_mariadb_data && npm run db:up && npm run db:wait` -> `MariaDB ready for dev`; `npm run db:migrate -- --database=dev` -> 11/11 applied; `npm run db:bootstrap:smoke` -> `PASS: clean-volume bootstrap is reproducible (database, user, grants, migrations, app connection)`, 16 expected tables present, `crm_app` confirmed read/write without DDL, `crm_dev_admin` confirmed DDL-capable. No real credentials in any tracked file (`.env`/`infra/.env` are gitignored; tracked `.example` files use local-only placeholder values). No manual SQL step in the documented path.
+- Depends on: none
+- Blocks: `PR-02A`, `PR-02B`, `PR-03A`, and any functional/integration verification.
+
+Result:
+
+- a single, documented environment variable contract for DB host/port/name/user/password, with no silent fallback between `DB_*`, `DATABASE_*`, and `CRM_APP_PASSWORD` naming;
+- from an empty Docker volume: database created, `crm_app` created with minimal grants, all `migrations/*.sql` applied, and the Next.js app able to connect, with zero manual SQL.
+
+Technical scope:
+
+- reconcile `infra/.env`, `infra/.env.example`, `.env`, `.env.example`, `infra/docker-compose.dev.yml`, `infra/mariadb/init/*`, and `lib/database-config.ts` alias resolution onto one contract;
+- fix `infra/mariadb/init/002-set-local-passwords.sh` (expects `DB_PASSWORD`) vs `infra/.env` (`DATABASE_PASSWORD`/`CRM_APP_PASSWORD`) mismatch, and the empty `MARIADB_USER`/`MARIADB_PASSWORD` passed into the official image from undefined `${DB_USER}`/`${DB_PASSWORD}`;
+- wire `npm run db:migrate` (or an equivalent bootstrap script) into the documented path from empty volume to ready app, replacing ad hoc `mariadb` CLI calls;
+- add an automated smoke script/test that: starts from a disposable volume, runs the bootstrap, asserts the expected tables exist, asserts `crm_app` can connect and run a basic query, and tears down.
+
+Exclusions:
+
+- no application runtime/business logic changes;
+- no production secrets;
+- no destructive action against any volume the developer didn't just create for the smoke test.
+
+Tests:
+
+- smoke test/script that provisions a clean volume and verifies tables + user + connectivity;
+- documented manual verification commands as a fallback.
+
+Acceptance:
+
+- `docker compose down -v && docker compose up -d` (disposable, documented) followed by the documented bootstrap commands leaves a working app connection with zero manual SQL inside the container;
+- the smoke test fails clearly if any step (user creation, grants, migrations, app connection) breaks.
+
+Risks:
+
+- accidentally encoding throwaway local credentials as if they were a security boundary;
+- divergence between this bootstrap and a future managed/staging DB.
+
+Evidence required:
+
+- exact bootstrap/reset/test commands;
+- smoke test output from a clean volume;
+- the resolved single env var contract.
+
 ### PR-02 - Introduce commercial event normalization
 
 - ID: `PR-02`
 - Title: `Normalize inbound and internal events into CommercialEvent`
 - Capacity: `observe and persist events`
 - Priority: `highest`
+- Status: **accepted**. Real webhook POST -> one `commercial_event` row; duplicate POST -> no second row, checked directly in the DB. The two production blockers noted in the first verification pass (`PR-02A` ingress auth, `PR-02B` duplicate timestamps) are now both resolved and accepted below; PR-02 itself does not need further changes.
 - Depends on: `PR-01`
 - Blocks: `PR-03` to `PR-16`
 
@@ -812,12 +865,114 @@ Evidence required:
 - duplicate suppression query;
 - event rows in DB if persisted.
 
+### PR-02A - Production-safe WhatsApp ingress
+
+- ID: `PR-02A`
+- Title: `Provider-specific authentication for the WhatsApp webhook, independent of the admin session gate`
+- Capacity: `ingress security`
+- Priority: `highest`
+- Status: **accepted**. `middleware.ts` carves out `/api/integrations/whatsapp/webhook` (alongside the existing `/login`/`/api/auth/login` carve-outs); the route's own `verifyMetaSignature` is the only gate, computed over the **literal raw request body** (`request.text()`, before `JSON.parse`) with a **timing-safe** comparison (`crypto.timingSafeEqual`, length-checked first), and fails closed when no app secret is configured and `NODE_ENV=production` (previously always allowed unsigned traffic when unconfigured, in every environment). 14/14 tests in `tests/native/whatsapp-webhook-auth.test.ts` pass, including 3 added during architecture-owner review to close real gaps: (1) a raw-body-fidelity test proves the signature is verified over the exact bytes Meta would send, not a parsed-and-reserialized copy — sends a pretty-printed (non-canonical) JSON body, signs over that literal text, confirms acceptance; (2) a production-fail-closed test sets `NODE_ENV=production` with no secret configured and confirms 401 `meta_signature_secret_not_configured`; (3) a missing-`hub.challenge` GET case. Independently re-verified live against a real running app, real DB, **zero** `x-admin-bypass-token`: GET valid verification returns the challenge; GET wrong token -> 403; signed POST -> 200 + 1 `commercial_event` row; identical signed POST again -> `duplicate:true`, still 1 row; unsigned POST -> 401 `missing_signature`; forged-signature POST -> 401 `invalid_signature`. An unrelated route (`/api/system/health`) still returns `{"error":"unauthorized"}` without the admin header (regression-checked in both the test suite and live).
+- Depends on: `PR-02`, `INFRA-01` (needed to run its DB-backed tests)
+- Blocks: production use of `PR-02`/`PR-03`'s native inbound path; `PR-04`+ should not be treated as "live" until this lands.
+
+Result:
+
+- `POST/GET /api/integrations/whatsapp/webhook` is reachable by Meta's real infrastructure without any admin/operator credential;
+- it is not reachable by anyone else without passing Meta's own authenticity check;
+- the generic admin-bypass middleware gate (`middleware.ts`) no longer decides whether the provider's webhook can be invoked.
+
+Technical scope:
+
+- carve out `/api/integrations/whatsapp/webhook` from `middleware.ts`'s blanket `/api/*` gate (alongside the existing `/login`/`/api/auth/login` carve-outs), the same way the route already carves itself out logically from session auth;
+- keep/extend `verifyMetaSignature` (HMAC `x-hub-signature-256` over the raw body using `META_WHATSAPP_APP_SECRET`/`BRAIN_META_WHATSAPP_APP_SECRET`) as the actual authenticity gate for `POST`, and make it fail closed (reject) when the secret is configured but the signature is missing/invalid; treat "secret not configured" as a loud warning, not a silent allow, in any environment where `APP_ENV`/`NODE_ENV` indicates production;
+- keep the existing `GET` `hub.verify_token` challenge flow for Meta's initial subscription handshake;
+- preserve idempotency by `providerMessageId` (already implemented via `commercial_event.dedupe_key` / `conversation_message.provider_message_id`) — do not regress it while changing the auth boundary.
+
+Exclusions:
+
+- no changes to other `/api/*` routes' auth;
+- no change to the commercial event/context contracts;
+- no outbound/send changes.
+
+Tests:
+
+- valid webhook verification (`GET` with correct `hub.verify_token` + `hub.mode=subscribe`) returns the challenge;
+- invalid verification (wrong token, wrong mode, missing challenge) is rejected;
+- authentic `POST` (valid `x-hub-signature-256`) is processed;
+- inauthentic `POST` (missing/invalid signature, secret configured) is rejected, not processed;
+- valid payload is persisted once;
+- malformed payload fails safely without persisting;
+- duplicate `providerMessageId` does not duplicate `commercial_event`/`conversation_message`;
+- a request with zero credentials (no admin token, no signature) still reaches the route's own auth logic instead of being intercepted by the generic 401 from `middleware.ts`;
+- an unrelated `/api/*` route still requires the admin session/bypass token exactly as before (regression guard that the carve-out is scoped to this one route).
+
+Acceptance:
+
+- a request shaped like Meta's real webhook call (no `x-admin-bypass-token`, valid/absent signature per configuration) reaches the handler;
+- with `META_WHATSAPP_APP_SECRET` configured, a forged signature is rejected before any DB write.
+
+Risks:
+
+- widening the middleware carve-out beyond this one path;
+- accepting unsigned traffic by default in an environment that should require signatures;
+- breaking the existing local/manual testing path that currently relies on the admin bypass token.
+
+Evidence required:
+
+- middleware diff scoped to the one route;
+- signature verification test output (pass/fail cases);
+- confirmation that other `/api/*` routes are unaffected.
+
+### PR-02B - Duplicate response contract
+
+- ID: `PR-02B`
+- Title: `Fix empty occurredAt/receivedAt on the duplicate-webhook response path`
+- Capacity: `contract correctness`
+- Priority: `medium`
+- Status: **accepted**. Root cause: `commercialEventRowToContract` (`lib/brain/commercial/events/repository.ts`) read `occurred_at`/`received_at` with a text-only coercion (`asText`) that silently returned `""` for `mysql2`'s `Date` objects (every DATETIME column comes back as `Date`, not `string`, once round-tripped through the DB — this only affected rows re-read from the DB, i.e. the duplicate path and any future direct caller of `loadCommercialEventByDedupeKey`, not the freshly-inserted in-memory object returned on first creation). Fixed with a dedicated `asDateTimeIso` helper that converts `Date -> toISOString()`; never returns `""` for a `NOT NULL` DATETIME column. Test added in `tests/commercial/commercial-events.test.ts` ("PR-02B: ..."), passing. Independently re-verified live: signed POST -> real ISO `occurredAt`/`receivedAt`; identical POST again (duplicate path) -> still real, non-empty ISO values, same contract shape as the first response.
+- Depends on: `PR-02`
+- Blocks: nothing structural; safe to ship independently of `PR-02A`.
+
+Risk discovered while fixing this (not fixed here, out of PR-02B's bounded scope): the round-tripped timestamp is the *correct, real* persisted value, but it is not necessarily the *same instant* as what was originally written. `commercial_event.occurred_at`/`received_at` are naive `DATETIME(3)` columns (no timezone), and the `mysql2` pool in `lib/db.ts` is created without an explicit `timezone` option, so reads/writes go through `mysql2`'s default local-timezone interpretation. In this environment that produced a observed +4h offset between the in-memory ISO value and the value read back from the DB for the same row. This is a pre-existing, systemic issue affecting every naive DATETIME column read as a JS `Date` anywhere in the app — not introduced or fixed by PR-02B, and far larger in blast radius than this PR's scope (would need an explicit decision: force `timezone: "Z"` on the pool, or store/compare everything in UTC consistently, then re-verify every other table that relies on the current behavior). Flagged here as a separate, real risk for a future dedicated task; the PR-02B test compares the duplicate-path value against a second fresh DB read of the same row (both round-tripped, so internally consistent) rather than against the pre-round-trip in-memory value.
+
+Result:
+
+- the `commercialEvent` embedded in a `duplicate:true` webhook response carries the same real, persisted `occurredAt`/`receivedAt` as the original event, not empty strings.
+
+Technical scope:
+
+- in the duplicate branch of `processNativeWhatsAppInbound` (`lib/brain/native-whatsapp/service.ts`) and in `loadCommercialEventByDedupeKey`/`recordCommercialEvent` (`lib/brain/commercial/events`), return the persisted event's actual timestamps instead of constructing a partial object with unset date fields;
+- define an explicit contract: a timestamp field is either a valid ISO string or the field/object is `null` — never an empty string `""`.
+
+Exclusions:
+
+- no change to dedupe key derivation or dedupe semantics;
+- no schema change (timestamps are already persisted correctly; this is a read/serialization bug).
+
+Tests:
+
+- first insertion: `commercialEvent.occurredAt`/`receivedAt` are valid ISO strings matching what was sent;
+- duplicate POST of the same `providerMessageId`: `commercialEvent.occurredAt`/`receivedAt` equal the original event's persisted values (not `""`, not different from the first response).
+
+Acceptance:
+
+- byte-for-byte same `occurredAt`/`receivedAt` between the first response and any subsequent duplicate response for the same event.
+
+Risks:
+
+- silently changing the response shape for any existing consumer that depends on the current (buggy) empty-string behavior — none found in this repo, but flag if discovered.
+
+Evidence required:
+
+- before/after response bodies for first vs. duplicate POST.
+
 ### PR-03 - Build the commercial context read model
 
 - ID: `PR-03`
 - Title: `Build the commercial context read model without legacy fallback`
 - Capacity: `understand customer and opportunity`
 - Priority: `high`
+- Status: **accepted** for the read-model contract itself; product integration (a real caller in the commercial cycle) is still `PR-04`+ scope, by this PR's own design. `buildNativeCommercialContext` run against a real conversation seeded through the live webhook matched the DB field-for-field; `not_found` path degrades safely against the real DB too. `customer_external_identity`-based identity-conflict visibility (this section's own "not yet done" note below) is now closed by `PR-03A`. `buildNativeCommercialContext` in `lib/brain/commercial/context/buildNativeCommercialContext.ts`, exported from `lib/brain/commercial/context/index.ts`.
 - Depends on: `PR-01`, `PR-02`
 - Blocks: `PR-04` to `PR-16`
 
@@ -864,6 +1019,74 @@ Evidence required:
 - selected source tables;
 - completeness status;
 - warnings.
+
+Evidence delivered (this slice):
+
+- `buildNativeCommercialContext(input)` returns a `CommercialContext` snapshot (`contractName: "CommercialContext"`, `schemaVersion: "1.0"`) keyed by `conversationPublicId`, sourced only through the existing native loader `loadNativeConversationDetailByPublicId` (`master_customer`, `conversation`, `conversation_message`, `crm_opportunities`, `crm_sales_need_profiles`, `crm_agent_actions`). No legacy `BrainContext`/shadow path is touched.
+- Read-only: no INSERT/UPDATE in the new module; `loadConversationDetail` is injectable for tests.
+- Completeness vocabulary: `complete | partial | minimal | insufficient`, computed from presence of customer, opportunity, and recent messages.
+- Warnings emitted: `conversation_not_found`, `invalid_current_time`, `missing_customer`, `missing_opportunity`, `missing_need_profile`, `missing_recent_messages`, `stale_context` (using the existing 7-day `COMMERCIAL_CONTEXT_STALE_THRESHOLD_MS`), `human_owner_active`, `ai_blocked`.
+- Tests: `tests/commercial/buildNativeCommercialContext.test.ts` — 5 injected-dependency unit tests (not_found, invalid time, degrade-safely/minimal completeness, stale context, human-owner/ai-blocked signals) pass deterministically without a DB. A 6th integration test reuses `processNativeWhatsAppInbound` (same pattern as `tests/native/native-whatsapp.test.ts`) to seed a real thread and read it back; it is blocked locally by a pre-existing MariaDB credential issue (`Access denied for user 'crm_app'@...`) that affects the already-merged native-whatsapp/commercial-event suites identically, not by this change.
+- Not yet done: PR-03 also lists `customer_external_identity` as a reusable source and an explicit identity-conflict test against real divergent identities; the current native loader resolves identity through `master_customer`/`customer_external_identity` upstream (in `resolveOrCreateNativeCustomer`) but does not yet surface a multi-identity conflict signal inside the context snapshot itself. Carved out as `PR-03A`.
+
+### PR-03A - Identity conflict safety
+
+- ID: `PR-03A`
+- Title: `Detect and surface identity conflicts instead of silently picking a customer`
+- Capacity: `identity safety`
+- Priority: `high`
+- Status: **accepted**. `resolveOrCreateNativeCustomer` (`lib/brain/native-whatsapp/service.ts`) checks `findDistinctCustomersByNormalizedValue` (new, `lib/integrations/customer-external-identity/repository.ts`) before any normalized-value lookup; when a normalized value (e.g. phone) already links to more than one distinct customer, it returns `customer: null` plus a structured `identityConflict` (`type: "divergent_identity_links"`, candidate customer ids) instead of silently picking one. A second check compares the freshly resolved customer against the conversation's already-stored `customer_id`; a mismatch raises `type: "customer_conversation_mismatch"`, forces `customer: null` for that turn, and `createOrUpdateNativeConversation`'s existing `COALESCE(VALUES(customer_id), customer_id)` preserves the prior link rather than silently overwriting it. Both signals propagate into `processNativeWhatsAppInbound`'s `identityWarnings`/`identityConflict` and into `auditLog` (new action `customer.identity_conflict`). All 6 required scenarios pass against the real local DB in `tests/native/identity-conflict.test.ts`.
+  - **Block is real, not a warning**: in every conflict case `result.customerId === null` and `result.customer === null` — verified by direct assertion in the tests and live (see below). No code path resolves a customer when a conflict is open.
+  - **Visible to future `CommercialContext` consumers** (closes `PR-03`'s open item): `buildNativeCommercialContext` independently re-derives the same conflict by calling `findDistinctCustomersByNormalizedValue` against the conversation's `externalContactId` and comparing against its resolved `customer`; exposes `identityConflict`, `signals.identityConflict`, and the two new warning codes. 3 new tests in `tests/commercial/buildNativeCommercialContext.test.ts`.
+  - **Live, independent proof** (architecture-owner review, real app + real DB, not mocks): seeded two `customer_external_identity` rows for one phone number pointing at two different real customers (ids 21/22), sent a fresh inbound from that number through `processNativeWhatsAppInbound` directly -> `customerId: null`, `identityConflict.candidateCustomerIds: [21, 22]`; then ran `buildNativeCommercialContext` against the resulting real `conversationPublicId` -> independently reproduced the **same** `identityConflict.candidateCustomerIds: [21, 22]` and `signals.identityConflict: true`; `hub_audit_log` shows real `customer.identity_conflict` rows for this and prior runs (ids 26, 18, 16).
+- Side fix discovered while writing the human-resolution/audit-trail test, formalized in this review (see "Audit log" below): `auditLog()` (`lib/audit.ts`) called `ensureAuditTable()` (`CREATE TABLE IF NOT EXISTS`) unconditionally even after confirming the table already exists, and `crm_app`'s minimal grants (correctly) deny `CREATE` — so every audit write was silently failing before this work (logged as `audit_log_failed`, swallowed, no row written). Removed the redundant call; **no new grants were added** — the fix reduces privileged operations, it does not request more. Policy decided explicitly: audit logging degrades on failure (catches, logs `audit_log_failed` to console, never throws) and must never block or roll back a commercial/native write that already succeeded, consistent with ADR-002/ADR-007 (observability is not commercial truth, technical failures must not abandon the customer). Verified by two new tests in `tests/native/audit-log.test.ts`: a direct successful write (row appears in `hub_audit_log`), and an injected failure (circular JSON in `after`) that is caught, logged, does not throw, and leaves no partial row.
+- Depends on: `PR-03`, `INFRA-01` (needed to run its real-DB tests)
+- Blocks: any commercial decision that the cycle (`PR-04`+) would make based on an unresolved/ambiguous identity.
+
+Result:
+
+- when inbound identity resolution (`resolveOrCreateNativeCustomer` and the underlying `customer_external_identity`/`master_customer` lookups) finds more than one plausible, non-equivalent customer for the same inbound signal, that conflict is detected and surfaced structurally — not silently resolved by picking the first/most-recent match;
+- `CommercialContext`/the resolution result carries an explicit conflict signal (e.g. `identityConflict: true` plus the candidate ids and the reason) instead of only the boolean `identity_conflict` heuristic already partially present in the legacy `buildCommercialContext` adapters;
+- commercial decisions that depend on identity (anything PR-04+ builds on top of `CommercialContext`) must treat an identity conflict as a hard block, not a warning to ignore.
+
+Technical scope:
+
+- inspect `resolveOrCreateNativeCustomer` (`lib/brain/native-whatsapp/service.ts`), `findExternalIdentityByProviderExternalId`/`findExternalIdentityByNormalizedValue`/`upsertExternalIdentity` (`lib/integrations/customer-external-identity`), and `master_customer` lookups;
+- define what "conflict" means precisely: (a) the same external id maps to two different `customer_id`s across `customer_external_identity` rows, (b) the provider id and the normalized-value lookup resolve to two different existing customers, (c) the conversation's stored `customer_id` disagrees with the customer the current inbound message would resolve to;
+- add a structured conflict result (candidates, reason, detected-at) propagated into `buildNativeCommercialContext`'s `signals`/`warnings` (extending, not duplicating, the existing `NativeCommercialContextWarning` vocabulary);
+- when a conflict is detected, do not auto-merge or auto-pick; require a human-resolvable trail (audit log entry/escalation-shaped warning) sufficient for an operator to act, per ADR-007's escalation model — implementing the actual escalation workflow itself is out of scope here, only the signal and trace.
+
+Exclusions:
+
+- no automatic merge/dedupe of customers;
+- no new escalation UI;
+- no changes to opportunity/decision/action lifecycle (that's PR-04+).
+
+Tests (unit + integration against real DB once `INFRA-01` lands):
+
+- unambiguous identity (single matching external identity) resolves cleanly, no conflict signal;
+- nonexistent identity (first contact) creates a provisional customer, no conflict;
+- duplicate-but-equivalent identities (same customer linked twice, e.g. two `customer_external_identity` rows pointing at the same `customer_id`) — no conflict;
+- divergent identities (same external id historically linked to two different customers) — conflict signal raised, no silent pick;
+- conflict between the conversation's stored `customer_id` and the customer the current inbound would resolve to — conflict signal raised;
+- human resolution path: once an operator/process disambiguates (e.g. updates the identity link), the next resolution is clean again, and the prior conflict is still visible in the trail (not erased).
+
+Acceptance:
+
+- no test or real-DB run ever returns a resolved customer silently when two non-equivalent customers were genuinely plausible;
+- every conflict case produces a warning/signal an operator can act on, with enough identifying detail (candidate customer ids, the external id involved) to investigate.
+
+Risks:
+
+- false positives blocking legitimate continuing conversations if the conflict definition is too aggressive;
+- performance cost of extra lookups on every inbound message;
+- conflating "missing data" (no identity yet) with "conflicting data" (two incompatible identities) — these must stay distinct signals.
+
+Evidence required:
+
+- the structural conflict signal shape;
+- test matrix results for the six scenarios above against the real local DB;
+- at least one captured example of the warning/audit trail an operator would see.
 
 ### PR-04 - Freeze opportunity lifecycle and terminality
 
