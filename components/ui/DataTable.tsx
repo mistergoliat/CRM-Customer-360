@@ -1,3 +1,4 @@
+import React from "react";
 type DataTableProps = {
   headers: string[];
   children: React.ReactNode;

@@ -1,3 +1,4 @@
+import React from "react";
 import { StatusChip } from "./StatusChip";
 
 type PageHeaderProps = {

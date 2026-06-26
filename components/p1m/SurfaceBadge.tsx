@@ -1,3 +1,4 @@
+import React from "react";
 import clsx from "clsx";
 
 type SurfaceBadgeKind = "fixture" | "preview" | "readOnly" | "provisional" | "notAvailable" | "real";

@@ -14,6 +14,9 @@ export async function GET(request: Request, context: Context) {
   if (!result) {
     return Response.json({ error: "conversation_not_found" }, { status: 404 });
   }
+  if (result.error) {
+    return Response.json({ error: result.error }, { status: 500 });
+  }
 
   return Response.json(result);
 }

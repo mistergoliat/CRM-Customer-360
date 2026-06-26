@@ -1158,6 +1158,7 @@ export async function loadNativeConversationDetailByPublicId(publicId: string) {
     conversation,
     customer,
     messages: messagesResult.ok ? messagesResult.rows : [],
+    error: messagesResult.ok ? null : messagesResult.error,
     opportunity,
     profile,
     lastDecision: lastDecisionRow

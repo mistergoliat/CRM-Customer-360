@@ -9,5 +9,8 @@ export async function GET(request: Request) {
   const page = Number(searchParams.get("page") || 1);
   const q = searchParams.get("q") || "";
   const result = await listConversations({ page, q });
+  if (result.error) {
+    return Response.json({ error: result.error }, { status: 500 });
+  }
   return Response.json(result);
 }

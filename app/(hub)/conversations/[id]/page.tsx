@@ -1,3 +1,4 @@
+import React from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getConversationById } from "@/lib/domains/conversations";
@@ -16,6 +17,33 @@ export default async function ConversationDetailPage({ params }: ConversationDet
   const { id } = await params;
   const result = await getConversationById(id);
   if (!result) notFound();
+  const hasError = Boolean(result.error || result.meta.status === "error");
+
+  if (hasError) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Operación"
+          title={`Conversación #${id}`}
+          description="Workspace real con timeline nativo, oportunidad y perfil visibles."
+          status="error"
+          actions={<SurfaceBadge kind="notAvailable" />}
+        />
+
+        <SectionCard title="Error de carga" eyebrow="Workspace" description="No se pudo leer la conversación desde la base nativa.">
+          <div className="space-y-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+            <p className="font-semibold">Error al cargar conversaciones</p>
+            <p>{result.error || result.meta.warnings.join(", ") || "No fue posible cargar el detalle."}</p>
+          </div>
+          <div className="mt-4">
+            <Link href="/conversations" className="hub-button-secondary">
+              Volver al inbox
+            </Link>
+          </div>
+        </SectionCard>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -46,18 +74,20 @@ export default async function ConversationDetailPage({ params }: ConversationDet
 
         <div className="space-y-5">
           <SectionCard title="Resumen" eyebrow="Conversation" description={result.conversation?.contactName ?? "Sin selección"}>
-            <InfoGrid
-              items={[
-                { label: "Cliente", value: result.conversation?.contactName ?? "—" },
-                { label: "wa_id", value: result.conversation?.waId ?? "—" },
-                { label: "Estado", value: result.conversation?.status ?? "—" },
-                { label: "Prioridad", value: result.conversation?.priority ?? "—" },
-                { label: "Departamento", value: result.conversation?.department ?? "—" },
-                { label: "Ventana", value: result.conversation?.whatsappWindowOpen ? "Abierta" : "Cerrada" }
-              ]}
-              columns={3}
-            />
-          </SectionCard>
+              <InfoGrid
+                items={[
+                  { label: "Cliente", value: result.conversation?.contactName ?? "—" },
+                  { label: "wa_id", value: result.conversation?.waId ?? "—" },
+                  { label: "Estado", value: result.conversation?.status ?? "—" },
+                  { label: "Prioridad", value: result.conversation?.priority ?? "—" },
+                  { label: "Departamento", value: result.conversation?.department ?? "—" },
+                  { label: "Ventana", value: result.conversation?.whatsappWindowOpen ? "Abierta" : "Cerrada" },
+                  { label: "Resolución", value: result.customerResolutionStatus }
+                ]}
+                columns={3}
+              />
+              {result.customerResolutionStatus === "conflict" ? <StatusChip label="requiere revisión" tone="red" /> : null}
+            </SectionCard>
 
           {result.opportunity ? (
             <SectionCard title="Oportunidad" eyebrow="CRM" description={result.opportunity.opportunityKey}>

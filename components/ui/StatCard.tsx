@@ -1,3 +1,4 @@
+import React from "react";
 import clsx from "clsx";
 import { isValidElement, type ReactNode } from "react";
 import { Icon } from "./Icon";

@@ -6,6 +6,8 @@ export type ConversationListInput = {
   q?: string;
 };
 
+export type ConversationReadStatus = "real" | "empty" | "error";
+
 export type ConversationListItem = {
   id: string;
   contactName: string | null;
@@ -31,7 +33,8 @@ export type ConversationListItem = {
 export type ConversationListReadModel = {
   items: ConversationListItem[];
   pagination: { page: number; pageSize: number; total: number };
-  meta: { mode: ModuleDataMode; source: string; warnings: string[] };
+  meta: { mode: ModuleDataMode; source: string; warnings: string[]; status: ConversationReadStatus };
+  error?: string | null;
 };
 
 export type ConversationMessage = {
@@ -102,5 +105,6 @@ export type ConversationDetailReadModel = {
     source: string;
   };
   warnings: string[];
-  meta: { mode: ModuleDataMode; source: string; warnings: string[] };
+  meta: { mode: ModuleDataMode; source: string; warnings: string[]; status: ConversationReadStatus };
+  error?: string | null;
 };

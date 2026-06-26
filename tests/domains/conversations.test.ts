@@ -25,7 +25,7 @@ test("conversations list maps repository data", async () => {
           }
         ],
         pagination: { page: 1, pageSize: 30, total: 1 },
-        meta: { mode: "real", source: "n8n_vw_hub_cases", warnings: [] }
+        meta: { mode: "real", source: "n8n_vw_hub_cases", warnings: [], status: "real" }
       }),
       getById: async () => null
     }
@@ -42,7 +42,7 @@ test("conversations detail surfaces data quality warnings", async () => {
       list: async () => ({
         items: [],
         pagination: { page: 1, pageSize: 30, total: 0 },
-        meta: { mode: "real", source: "n8n_vw_hub_cases", warnings: [] }
+        meta: { mode: "real", source: "n8n_vw_hub_cases", warnings: [], status: "real" }
       }),
       getById: async () => ({
         conversation: {
@@ -95,7 +95,7 @@ test("conversations detail surfaces data quality warnings", async () => {
           source: "legacy_n8n"
         },
         warnings: ["timeline_fallback_by_wa_id"],
-        meta: { mode: "real", source: "n8n_vw_hub_cases", warnings: ["timeline_fallback_by_wa_id"] }
+        meta: { mode: "real", source: "n8n_vw_hub_cases", warnings: ["timeline_fallback_by_wa_id"], status: "real" }
       })
     }
   });
@@ -111,7 +111,7 @@ test("conversations detail returns null for missing rows", async () => {
       list: async () => ({
         items: [],
         pagination: { page: 1, pageSize: 30, total: 0 },
-        meta: { mode: "real", source: "n8n_vw_hub_cases", warnings: [] }
+        meta: { mode: "real", source: "n8n_vw_hub_cases", warnings: [], status: "empty" }
       }),
       getById: async () => null
     }

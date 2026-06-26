@@ -1,3 +1,4 @@
+import React from "react";
 import Link from "next/link";
 import { listConversations, getConversationById } from "@/lib/domains/conversations";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -23,8 +24,10 @@ export default async function ConversationsPage({ searchParams }: ConversationsP
   const q = param(sp, "q") || "";
   const page = Number(param(sp, "page") || 1);
   const data = await listConversations({ q, page });
-  const selected = data.items[0] ? await getConversationById(data.items[0].id) : null;
+  const selected = data.error ? null : data.items[0] ? await getConversationById(data.items[0].id) : null;
   const selectedConversation = selected?.conversation ?? data.items[0] ?? null;
+  const hasError = Boolean(data.error || data.meta.status === "error");
+  const isEmpty = !hasError && data.items.length === 0;
 
   return (
     <div className="space-y-6">
@@ -52,38 +55,64 @@ export default async function ConversationsPage({ searchParams }: ConversationsP
             </button>
           </form>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-200">
-            <DataTable headers={["Cliente", "Estado", "Prioridad", "Ventana", "Último mensaje", "Fuente"]}>
-              {data.items.map((row) => (
-                <tr key={row.id}>
-                  <td>
-                    <Link href={`/conversations/${row.id}`} className="font-semibold text-primary hover:underline">
-                      {row.contactName ?? row.waId ?? row.id}
-                    </Link>
-                    <p className="text-label-sm text-slate-500">{row.waId}</p>
-                  </td>
-                  <td>
-                    <StatusChip label={row.status ?? "unknown"} tone={row.status === "open" || row.status === "active" ? "green" : row.status === "pending" ? "amber" : "gray"} />
-                  </td>
-                  <td>
-                    <StatusChip label={row.priority ?? "normal"} tone={row.priority === "urgent" ? "red" : row.priority === "high" ? "amber" : "blue"} />
-                  </td>
-                  <td>
-                    <StatusChip label={row.whatsappWindowOpen ? "abierta" : "cerrada"} tone={row.whatsappWindowOpen ? "green" : "amber"} />
-                  </td>
-                  <td className="max-w-md">
-                    <p>{row.lastMessage ?? "Sin mensaje"}</p>
-                    <p className="text-label-sm text-slate-500">{formatDateTime(row.lastMessageAt)}</p>
-                  </td>
-                  <td>{row.source}</td>
-                </tr>
-              ))}
-            </DataTable>
-          </div>
+          {hasError ? (
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+              <p className="font-semibold">Error al cargar conversaciones</p>
+              <p className="mt-1">{data.error || data.meta.warnings.join(", ") || "No se pudo cargar el inbox nativo."}</p>
+            </div>
+          ) : isEmpty ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+              <p className="font-semibold text-slate-800">Sin conversaciones</p>
+              <p className="mt-1">Cuando llegue el primer inbound de WhatsApp, aparecerá aquí.</p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <DataTable headers={["Cliente", "Estado", "Prioridad", "Ventana", "Último mensaje", "Fuente", "Conflicto"]}>
+                {data.items.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <Link href={`/conversations/${row.id}`} className="font-semibold text-primary hover:underline">
+                        {row.contactName ?? row.waId ?? row.id}
+                      </Link>
+                      <p className="text-label-sm text-slate-500">{row.waId}</p>
+                    </td>
+                    <td>
+                      <StatusChip label={row.status ?? "unknown"} tone={row.status === "open" || row.status === "active" ? "green" : row.status === "pending" ? "amber" : "gray"} />
+                    </td>
+                    <td>
+                      <StatusChip label={row.priority ?? "normal"} tone={row.priority === "urgent" ? "red" : row.priority === "high" ? "amber" : "blue"} />
+                    </td>
+                    <td>
+                      <StatusChip label={row.whatsappWindowOpen ? "abierta" : "cerrada"} tone={row.whatsappWindowOpen ? "green" : "amber"} />
+                    </td>
+                    <td className="max-w-md">
+                      <p>{row.lastMessage ?? "Sin mensaje"}</p>
+                      <p className="text-label-sm text-slate-500">{formatDateTime(row.lastMessageAt)}</p>
+                    </td>
+                    <td>{row.source}</td>
+                    <td>
+                      {row.customerResolutionStatus === "conflict" ? (
+                        <StatusChip label="revisar" tone="red" />
+                      ) : row.customerResolutionStatus === "unknown" ? (
+                        <StatusChip label="desconocido" tone="amber" />
+                      ) : (
+                        <span className="text-label-sm text-slate-500">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </DataTable>
+            </div>
+          )}
         </SectionCard>
 
         <SectionCard title="Detalle" eyebrow="Workspace preview" description={selectedConversation ? selectedConversation.contactName ?? selectedConversation.waId ?? selectedConversation.id : "Sin selección"}>
-          {selectedConversation ? (
+          {hasError ? (
+            <div className="space-y-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+              <p className="font-semibold">No fue posible cargar el workspace</p>
+              <p>{data.error || data.meta.warnings.join(", ") || "Error desconocido"}</p>
+            </div>
+          ) : selectedConversation ? (
             <div className="space-y-4">
               <InfoGrid
                 items={[
@@ -92,7 +121,8 @@ export default async function ConversationsPage({ searchParams }: ConversationsP
                   { label: "Estado", value: selectedConversation.status ?? "—" },
                   { label: "Prioridad", value: selectedConversation.priority ?? "—" },
                   { label: "Departamento", value: selectedConversation.department ?? "—" },
-                  { label: "Ventana", value: selectedConversation.whatsappWindowOpen ? "Abierta" : "Cerrada" }
+                  { label: "Ventana", value: selectedConversation.whatsappWindowOpen ? "Abierta" : "Cerrada" },
+                  { label: "Resolución", value: selected?.customerResolutionStatus ?? "unknown" }
                 ]}
                 columns={3}
               />
