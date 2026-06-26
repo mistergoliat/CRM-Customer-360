@@ -4,7 +4,7 @@ import { auditLog } from "@/lib/audit";
 import { queryRows, safeQueryRows, withTransaction } from "@/lib/db";
 import { createMasterCustomer } from "@/lib/integrations/customer-master/customer-repository";
 import { normalizeMasterCustomerEmail } from "@/lib/integrations/customer-master/mappers";
-import { findExternalIdentityByNormalizedValue, findExternalIdentityByProviderExternalId, upsertExternalIdentity } from "@/lib/integrations/customer-external-identity";
+import { findDistinctCustomersByNormalizedValue, findExternalIdentityByNormalizedValue, findExternalIdentityByProviderExternalId, upsertExternalIdentity } from "@/lib/integrations/customer-external-identity";
 import {
   loadCommercialEventByDedupeKey,
   normalizeMetaWhatsAppInboundCommercialEvent,
@@ -279,6 +279,14 @@ async function loadCustomerById(customerId: number | null): Promise<NativeCustom
   return result.rows[0] ?? null;
 }
 
+type NativeIdentityConflict = {
+  type: "divergent_identity_links" | "customer_conversation_mismatch";
+  provider: string;
+  normalizedValue: string;
+  candidateCustomerIds: number[];
+  detectedAt: string;
+};
+
 async function resolveOrCreateNativeCustomer(input: {
   provider: string;
   identityType: string;
@@ -293,7 +301,27 @@ async function resolveOrCreateNativeCustomer(input: {
       customer,
       externalIdentityId: existingIdentity.row.id,
       warnings: [] as string[],
-      created: false
+      created: false,
+      identityConflict: null as NativeIdentityConflict | null
+    };
+  }
+
+  const distinctCustomers = await findDistinctCustomersByNormalizedValue(input.provider, input.normalizedValue);
+  if (distinctCustomers.ok && distinctCustomers.customerIds.length > 1) {
+    // PR-03A: do not silently pick a winner when the same normalized identity
+    // (e.g. phone number) is already linked to more than one distinct customer.
+    return {
+      customer: null,
+      externalIdentityId: null,
+      warnings: ["identity_conflict_divergent_customers"] as string[],
+      created: false,
+      identityConflict: {
+        type: "divergent_identity_links",
+        provider: input.provider,
+        normalizedValue: input.normalizedValue,
+        candidateCustomerIds: distinctCustomers.customerIds,
+        detectedAt: nowIso()
+      } as NativeIdentityConflict | null
     };
   }
 
@@ -313,7 +341,8 @@ async function resolveOrCreateNativeCustomer(input: {
         customer,
         externalIdentityId: identity.ok && identity.row ? identity.row.id : normalizedLookup.row.id,
         warnings: identity.ok ? [] : [identity.error ?? "external_identity_upsert_failed"],
-        created: false
+        created: false,
+        identityConflict: null as NativeIdentityConflict | null
       };
     }
   }
@@ -349,7 +378,8 @@ async function resolveOrCreateNativeCustomer(input: {
     },
     externalIdentityId: identity.ok && identity.row ? identity.row.id : null,
     warnings: identity.ok ? [] : [identity.error ?? "external_identity_upsert_failed"],
-    created: true
+    created: true,
+    identityConflict: null as NativeIdentityConflict | null
   };
 }
 
@@ -901,10 +931,35 @@ export async function processNativeWhatsAppInbound(input: {
     senderName: input.senderName
   });
 
+  // PR-03A: if this conversation already has a confirmed customer link, never
+  // let a fresh resolution silently swap it. Detect the mismatch, keep the
+  // existing link (createOrUpdateNativeConversation's COALESCE preserves it
+  // when customerId is null here), and surface it instead of guessing.
+  const existingConversationPublicId = `conv-${stableId([input.phoneNumberId, normalizedExternalId])}`;
+  const existingConversation = await loadConversationByPublicId(existingConversationPublicId);
+  let resolvedCustomer = identity.customer;
+  let identityConflict = identity.identityConflict;
+  const identityWarnings = [...identity.warnings];
+  if (
+    existingConversation?.customer_id &&
+    resolvedCustomer &&
+    Number(existingConversation.customer_id) !== Number(resolvedCustomer.id)
+  ) {
+    identityConflict = {
+      type: "customer_conversation_mismatch",
+      provider: "whatsapp",
+      normalizedValue: normalizedSenderPhone,
+      candidateCustomerIds: [Number(existingConversation.customer_id), Number(resolvedCustomer.id)],
+      detectedAt: nowIso()
+    };
+    identityWarnings.push("identity_conflict_customer_conversation_mismatch");
+    resolvedCustomer = null;
+  }
+
   const result = await withTransaction(async (connection) => {
     const conversation = await createOrUpdateNativeConversation(
       {
-        customerId: identity.customer ? Number(identity.customer.id) : null,
+        customerId: resolvedCustomer ? Number(resolvedCustomer.id) : null,
         phoneNumberId: input.phoneNumberId,
         externalContactId: normalizedExternalId,
         externalThreadId: normalizedExternalId,
@@ -943,7 +998,7 @@ export async function processNativeWhatsAppInbound(input: {
       text: input.text,
       occurredAt: input.occurredAt,
       receivedAt: nowIso(),
-      customerId: identity.customer ? Number(identity.customer.id) : null,
+      customerId: resolvedCustomer ? Number(resolvedCustomer.id) : null,
       conversationId: conversation.id,
       opportunityId: null,
       messageId: appendResult.messageId,
@@ -954,7 +1009,8 @@ export async function processNativeWhatsAppInbound(input: {
         customerCreated: identity.created,
         externalIdentityId: identity.externalIdentityId,
         senderName: input.senderName,
-        senderPhone: normalizedSenderPhone
+        senderPhone: normalizedSenderPhone,
+        identityConflict
       }
     });
 
@@ -966,15 +1022,15 @@ export async function processNativeWhatsAppInbound(input: {
     await touchConversationAfterInbound(
       conversation.id,
       input.occurredAt,
-      identity.customer ? Number(identity.customer.id) : conversation.customer_id,
+      resolvedCustomer ? Number(resolvedCustomer.id) : conversation.customer_id,
       connection
     );
 
     return {
       duplicate: false as const,
       correlationId,
-      customerId: identity.customer ? Number(identity.customer.id) : null,
-      customer: identity.customer,
+      customerId: resolvedCustomer ? Number(resolvedCustomer.id) : null,
+      customer: resolvedCustomer,
       externalIdentityId: identity.externalIdentityId,
       conversationId: conversation.id,
       conversationPublicId: conversation.public_id,
@@ -982,12 +1038,13 @@ export async function processNativeWhatsAppInbound(input: {
       messagePublicId: appendResult.messagePublicId,
       commercialEvent: commercialEventResult.event,
       commercialEventStatus: commercialEventResult.status,
-      identityWarnings: identity.warnings
+      identityWarnings,
+      identityConflict
     };
   });
 
   await auditLog({
-    action: identity.created ? "customer.created" : "customer.linked",
+    action: identityConflict ? "customer.identity_conflict" : identity.created ? "customer.created" : "customer.linked",
     entityType: "conversation",
     entityId: result.conversationId,
     after: {
@@ -998,7 +1055,9 @@ export async function processNativeWhatsAppInbound(input: {
       messageId: result.messageId,
       messagePublicId: result.messagePublicId,
       commercialEventId: result.commercialEvent?.id ?? null,
-      commercialEventStatus: result.commercialEventStatus
+      commercialEventStatus: result.commercialEventStatus,
+      identityWarnings: result.identityWarnings,
+      identityConflict: result.identityConflict
     }
   });
 

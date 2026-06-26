@@ -24,6 +24,9 @@ function isAllowedRecipient(value: string) {
 function verifyMetaSignature(rawBody: string, signatureHeader: string | null) {
   const appSecret = process.env.META_WHATSAPP_APP_SECRET?.trim() || process.env.BRAIN_META_WHATSAPP_APP_SECRET?.trim() || null;
   if (!appSecret) {
+    if (process.env.NODE_ENV === "production") {
+      return { ok: false as const, warning: "meta_signature_secret_not_configured" };
+    }
     return { ok: true as const, warning: "meta_signature_secret_not_configured" };
   }
   if (!signatureHeader) {

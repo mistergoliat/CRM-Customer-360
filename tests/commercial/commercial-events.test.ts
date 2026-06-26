@@ -211,6 +211,50 @@ test("CommercialEvent persists once and duplicate dedupe returns existing row", 
   assert.equal(count, 1);
 });
 
+test("PR-02B: occurredAt/receivedAt are real ISO timestamps on both first insertion and duplicate, never empty strings", async () => {
+  const providerMessageId = `wamid.${uniqueSuffix("timestamps")}`;
+  const event = normalizeMetaWhatsAppInboundCommercialEvent({
+    providerMessageId,
+    phoneNumberId: "phone-timestamps",
+    externalSenderId: "56990000099",
+    senderPhone: "56990000099",
+    senderName: "Cliente Timestamps",
+    messageType: "text",
+    text: "Verificando timestamps",
+    occurredAt: new Date().toISOString()
+  });
+
+  function assertIsoTimestamp(value: string) {
+    assert.notEqual(value, "");
+    assert.ok(!Number.isNaN(new Date(value).getTime()), `expected a valid ISO timestamp, got ${JSON.stringify(value)}`);
+  }
+
+  const first = await recordCommercialEvent(event);
+  assert.equal(first.ok, true);
+  assert.ok(first.event);
+  assertIsoTimestamp(first.event!.occurredAt);
+  assertIsoTimestamp(first.event!.receivedAt);
+
+  const second = await recordCommercialEvent(event);
+  assert.equal(second.ok, true);
+  assert.equal(second.status, "duplicate");
+  assert.ok(second.event);
+  assertIsoTimestamp(second.event!.occurredAt);
+  assertIsoTimestamp(second.event!.receivedAt);
+
+  // Compare against a fresh read of the same persisted row (not the original
+  // in-memory `event`): MariaDB DATETIME columns are naive (no timezone), and
+  // mysql2's default Date parsing for naive datetimes is a separate, known,
+  // pre-existing issue (not introduced or fixed by PR-02B) tracked as a risk
+  // in docs/product/autonomous-commerce-implementation-backlog.md (PR-02B).
+  const reloaded = await loadCommercialEventByDedupeKey(event.dedupeKey);
+  assert.ok(reloaded);
+  assertIsoTimestamp(reloaded!.occurredAt);
+  assertIsoTimestamp(reloaded!.receivedAt);
+  assert.equal(second.event!.occurredAt, reloaded!.occurredAt);
+  assert.equal(second.event!.receivedAt, reloaded!.receivedAt);
+});
+
 test("CommercialEvent can be inserted and rolled back in a single transaction", async () => {
   const providerMessageId = `wamid.${uniqueSuffix("rollback")}`;
   const event = normalizeMetaWhatsAppInboundCommercialEvent({

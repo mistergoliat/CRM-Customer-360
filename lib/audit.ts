@@ -22,6 +22,7 @@ export type AuditAction =
   | "customer.creation.confirmed"
   | "customer.linked"
   | "customer.link.failed"
+  | "customer.identity_conflict"
   | "ai_sdr.handoff.requested"
   | "whatsapp.delivery_status.applied";
 
@@ -54,7 +55,10 @@ export async function auditLog(input: {
     const auditTableExists = await hasTable("hub_audit_log");
     if (!auditTableExists) return;
 
-    await ensureAuditTable();
+    // Do not call ensureAuditTable() here: the table already exists (just
+    // confirmed above), and CREATE TABLE requires a privilege the app's
+    // minimal-grant DB user intentionally does not have, which made every
+    // audit write silently fail under those grants.
     let ip: string | null = null;
     let userAgent: string | null = null;
     try {

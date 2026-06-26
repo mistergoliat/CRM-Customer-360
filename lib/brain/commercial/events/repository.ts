@@ -25,6 +25,13 @@ function asNullableString(value: unknown) {
   return null;
 }
 
+function asDateTimeIso(value: unknown) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  return asText(value);
+}
+
 function asJsonRecord(value: unknown) {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
   if (typeof value === "string" && value.trim()) {
@@ -71,8 +78,8 @@ export function commercialEventRowToContract(row: Record<string, unknown>): Comm
     opportunityId: asNullableString(row.opportunity_id),
     channel: asNullableString(row.channel),
     provider: asNullableString(row.provider),
-    occurredAt: asText(row.occurred_at) ?? "",
-    receivedAt: asText(row.received_at) ?? "",
+    occurredAt: asDateTimeIso(row.occurred_at) ?? "",
+    receivedAt: asDateTimeIso(row.received_at) ?? "",
     payload: asJsonRecord(row.payload_json) ?? {},
     metadata: asJsonRecord(row.metadata_json) ?? {}
   };
