@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { auditLog } from "@/lib/audit";
 import { queryRows, safeQueryRows, withTransaction } from "@/lib/db";
@@ -541,8 +542,8 @@ async function loadConversationMessageById(messageId: number) {
 }
 
 async function loadOutboxByProviderMessageId(providerMessageId: string) {
-  const result = await safeQueryRows<Record<string, unknown>>(
-    "SELECT provider_status FROM brain_message_outbox WHERE provider_message_id = ? LIMIT 1",
+  const result = await safeQueryRows<{ id: number; provider_status: string | null }>(
+    "SELECT id, provider_status FROM brain_message_outbox WHERE provider_message_id = ? LIMIT 1",
     [providerMessageId]
   );
   if (!result.ok) return null;
@@ -1061,6 +1062,38 @@ export async function processNativeWhatsAppInbound(input: {
     }
   });
 
+  // Fase 1 — native autonomous cycle (PR-14).
+  // Runs after inbound is durably persisted so a failure here never undoes the
+  // already-committed ConversationMessage / CommercialEvent (ADR-007 continuity).
+  // Gated by the same flag set as processInbound: BRAIN_SALES_AGENT_ENABLED,
+  // BRAIN_COMMERCIAL_SHADOW_ENABLED, BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED.
+  // No CommercialEvent is created here — the one persisted above is the
+  // canonical event for this inbound turn; the cycle reads it via context.
+  if (
+    !result.duplicate &&
+    result.conversationId &&
+    result.conversationPublicId &&
+    (process.env.BRAIN_SALES_AGENT_ENABLED === "true" ||
+      process.env.BRAIN_COMMERCIAL_SHADOW_ENABLED === "true" ||
+      process.env.BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED === "true")
+  ) {
+    try {
+      await runNativeAutonomousCycle({
+        conversationId: result.conversationId,
+        conversationPublicId: result.conversationPublicId as string,
+        customerMasterId: result.customerId ?? null,
+        waId: normalizedExternalId,
+        phoneNumberId: input.phoneNumberId,
+        messageId: result.messageId,
+        messageText: input.text,
+        correlationId: result.correlationId,
+        currentTime: nowIso()
+      });
+    } catch (error) {
+      console.error("native_autonomous_cycle_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return result;
 }
 
@@ -1127,6 +1160,20 @@ export async function applyMetaDeliveryStatus(input: {
   });
 
   await recordCommercialEvent(deliveryEvent);
+
+  // Record ActionOutcome for delivery status changes — closes the execution loop.
+  if (currentOutbox?.id) {
+    const { recordDeliveryOutcome } = await import("@/lib/brain/commercial/action-queue/persistActionOutcome");
+    await recordDeliveryOutcome(
+      currentOutbox.id,
+      input.providerMessageId,
+      input.status as "sent" | "delivered" | "read" | "failed",
+      input.occurredAt,
+      typeof input.rawPayload === "object" && input.rawPayload !== null
+        ? (input.rawPayload as Record<string, unknown>)
+        : null
+    ).catch(() => void 0); // best-effort, never fail the delivery status update
+  }
 
   await auditLog({
     action: "whatsapp.delivery_status.applied",
