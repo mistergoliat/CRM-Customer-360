@@ -10,6 +10,7 @@ export type NativeInboundAgentTriggerInput = {
   conversationPublicId: string;
   customerMasterId: number | null;
   waId: string | null;
+  phoneNumberId: string | null;
   messageText: string;
   messageId: number | string | null;
   correlationId: string;
@@ -87,7 +88,7 @@ export async function maybeRunCommercialAgentForInboundTurn(input: NativeInbound
     sourceAgentName: "commercial-agent-runtime",
     sourceAgentVersion: "brain.commercial.agent-runtime.v1",
     waId: input.waId,
-    phoneNumberId: null,
+    phoneNumberId: input.phoneNumberId,
     conversationCaseId: input.conversationId,
     messageText: turn.responseText,
     metaPayloadJson: {

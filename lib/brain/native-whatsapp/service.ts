@@ -1069,6 +1069,7 @@ export async function processNativeWhatsAppInbound(input: {
         conversationPublicId: result.conversationPublicId as string,
         customerMasterId: result.customerId,
         waId: normalizedExternalId,
+        phoneNumberId: input.phoneNumberId,
         messageText: input.text,
         messageId: result.messageId,
         correlationId: result.correlationId,
@@ -1160,6 +1161,32 @@ export async function applyMetaDeliveryStatus(input: {
   return { ok: true as const, warning: null, conversationId: conversation.id, messageId: message.id };
 }
 
+async function loadPlannedOutboundDraftMessages(conversationId: number): Promise<NativeConversationMessageRow[]> {
+  const result = await safeQueryRows<{ id: number; message_text: string | null; created_at: string }>(
+    "SELECT id, message_text, created_at FROM brain_message_outbox WHERE conversation_case_id = ? AND status = 'planned' ORDER BY created_at ASC, id ASC",
+    [conversationId]
+  );
+  if (!result.ok) return [];
+  // Not yet sent (BRAIN_META_SEND_ENABLED/BRAIN_PERSIST_CANONICAL_OUTBOUND are both
+  // false by default), so these rows never reach conversation_message. Surfaced here
+  // as drafts so operators can see what the agent would say without sending it.
+  return result.rows.map((row) => ({
+    id: -row.id,
+    public_id: `outbox-planned-${row.id}`,
+    conversation_id: conversationId,
+    provider: "brain_outbox",
+    provider_message_id: null,
+    direction: "outbound",
+    sender_type: "agent",
+    message_type: "text",
+    body: row.message_text,
+    status: "planned",
+    provider_timestamp: null,
+    created_at: row.created_at,
+    updated_at: row.created_at
+  }));
+}
+
 export async function loadNativeConversationDetailByPublicId(publicId: string) {
   const conversation = await loadConversationByPublicId(publicId);
   if (!conversation) return null;
@@ -1168,6 +1195,10 @@ export async function loadNativeConversationDetailByPublicId(publicId: string) {
     "SELECT * FROM conversation_message WHERE conversation_id = ? ORDER BY created_at ASC, id ASC",
     [conversation.id]
   );
+  const plannedDrafts = await loadPlannedOutboundDraftMessages(conversation.id);
+  const messages = [...(messagesResult.ok ? messagesResult.rows : []), ...plannedDrafts].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
   const opportunity = mapOpportunityRow(await loadActiveOpportunity(String(conversation.id)));
   const profile = mapProfileRow(await loadActiveProfile(String(conversation.id), opportunity?.id ? Number(opportunity.id) : null));
   const lastDecisionRow = await loadLatestDecision(opportunity?.id ? Number(opportunity.id) : null);
@@ -1175,7 +1206,7 @@ export async function loadNativeConversationDetailByPublicId(publicId: string) {
   return {
     conversation,
     customer,
-    messages: messagesResult.ok ? messagesResult.rows : [],
+    messages,
     opportunity,
     profile,
     lastDecision: lastDecisionRow

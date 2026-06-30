@@ -30,17 +30,20 @@ export default async function ConversationDetailPage({ params }: ConversationDet
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_360px]">
         <SectionCard title="Timeline" eyebrow="Mensajes" description={`${result.messages.length} mensajes recuperados`}>
           <div className="space-y-3">
-            {result.messages.map((message) => (
-              <div key={message.key} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <StatusChip label={message.direction} tone={message.direction === "inbound" ? "green" : message.direction === "outbound" ? "blue" : "gray"} />
-                  {message.status ? <StatusChip label={message.status} tone="gray" /> : null}
-                  <span className="text-label-sm text-slate-500">{formatDateTime(message.occurredAt)}</span>
+            {result.messages.map((message) => {
+              const isDraft = message.status === "planned";
+              return (
+                <div key={message.key} className={`rounded-2xl border p-4 ${isDraft ? "border-amber-200 border-dashed bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <StatusChip label={message.direction} tone={message.direction === "inbound" ? "green" : message.direction === "outbound" ? "blue" : "gray"} />
+                    {message.status ? <StatusChip label={isDraft ? "borrador, no enviado" : message.status} tone={isDraft ? "amber" : "gray"} /> : null}
+                    <span className="text-label-sm text-slate-500">{formatDateTime(message.occurredAt)}</span>
+                  </div>
+                  <p className="text-body-md text-slate-700">{message.body}</p>
+                  <p className="mt-2 text-label-sm text-slate-500">{message.timelineSource}</p>
                 </div>
-                <p className="text-body-md text-slate-700">{message.body}</p>
-                <p className="mt-2 text-label-sm text-slate-500">{message.timelineSource}</p>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </SectionCard>
 
