@@ -12,8 +12,8 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <PageHeader
         eyebrow="Sistema"
-        title="Settings"
-        description="Configuración visual, governance, roles, canales, flags y seguridad."
+        title="Configuración"
+        description="Gobernanza visual, usuarios, canales, flags, seguridad y auditoría."
         status="Parcial"
         actions={<SurfaceBadge kind="fixture" />}
       />
@@ -37,7 +37,7 @@ export default function SettingsPage() {
       </section>
 
       <section className="grid gap-5 xl:grid-cols-3">
-        <SectionCard title="Gobierno de acciones" eyebrow="Governance" description="Políticas de ejecución.">
+        <SectionCard title="Gobernanza" eyebrow="Governance" description="Políticas de ejecución y ventanas operativas.">
           <InfoGrid items={data.governance} />
         </SectionCard>
         <SectionCard title="Feature flags" eyebrow="Flags" description="Capacidades controladas por flags.">

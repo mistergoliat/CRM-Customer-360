@@ -18,7 +18,10 @@ export {
   marketingCampaignsFixture,
   marketingCopilotFixture,
   marketingOverviewFixture,
+  marketingPerformanceFixture,
+  marketingTemplatesFixture,
   marketingSegmentsFixture,
+  type MarketingTemplateCard,
   type MarketingAutomation,
   type MarketingCampaign,
   type MarketingSegmentRow

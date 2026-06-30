@@ -11,7 +11,20 @@ export type AuditAction =
   | "ai_blocked"
   | "api_error"
   | "meta_send_error"
-  | "db_query_error";
+  | "db_query_error"
+  | "customer.created"
+  | "ai_sdr.decision.created"
+  | "ai_sdr.tool.requested"
+  | "ai_sdr.tool.executed"
+  | "ai_sdr.tool.failed"
+  | "customer.lookup.completed"
+  | "customer.creation.offered"
+  | "customer.creation.confirmed"
+  | "customer.linked"
+  | "customer.link.failed"
+  | "customer.identity_conflict"
+  | "ai_sdr.handoff.requested"
+  | "whatsapp.delivery_status.applied";
 
 export async function ensureAuditTable() {
   await queryRows(`
@@ -42,10 +55,21 @@ export async function auditLog(input: {
     const auditTableExists = await hasTable("hub_audit_log");
     if (!auditTableExists) return;
 
-    await ensureAuditTable();
-    const headerBag = await headers();
-    const ip = headerBag.get("x-forwarded-for")?.split(",")[0]?.trim() ?? headerBag.get("x-real-ip") ?? null;
-    const userAgent = headerBag.get("user-agent") ?? null;
+    // Do not call ensureAuditTable() here: the table already exists (just
+    // confirmed above), and CREATE TABLE requires a privilege the app's
+    // minimal-grant DB user intentionally does not have, which made every
+    // audit write silently fail under those grants.
+    let ip: string | null = null;
+    let userAgent: string | null = null;
+    try {
+      const headerBag = await headers();
+      ip = headerBag.get("x-forwarded-for")?.split(",")[0]?.trim() ?? headerBag.get("x-real-ip") ?? null;
+      userAgent = headerBag.get("user-agent") ?? null;
+    } catch (error) {
+      if (!(error instanceof Error) || !/outside a request scope/i.test(error.message)) {
+        throw error;
+      }
+    }
 
     await insertExistingColumns("hub_audit_log", {
       action: input.action,

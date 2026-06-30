@@ -18,7 +18,7 @@ import {
   readPrestashopAddressCandidate,
   readPrestashopCustomerCandidate,
   readPrestashopOrderCandidate,
-  type CustomerSourceObservation,
+  readMasterCustomerCandidate,
 } from "./sourceReaders";
 import type {
   CustomerIdentityConfidence,
@@ -36,6 +36,7 @@ import type {
   CustomerSourceMatch,
   CustomerTimelineSeed,
   CustomerWritePolicy,
+  CustomerSourceObservation,
 } from "./types";
 
 const CUSTOMER_RESOLVER_VERSION = "p1j-001-readonly-1";
@@ -264,16 +265,17 @@ function buildSourceMatches(observations: CustomerSourceObservation[]): Customer
     const key = observationKey(observation);
     if (seen.has(key)) continue;
     seen.add(key);
-    matches.push({
-      source: observation.source,
-      matchedBy: observation.matchedBy,
-      confidence: observation.confidence,
-      sourceRecordId: observation.sourceRecordId,
-      identityType: observation.identityType,
-      identityValue: observation.identityValue,
-      customerKey: observation.customerKey,
-      notes: observation.notes,
-    });
+      matches.push({
+        source: observation.source,
+        matchedBy: observation.matchedBy,
+        confidence: observation.confidence,
+        sourceRecordId: observation.sourceRecordId,
+        identityType: observation.identityType,
+        identityValue: observation.identityValue,
+        customerKey: observation.customerKey,
+        notes: observation.notes,
+        sourceMetadata: observation.sourceMetadata,
+      });
   }
 
   return matches;
@@ -429,6 +431,7 @@ export async function resolveCustomerCandidate(
   const allowProvisional = input.options?.allowProvisional ?? CUSTOMER_DEFAULT_READ_ONLY_OPTIONS.allowProvisional;
 
   const readerResults = await Promise.all([
+    readMasterCustomerCandidate(input),
     readPrestashopCustomerCandidate(input),
     readPrestashopAddressCandidate(input),
     readPrestashopOrderCandidate(input),

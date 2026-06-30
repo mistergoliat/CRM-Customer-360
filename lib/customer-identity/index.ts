@@ -18,6 +18,7 @@ export {
 } from "./normalize";
 
 export {
+  readMasterCustomerCandidate,
   readLegacyConversationCandidate,
   readLegacyInboundCandidate,
   readPrestashopAddressCandidate,

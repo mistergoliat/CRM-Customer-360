@@ -5,28 +5,11 @@ import type {
   CustomerIdentityResolutionInput,
   CustomerIdentitySource,
   CustomerIdentityType,
-  CustomerTimelineSeed
+  CustomerTimelineSeed,
+  CustomerSourceObservation,
+  CustomerSourceReaderResult
 } from "./types";
-
-export type CustomerSourceObservation = {
-  source: CustomerIdentitySource;
-  table: string;
-  sourceRecordId: string | number | null;
-  matchedBy: string;
-  identityType: CustomerIdentityType | null;
-  identityValue: string | null;
-  confidence: CustomerIdentityConfidence;
-  customerKey: string | null;
-  notes: string[];
-  timelineSeed: CustomerTimelineSeed | null;
-};
-
-export type CustomerSourceReaderResult = {
-  source: CustomerIdentitySource;
-  table: string;
-  observations: CustomerSourceObservation[];
-  warnings: string[];
-};
+import { normalizePlatformOrigin } from "@/lib/domains/customers/platform-origin";
 
 type QueryTerm = {
   value: string | number | null | undefined;
@@ -134,6 +117,7 @@ function makeObservation(input: {
   customerKey: string | null;
   notes?: string[];
   timelineSeed?: CustomerTimelineSeed | null;
+  sourceMetadata?: Record<string, unknown>;
 }): CustomerSourceObservation {
   return {
     source: input.source,
@@ -145,7 +129,8 @@ function makeObservation(input: {
     confidence: input.confidence,
     customerKey: input.customerKey,
     notes: input.notes ?? [],
-    timelineSeed: input.timelineSeed ?? null
+    timelineSeed: input.timelineSeed ?? null,
+    sourceMetadata: input.sourceMetadata
   };
 }
 
@@ -185,6 +170,52 @@ function buildCustomerKeyFromOrder(idOrder: string | number | null | undefined) 
 
 function buildCandidateKey(prefix: string, value: string | null) {
   return value ? `${prefix}:${value}` : null;
+}
+
+export async function readMasterCustomerCandidate(input: CustomerIdentityResolutionInput): Promise<CustomerSourceReaderResult> {
+  const normalizedEmail = normalizeEmail(input.email);
+  const normalizedId = normalizeIdentityValue("customer_master_id", input.idCustomer);
+  const terms: QueryTerm[] = [
+    { value: normalizedId, columns: ["id", "customer_master_id"] },
+    { value: normalizedEmail, columns: ["email"], compare: "lowercase" }
+  ];
+  const query = await queryTableRows("master_customer", "mariadb", terms, 10);
+  const observations: CustomerSourceObservation[] = [];
+
+  for (const row of query.rows) {
+    const rowId = normalizeIdentityValue("customer_master_id", firstNonEmpty(row, ["id", "customer_master_id"]));
+    const rowEmail = normalizeEmail(firstNonEmpty(row, ["email"]));
+    const rowPlatformOrigin = normalizePlatformOrigin(firstNonEmpty(row, ["platform_origin"]));
+    const matchById = Boolean(normalizedId && rowId && normalizedId === rowId);
+    const matchByEmail = Boolean(normalizedEmail && rowEmail && normalizedEmail === rowEmail);
+    if (!matchById && !matchByEmail) continue;
+
+    const sourceRecordId = scalarId(row.id) ?? rowId ?? rowEmail;
+    observations.push(
+      makeObservation({
+        source: "mariadb",
+        table: "master_customer",
+        sourceRecordId,
+        matchedBy: matchById ? "id" : "email",
+        identityType: matchById ? "customer_master_id" : "email",
+        identityValue: matchById ? rowId : rowEmail,
+        confidence: "high",
+        customerKey: rowId ? `customer_master:${rowId}` : rowEmail ? `customer_master:email:${rowEmail}` : null,
+        notes: ["Canonical customer master row matched."],
+        timelineSeed: sourceRecordId === null ? null : buildLegacyTimelineSeed("mariadb", "identity", sourceRecordId, matchById ? "id" : "email", "high"),
+        sourceMetadata: {
+          platform_origin: rowPlatformOrigin
+        }
+      })
+    );
+  }
+
+  return {
+    source: "mariadb",
+    table: "master_customer",
+    observations,
+    warnings: query.warnings
+  };
 }
 
 export async function readPrestashopCustomerCandidate(input: CustomerIdentityResolutionInput): Promise<CustomerSourceReaderResult> {

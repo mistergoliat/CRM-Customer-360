@@ -44,6 +44,20 @@ export const dashboardFixture: DashboardFixture = {
       href: "/opportunities/demo-opportunity-1"
     },
     {
+      id: "p1m-priority-1b",
+      priority: "P0",
+      client: "Camila Rojas",
+      phone: "56987554321",
+      work_type: "Conversación",
+      related_entity: "Consulta de stock y despacho",
+      status: "Esperando cliente",
+      reason: "Ya existe oportunidad vinculada pero falta confirmar disponibilidad",
+      waiting_time: "18m",
+      owner: "Laura Perez",
+      action: "Ver",
+      href: "/conversations/demo-conversation-2"
+    },
+    {
       id: "p1m-priority-2",
       priority: "P1",
       client: "Gimnasio Pacific",
@@ -97,7 +111,49 @@ export const dashboardFixture: DashboardFixture = {
       waiting_time: "3.2h",
       owner: "Admin User",
       action: "Ver",
-      href: "/customers/demo-customer-2"
+      href: "/customers/demo-customer-3"
+    },
+    {
+      id: "p1m-priority-6",
+      priority: "P1",
+      client: "Renata Soto",
+      phone: "56974455661",
+      work_type: "Acción",
+      related_entity: "Confirmar descuento aprobado",
+      status: "Revisión requerida",
+      reason: "El copilot detectó riesgo de margen y espera confirmación",
+      waiting_time: "58m",
+      owner: "Laura Perez",
+      action: "Revisar",
+      href: "/actions/demo-action-1"
+    },
+    {
+      id: "p1m-priority-7",
+      priority: "P2",
+      client: "Andrés Ibarra",
+      phone: "56952233441",
+      work_type: "Oportunidad",
+      related_entity: "Mantenimiento anual",
+      status: "Negotiation",
+      reason: "Esperando documento adjunto y validación de términos",
+      waiting_time: "2.1h",
+      owner: "Admin User",
+      action: "Abrir",
+      href: "/opportunities/demo-opportunity-3"
+    },
+    {
+      id: "p1m-priority-8",
+      priority: "P3",
+      client: "Marta León",
+      phone: "56931122449",
+      work_type: "Caso",
+      related_entity: "Garantía de producto",
+      status: "Abierto",
+      reason: "Se requiere revisión de evidencia antes de escalar",
+      waiting_time: "4.3h",
+      owner: "Laura Perez",
+      action: "Abrir",
+      href: "/cases/demo-case-1"
     }
   ],
   pipeline: [
@@ -150,6 +206,22 @@ export const dashboardFixture: DashboardFixture = {
       time: "3 hours ago",
       tone: "gray",
       icon: "shopping_cart"
+    },
+    {
+      id: "activity-6",
+      title: "Copilot - Recomendación creada",
+      subtitle: "Cotización formal con aprobación requerida",
+      time: "4 hours ago",
+      tone: "amber",
+      icon: "auto_awesome"
+    },
+    {
+      id: "activity-7",
+      title: "Knowledge - Artículo consultado",
+      subtitle: "Proceso de cotización abierto desde Copilot",
+      time: "5 hours ago",
+      tone: "blue",
+      icon: "book_5"
     }
   ],
   aiReview: {
@@ -160,7 +232,7 @@ export const dashboardFixture: DashboardFixture = {
     confidence: "Alta",
     risk: "Medio",
     approval: "Requerida",
-    missing: ["Historial completo de compras"]
+    missing: ["Historial completo de compras", "Dirección de despacho confirmada"]
   },
   identityQuality: [
     { label: "Resueltos", value: "88%" },
@@ -180,7 +252,9 @@ export const dashboardFixture: DashboardFixture = {
   sourceStatus: [
     { label: "PrestaShop API", status: "Conectado", detail: "12m" },
     { label: "SAP Business One", status: "Retrasado", detail: "12m" },
-    { label: "WhatsApp Cloud", status: "Conectado" },
-    { label: "CRM Brain", status: "Conectado" }
+    { label: "WhatsApp Cloud", status: "Conectado", detail: "3m" },
+    { label: "CRM Brain", status: "Conectado", detail: "read-only" },
+    { label: "Meta Graph", status: "Conectado", detail: "session ok" },
+    { label: "Scheduler", status: "Conectado", detail: "preview mode" }
   ]
 };

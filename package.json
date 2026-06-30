@@ -4,11 +4,24 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:local": "npm run db:up && npm run db:wait && npx --yes tsx@4.20.5 scripts/dev-local.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint app components lib middleware.ts next.config.ts tailwind.config.ts",
     "typecheck": "tsc --noEmit",
-    "customer-identity:evaluate": "npx --yes tsx scripts/customer-identity/evaluate-candidates.ts"
+    "db:up": "docker compose --env-file infra/.env -f infra/docker-compose.dev.yml up -d",
+    "db:down": "docker compose --env-file infra/.env -f infra/docker-compose.dev.yml down",
+    "db:logs": "docker compose --env-file infra/.env -f infra/docker-compose.dev.yml logs -f mariadb",
+    "db:status": "npx --yes tsx@4.20.5 scripts/db-status.ts",
+    "db:wait": "npx --yes tsx@4.20.5 scripts/db-wait.ts",
+    "db:migrate": "npx --yes tsx@4.20.5 scripts/db-migrate.ts",
+    "db:seed": "npx --yes tsx@4.20.5 scripts/db-seed.ts",
+    "db:reset": "npx --yes tsx@4.20.5 scripts/db-reset.ts --database=dev",
+    "db:test:reset": "npx --yes tsx@4.20.5 scripts/db-reset.ts --database=test",
+    "db:legacy:reset": "npx --yes tsx@4.20.5 scripts/db-reset.ts --database=legacy",
+    "db:permissions": "npx --yes tsx@4.20.5 scripts/db-permissions.ts",
+    "db:bootstrap:smoke": "npx --yes tsx@4.20.5 scripts/db-bootstrap-smoke.ts",
+    "customer-identity:evaluate": "npx --yes tsx@4.20.5 scripts/customer-identity/evaluate-candidates.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

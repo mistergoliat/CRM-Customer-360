@@ -52,8 +52,13 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico" ||
     pathname === "/login" ||
-    pathname === "/api/auth/login"
+    pathname === "/api/auth/login" ||
+    pathname === "/api/integrations/whatsapp/webhook"
   ) {
+    // The WhatsApp webhook authenticates itself (Meta verify_token challenge on
+    // GET, x-hub-signature-256 HMAC on POST) inside the route handler. Meta's
+    // own infrastructure can never send an operator session cookie or
+    // x-admin-bypass-token, so this route must not depend on this gate (PR-02A).
     return NextResponse.next();
   }
 

@@ -81,6 +81,42 @@ export const BRAIN_TOOL_REGISTRY: Record<BrainToolName, BrainToolDefinition> = {
     riskLevel: "low",
     defaultMode: "noop",
     inputSchema: "brain.tool.explainAgentDecision.v1"
+  },
+  lookupCustomerByEmail: {
+    name: "lookupCustomerByEmail",
+    description: "Lookup a canonical customer by exact email match.",
+    readOnly: true,
+    enabled: true,
+    riskLevel: "low",
+    defaultMode: "read_only",
+    inputSchema: "brain.tool.lookupCustomerByEmail.v1"
+  },
+  createCustomer: {
+    name: "createCustomer",
+    description: "Create a canonical customer record after explicit confirmation.",
+    readOnly: false,
+    enabled: true,
+    riskLevel: "medium",
+    defaultMode: "noop",
+    inputSchema: "brain.tool.createCustomer.v1"
+  },
+  linkCustomerToConversation: {
+    name: "linkCustomerToConversation",
+    description: "Persist an explicit customer to conversation link.",
+    readOnly: false,
+    enabled: true,
+    riskLevel: "low",
+    defaultMode: "noop",
+    inputSchema: "brain.tool.linkCustomerToConversation.v1"
+  },
+  getCustomerContext: {
+    name: "getCustomerContext",
+    description: "Read customer context for operational onboarding.",
+    readOnly: true,
+    enabled: true,
+    riskLevel: "low",
+    defaultMode: "read_only",
+    inputSchema: "brain.tool.getCustomerContext.v1"
   }
 };
 

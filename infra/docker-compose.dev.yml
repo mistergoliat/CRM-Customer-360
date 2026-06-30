@@ -1,0 +1,33 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: crm-customer-360-mariadb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3306:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: main_management
+      # crm_app is created and granted explicitly by infra/mariadb/init/*
+      # (minimal SELECT/INSERT/UPDATE/DELETE only). Do not set MARIADB_USER/
+      # MARIADB_PASSWORD here: the official image grants ALL PRIVILEGES to
+      # whatever user it auto-creates, which would be broader than intended.
+      # CRM_APP_PASSWORD is infra-only (consumed by mariadb/init/002-*.sh);
+      # it must carry the same value as DATABASE_PASSWORD/DB_PASSWORD below.
+      CRM_APP_PASSWORD: ${CRM_APP_PASSWORD}
+      CRM_DEV_ADMIN_PASSWORD: ${CRM_DEV_ADMIN_PASSWORD}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - main_management_mariadb_data:/var/lib/mysql
+      - ./mariadb/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+volumes:
+  main_management_mariadb_data:

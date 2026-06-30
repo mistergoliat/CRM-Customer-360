@@ -11,6 +11,7 @@ import {
 } from "./types";
 
 export const CUSTOMER_IDENTITY_PRECEDENCE = [
+  "customer_master_id",
   "prestashop_customer_id",
   "email",
   "order_id",
@@ -20,6 +21,7 @@ export const CUSTOMER_IDENTITY_PRECEDENCE = [
 ] as const satisfies readonly CustomerIdentityType[];
 
 export const CUSTOMER_STRONG_IDENTITY_TYPES = [
+  "customer_master_id",
   "prestashop_customer_id",
   "email",
   "order_id",

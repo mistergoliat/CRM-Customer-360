@@ -1,206 +1,141 @@
 import Link from "next/link";
-import { getDashboardViewModel } from "@/lib/p1m/read-models";
+import { getDashboardData } from "@/lib/dashboard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatCard } from "@/components/ui/StatCard";
 import { StatusChip } from "@/components/ui/StatusChip";
 import { DataTable } from "@/components/ui/DataTable";
 import { SurfaceBadge } from "@/components/p1m/SurfaceBadge";
 import { SectionCard } from "@/components/p1m/SectionCard";
-import { InfoGrid } from "@/components/p1m/InfoGrid";
-import { stateForTone } from "@/lib/status";
 
-export default function DashboardPage() {
-  const data = getDashboardViewModel();
+function asText(value: unknown, fallback = "—") {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : fallback;
+  }
+  if (typeof value === "number" || typeof value === "bigint") return String(value);
+  return fallback;
+}
+
+export default async function DashboardPage() {
+  const data = await getDashboardData();
 
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Home"
-        title="Centro operacional"
-        description="Clientes, conversaciones, oportunidades, casos y acciones gobernadas en una sola vista."
-        status="Activo"
-        actions={<SurfaceBadge kind="fixture" />}
+        title="Centro modular"
+        description="El HUB ahora expone módulos reales, parciales y fixture sin ocultar el estado de cada fuente."
+        status="Modular"
+        actions={<SurfaceBadge kind="preview" />}
       />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {data.metrics.map((metric) => (
-          <Link key={metric.key} href={metric.href ?? "#"} className="block">
-            <StatCard title={metric.title} value={metric.value} description={metric.description} icon={metric.icon} state={stateForTone(metric.tone)} />
-          </Link>
+          <StatCard key={metric.key} title={metric.title} value={metric.value} description={metric.description} icon={metric.icon} state={metric.state} />
         ))}
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_360px]">
-        <SectionCard title="Trabajo prioritario" eyebrow="Lo que requiere tu atención ahora" description="Vista operativa principal con estados y acceso rápido a la entidad relacionada." actions={<StatusChip label="Preview only" tone="amber" />}>
-          <DataTable headers={["Prioridad", "Cliente", "Tipo de trabajo", "Entidad relacionada", "Estado", "Motivo", "Tiempo esperando", "Responsable", "Acción"]}>
-            {data.priorityRows.map((row) => (
-              <tr key={row.id}>
-                <td><StatusChip label={row.priority} tone={row.priority === "P0" ? "red" : row.priority === "P1" ? "amber" : "blue"} /></td>
-                <td>
-                  <p className="font-semibold text-on-surface">{row.client}</p>
-                  <p className="text-label-sm text-slate-500">{row.phone}</p>
-                </td>
-                <td>{row.work_type}</td>
-                <td>
-                  <p className="font-semibold text-on-surface">{row.related_entity}</p>
-                  <p className="text-label-sm text-slate-500">
-                    <Link href={row.href ?? "#"} className="text-primary hover:underline">Abrir</Link>
-                  </p>
-                </td>
-                <td><StatusChip label={row.status} /></td>
-                <td className="max-w-[280px]">{row.reason}</td>
-                <td>
-                  <p className="whitespace-pre-line text-slate-700">{row.waiting_time}</p>
-                </td>
-                <td>{row.owner}</td>
-                <td>
-                  <Link href={row.href ?? "#"} className="hub-button-secondary min-w-[96px]">
-                    {row.action}
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </DataTable>
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_360px]">
+        <SectionCard title="Estado de datos" eyebrow="Capabilities" description="Respuesta de /api/system/capabilities con modo y fuente por módulo.">
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <DataTable headers={["Módulo", "Modo", "Fuente", "Disponible", "Warnings"]}>
+              {data.capabilities.modules.map((module) => (
+                <tr key={module.module}>
+                  <td className="font-semibold text-on-surface">{module.module}</td>
+                  <td>
+                    <StatusChip
+                      label={module.mode}
+                      tone={module.mode === "real" ? "green" : module.mode === "partial" ? "amber" : module.mode === "fixture" ? "gray" : module.mode === "disabled" ? "slate" : "red"}
+                    />
+                  </td>
+                  <td>{module.source}</td>
+                  <td>{module.available ? "Sí" : "No"}</td>
+                  <td className="max-w-md text-slate-600">{module.warnings.length > 0 ? module.warnings.join(", ") : "—"}</td>
+                </tr>
+              ))}
+            </DataTable>
+          </div>
         </SectionCard>
 
         <div className="space-y-5">
-          <SectionCard title="AI SDR - Revisión prioritaria" eyebrow="Preview only" description="Esta tarjeta refleja el foco comercial de la pantalla y no ejecuta nada.">
-            <div className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-2">
-                <InfoGrid
-                  items={[
-                    { label: "Cliente", value: data.aiReview.customer },
-                    { label: "Oportunidad", value: data.aiReview.opportunity },
-                    { label: "Señal detectada", value: data.aiReview.signal },
-                    { label: "Acción propuesta", value: data.aiReview.action }
-                  ]}
-                />
+          <SectionCard title="Salud del sistema" eyebrow="Runtime" description="Resumen aislado de disponibilidad y configuración.">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-body-md text-slate-600">DB health</span>
+                <StatusChip label={data.dbHealth.ok ? "ok" : "error"} tone={data.dbHealth.ok ? "green" : "red"} />
               </div>
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-[11px] font-bold uppercase text-slate-500">Confianza</p>
-                  <p className="mt-2 text-headline-md text-on-surface">{data.aiReview.confidence}</p>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-[11px] font-bold uppercase text-slate-500">Riesgo</p>
-                  <p className="mt-2 text-headline-md text-on-surface">{data.aiReview.risk}</p>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-[11px] font-bold uppercase text-slate-500">Aprobación</p>
-                  <p className="mt-2 text-headline-md text-on-surface">{data.aiReview.approval}</p>
-                </div>
+              <div className="flex items-center justify-between">
+                <span className="text-body-md text-slate-600">n8n</span>
+                <StatusChip label={data.n8nHealth.status} tone={data.n8nHealth.status === "ok" ? "green" : data.n8nHealth.status === "warning" ? "amber" : "red"} />
               </div>
-              <div>
-                <p className="text-label-bold uppercase text-slate-500">Información faltante</p>
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-body-md text-slate-700">
-                  {data.aiReview.missing.map((item) => <li key={item}>{item}</li>)}
-                </ul>
+              <div className="flex items-center justify-between">
+                <span className="text-body-md text-slate-600">Clientes reales</span>
+                <StatusChip label={String(data.customerCount)} tone="blue" />
               </div>
-              <button className="hub-button-secondary w-full" type="button" disabled>
-                Revisar propuesta
-              </button>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-label-bold uppercase text-slate-500">Meta</p>
+                <p className="mt-2 text-body-md text-slate-700">{data.metaConfigured ? "Configurado" : "No configurado"}</p>
+              </div>
             </div>
           </SectionCard>
 
-          <SectionCard title="Calidad de identidad" eyebrow="Identity" description="Señales de resolución y conflicto para Customer Candidate." >
-            <div className="space-y-3">
-              {data.identityQuality.map((item) => (
-                <div key={item.label} className="flex items-center justify-between">
-                  <span className="text-body-md text-slate-600">{item.label}</span>
-                  <span className="text-body-md font-semibold text-on-surface">{item.value}</span>
-                </div>
-              ))}
-            </div>
-          </SectionCard>
-
-          <SectionCard title="Salud de integraciones" eyebrow="System" description="Estado operativo visible sin fingir conectividad real.">
-            <div className="space-y-3">
-              {data.integrationHealth.map((item) => (
-                <div key={item.label} className="flex items-center justify-between">
-                  <span className="text-body-md text-slate-700">{item.label}</span>
-                  <StatusChip label={item.status} tone={item.status.toLowerCase().includes("retras") ? "amber" : "green"} />
-                </div>
-              ))}
+          <SectionCard title="Conversations / Cases" eyebrow="Core" description="Vistas reales separadas del resto del HUB.">
+            <div className="space-y-2">
+              <Link className="hub-button-secondary w-full" href="/conversations">
+                Abrir conversaciones
+              </Link>
+              <Link className="hub-button-secondary w-full" href="/cases">
+                Abrir casos
+              </Link>
+              <Link className="hub-button-secondary w-full" href="/customers">
+                Abrir clientes
+              </Link>
             </div>
           </SectionCard>
         </div>
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-        <SectionCard title="Pipeline comercial" eyebrow="Resumen" description="Indicadores de la situación comercial resumida.">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {data.pipeline.map((stage) => (
-              <div key={stage.key} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-[11px] font-bold uppercase text-slate-500">{stage.label}</p>
-                <p className="mt-2 text-headline-md text-on-surface">{stage.count}</p>
-                <p className="text-label-sm text-slate-500">{stage.value}</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 flex items-center justify-between">
-            <p className="text-label-bold uppercase text-slate-500">Valor total</p>
-            <StatusChip label="CLP $14.2M" tone="green" />
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Actividad reciente" eyebrow="Timeline" description="Eventos operativos de los últimos minutos.">
-          <div className="space-y-3">
-            {data.recentActivity.map((item) => (
-              <div key={item.id} className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-slate-500 shadow-sm">
-                  <span className="material-symbols-outlined">{item.icon}</span>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-semibold text-on-surface">{item.title}</p>
-                    {item.chips?.map((chip) => <StatusChip key={chip.label} label={chip.label} tone={chip.tone} />)}
-                  </div>
-                  <p className="text-body-md text-slate-600">{item.subtitle}</p>
-                  <p className="text-label-sm text-slate-500">{item.time}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      </section>
-
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_360px]">
-        <SectionCard title="Oportunidades estancadas" eyebrow="Alertas" description="Entrada rápida a oportunidades que necesitan seguimiento.">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-2 text-label-bold uppercase text-slate-500">
-              <span>Cliente</span>
-              <span>Estado</span>
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <SectionCard title="Casos recientes" eyebrow="Operational" description="Sección aislada de datos reales.">
+          {data.recentCases.ok ? (
+            <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <DataTable headers={["Caso", "Cliente", "Estado", "Último mensaje"]}>
+                {data.recentCases.rows.slice(0, 8).map((row: Record<string, unknown>) => (
+                  <tr key={String(row.conversation_case_id ?? row.id ?? row.case_id ?? Math.random())}>
+                    <td>
+                      <Link className="font-semibold text-primary hover:underline" href={`/cases/${asText(row.conversation_case_id ?? row.id ?? row.case_id, "0")}`}>
+                        #{asText(row.conversation_case_id ?? row.id ?? row.case_id, "0")}
+                      </Link>
+                    </td>
+                    <td>{asText(row.contact_name ?? row.wa_id)}</td>
+                    <td>{asText(row.status ?? row.priority)}</td>
+                    <td className="max-w-md">{asText(row.last_message)}</td>
+                  </tr>
+                ))}
+              </DataTable>
             </div>
-            {data.priorityRows.slice(0, 2).map((row) => (
-              <div key={row.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3">
-                <div>
-                  <p className="font-semibold text-on-surface">{row.related_entity}</p>
-                  <p className="text-label-sm text-slate-500">{row.client}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-label-sm text-primary">{row.reason}</p>
-                  <Link href={row.href ?? "#"} className="text-label-sm font-bold text-primary hover:underline">
-                    Ver oportunidad
-                  </Link>
-                </div>
-              </div>
-            ))}
-          </div>
+          ) : (
+            <p className="text-body-md text-slate-600">{data.recentCases.error}</p>
+          )}
         </SectionCard>
 
-        <SectionCard title="Estado de fuentes" eyebrow="Connectivity" description="Fuentes visibles y su estado resumido.">
-          <div className="space-y-3">
-            {data.sourceStatus.map((item) => (
-              <div key={item.label} className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <div>
-                  <p className="font-semibold text-on-surface">{item.label}</p>
-                  {item.detail ? <p className="text-label-sm text-slate-500">{item.detail}</p> : null}
-                </div>
-                <StatusChip label={item.status} tone={item.status.toLowerCase().includes("retr") ? "amber" : "green"} />
-              </div>
-            ))}
-          </div>
-          <p className="mt-4 text-label-sm text-slate-500">Última sincronización global: Hoy 14:02:11</p>
+        <SectionCard title="Auditoría reciente" eyebrow="Traceability" description="Eventos auditable separados del resto.">
+          {data.recentAudit.ok ? (
+            <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <DataTable headers={["Evento", "Entidad", "ID", "Fecha"]}>
+                {data.recentAudit.rows.slice(0, 8).map((row: Record<string, unknown>, index: number) => (
+                  <tr key={String(row.id ?? index)}>
+                    <td>{asText(row.action)}</td>
+                    <td>{asText(row.entity_type ?? row.entityType)}</td>
+                    <td>{asText(row.entity_id ?? row.entityId)}</td>
+                    <td>{asText(row.created_at ?? row.createdAt)}</td>
+                  </tr>
+                ))}
+              </DataTable>
+            </div>
+          ) : (
+            <p className="text-body-md text-slate-600">{data.recentAudit.error}</p>
+          )}
         </SectionCard>
       </section>
     </div>

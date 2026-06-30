@@ -14,7 +14,9 @@ import {
   marketingCampaignsFixture,
   marketingCopilotFixture,
   marketingOverviewFixture,
+  marketingPerformanceFixture,
   marketingSegmentsFixture,
+  marketingTemplatesFixture,
   marketingAutomationsFixture,
   type OpportunityWorkspace,
   opportunityInboxFixture,
@@ -71,6 +73,22 @@ export function getMarketingCopilotViewModel() {
 
 export function getMarketingSegmentsViewModel() {
   return marketingSegmentsFixture;
+}
+
+export function getMarketingCampaignsViewModel() {
+  return marketingCampaignsFixture;
+}
+
+export function getMarketingTemplatesViewModel() {
+  return marketingTemplatesFixture;
+}
+
+export function getMarketingPerformanceViewModel() {
+  return marketingPerformanceFixture;
+}
+
+export function getMarketingAutomationsViewModel() {
+  return marketingAutomationsFixture;
 }
 
 export function getMarketingCampaignViewModel(id: string): MarketingCampaign {

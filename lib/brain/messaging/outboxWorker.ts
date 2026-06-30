@@ -1,6 +1,6 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { safeQueryRows, withConnection } from "@/lib/db";
-import { sendMetaWhatsAppTextMessage } from "./metaClient";
+import { isMetaSendEnabled, sendMetaWhatsAppTextMessage } from "./metaClient";
 import { buildMetaWhatsAppTextPayloadPreview } from "./metaPayload";
 import { BRAIN_UPDATE_CASE_AFTER_BACKEND_SEND_FLAG, updateCaseAfterBackendOutbound } from "./caseUpdates";
 import { BRAIN_MESSAGE_OUTBOX_TABLE } from "./outbox";
@@ -128,6 +128,7 @@ function buildNotes(
   if (!enabled) notes.unshift("Outbox worker is disabled by default.");
   if (dryRun) notes.push("dryRun=true returns candidate summaries and planned transitions only.");
   if (lockOnly) notes.push("lockOnly=true locks planned rows transactionally and stops before any send step.");
+  if (!dryRun && !lockOnly && !sendLocked) notes.push("planned rows are acquired transactionally and then sent in the same worker run.");
   if (sendLocked) notes.push("sendLocked=true processes locked rows only and transitions through sending -> sent/failed.");
   if (!allowRealSend) notes.push("Real send path remains disabled by flag.");
   if (selectedCount === 0) notes.push("No planned outbox candidates were selected.");
@@ -295,7 +296,7 @@ async function selectOutboxById(outboxId: number, lockSeconds = DEFAULT_OUTBOX_W
   }
 
   const rows = await safeQueryRows<Record<string, unknown>>(
-    `SELECT id, dedupe_key, status, source, wa_id, phone_number_id, conversation_case_id, message_text, meta_payload_json, provider_message_id, error_code, error_message, planned_at, locked_at, sent_at, failed_at, created_at, updated_at FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\` WHERE id = ? LIMIT 1`,
+    `SELECT id, dedupe_key, status, source, wa_id, phone_number_id, conversation_case_id, message_text, meta_payload_json, provider_message_id, provider_status, provider_status_updated_at, error_code, error_message, planned_at, locked_at, sent_at, failed_at, created_at, updated_at FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\` WHERE id = ? LIMIT 1`,
     [outboxId]
   );
 
@@ -409,14 +410,14 @@ async function transitionLockedSendRow(input: {
       const params: Array<string | number | null> = [input.nextStatus];
 
       if (input.nextStatus === "sending") {
-        setFragments.push("provider_message_id = NULL", "error_code = NULL", "error_message = NULL");
+        setFragments.push("provider_message_id = NULL", "provider_status = NULL", "provider_status_updated_at = NULL", "error_code = NULL", "error_message = NULL");
         setFragments.push("sent_at = NULL", "failed_at = NULL");
       } else if (input.nextStatus === "sent") {
-        setFragments.push("provider_message_id = ?", "error_code = NULL", "error_message = NULL");
+        setFragments.push("provider_message_id = ?", "provider_status = 'sent'", "provider_status_updated_at = NOW()", "error_code = NULL", "error_message = NULL");
         setFragments.push("sent_at = NOW()", "failed_at = NULL");
         params.push(input.providerMessageId ?? null);
       } else {
-        setFragments.push("provider_message_id = ?", "error_code = ?", "error_message = ?");
+        setFragments.push("provider_message_id = ?", "provider_status = 'failed'", "provider_status_updated_at = NOW()", "error_code = ?", "error_message = ?");
         setFragments.push("sent_at = NULL", "failed_at = NOW()");
         params.push(input.providerMessageId ?? null, input.errorCode ?? null, input.errorMessage ?? null);
       }
@@ -428,7 +429,7 @@ async function transitionLockedSendRow(input: {
 
       if (updateResult.affectedRows === 0) {
         const [currentRows] = await connection.execute<RowDataPacket[]>(
-          `SELECT id, status, locked_at, sent_at, failed_at, provider_message_id, error_code, error_message, dedupe_key FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\` WHERE id = ? LIMIT 1`,
+          `SELECT id, status, locked_at, sent_at, failed_at, provider_message_id, provider_status, provider_status_updated_at, error_code, error_message, dedupe_key FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\` WHERE id = ? LIMIT 1`,
           [input.row.id]
         );
         const currentRow = (currentRows[0] ?? {}) as Record<string, unknown>;
@@ -457,7 +458,7 @@ async function transitionLockedSendRow(input: {
       }
 
       const [rows] = await connection.execute<RowDataPacket[]>(
-        `SELECT id, dedupe_key, status, source, wa_id, phone_number_id, conversation_case_id, message_text, meta_payload_json, provider_message_id, error_code, error_message, planned_at, locked_at, sent_at, failed_at, created_at, updated_at FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\` WHERE id = ? LIMIT 1`,
+        `SELECT id, dedupe_key, status, source, wa_id, phone_number_id, conversation_case_id, message_text, meta_payload_json, provider_message_id, provider_status, provider_status_updated_at, error_code, error_message, planned_at, locked_at, sent_at, failed_at, created_at, updated_at FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\` WHERE id = ? LIMIT 1`,
         [input.row.id]
       );
       const currentRow = (rows[0] ?? {}) as Record<string, unknown>;
@@ -1239,7 +1240,7 @@ export async function planOutboxWorkerRun(
   const startedAt = Date.now();
   const enabled = getOutboxWorkerEnabled();
   const allowRealSend = getOutboxWorkerAllowRealSend();
-  const metaSendEnabled = process.env.BRAIN_META_SEND_ENABLED?.trim() === "true";
+  const metaSendEnabled = isMetaSendEnabled();
   const batchSize = getOutboxWorkerBatchSize();
   const lockSeconds = getOutboxWorkerLockSeconds();
   const lockOnly = request.lockOnly ?? false;
@@ -1395,7 +1396,7 @@ export async function planOutboxWorkerRun(
 
     const lockedSelection = outboxId !== null
       ? await selectOutboxById(outboxId, lockSeconds)
-      : await selectLockedOutboxCandidates(limit, debug, undefined, lockSeconds);
+      : await selectStaleLockedOutboxCandidates(limit, lockSeconds, debug);
 
     if (!lockedSelection.ok) {
       const plan = buildWorkerPlan({
@@ -1458,9 +1459,9 @@ export async function planOutboxWorkerRun(
     if (outboxId !== null) {
       const lockedSelectionById = lockedSelection as Awaited<ReturnType<typeof selectOutboxById>>;
       const currentRow = lockedSelectionById.row;
-      if (!currentRow || currentRow.status !== "locked") {
+      if (!currentRow || currentRow.status !== "locked" || !currentRow.stale_locked) {
         const skippedRecord = currentRow
-          ? buildSkippedLockedSendRecord(currentRow, currentRow.status === "locked" ? "not_sendable" : `status_${currentRow.status}`)
+          ? buildSkippedLockedSendRecord(currentRow, currentRow.status !== "locked" ? `status_${currentRow.status}` : "locked_not_recoverable_yet")
           : {
               id: outboxId,
               previous_status: "planned" as const,
@@ -1488,7 +1489,7 @@ export async function planOutboxWorkerRun(
           failedRecords: [],
           transitionResults: [],
           blockedReasons: ["outbox_not_locked"],
-          warnings: ["Requested outboxId is not locked or does not exist."],
+          warnings: ["Requested outboxId is not locked, stale or does not exist."],
           notes: buildNotes(enabled, dryRun, lockOnly, allowRealSend, 0, 0, true, 0, 0),
           mode: "blocked"
         });
@@ -1499,7 +1500,7 @@ export async function planOutboxWorkerRun(
           status: "blocked",
           reason: "outbox_not_locked",
           errorCode: "blocked",
-          errorMessage: "Requested outboxId is not locked or does not exist.",
+          errorMessage: "Requested outboxId is not locked, stale or does not exist.",
           blockedReasons: plan.blocked_reasons,
           warnings: plan.warnings,
           plan,
@@ -1528,8 +1529,20 @@ export async function planOutboxWorkerRun(
 
       lockedRows = [currentRow];
     } else {
-      const lockedSelectionBatch = lockedSelection as Awaited<ReturnType<typeof selectLockedOutboxCandidates>>;
-      lockedRows = lockedSelectionBatch.candidates;
+      const lockedSelectionBatch = lockedSelection as Awaited<ReturnType<typeof selectStaleLockedOutboxCandidates>>;
+      lockedRows = [];
+      for (const candidate of lockedSelectionBatch.candidates) {
+        if (candidate.id === null || candidate.id === undefined) {
+          continue;
+        }
+
+        const lockedSelectionById = await selectOutboxById(candidate.id, lockSeconds);
+        if (!lockedSelectionById.ok || !lockedSelectionById.row || !lockedSelectionById.row.stale_locked || lockedSelectionById.row.status !== "locked") {
+          continue;
+        }
+
+        lockedRows.push(lockedSelectionById.row);
+      }
     }
 
     const lockedCandidates = lockedRows.map((row) => toLockedSendCandidateSummary(row, debug));
@@ -1540,7 +1553,7 @@ export async function planOutboxWorkerRun(
     const transitionResults: BrainOutboxTransitionResult[] = [];
     const warnings: string[] = [];
     if (staleLockedCount > 0) {
-      warnings.push(`${staleLockedCount} locked record(s) are stale_locked; sendLocked will process them manually.`);
+      warnings.push(`${staleLockedCount} locked record(s) are stale_locked and eligible for explicit recovery.`);
     }
 
     for (const row of lockedRows) {
@@ -1757,48 +1770,131 @@ export async function planOutboxWorkerRun(
   }
 
   if (!lockOnly) {
+    const lockResult = await lockOutboxBatch({
+      candidates: plannedSelection.candidates,
+      staleLockedCandidates,
+      debug,
+      lockSeconds
+    });
+
+    const lockedRows: LockedSendRow[] = [];
+    const skippedRecords = [...lockResult.skippedRecords];
+    const transitionResults = [...lockResult.transitionResults];
+    const warnings = buildBlockedReasons(plannedSelection.warning ? [plannedSelection.warning] : undefined, staleSelection.warning ? [staleSelection.warning] : undefined, lockResult.warnings);
+
+    for (const lockedRecord of lockResult.lockedRecords) {
+      if (lockedRecord.id === null || lockedRecord.id === undefined) {
+        skippedRecords.push({
+          id: null,
+          previous_status: "planned",
+          status: "planned",
+          dedupe_key: lockedRecord.dedupe_key,
+          reason: "missing_locked_id",
+          stale_locked: false
+        });
+        warnings.push("Locked row missing id after acquisition.");
+        continue;
+      }
+
+      const lockedSelectionById = await selectOutboxById(lockedRecord.id, lockSeconds);
+      if (!lockedSelectionById.ok || !lockedSelectionById.row) {
+        skippedRecords.push({
+          id: lockedRecord.id,
+          previous_status: "planned",
+          status: "planned",
+          dedupe_key: lockedRecord.dedupe_key,
+          reason: "locked_row_lookup_failed",
+          stale_locked: false
+        });
+        if (lockedSelectionById.ok) {
+          warnings.push("Locked row lookup returned no data.");
+        } else {
+          warnings.push(lockedSelectionById.warning);
+        }
+        continue;
+      }
+
+      if (lockedSelectionById.row.status !== "locked") {
+        skippedRecords.push(buildSkippedLockedSendRecord(lockedSelectionById.row, `status_${lockedSelectionById.row.status}`));
+        warnings.push(`Outbox ${lockedSelectionById.row.id} is not locked.`);
+        continue;
+      }
+
+      lockedRows.push(lockedSelectionById.row);
+    }
+
+    const sentRecords: BrainOutboxWorkerSentRecord[] = [];
+    const failedRecords: BrainOutboxWorkerFailedRecord[] = [];
+    const sendSkippedRecords: BrainOutboxWorkerSkippedRecord[] = [];
+
+    if (staleLockedCandidates.length > 0) {
+      warnings.push(`${staleLockedCandidates.length} locked record(s) are stale_locked; sendLocked remains reserved for explicit recovery.`);
+    }
+
+    for (const row of lockedRows) {
+      const sendResult = await sendLockedOutboxRecord(row, { debug });
+      transitionResults.push(...sendResult.transitions);
+      warnings.push(...sendResult.warnings);
+      if (sendResult.sentRecord) {
+        sentRecords.push(sendResult.sentRecord);
+      }
+      if (sendResult.failedRecord) {
+        failedRecords.push(sendResult.failedRecord);
+      }
+      if (sendResult.skippedRecord) {
+        sendSkippedRecords.push(sendResult.skippedRecord);
+      }
+    }
+
+    const allSkippedRecords = [...skippedRecords, ...sendSkippedRecords];
     const plan = buildWorkerPlan({
       enabled,
       allowRealSend,
-      dryRun,
-      lockOnly,
+      dryRun: false,
+      lockOnly: false,
       debug,
       limit,
       batchSize,
       lockSeconds,
       candidates: plannedSelection.candidates,
-      lockedRecords: [],
-      skippedRecords: staleLockedCandidates.map((candidate) => toSkippedRecord(candidate, "stale_locked", "locked")),
-      transitionResults: [],
-      blockedReasons: ["lock_only_required"],
-      warnings: ["dryRun=false requires lockOnly=true in this milestone."],
-      notes: buildNotes(enabled, dryRun, lockOnly, allowRealSend, plannedSelection.candidates.length, staleLockedCandidates.length),
-      mode: "blocked"
+      lockedRecords: lockResult.lockedRecords,
+      skippedRecords: allSkippedRecords,
+      sentRecords,
+      failedRecords,
+      transitionResults,
+      blockedReasons: failedRecords.length > 0 && sentRecords.length === 0 ? ["meta_send_failed"] : [],
+      warnings: buildBlockedReasons(warnings),
+      notes: buildNotes(enabled, false, false, allowRealSend, plannedSelection.candidates.length, staleLockedCandidates.length, false, sentRecords.length, failedRecords.length),
+      mode: sentRecords.length > 0 && failedRecords.length === 0 ? "planned_send" : failedRecords.length > 0 ? "failed" : "noop"
     });
 
     return buildWorkerResponse({
-      ok: false,
+      ok: failedRecords.length === 0,
       disabled: false,
-      status: "blocked",
-      reason: "lock_only_required",
-      errorCode: "blocked",
-      errorMessage: "lockOnly=true is required when dryRun=false in P1I-005.",
+      status: failedRecords.length > 0 ? "failed" : sentRecords.length > 0 ? "sent" : "noop",
+      reason: failedRecords.length > 0 ? "meta_send_failed" : sentRecords.length > 0 ? "sent" : "noop",
+      errorCode: failedRecords.length > 0 ? "failed" : null,
+      errorMessage: failedRecords.length > 0 ? "One or more planned records failed during Meta send." : null,
       blockedReasons: plan.blocked_reasons,
       warnings: plan.warnings,
       plan,
       enabled,
       allowRealSend,
-      dryRun,
-      lockOnly,
+      dryRun: false,
+      lockOnly: false,
       debug,
       limit,
       batchSize,
       lockSeconds,
-      lockedCount: 0,
-      skippedCount: staleLockedCandidates.length,
+      lockedCount: lockResult.lockedRecords.length,
+      sentCount: sentRecords.length,
+      failedCount: failedRecords.length,
+      skippedCount: allSkippedRecords.length,
       candidates: plannedSelection.candidates,
-      lockedRecords: [],
-      skippedRecords: plan.skippedRecords,
+      lockedRecords: lockResult.lockedRecords,
+      skippedRecords: allSkippedRecords,
+      sentRecords,
+      failedRecords,
       processingMs: Date.now() - startedAt
     });
   }

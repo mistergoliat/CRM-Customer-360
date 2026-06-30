@@ -12,11 +12,13 @@ import { createOutboxPlannedRecord } from "./messaging/outbox";
 import type { BrainExecutionSource, BrainExecuteRequest } from "./messaging/types";
 import { makeBrainRequestId } from "./instructions";
 import type { BrainActionPolicy, BrainNormalizedAction } from "./actions/types";
+import { runCustomerOnboardingLoop } from "./commercial/customer-onboarding";
 import { COMMERCIAL_POLICY_DEFAULT_FLAGS } from "./commercial/policy";
 import { COMMERCIAL_SHADOW_DEFAULT_FEATURE_FLAGS, COMMERCIAL_SHADOW_RUNTIME_TIMEOUT_MS } from "./commercial/shadow";
 import { createCommercialShadowFailedSafe } from "./commercial/shadow/createCommercialShadowFailedSafe";
 import { runCommercialShadowEvaluation } from "./commercial/shadow/runCommercialShadowEvaluation";
 import { evaluateCommercialShadowResult } from "./commercial/evaluation";
+import { createPrestashopProductRepository, createSalesConsultativeOperationsRepository, runSalesConsultativeService } from "./commercial/sales-consultative";
 import { runCommercialOperationalLoop } from "./commercial/operational-loop";
 import { COMMERCIAL_POLICY_VERSION } from "./commercial/policy";
 import type { CommercialShadowFeatureFlags, CommercialShadowInput, CommercialShadowResult } from "./commercial/shadow";
@@ -31,6 +33,7 @@ import type {
   BrainProcessInboundResponse,
   BrainResolvedContext
 } from "./inbound/types";
+import { safeQueryRows } from "@/lib/db";
 
 type BrainProcessInboundCommercialShadowDependencies = {
   commercialShadowHook?: (input: CommercialShadowInput) => Promise<CommercialShadowResult>;
@@ -115,6 +118,243 @@ function mapInboundSourceToExecutionSource(source: BrainNormalizedProcessInbound
   if (source === "hub_preview") return "operator";
   if (source === "manual_test") return "operator";
   return "brain";
+}
+
+function normalizeText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function shouldRunSalesConsultativeFlow(request: BrainNormalizedProcessInboundRequest, contextResponse: BrainContextResolveResponse) {
+  const text = normalizeText(request.messageText);
+  const salesKeywords = [
+    "producto",
+    "catalogo",
+    "catálogo",
+    "precio",
+    "stock",
+    "disponible",
+    "comprar",
+    "cotizar",
+    "cotizacion",
+    "cotización",
+    "recomienda",
+    "recomendacion",
+    "recomendación",
+    "alternativa",
+    "presupuesto",
+    "espacio",
+    "medidas",
+    "dimensiones",
+    "compatibilidad",
+    "envio",
+    "envío",
+    "despacho",
+    "checkout",
+    "pago",
+    "garantia",
+    "garantía",
+    "objecion",
+    "objeción",
+    "comparar",
+    "seguimiento",
+    "urgente",
+    "negocio",
+    "empresa",
+    "gimnasio",
+    "box"
+  ];
+
+  if (salesKeywords.some((keyword) => text.includes(keyword))) return true;
+  if (contextResponse.service_context.primary_service === "sales") return true;
+  return false;
+}
+
+function parseJsonArray(value: unknown) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function parseJsonObject(value: unknown) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function parseNumberOrNull(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function parseIdValue(value: unknown): string | number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) && String(parsed) === trimmed ? parsed : trimmed;
+  }
+  return null;
+}
+
+async function loadConsultativeOpportunity(request: BrainNormalizedProcessInboundRequest, contextResponse: BrainContextResolveResponse) {
+  const waId = request.waId ?? contextResponse.customer_context.wa_id ?? null;
+  const conversationCaseId = request.conversationCaseId ?? contextResponse.case_context.active_case?.conversation_case_id ?? null;
+  const customerMasterId = request.customerRef?.idCustomer ?? contextResponse.customer_context.id_customer ?? null;
+  const leadId = request.customerRef?.idOrder ?? null;
+
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+  if (waId) {
+    queries.push({
+      sql: "SELECT * FROM crm_opportunities WHERE wa_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+      params: [waId]
+    });
+  }
+  if (conversationCaseId) {
+    queries.push({
+      sql: "SELECT * FROM crm_opportunities WHERE conversation_case_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+      params: [conversationCaseId]
+    });
+  }
+  if (customerMasterId) {
+    queries.push({
+      sql: "SELECT * FROM crm_opportunities WHERE customer_master_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+      params: [customerMasterId]
+    });
+  }
+  if (leadId) {
+    queries.push({
+      sql: "SELECT * FROM crm_opportunities WHERE lead_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+      params: [leadId]
+    });
+  }
+
+  for (const query of queries) {
+    const result = await safeQueryRows<Record<string, unknown>>(query.sql, query.params);
+    if (!result.ok || result.rows.length === 0) continue;
+    const row = result.rows[0];
+    return {
+      id: parseIdValue(row.id),
+      opportunityKey: String(row.opportunity_key ?? ""),
+      status: String(row.status ?? "new"),
+      stage: row.stage ? String(row.stage) : null,
+      primaryIntent: String(row.primary_intent ?? "product_recommendation"),
+      currentSummary: row.current_summary ? String(row.current_summary) : null,
+      nextActionType: row.next_action_type ? String(row.next_action_type) : null,
+      nextActionDueAt: row.next_action_due_at ? String(row.next_action_due_at) : null,
+      waitingFor: row.waiting_for ? String(row.waiting_for) : null,
+      humanOwnerActive: Boolean(row.human_owner_active),
+      aiBlocked: Boolean(row.ai_blocked),
+      customerCandidateId: parseIdValue(row.customer_candidate_id),
+      customerMasterId: parseIdValue(row.customer_master_id),
+      leadId: parseIdValue(row.lead_id),
+      conversationCaseId: parseIdValue(row.conversation_case_id),
+      waId: row.wa_id ? String(row.wa_id) : null,
+      requirements: parseJsonArray(row.requirements_json),
+      missingRequirements: parseJsonArray(row.missing_requirements_json),
+      productInterests: parseJsonArray(row.product_interests_json),
+      objections: parseJsonArray(row.objections_json) as never[],
+      signals: parseJsonArray(row.signals_json)
+        .map((item) => (typeof item === "string" ? item : null))
+        .filter((item): item is string => Boolean(item)),
+      version: Number(row.version ?? 1),
+      lastActivityAt: String(row.last_activity_at ?? row.updated_at ?? new Date().toISOString()),
+      closedAt: row.closed_at ? String(row.closed_at) : null
+    };
+  }
+
+  return null;
+}
+
+async function loadExistingSalesNeedProfile(request: BrainNormalizedProcessInboundRequest, contextResponse: BrainContextResolveResponse, opportunityKey: string | null) {
+  const waId = request.waId ?? contextResponse.customer_context.wa_id ?? null;
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+  if (opportunityKey) {
+    queries.push({
+      sql: "SELECT * FROM crm_sales_need_profiles WHERE opportunity_key = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+      params: [opportunityKey]
+    });
+  }
+  if (waId) {
+    queries.push({
+      sql: "SELECT * FROM crm_sales_need_profiles WHERE wa_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+      params: [waId]
+    });
+  }
+
+  for (const query of queries) {
+    const result = await safeQueryRows<Record<string, unknown>>(query.sql, query.params);
+    if (!result.ok || result.rows.length === 0) continue;
+    const row = result.rows[0];
+    return {
+      useCase: row.use_case ? String(row.use_case) : null,
+      customerType: row.customer_type ? String(row.customer_type) : null,
+      goals: parseJsonArray(row.goals_json)
+        .map((item) => (typeof item === "string" ? item : null))
+        .filter((item): item is string => Boolean(item)),
+      requiredFeatures: parseJsonArray(row.required_features_json)
+        .map((item) => (typeof item === "string" ? item : null))
+        .filter((item): item is string => Boolean(item)),
+      preferredFeatures: parseJsonArray(row.preferred_features_json)
+        .map((item) => (typeof item === "string" ? item : null))
+        .filter((item): item is string => Boolean(item)),
+      budgetMin: parseNumberOrNull(row.budget_min),
+      budgetMax: parseNumberOrNull(row.budget_max),
+      availableSpace: (() => {
+        const value = parseJsonObject(row.available_space_json);
+        if (!value) return null;
+        return {
+          width: parseNumberOrNull(value.width),
+          height: parseNumberOrNull(value.height),
+          length: parseNumberOrNull(value.length),
+          unit: typeof value.unit === "string" ? value.unit : null
+        };
+      })(),
+      location: (() => {
+        const value = parseJsonObject(row.location_json);
+        if (!value) return null;
+        return {
+          country: typeof value.country === "string" ? value.country : null,
+          region: typeof value.region === "string" ? value.region : null,
+          city: typeof value.city === "string" ? value.city : null,
+          address: typeof value.address === "string" ? value.address : null
+        };
+      })(),
+      deliveryDeadline: row.delivery_deadline ? String(row.delivery_deadline) : null,
+      experienceLevel: row.experience_level ? String(row.experience_level) : null,
+      purchaseUrgency: row.purchase_urgency ? String(row.purchase_urgency) : null,
+      decisionReadiness: row.decision_readiness ? String(row.decision_readiness) : null,
+      missingInformation: parseJsonArray(row.missing_information_json)
+        .map((item) => (typeof item === "string" ? item : null))
+        .filter((item): item is string => Boolean(item)),
+      lastUpdatedAt: String(row.updated_at ?? row.created_at ?? new Date().toISOString())
+    };
+  }
+
+  return null;
 }
 
 function buildSkippedOutboxPlanResult(status: "skipped_by_flag" | "skipped_by_policy", reason: string): BrainInboundOutboxPlanResult {
@@ -654,7 +894,9 @@ function buildValidResponse(
   outboxPlanResult: BrainInboundOutboxPlanResult | null,
   outboxPlanWarnings: string[] = [],
   commercialShadowResult: CommercialShadowResult | null = null,
-  commercialOperationalLoopResult: CommercialOperationalLoopResult | null = null
+  commercialOperationalLoopResult: CommercialOperationalLoopResult | null = null,
+  customerOnboardingResult: Awaited<ReturnType<typeof runCustomerOnboardingLoop>> | null = null,
+  salesConsultativeResult: Awaited<ReturnType<typeof runSalesConsultativeService>>["result"] | null = null
 ): BrainProcessInboundResponse {
   const requestId = makeBrainRequestId(request);
   const context = resolveBrainContext(request);
@@ -712,7 +954,9 @@ function buildValidResponse(
         reason: "AI orchestrator remains deferred while the backend response policy and action router stay read-only."
       },
       commercialShadow: commercialShadowResult,
-      commercialOperationalLoop: commercialOperationalLoopResult
+      commercialOperationalLoop: commercialOperationalLoopResult,
+      customerOnboarding: customerOnboardingResult,
+      salesConsultative: salesConsultativeResult
     },
     metadata: {
       version: "brain.process-inbound.v2",
@@ -787,6 +1031,22 @@ function buildCommercialOperationalLoopInput(
       correlationId,
       shadowStatus: commercialShadowResult.status
     }
+  };
+}
+
+function buildCustomerOnboardingDraft(responseText: string, customerOnboardingResult: Awaited<ReturnType<typeof runCustomerOnboardingLoop>>) {
+  return {
+    outputSchema: "brain.agent.knowledge.output.v1",
+    agentName: "knowledge",
+    agentVersion: "brain.agent.customer-onboarding.v1",
+    decision: "answer" as const,
+    answer_type: "generic" as const,
+    message: responseText,
+    confidence: customerOnboardingResult.decision.confidence,
+    sources_used: ["customer_onboarding"],
+    safety_flags: ["customer_onboarding", ...(customerOnboardingResult.warnings.length > 0 ? ["warnings_present"] : [])],
+    tool_requests: [],
+    warnings: customerOnboardingResult.warnings
   };
 }
 
@@ -895,6 +1155,7 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
   const contextSummary = buildContextSummary(requestId, request, contextResponse);
   let commercialShadowResult: CommercialShadowResult | null = null;
   let commercialOperationalLoopResult: CommercialOperationalLoopResult | null = null;
+  let customerOnboardingResult: Awaited<ReturnType<typeof runCustomerOnboardingLoop>> | null = null;
   if (commercialShadowFlags.commercialShadowEnabled) {
     try {
       commercialShadowResult = await commercialShadowHook(buildCommercialShadowInput(request, contextResponse, startedAt, commercialShadowFlags));
@@ -924,6 +1185,7 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
   let outboxPlanResult: BrainInboundOutboxPlanResult | null = null;
   let outboxPlanWarnings: string[] = [];
   const persistOutboxPlanRequested = getProcessInboundPersistOutboxPlanRequested(input);
+  let salesConsultativeResult: Awaited<ReturnType<typeof runSalesConsultativeService>>["result"] | null = null;
 
   if (shouldRunKnowledgeAgent(request, actionResponse, contextResponse)) {
     try {
@@ -936,6 +1198,78 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
     } catch (error) {
       const message = error instanceof Error ? error.message : "Knowledge Agent dry-run failed.";
       actionResponse.warnings.push(message);
+    }
+  }
+
+  try {
+    customerOnboardingResult = await runCustomerOnboardingLoop({
+      conversationCaseId: request.conversationCaseId ?? contextResponse.case_context?.active_case?.conversation_case_id ?? null,
+      waId: request.waId ?? contextResponse.customer_context?.wa_id ?? null,
+      messageId: request.messageId ?? null,
+      messageText: request.messageText,
+      currentTime: new Date(startedAt).toISOString(),
+      correlationId: request.messageId,
+      brainContext: contextResponse as unknown as Record<string, unknown>,
+      writeEnabled: process.env.DB_WRITE_ENABLED === "true",
+      source: request.source
+    });
+
+    if (customerOnboardingResult.responseText) {
+      const onboardingDraft = buildCustomerOnboardingDraft(customerOnboardingResult.responseText, customerOnboardingResult);
+      agentDraft = onboardingDraft as unknown as BrainAgentRunResponse["draft"];
+      if (customerOnboardingResult.decision.requiresHumanApproval) {
+        actionResponse.warnings.push("customer_onboarding_handoff_required");
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Customer onboarding loop failed.";
+    actionResponse.warnings.push(message);
+  }
+
+  if (shouldRunSalesConsultativeFlow(request, contextResponse)) {
+    try {
+      const consultativeOpportunity = await loadConsultativeOpportunity(request, contextResponse);
+      const existingProfile = await loadExistingSalesNeedProfile(request, contextResponse, consultativeOpportunity?.opportunityKey ?? null);
+      const consultativeRun = await runSalesConsultativeService(
+        {
+        currentTime: new Date(startedAt).toISOString(),
+        messageText: request.messageText,
+        customerContext: {
+          waId: request.waId ?? contextResponse.customer_context.wa_id ?? null,
+          phoneNumberId: request.phoneNumberId ?? contextResponse.input_event.phone_number_id ?? null,
+          email: request.customerRef?.email ?? contextResponse.customer_context.email ?? null,
+          phone: request.customerRef?.phone ?? null,
+          idCustomer: request.customerRef?.idCustomer ?? contextResponse.customer_context.id_customer ?? null,
+          idOrder: request.customerRef?.idOrder ?? contextResponse.customer_context.id_order ?? null,
+          invoiceNumber: request.customerRef?.invoiceNumber ?? contextResponse.customer_context.invoice_number ?? null,
+          contactId: request.customerRef?.contactId ?? contextResponse.customer_context.contact_id ?? null
+        },
+        opportunity: consultativeOpportunity,
+        existingProfile,
+        recentInteractions: contextResponse.conversation_context.recent_messages.map((message) => ({
+          id: message.message_id ?? null,
+          direction: message.direction ?? "unknown",
+          text: message.message_text ?? null,
+          occurredAt: message.occurred_at ?? message.created_at ?? null,
+          source: message.source_table ?? null
+        })),
+        productRepository: createPrestashopProductRepository(),
+        operationsRepository: createSalesConsultativeOperationsRepository(),
+        currentStageHint: null,
+        metadata: request.metadata ?? null
+        },
+        {
+          requestId
+        }
+      );
+      salesConsultativeResult = consultativeRun.result;
+      if (consultativeRun.dispatchWarnings.length > 0) {
+        actionResponse.warnings.push(...consultativeRun.dispatchWarnings);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Sales consultative flow failed.";
+      actionResponse.warnings.push(message);
+      salesConsultativeResult = null;
     }
   }
 
@@ -957,7 +1291,7 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
   outboxPlanResult = outboxPlanAttempt.result;
   outboxPlanWarnings = outboxPlanAttempt.warnings;
 
-  if (commercialOperationalLoopFlags.commercialOperationalLoopEnabled) {
+  if (commercialOperationalLoopFlags.commercialOperationalLoopEnabled && !salesConsultativeResult) {
     const commercialOperationalLoopInput = buildCommercialOperationalLoopInput(
       request,
       contextResponse,
@@ -987,6 +1321,8 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
     outboxPlanResult,
     outboxPlanWarnings,
     commercialShadowResult,
-    commercialOperationalLoopResult
+    commercialOperationalLoopResult,
+    customerOnboardingResult,
+    salesConsultativeResult
   );
 }

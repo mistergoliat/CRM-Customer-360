@@ -1,4 +1,5 @@
 export const CUSTOMER_IDENTITY_TYPES = [
+  "customer_master_id",
   "email",
   "wa_id",
   "phone",
@@ -119,6 +120,7 @@ export type CustomerSourceMatch = {
   identityValue: string | null;
   customerKey: string | null;
   notes: string[];
+  sourceMetadata?: Record<string, unknown>;
 };
 
 export type CustomerWritePolicy = {
@@ -127,6 +129,27 @@ export type CustomerWritePolicy = {
   canAppendTimelineEvent: boolean;
   canMerge: boolean;
   reason: string;
+};
+
+export type CustomerSourceObservation = {
+  source: CustomerIdentitySource;
+  table: string;
+  sourceRecordId: string | number | null;
+  matchedBy: string;
+  identityType: CustomerIdentityType | null;
+  identityValue: string | null;
+  confidence: CustomerIdentityConfidence;
+  customerKey: string | null;
+  notes: string[];
+  timelineSeed: CustomerTimelineSeed | null;
+  sourceMetadata?: Record<string, unknown>;
+};
+
+export type CustomerSourceReaderResult = {
+  source: CustomerIdentitySource;
+  table: string;
+  observations: CustomerSourceObservation[];
+  warnings: string[];
 };
 
 export type CustomerResolutionMetadata = {

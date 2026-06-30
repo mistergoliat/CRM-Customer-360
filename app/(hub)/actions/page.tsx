@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatCard } from "@/components/ui/StatCard";
-import { DataTable } from "@/components/ui/DataTable";
 import { StatusChip } from "@/components/ui/StatusChip";
 import { SurfaceBadge } from "@/components/p1m/SurfaceBadge";
 import { SectionCard } from "@/components/p1m/SectionCard";
@@ -19,7 +18,7 @@ export default function ActionsPage() {
       <PageHeader
         eyebrow="CRM"
         title="Acciones"
-        description="Cola global de acciones gubernadas. Todo queda en modo preview mientras no exista backend de ejecución."
+        description="Cola global de acciones gobernadas. Todo queda en modo preview mientras no exista backend de ejecución."
         status="Preview"
         actions={<SurfaceBadge kind="fixture" />}
       />
@@ -30,26 +29,47 @@ export default function ActionsPage() {
         ))}
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_360px]">
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_360px]">
         <SectionCard title="Action queue" eyebrow="Global queue" description="Acciones visuales y gobernadas. No hay side effects reales." actions={<StatusChip label="Preview only" tone="amber" />}>
-          <DataTable headers={["Cliente", "Entidad", "Estado", "Riesgo", "Aprobación", "Origen", "Programación", "Responsable"]}>
-            {data.rows.map((row) => (
-              <tr key={row.id} className={row.id === selected?.id ? "bg-primary-fixed/30" : undefined}>
-                <td>
-                  <Link href={row.href ?? "#"} className="font-semibold text-primary hover:underline">
-                    {row.client}
-                  </Link>
-                </td>
-                <td>{row.related_entity}</td>
-                <td><StatusChip label={row.status} tone={row.status === "Blocked" ? "red" : row.status.includes("Revisión") ? "amber" : "blue"} /></td>
-                <td><StatusChip label={row.risk} tone={row.risk === "Medio" ? "amber" : "green"} /></td>
-                <td><StatusChip label={row.approval} tone={row.approval === "Requerida" ? "red" : "green"} /></td>
-                <td>{row.origin}</td>
-                <td>{row.schedule}</td>
-                <td>{row.owner}</td>
-              </tr>
+          <div className="mb-4 flex flex-wrap gap-2">
+            {["Buscar", "Estado", "Tipo", "Riesgo", "Aprobación", "Origen", "Responsable", "Más filtros"].map((filter, index) => (
+              <StatusChip key={filter} label={filter} tone={index === 0 ? "blue" : "gray"} />
             ))}
-          </DataTable>
+          </div>
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <table className="hub-table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Entidad</th>
+                  <th>Estado</th>
+                  <th>Riesgo</th>
+                  <th>Aprobación</th>
+                  <th>Origen</th>
+                  <th>Programación</th>
+                  <th>Responsable</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.rows.map((row) => (
+                  <tr key={row.id} className={row.id === selected?.id ? "bg-primary-fixed/30" : undefined}>
+                    <td>
+                      <Link href={row.href ?? "#"} className="font-semibold text-primary hover:underline">
+                        {row.client}
+                      </Link>
+                    </td>
+                    <td>{row.related_entity}</td>
+                    <td><StatusChip label={row.status} tone={row.status === "Blocked" ? "red" : row.status.includes("Revisión") ? "amber" : "blue"} /></td>
+                    <td><StatusChip label={row.risk} tone={row.risk === "Alto" ? "red" : row.risk === "Medio" ? "amber" : "green"} /></td>
+                    <td><StatusChip label={row.approval} tone={row.approval === "Requerida" ? "red" : "green"} /></td>
+                    <td>{row.origin}</td>
+                    <td>{row.schedule}</td>
+                    <td>{row.owner}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </SectionCard>
 
         <SectionCard title="Detalle lateral" eyebrow="Preview" description={selected?.client ?? "Sin selección"}>
@@ -59,9 +79,10 @@ export default function ActionsPage() {
                 items={[
                   { label: "Cliente", value: detail.client },
                   { label: "Entidad", value: detail.related_entity },
-                  { label: "Rationale", value: detail.rationale },
-                  { label: "Preview", value: detail.preview }
+                  { label: "Preview", value: detail.preview },
+                  { label: "Rationale", value: detail.rationale }
                 ]}
+                columns={2}
               />
               <div>
                 <p className="text-label-bold uppercase text-slate-500">Lifecycle</p>
@@ -93,6 +114,9 @@ export default function ActionsPage() {
                 <button className="hub-button-secondary" type="button" disabled>
                   Programar
                 </button>
+                <Link href={`/actions/${selected.id}`} className="hub-button-ghost">
+                  Abrir detalle
+                </Link>
               </div>
             </div>
           ) : null}

@@ -1,7 +1,5 @@
 import Link from "next/link";
-import { getCaseFilterOptions, listCases } from "@/lib/cases";
-import { asText, formatDateTime, truncate } from "@/lib/format";
-import { isDbWriteEnabled } from "@/lib/write-access";
+import { listCases } from "@/lib/domains/cases";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable } from "@/components/ui/DataTable";
 import { StatusChip } from "@/components/ui/StatusChip";
@@ -36,60 +34,54 @@ export default async function CasesPage({ searchParams }: CasesPageProps) {
     requires_human: param(sp, "requires_human") || "",
     page: String(param(sp, "page") || 1)
   };
-  const filters = {
+
+  const data = await listCases({
     q: rawFilters.q,
     status: rawFilters.status,
     department: rawFilters.department,
     priority: rawFilters.priority,
     requiresHuman: rawFilters.requires_human,
     page: Number(rawFilters.page)
-  };
-  const [cases, statuses, departments, priorities] = await Promise.all([
-    listCases(filters),
-    getCaseFilterOptions("status"),
-    getCaseFilterOptions("department"),
-    getCaseFilterOptions("priority")
-  ]);
-  const totalPages = Math.max(1, Math.ceil(cases.total / cases.pageSize));
-  const writeEnabled = isDbWriteEnabled();
+  });
+  const totalPages = Math.max(1, Math.ceil(data.pagination.total / data.pagination.pageSize));
 
   return (
     <>
       <PageHeader
         eyebrow="Casos"
         title="Bandeja operacional"
-        description="Casos reales desde n8n_vw_hub_cases con filtros de operacion humana, prioridad, departamento y ventana WhatsApp."
-        status="Activo"
-        actions={<StatusChip label={writeEnabled ? "writer enabled" : "writer disabled"} tone={writeEnabled ? "green" : "amber"} />}
+        description="Casos reales encapsulados por el dominio nuevo sobre el legado n8n."
+        status={data.meta.mode}
+        actions={<StatusChip label={data.meta.source} tone="green" />}
       />
 
       <form className="hub-card mb-5 grid gap-3 p-4 md:grid-cols-6" action="/cases">
-        <input className="hub-input md:col-span-2" name="q" defaultValue={filters.q} placeholder="wa_id, cliente, orden, factura" />
-        <select className="hub-input" name="status" defaultValue={filters.status}>
+        <input className="hub-input md:col-span-2" name="q" defaultValue={rawFilters.q} placeholder="wa_id, cliente, orden, factura" />
+        <select className="hub-input" name="status" defaultValue={rawFilters.status}>
           <option value="">Estado</option>
-          {statuses.map((option) => (
+          {["open", "pending", "human_required", "closed", "resolved"].map((option) => (
             <option key={option} value={option}>
               {option}
             </option>
           ))}
         </select>
-        <select className="hub-input" name="department" defaultValue={filters.department}>
+        <select className="hub-input" name="department" defaultValue={rawFilters.department}>
           <option value="">Departamento</option>
-          {departments.map((option) => (
+          {["ventas", "sac", "postventa", "operaciones"].map((option) => (
             <option key={option} value={option}>
               {option}
             </option>
           ))}
         </select>
-        <select className="hub-input" name="priority" defaultValue={filters.priority}>
+        <select className="hub-input" name="priority" defaultValue={rawFilters.priority}>
           <option value="">Prioridad</option>
-          {priorities.map((option) => (
+          {["urgent", "high", "normal", "low"].map((option) => (
             <option key={option} value={option}>
               {option}
             </option>
           ))}
         </select>
-        <select className="hub-input" name="requires_human" defaultValue={filters.requiresHuman}>
+        <select className="hub-input" name="requires_human" defaultValue={rawFilters.requires_human}>
           <option value="">Humano</option>
           <option value="1">Requiere humano</option>
           <option value="0">No requiere</option>
@@ -97,43 +89,42 @@ export default async function CasesPage({ searchParams }: CasesPageProps) {
         <button className="hub-button-primary md:col-start-6">Filtrar</button>
       </form>
 
-      {cases.error ? (
-        <ErrorState title="Consulta de casos fallo" message={cases.error} />
-      ) : cases.rows.length === 0 ? (
-        <EmptyState title="Sin casos para estos filtros" description="La vista existe pero no devolvio registros." icon="assignment" />
+      {data.meta.warnings.length > 0 ? <ErrorState title="Warnings de casos" message={data.meta.warnings.join(", ")} /> : null}
+
+      {data.items.length === 0 ? (
+        <EmptyState title="Sin casos para estos filtros" description="La vista existe pero no devolvió registros." icon="assignment" />
       ) : (
-        <DataTable headers={["Caso", "Cliente", "Estado", "Prioridad", "Ventana", "Ultimo mensaje", "Accion"]}>
-          {cases.rows.map((row) => (
-            <tr key={String(row.conversation_case_id)}>
+        <DataTable headers={["Caso", "Cliente", "Estado", "Prioridad", "Ventana", "Último mensaje", "Acción"]}>
+          {data.items.map((row) => (
+            <tr key={row.id}>
               <td>
-                <Link href={`/cases/${row.conversation_case_id}`} className="font-bold text-primary hover:underline">
-                  #{String(row.conversation_case_id)}
+                <Link href={`/cases/${row.id}`} className="font-bold text-primary hover:underline">
+                  #{row.id}
                 </Link>
-                <p className="text-label-sm text-slate-500">{asText(row.active_case_key)}</p>
               </td>
               <td>
-                <p className="font-semibold text-on-surface">{asText(row.contact_name)}</p>
-                <p className="text-label-sm text-slate-500">{asText(row.wa_id)}</p>
+                <p className="font-semibold text-on-surface">{row.contactName ?? "—"}</p>
+                <p className="text-label-sm text-slate-500">{row.waId ?? "—"}</p>
               </td>
               <td>
                 <div className="flex flex-wrap gap-1">
-                  <StatusChip label={asText(row.status)} />
-                  {row.requires_human ? <StatusChip label="humano" tone="red" /> : null}
+                  <StatusChip label={row.status ?? "unknown"} />
+                  {row.requiresHuman ? <StatusChip label="humano" tone="red" /> : null}
                 </div>
               </td>
               <td>
-                <StatusChip label={asText(row.priority, "normal")} />
+                <StatusChip label={row.priority ?? "normal"} />
               </td>
               <td>
-                <StatusChip label={row.whatsapp_window_open ? "abierta" : "cerrada"} tone={row.whatsapp_window_open ? "green" : "amber"} />
+                <StatusChip label={row.whatsappWindowOpen ? "abierta" : "cerrada"} tone={row.whatsappWindowOpen ? "green" : "amber"} />
               </td>
               <td className="max-w-md">
-                <p>{truncate(row.last_message, 110)}</p>
-                <p className="text-label-sm text-slate-500">{formatDateTime(row.last_message_at || row.updated_at)}</p>
+                <p>{row.lastMessage ?? "Sin mensaje"}</p>
+                <p className="text-label-sm text-slate-500">{row.lastMessageAt ?? row.updatedAt ?? "—"}</p>
               </td>
               <td>
                 <div className="flex justify-center">
-                  <Link className="hub-button-primary min-w-[108px]" href={`/cases/${row.conversation_case_id}`}>
+                  <Link className="hub-button-primary min-w-[108px]" href={`/cases/${row.id}`}>
                     Ver caso
                   </Link>
                 </div>
@@ -145,13 +136,13 @@ export default async function CasesPage({ searchParams }: CasesPageProps) {
 
       <div className="mt-4 flex items-center justify-between">
         <p className="text-body-md text-slate-500">
-          Pagina {cases.page} de {totalPages}. Total: {cases.total}
+          Página {data.pagination.page} de {totalPages}. Total: {data.pagination.total}
         </p>
         <div className="flex gap-2">
-          <Link className="hub-button-secondary" href={withPage(rawFilters, Math.max(1, cases.page - 1))}>
+          <Link className="hub-button-secondary" href={withPage(rawFilters, Math.max(1, data.pagination.page - 1))}>
             Anterior
           </Link>
-          <Link className="hub-button-secondary" href={withPage(rawFilters, Math.min(totalPages, cases.page + 1))}>
+          <Link className="hub-button-secondary" href={withPage(rawFilters, Math.min(totalPages, data.pagination.page + 1))}>
             Siguiente
           </Link>
         </div>

@@ -1,4 +1,5 @@
 import mysql, { type Pool, type PoolConnection, type RowDataPacket } from "mysql2/promise";
+import { resolveNamedDatabaseConnection } from "./database-config";
 
 type QueryResult<T> =
   | { ok: true; rows: T[]; warning?: string }
@@ -10,12 +11,13 @@ const columnCache = new Map<string, string[]>();
 export type DbRow = Record<string, unknown>;
 
 export function getPool() {
-  if (!process.env.DATABASE_URL) {
-    throw new Error("DATABASE_URL no configurado");
-  }
-
   if (!pool) {
-    pool = mysql.createPool(process.env.DATABASE_URL);
+    const connection = resolveNamedDatabaseConnection("app");
+    if (connection.url) {
+      pool = mysql.createPool(connection.url);
+    } else {
+      throw new Error("DATABASE_URL o variables DATABASE_* no configuradas");
+    }
   }
 
   return pool;
@@ -28,6 +30,24 @@ export async function withConnection<T>(fn: (connection: PoolConnection) => Prom
   } finally {
     connection.release();
   }
+}
+
+export async function withTransaction<T>(fn: (connection: PoolConnection) => Promise<T>) {
+  return withConnection(async (connection) => {
+    await connection.beginTransaction();
+    try {
+      const result = await fn(connection);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch {
+        // ignore rollback failures so the original error survives
+      }
+      throw error;
+    }
+  });
 }
 
 export async function queryRows<T = DbRow>(sql: string, params: unknown[] = []): Promise<T[]> {

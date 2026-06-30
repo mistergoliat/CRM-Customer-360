@@ -8,19 +8,22 @@ const items = [
   { label: "Resumen", href: "/marketing" },
   { label: "Copilot", href: "/marketing/copilot" },
   { label: "Segmentos", href: "/marketing/segments" },
-  { label: "Campañas", href: "/marketing/campaigns/new" },
-  { label: "Automatizaciones", href: "/marketing/automations/demo-automation-1" },
-  { label: "Plantillas", href: "/marketing#templates" },
-  { label: "Rendimiento", href: "/marketing#performance" }
+  { label: "Campañas", href: "/marketing/campaigns" },
+  { label: "Automatizaciones", href: "/marketing/automations" },
+  { label: "Plantillas", href: "/marketing/templates" },
+  { label: "Rendimiento", href: "/marketing/performance" }
 ];
 
 export function MarketingNav() {
   const pathname = usePathname();
+  const activeHref = items
+    .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 
   return (
     <div className="mb-5 flex flex-wrap gap-2">
       {items.map((item) => {
-        const active = pathname === item.href || pathname.startsWith(`${item.href.split("#")[0]}/`);
+        const active = activeHref === item.href;
         return (
           <Link
             key={item.label}

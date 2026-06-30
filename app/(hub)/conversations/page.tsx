@@ -1,91 +1,114 @@
 import Link from "next/link";
+import { listConversations, getConversationById } from "@/lib/domains/conversations";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatCard } from "@/components/ui/StatCard";
 import { DataTable } from "@/components/ui/DataTable";
 import { StatusChip } from "@/components/ui/StatusChip";
 import { SurfaceBadge } from "@/components/p1m/SurfaceBadge";
 import { SectionCard } from "@/components/p1m/SectionCard";
-import { getConversationInboxViewModel } from "@/lib/p1m/read-models";
-import { stateForTone } from "@/lib/status";
+import { InfoGrid } from "@/components/p1m/InfoGrid";
+import { formatDateTime } from "@/lib/format";
 
-export default function ConversationsPage() {
-  const data = getConversationInboxViewModel();
-  const selected = data.rows.find((row) => row.id === data.selectedId) ?? data.rows[0];
+type ConversationsPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+function param(searchParams: Record<string, string | string[] | undefined>, key: string) {
+  const value = searchParams[key];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export default async function ConversationsPage({ searchParams }: ConversationsPageProps) {
+  const sp = await searchParams;
+  const q = param(sp, "q") || "";
+  const page = Number(param(sp, "page") || 1);
+  const data = await listConversations({ q, page });
+  const selected = data.items[0] ? await getConversationById(data.items[0].id) : null;
+  const selectedConversation = selected?.conversation ?? data.items[0] ?? null;
 
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Operación"
         title="Conversaciones"
-        description="Entrada del módulo Conversaciones. El chat completo se abre en la vista de workspace."
-        status="Preview"
-        actions={<SurfaceBadge kind="fixture" />}
+        description="Inbox real sobre conversaciones nativas en MariaDB."
+        status="Real"
+        actions={<SurfaceBadge kind="real" />}
       />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {data.metrics.map((metric) => (
-          <StatCard key={metric.key} title={metric.title} value={metric.value} description={metric.description} icon={metric.icon} state={stateForTone(metric.tone)} />
-        ))}
+        <StatCard title="Conversaciones" value={data.pagination.total} description="Total en la consulta actual" icon="forum" state="ok" />
+        <StatCard title="Pagina" value={data.pagination.page} description={`Page size ${data.pagination.pageSize}`} icon="table_view" state="muted" />
+        <StatCard title="Fuente" value={data.meta.source} description={data.meta.warnings.length > 0 ? data.meta.warnings.join(", ") : "Sin warnings"} icon="dataset" state={data.meta.warnings.length > 0 ? "warning" : "ok"} />
+        <StatCard title="Modo" value={data.meta.mode} description="Estado de datos del módulo" icon="hub" state={data.meta.mode === "real" ? "ok" : "warning"} />
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_360px]">
-        <SectionCard title="Inbox de conversaciones" eyebrow="Listado" description="Selecciona una fila para navegar al workspace." actions={<StatusChip label="Preview only" tone="amber" />}>
-          <div className="mb-4 flex flex-wrap gap-2">
-            {data.filters.map((filter, index) => (
-              <StatusChip key={filter} label={filter} tone={index === 0 ? "blue" : "gray"} />
-            ))}
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_360px]">
+        <SectionCard title="Inbox" eyebrow="Listado" description="Búsqueda operativa, prioridad y ventana WhatsApp." actions={<StatusChip label="real" tone="green" />}>
+          <form className="mb-4 flex flex-wrap gap-2" action="/conversations">
+            <input className="hub-input min-w-[260px] flex-1" name="q" defaultValue={q} placeholder="Buscar por cliente, wa_id o caso" />
+            <button className="hub-button-primary" type="submit">
+              Buscar
+            </button>
+          </form>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <DataTable headers={["Cliente", "Estado", "Prioridad", "Ventana", "Último mensaje", "Fuente"]}>
+              {data.items.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <Link href={`/conversations/${row.id}`} className="font-semibold text-primary hover:underline">
+                      {row.contactName ?? row.waId ?? row.id}
+                    </Link>
+                    <p className="text-label-sm text-slate-500">{row.waId}</p>
+                  </td>
+                  <td>
+                    <StatusChip label={row.status ?? "unknown"} tone={row.status === "open" || row.status === "active" ? "green" : row.status === "pending" ? "amber" : "gray"} />
+                  </td>
+                  <td>
+                    <StatusChip label={row.priority ?? "normal"} tone={row.priority === "urgent" ? "red" : row.priority === "high" ? "amber" : "blue"} />
+                  </td>
+                  <td>
+                    <StatusChip label={row.whatsappWindowOpen ? "abierta" : "cerrada"} tone={row.whatsappWindowOpen ? "green" : "amber"} />
+                  </td>
+                  <td className="max-w-md">
+                    <p>{row.lastMessage ?? "Sin mensaje"}</p>
+                    <p className="text-label-sm text-slate-500">{formatDateTime(row.lastMessageAt)}</p>
+                  </td>
+                  <td>{row.source}</td>
+                </tr>
+              ))}
+            </DataTable>
           </div>
-          <DataTable headers={["Cliente", "Canal", "Estado", "Responsable", "Esperando", "Relacionado", "Último mensaje"]}>
-            {data.rows.map((row) => (
-              <tr key={row.id} className={row.id === selected?.id ? "bg-primary-fixed/30" : undefined}>
-                <td>
-                  <Link href={row.href ?? "#"} className="font-semibold text-primary hover:underline">
-                    {row.client}
-                  </Link>
-                  <p className="text-label-sm text-slate-500">{row.wa_id}</p>
-                </td>
-                <td><StatusChip label={row.channel} tone="blue" /></td>
-                <td><StatusChip label={row.status} tone={row.tone} /></td>
-                <td>{row.owner}</td>
-                <td>{row.waiting}</td>
-                <td className="max-w-[240px]">{row.related}</td>
-                <td className="max-w-[320px]">
-                  <p>{row.last_message}</p>
-                  <p className="mt-1 text-label-sm text-slate-500">{row.summary}</p>
-                </td>
-              </tr>
-            ))}
-          </DataTable>
         </SectionCard>
 
-        <SectionCard title="Panel lateral" eyebrow="Conversation preview" description={selected?.client ?? "Sin selección"}>
-          {selected ? (
+        <SectionCard title="Detalle" eyebrow="Workspace preview" description={selectedConversation ? selectedConversation.contactName ?? selectedConversation.waId ?? selectedConversation.id : "Sin selección"}>
+          {selectedConversation ? (
             <div className="space-y-4">
+              <InfoGrid
+                items={[
+                  { label: "Cliente", value: selectedConversation.contactName ?? "Sin nombre" },
+                  { label: "wa_id", value: selectedConversation.waId ?? "—" },
+                  { label: "Estado", value: selectedConversation.status ?? "—" },
+                  { label: "Prioridad", value: selectedConversation.priority ?? "—" },
+                  { label: "Departamento", value: selectedConversation.department ?? "—" },
+                  { label: "Ventana", value: selectedConversation.whatsappWindowOpen ? "Abierta" : "Cerrada" }
+                ]}
+                columns={3}
+              />
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-label-bold uppercase text-slate-500">Cliente</p>
-                <p className="mt-1 text-headline-md text-on-surface">{selected.client}</p>
-                <p className="text-body-md text-slate-500">{selected.wa_id}</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <StatusChip label={selected.channel} tone="blue" />
-                  <StatusChip label={selected.status} tone={selected.tone} />
-                  <StatusChip label={selected.priority} tone={selected.priority === "P0" ? "red" : selected.priority === "P1" ? "amber" : "blue"} />
-                </div>
+                <p className="text-label-bold uppercase text-slate-500">Último mensaje</p>
+                <p className="mt-2 text-body-md text-slate-700">{selectedConversation.lastMessage ?? "Sin datos"}</p>
               </div>
-              <div>
-                <p className="text-label-bold uppercase text-slate-500">Resumen AI SDR</p>
-                <p className="mt-2 text-body-md text-slate-700">{selected.summary}</p>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-label-bold uppercase text-slate-500">Data quality</p>
+                <p className="mt-2 text-body-md text-slate-700">{selected?.dataQuality.status}</p>
+                <p className="mt-1 text-label-sm text-slate-500">{selected?.dataQuality.warnings.join(", ") || "Sin warnings"}</p>
               </div>
-              <div>
-                <p className="text-label-bold uppercase text-slate-500">Vinculado</p>
-                <p className="mt-2 text-body-md text-slate-700">{selected.related}</p>
-              </div>
-              <div className="grid gap-2">
-                <Link href={selected.href ?? "#"} className="hub-button-primary">
+              <div className="flex gap-2">
+                <Link href={`/conversations/${selectedConversation.id}`} className="hub-button-primary">
                   Abrir workspace
                 </Link>
-                <button className="hub-button-secondary" type="button" disabled>
-                  Revisar propuesta
-                </button>
               </div>
             </div>
           ) : null}

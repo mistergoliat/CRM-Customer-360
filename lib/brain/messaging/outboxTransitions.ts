@@ -1,9 +1,9 @@
 import type { BrainOutboxStatus, BrainOutboxTransitionResult } from "./types";
 
 const ALLOWED_TRANSITIONS: Record<BrainOutboxStatus, BrainOutboxStatus[]> = {
-  planned: ["locked", "blocked"],
+  planned: ["locked", "cancelled", "blocked"],
   pending: [],
-  locked: ["sending", "failed"],
+  locked: ["sending", "failed", "cancelled"],
   sending: ["sent", "failed"],
   sent: [],
   failed: [],

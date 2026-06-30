@@ -201,7 +201,7 @@ export type BrainCanonicalOutboxCommand = {
 export const BRAIN_OUTBOX_WORKER_STATUSES = ["disabled", "planned", "locked", "sending", "sent", "noop", "blocked", "failed"] as const;
 export type BrainOutboxWorkerStatus = (typeof BRAIN_OUTBOX_WORKER_STATUSES)[number];
 
-export const BRAIN_OUTBOX_WORKER_MODES = ["disabled", "dry_run", "lock_only", "send_locked", "noop", "blocked", "failed"] as const;
+export const BRAIN_OUTBOX_WORKER_MODES = ["disabled", "dry_run", "lock_only", "planned_send", "send_locked", "noop", "blocked", "failed"] as const;
 export type BrainOutboxWorkerMode = (typeof BRAIN_OUTBOX_WORKER_MODES)[number];
 
 export type BrainOutboxWorkerRequest = {
