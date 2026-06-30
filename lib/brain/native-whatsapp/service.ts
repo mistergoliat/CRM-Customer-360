@@ -14,6 +14,7 @@ import {
 import { normalizeWhatsAppRecipientDigits } from "@/lib/brain/messaging/whatsapp-transport/constants";
 import { appendConversationMessage } from "@/lib/brain/local-ai-sdr/repository";
 import { createPrestashopProductRepository, createSalesConsultativeOperationsRepository, runSalesConsultativeService } from "@/lib/brain/commercial/sales-consultative";
+import { maybeRunCommercialAgentForInboundTurn } from "@/lib/brain/commercial/agent-runtime/wireToNativeInbound";
 import type {
   SalesConsultativeCustomerContext,
   SalesConsultativeInteraction,
@@ -1060,6 +1061,23 @@ export async function processNativeWhatsAppInbound(input: {
       identityConflict: result.identityConflict
     }
   });
+
+  if (process.env.BRAIN_COMMERCIAL_AGENT_ENABLED?.trim().toLowerCase() === "true") {
+    try {
+      await maybeRunCommercialAgentForInboundTurn({
+        conversationId: result.conversationId,
+        conversationPublicId: result.conversationPublicId as string,
+        customerMasterId: result.customerId,
+        waId: normalizedExternalId,
+        messageText: input.text,
+        messageId: result.messageId,
+        correlationId: result.correlationId,
+        currentTime: nowIso()
+      });
+    } catch (error) {
+      console.error("commercial_agent_turn_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
 
   return result;
 }
