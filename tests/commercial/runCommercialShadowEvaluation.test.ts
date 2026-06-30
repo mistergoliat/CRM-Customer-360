@@ -4,7 +4,7 @@ import { createFakeSalesAgentProvider } from "../../lib/brain/commercial/sales-a
 import { runCommercialShadowEvaluation } from "../../lib/brain/commercial/shadow/runCommercialShadowEvaluation";
 import { COMMERCIAL_SHADOW_DEFAULT_FEATURE_FLAGS } from "../../lib/brain/commercial/shadow/shadowConstants";
 import { makeBrainContextResolveResponse, makeCommercialPolicyFlags, makeCommercialShadowFlags, makeCommercialShadowInput, makeInboundRequest, makeNormalizedInboundMessage, FIXED_TIME } from "./fixtures";
-import { SALES_AGENT_CONTRACT_VERSION, SALES_AGENT_PROMPT_VERSION } from "../../lib/brain/commercial/sales-agent/runtimeTypes";
+import { SALES_AGENT_CONTRACT_VERSION, SALES_AGENT_PROMPT_VERSION, SALES_AGENT_RUNTIME_VERSION } from "../../lib/brain/commercial/sales-agent/runtimeTypes";
 import type { CommercialShadowInput, CommercialShadowResult } from "../../lib/brain/commercial/shadow";
 import type { SalesAgentRuntimeClock } from "../../lib/brain/commercial/sales-agent/runtimeTypes";
 
@@ -248,7 +248,7 @@ test("completed shadow keeps zero side effects and stable versions", async () =>
   assert.equal(result.versions.contractVersion, SALES_AGENT_CONTRACT_VERSION);
   assert.equal(result.versions.promptVersion, SALES_AGENT_PROMPT_VERSION);
   assert.equal(result.versions.policyVersion, "brain.commercial.policy.v1");
-  assert.equal(result.versions.runtimeVersion, "sales-agent-runtime-dry-run-v0.1.0");
+  assert.equal(result.versions.runtimeVersion, SALES_AGENT_RUNTIME_VERSION);
   assert.deepEqual(
     result.stages.map((stage) => stage.stage),
     ["eligibility", "context_builder", "sales_agent_runtime", "commercial_policy"]

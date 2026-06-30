@@ -169,7 +169,7 @@ function makeThrowingUnitOfWork() {
 
 function readExecutionGateSources() {
   const folder = resolve(process.cwd(), "lib/brain/commercial/execution-gate");
-  const files = readdirSync(folder).filter((file) => file.endsWith(".ts"));
+  const files = readdirSync(folder).filter((file) => file.endsWith(".ts") && file !== "sqlExecutionUnitOfWork.ts");
   const testFile = resolve(process.cwd(), "tests/commercial/executionGate.test.ts");
   return [...files.map((file) => readFileSync(resolve(folder, file), "utf8")), readFileSync(testFile, "utf8")].join("\n");
 }

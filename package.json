@@ -21,6 +21,7 @@
     "db:legacy:reset": "npx --yes tsx@4.20.5 scripts/db-reset.ts --database=legacy",
     "db:permissions": "npx --yes tsx@4.20.5 scripts/db-permissions.ts",
     "db:bootstrap:smoke": "npx --yes tsx@4.20.5 scripts/db-bootstrap-smoke.ts",
+    "autonomy:live": "npx --yes tsx@4.20.5 scripts/commercial-live-autonomy-run.ts",
     "customer-identity:evaluate": "npx --yes tsx@4.20.5 scripts/customer-identity/evaluate-candidates.ts"
   },
   "dependencies": {

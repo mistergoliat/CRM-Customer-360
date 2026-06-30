@@ -16,6 +16,14 @@ function toIsoString(value: string | Date): string {
   return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
 }
 
+function toMysqlDateTime(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string" && !(value instanceof Date)) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date(0) : date;
+  return safeDate.toISOString().slice(0, 19).replace("T", " ");
+}
+
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === "string" && value.trim().length > 0))];
 }
@@ -107,7 +115,7 @@ async function insertAction(connection: AgentActionQueueConnection, action: CrmA
         runtime_version,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     toExecuteValues([
       row.action_id,
@@ -128,8 +136,8 @@ async function insertAction(connection: AgentActionQueueConnection, action: CrmA
       JSON.stringify(row.execution_payload_json ?? null),
       row.draft_message,
       row.final_message,
-      row.scheduled_for,
-      row.expires_at,
+      toMysqlDateTime(row.scheduled_for),
+      toMysqlDateTime(row.expires_at),
       row.attempt_number,
       row.max_attempts,
       JSON.stringify(row.block_reasons_json ?? []),
@@ -140,15 +148,15 @@ async function insertAction(connection: AgentActionQueueConnection, action: CrmA
       row.source,
       row.created_by,
       row.approved_by,
-      row.approved_at,
-      row.executed_at,
-      row.cancelled_at,
+      toMysqlDateTime(row.approved_at),
+      toMysqlDateTime(row.executed_at),
+      toMysqlDateTime(row.cancelled_at),
       row.outbox_message_id,
       row.lifecycle_version,
       row.policy_version,
       row.runtime_version,
-      row.created_at ?? currentTime,
-      row.updated_at ?? currentTime
+      toMysqlDateTime(row.created_at ?? currentTime),
+      toMysqlDateTime(row.updated_at ?? currentTime)
     ])
   );
   return result.insertId ?? null;
@@ -219,8 +227,8 @@ async function updateExistingAction(connection: AgentActionQueueConnection, acti
       JSON.stringify(row.execution_payload_json ?? null),
       row.draft_message,
       row.final_message,
-      row.scheduled_for,
-      row.expires_at,
+      toMysqlDateTime(row.scheduled_for),
+      toMysqlDateTime(row.expires_at),
       row.attempt_number,
       row.max_attempts,
       JSON.stringify(row.block_reasons_json ?? []),
@@ -231,14 +239,14 @@ async function updateExistingAction(connection: AgentActionQueueConnection, acti
       row.source,
       row.created_by,
       row.approved_by,
-      row.approved_at,
-      row.executed_at,
-      row.cancelled_at,
+      toMysqlDateTime(row.approved_at),
+      toMysqlDateTime(row.executed_at),
+      toMysqlDateTime(row.cancelled_at),
       row.outbox_message_id,
       row.lifecycle_version,
       row.policy_version,
       row.runtime_version,
-      row.updated_at ?? currentTime,
+      toMysqlDateTime(row.updated_at ?? currentTime),
       action.idempotencyKey
     ])
   );

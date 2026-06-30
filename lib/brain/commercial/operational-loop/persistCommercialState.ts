@@ -8,6 +8,13 @@ function toIsoString(value: string | Date): string {
   return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
 }
 
+function toMysqlDateTime(value: string | Date | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date(0) : date;
+  return safeDate.toISOString().slice(0, 19).replace("T", " ");
+}
+
 function stringifyJson(value: unknown): string {
   const sanitized = sanitizeCommercialObject({ value });
   return JSON.stringify(sanitized.value?.value ?? null);
@@ -49,14 +56,14 @@ function buildOpportunityValues(state: CommercialOperationalState, currentTime: 
     last_agent_decision_id: state.lastAgentDecisionId,
     waiting_for: state.waitingFor,
     next_action_type: state.nextActionType,
-    next_action_due_at: state.nextActionDueAt,
+    next_action_due_at: toMysqlDateTime(state.nextActionDueAt),
     human_owner_active: state.humanOwnerActive ? 1 : 0,
     ai_blocked: state.aiBlocked ? 1 : 0,
     version: state.version,
-    created_at: state.createdAt ?? currentTime,
-    updated_at: currentTime,
-    last_activity_at: state.lastActivityAt ?? currentTime,
-    closed_at: state.closedAt
+    created_at: toMysqlDateTime(state.createdAt ?? currentTime),
+    updated_at: toMysqlDateTime(currentTime),
+    last_activity_at: toMysqlDateTime(state.lastActivityAt ?? currentTime),
+    closed_at: toMysqlDateTime(state.closedAt)
   };
 }
 
@@ -342,7 +349,7 @@ export async function persistCommercialState(input: CommercialOperationalPersist
           contract_version: input.decisionRecord.contractVersion,
           policy_version: input.decisionRecord.policyVersion,
           runtime_version: input.decisionRecord.runtimeVersion,
-          created_at: currentTime
+          created_at: toMysqlDateTime(currentTime)
         };
 
         await connection.execute<ResultSetHeader>(

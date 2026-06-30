@@ -4,6 +4,7 @@ import type { BrainActionPolicy, BrainInstructionAction, BrainNormalizedAction }
 import type { BrainExecutionPlan } from "../messaging/types";
 import type { CommercialShadowResult } from "../commercial/shadow";
 import type { CommercialOperationalLoopResult } from "../commercial/operational-loop";
+import type { CommercialExecutionBridgeResult } from "../commercial/execution-bridge";
 import type { CustomerOnboardingRunResult } from "../commercial/customer-onboarding";
 import type { SalesConsultativeResult } from "../commercial/sales-consultative";
 
@@ -233,6 +234,7 @@ export type BrainProcessInboundResponse = {
     };
     commercialShadow?: CommercialShadowResult | null;
     commercialOperationalLoop?: CommercialOperationalLoopResult | null;
+    commercialExecutionBridge?: CommercialExecutionBridgeResult | null;
     customerOnboarding?: CustomerOnboardingRunResult | null;
     salesConsultative?: SalesConsultativeResult | null;
   };
