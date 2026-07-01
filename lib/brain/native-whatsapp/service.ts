@@ -437,8 +437,12 @@ async function createOrUpdateNativeConversation(input: {
       ON DUPLICATE KEY UPDATE
         customer_id = COALESCE(VALUES(customer_id), customer_id),
         external_thread_id = COALESCE(VALUES(external_thread_id), external_thread_id),
-        ai_enabled = VALUES(ai_enabled),
-        human_owner_active = VALUES(human_owner_active),
+        -- Ownership flags are NEVER reset by an inbound: if an operator took
+        -- control (human_owner_active=1 / ai_enabled=0), a customer reply must
+        -- not silently hand the conversation back to the AI.
+        -- Reopen policy: a new inbound on a closed conversation reopens it,
+        -- preserving whatever ownership state it had.
+        status = IF(status IN ('closed','resolved','done','archived'), 'open', status),
         updated_at = VALUES(updated_at)
     `;
   if (connection) {
@@ -489,29 +493,6 @@ async function touchConversationAfterInbound(conversationId: number, occurredAt:
     return;
   }
   await queryRows(sql, params);
-}
-
-async function touchConversationAfterOutbound(conversationId: number, occurredAt: string, aiEnabled?: boolean, humanOwnerActive?: boolean) {
-  await queryRows(
-    `
-      UPDATE conversation
-      SET
-        ai_enabled = COALESCE(?, ai_enabled),
-        human_owner_active = COALESCE(?, human_owner_active),
-        last_message_at = ?,
-        last_outbound_at = ?,
-        updated_at = ?
-      WHERE id = ?
-    `,
-    [
-      aiEnabled === undefined ? null : aiEnabled ? 1 : 0,
-      humanOwnerActive === undefined ? null : humanOwnerActive ? 1 : 0,
-      toMysqlDateTime(occurredAt),
-      toMysqlDateTime(occurredAt),
-      toMysqlDateTime(occurredAt),
-      conversationId
-    ]
-  );
 }
 
 async function loadConversationByPublicId(publicId: string) {
@@ -1133,7 +1114,11 @@ export async function applyMetaDeliveryStatus(input: {
   }
 
   const currentOutbox = await loadOutboxByProviderMessageId(input.providerMessageId);
-  if (shouldProjectDeliveryStatus((typeof currentOutbox?.provider_status === "string" ? currentOutbox.provider_status : null), input.status)) {
+  const outboxProjectionApplied = shouldProjectDeliveryStatus(
+    typeof currentOutbox?.provider_status === "string" ? currentOutbox.provider_status : null,
+    input.status
+  );
+  if (outboxProjectionApplied) {
     await queryRows(
       `
         UPDATE brain_message_outbox
@@ -1162,7 +1147,9 @@ export async function applyMetaDeliveryStatus(input: {
   await recordCommercialEvent(deliveryEvent);
 
   // Record ActionOutcome for delivery status changes — closes the execution loop.
-  if (currentOutbox?.id) {
+  // Only when the monotonic projection applied: a duplicate or out-of-order
+  // webhook must not create a duplicate outcome row.
+  if (currentOutbox?.id && outboxProjectionApplied) {
     const { recordDeliveryOutcome } = await import("@/lib/brain/commercial/action-queue/persistActionOutcome");
     await recordDeliveryOutcome(
       currentOutbox.id,

@@ -13,14 +13,14 @@ import type { BrainExecutionSource, BrainExecuteRequest } from "./messaging/type
 import { makeBrainRequestId } from "./instructions";
 import type { BrainActionPolicy, BrainNormalizedAction } from "./actions/types";
 import { runCustomerOnboardingLoop } from "./commercial/customer-onboarding";
-import { COMMERCIAL_POLICY_DEFAULT_FLAGS } from "./commercial/policy";
 import {
-  COMMERCIAL_SHADOW_CONTEXT_TIMEOUT_MS,
-  COMMERCIAL_SHADOW_DEFAULT_FEATURE_FLAGS,
-  COMMERCIAL_SHADOW_DEFAULT_TIMEOUT_MS,
-  COMMERCIAL_SHADOW_POLICY_TIMEOUT_MS,
-  COMMERCIAL_SHADOW_RUNTIME_TIMEOUT_MS
-} from "./commercial/shadow";
+  buildCommercialShadowFeatureFlags,
+  buildCommercialLoopFeatureFlags,
+  buildCommercialBridgeFeatureFlags,
+  buildCommercialCyclePolicyFlags,
+  buildCommercialCycleTimeouts,
+  buildCommercialSalesAgentDryRun
+} from "./commercial/config/commercialCycleConfig";
 import { createCommercialShadowFailedSafe } from "./commercial/shadow/createCommercialShadowFailedSafe";
 import { runCommercialShadowEvaluation } from "./commercial/shadow/runCommercialShadowEvaluation";
 import { evaluateCommercialShadowResult } from "./commercial/evaluation";
@@ -34,7 +34,6 @@ import type { CommercialExecutionBridgeFeatureFlags, CommercialExecutionBridgeRe
 import {
   SALES_AGENT_CONTRACT_VERSION,
   SALES_AGENT_PROMPT_VERSION,
-  SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN,
   SALES_AGENT_RUNTIME_DEFAULT_MODE
 } from "./commercial/sales-agent/runtimeTypes";
 import type {
@@ -1001,39 +1000,14 @@ function readEnvFlag(name: string, fallback = false) {
   return fallback;
 }
 
-function readEnvPositiveInt(name: string, fallback: number) {
-  const value = process.env[name]?.trim();
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 function buildCommercialShadowFlags(input: BrainProcessInboundCommercialShadowDependencies | undefined): CommercialShadowFeatureFlags {
-  const salesAgentEnabled = readEnvFlag("BRAIN_SALES_AGENT_ENABLED", false);
-  const realModelEnabled = readEnvFlag("BRAIN_ENABLE_REAL_MODEL", false);
-  const commercialShadowEnabled = readEnvFlag("BRAIN_COMMERCIAL_SHADOW_ENABLED", salesAgentEnabled);
-  const commercialRuntimeEnabled = readEnvFlag("BRAIN_COMMERCIAL_RUNTIME_ENABLED", commercialShadowEnabled);
-  const commercialPolicyEnabled = readEnvFlag("BRAIN_COMMERCIAL_POLICY_ENABLED", commercialShadowEnabled);
-  const commercialAllowRealProvider = readEnvFlag("BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER", salesAgentEnabled || realModelEnabled);
-
-  return {
-    ...COMMERCIAL_SHADOW_DEFAULT_FEATURE_FLAGS,
-    commercialShadowEnabled,
-    commercialRuntimeEnabled,
-    commercialPolicyEnabled,
-    commercialShadowAllowRealProvider: commercialAllowRealProvider,
-    ...(input?.commercialShadowFlags ?? {})
-  };
+  return buildCommercialShadowFeatureFlags(input?.commercialShadowFlags);
 }
 
 function buildCommercialOperationalLoopFlags(
   input: BrainProcessInboundCommercialOperationalLoopDependencies | undefined
 ): CommercialOperationalLoopFeatureFlags {
-  return {
-    commercialOperationalLoopEnabled: process.env.BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED === "true",
-    commercialStatePersistenceEnabled: process.env.BRAIN_COMMERCIAL_STATE_PERSISTENCE_ENABLED === "true",
-    ...(input?.commercialOperationalLoopFlags ?? {})
-  };
+  return buildCommercialLoopFeatureFlags(input?.commercialOperationalLoopFlags);
 }
 
 function shouldRunCommercialAutonomyAfterConsultative(input: BrainProcessInboundCommercialOperationalLoopDependencies | undefined) {
@@ -1052,16 +1026,7 @@ function parseEnvCsv(name: string, fallback: string[] = []) {
 function buildCommercialExecutionBridgeFlags(
   input: BrainProcessInboundCommercialExecutionBridgeDependencies | undefined
 ): CommercialExecutionBridgeFeatureFlags {
-  return {
-    actionQueueEnabled: readEnvFlag("BRAIN_AGENT_ACTION_QUEUE_ENABLED", false),
-    actionPersistenceEnabled: readEnvFlag("BRAIN_AGENT_ACTION_PERSISTENCE_ENABLED", false),
-    executionGateEnabled: readEnvFlag("BRAIN_EXECUTION_GATE_ENABLED", false),
-    outboxBridgeEnabled: readEnvFlag("BRAIN_OUTBOX_BRIDGE_ENABLED", false),
-    sandboxEnabled: readEnvFlag("BRAIN_AUTONOMOUS_SANDBOX_ENABLED", true),
-    autonomousReplyEnabled: readEnvFlag("BRAIN_AUTONOMOUS_REPLY_ENABLED", true),
-    sandboxModeRequired: readEnvFlag("BRAIN_EXECUTION_GATE_SANDBOX_REQUIRED", false),
-    ...(input?.commercialExecutionBridgeFlags ?? {})
-  };
+  return buildCommercialBridgeFeatureFlags(input?.commercialExecutionBridgeFlags);
 }
 
 function buildCommercialOperationalLoopInput(
@@ -1134,17 +1099,9 @@ function buildCommercialShadowInput(
   flags: CommercialShadowFeatureFlags,
   abortSignal: AbortSignal | null = null
 ): CommercialShadowInput {
-  const salesAgentDryRun =
-    process.env.BRAIN_SALES_AGENT_DRY_RUN?.trim().toLowerCase() === "true"
-      ? true
-      : process.env.BRAIN_SALES_AGENT_DRY_RUN?.trim().toLowerCase() === "false"
-        ? false
-        : SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN;
+  const salesAgentDryRun = buildCommercialSalesAgentDryRun();
   const salesAgentMode = salesAgentDryRun ? "dry_run" : SALES_AGENT_RUNTIME_DEFAULT_MODE;
-  const shadowTimeoutMs = readEnvPositiveInt("BRAIN_COMMERCIAL_SHADOW_TIMEOUT_MS", COMMERCIAL_SHADOW_DEFAULT_TIMEOUT_MS);
-  const contextTimeoutMs = readEnvPositiveInt("BRAIN_COMMERCIAL_CONTEXT_TIMEOUT_MS", COMMERCIAL_SHADOW_CONTEXT_TIMEOUT_MS);
-  const runtimeTimeoutMs = readEnvPositiveInt("BRAIN_COMMERCIAL_RUNTIME_TIMEOUT_MS", COMMERCIAL_SHADOW_RUNTIME_TIMEOUT_MS);
-  const policyTimeoutMs = readEnvPositiveInt("BRAIN_COMMERCIAL_POLICY_TIMEOUT_MS", COMMERCIAL_SHADOW_POLICY_TIMEOUT_MS);
+  const { shadowTimeoutMs, contextTimeoutMs, runtimeTimeoutMs, policyTimeoutMs } = buildCommercialCycleTimeouts();
 
   return {
     inboundMessage: request,
@@ -1175,19 +1132,7 @@ function buildCommercialShadowInput(
       dryRun: salesAgentDryRun,
       abortSignal
     },
-    policyFlags: {
-      ...COMMERCIAL_POLICY_DEFAULT_FLAGS,
-      commercialPolicyEnabled: true,
-      allowDraftReplies: true,
-      allowToolRequests: true,
-      allowEntityProposals: true,
-      allowFollowUpEvaluation: true,
-      allowInternalTasks: true,
-      allowQuoteDraftRequests: true,
-      allowOperatorReviewRequests: true,
-      allowSensitiveClaims: false,
-      allowOutboundProposals: true
-    },
+    policyFlags: buildCommercialCyclePolicyFlags(true),
     shadowFlags: flags,
     contractVersion: SALES_AGENT_CONTRACT_VERSION,
     promptVersion: SALES_AGENT_PROMPT_VERSION,

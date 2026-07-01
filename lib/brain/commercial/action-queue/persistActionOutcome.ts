@@ -18,7 +18,7 @@ export type PersistExecutionInput = {
   outboxMessageId: number | null;
   outboxDedupeKey: string | null;
   attemptNumber: number;
-  status: "requested" | "executing" | "succeeded" | "failed";
+  status: "requested" | "executing" | "succeeded" | "failed" | "cancelled";
   requestedAt: string;
   startedAt?: string | null;
   completedAt?: string | null;
@@ -149,8 +149,9 @@ export async function recordDeliveryOutcome(
   occurredAt: string,
   providerEventJson?: Record<string, unknown> | null
 ): Promise<void> {
-  const actionId = await loadActionIdByOutboxMessageId(outboxMessageId);
-  if (!actionId) return;
+  // Same fallback id as the send path, so outbox rows without a linked
+  // crm_agent_actions row still get a traceable delivery outcome.
+  const actionId = (await loadActionIdByOutboxMessageId(outboxMessageId)) ?? `outbox:${outboxMessageId}`;
 
   const executionResult = await safeQueryRows<{ execution_id: string }>(
     `SELECT execution_id FROM crm_action_executions WHERE outbox_message_id = ? ORDER BY created_at DESC LIMIT 1`,

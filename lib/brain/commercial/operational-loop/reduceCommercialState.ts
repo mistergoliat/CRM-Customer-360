@@ -132,7 +132,14 @@ function buildBaseState(input: CommercialOperationalStateReductionInput, previou
     customerCandidateId: previousState?.customerCandidateId ?? input.identityResolution.selectedState?.customerCandidateId ?? null,
     customerMasterId: previousState?.customerMasterId ?? input.identityResolution.selectedState?.customerMasterId ?? null,
     leadId: previousState?.leadId ?? input.identityResolution.selectedState?.leadId ?? null,
-    conversationCaseId: previousState?.conversationCaseId ?? input.identityResolution.selectedState?.conversationCaseId ?? null,
+    conversationCaseId:
+      previousState?.conversationCaseId ??
+      input.identityResolution.selectedState?.conversationCaseId ??
+      // New opportunities must stay linked to the conversation that created
+      // them — the HUB, follow-ups and the autonomous panel resolve by it.
+      input.inboundMessage.conversationCaseId ??
+      input.brainContext.case_context?.active_case?.conversation_case_id ??
+      null,
     waId: previousState?.waId ?? input.identityResolution.selectedState?.waId ?? input.brainContext.customer_context?.wa_id ?? null,
     channel:
       previousState?.channel ??

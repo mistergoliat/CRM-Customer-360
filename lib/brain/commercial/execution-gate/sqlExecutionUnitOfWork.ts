@@ -89,6 +89,22 @@ class SqlOutboxRepository implements OutboxRepository {
     const existing = await this.findByIdempotencyKey(command.idempotencyKey);
     if (existing) return { inserted: false, duplicate: true, rowId: existing.id };
 
+    // The action doesn't carry a phone_number_id; the canonical value is the
+    // conversation's channel_account_id (the Meta phone number the customer
+    // wrote to). Without it the worker cannot send the message at all.
+    let phoneNumberId: string | null = null;
+    if (command.conversationCaseId !== null && command.conversationCaseId !== undefined) {
+      const [convRows] = await this.connection.execute(
+        "SELECT channel_account_id FROM conversation WHERE id = ? LIMIT 1",
+        [command.conversationCaseId]
+      );
+      const convRow = (convRows as Record<string, unknown>[])[0];
+      phoneNumberId = convRow && typeof convRow.channel_account_id === "string" ? convRow.channel_account_id : null;
+    }
+    if (!phoneNumberId) {
+      phoneNumberId = process.env.META_WHATSAPP_DEFAULT_PHONE_NUMBER_ID?.trim() || null;
+    }
+
     const [result] = await this.connection.execute<ResultSetHeader>(
       `
         INSERT IGNORE INTO \`${BRAIN_MESSAGE_OUTBOX_TABLE}\`
@@ -99,7 +115,7 @@ class SqlOutboxRepository implements OutboxRepository {
             provider_message_id, error_code, error_message, planned_at, locked_at,
             sent_at, failed_at, created_at, updated_at
           )
-        VALUES (?, ?, 'outbound', 'planned', ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?)
+        VALUES (?, ?, 'outbound', 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?)
       `,
       [
         command.idempotencyKey,
@@ -109,6 +125,7 @@ class SqlOutboxRepository implements OutboxRepository {
         "sales-agent",
         command.metadata.runtimeVersion,
         command.recipient,
+        phoneNumberId,
         command.conversationCaseId,
         command.messageText,
         hashMessageText(command.messageText),

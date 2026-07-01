@@ -51,6 +51,16 @@ export function buildNativeBrainContextShim(
     channel: "whatsapp",
     platform: conv?.channel ?? "whatsapp",
 
+    // The legacy pipeline resolves identity via the n8n context service; the
+    // native path already resolved it against master_customer, so we mirror
+    // the equivalent resolver output here.
+    resolver_identity: {
+      identity_type: snapshot.identityConflict ? "mixed" : customer ? "customer" : "wa_id",
+      confidence: snapshot.identityConflict ? 0.2 : customer ? 0.9 : 0.5,
+      notes: [],
+      warnings: []
+    },
+
     customer_context: {
       wa_id: conv?.externalContactId ?? waId,
       phone_number_id: phoneNumberId,

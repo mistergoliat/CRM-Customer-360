@@ -22,6 +22,8 @@
     "db:permissions": "npx --yes tsx@4.20.5 scripts/db-permissions.ts",
     "db:bootstrap:smoke": "npx --yes tsx@4.20.5 scripts/db-bootstrap-smoke.ts",
     "autonomy:live": "npx --yes tsx@4.20.5 scripts/commercial-live-autonomy-run.ts",
+    "e2e:autonomous": "npx --yes tsx@4.20.5 scripts/e2e-autonomous-harness.ts",
+    "test": "npx --yes tsx@4.20.5 --test \"tests/**/*.test.ts\"",
     "worker:outbox": "npx --yes tsx@4.20.5 scripts/autonomous-outbox-worker.ts",
     "worker:followup": "npx --yes tsx@4.20.5 scripts/autonomous-followup-worker.ts",
     "customer-identity:evaluate": "npx --yes tsx@4.20.5 scripts/customer-identity/evaluate-candidates.ts"

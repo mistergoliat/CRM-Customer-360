@@ -196,7 +196,7 @@ function buildChannelContext(commercialContext: CommercialContextBuilderResult, 
     quietHoursActive: false,
     humanOwnerActive: Boolean(sourceSummary.humanOwnershipActive),
     aiBlocked: Boolean(sourceSummary.aiBlocked),
-    identityConflict: Boolean(input.brainContext.resolver_identity.identity_type === "mixed"),
+    identityConflict: Boolean(input.brainContext.resolver_identity?.identity_type === "mixed"),
     recentCustomerReply: Boolean(sourceSummary.hasLatestCustomerMessage),
     recentHumanContact: Boolean(sourceSummary.manualReplyActive)
   };
