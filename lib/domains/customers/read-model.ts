@@ -10,6 +10,15 @@ function sectionItems(values: Array<{ label: string; value: string }>) {
   return values;
 }
 
+function unavailableSection(name: string, source: string, warning: string) {
+  return {
+    state: "unavailable" as const,
+    source,
+    warnings: [warning],
+    items: sectionItems([{ label: name, value: "No disponible" }])
+  };
+}
+
 export function buildCustomerListReadModel(input: {
   items: CustomerRecord[];
   page: number;
@@ -55,23 +64,31 @@ export function buildCustomerDetailReadModel(input: {
 }): CustomerDetailReadModel {
   const identityResult = input.identityResult;
   const customerEmail = input.customer?.email ?? null;
+
   return {
     customer: input.customer,
     identity: {
-      state: identityResult ? (identityResult.resolution.status === "conflict_needs_review" ? "error" : identityResult.resolution.status === "not_enough_identity" ? "unavailable" : "real") : "unavailable",
+      state: identityResult
+        ? identityResult.resolution.status === "conflict_needs_review"
+          ? "error"
+          : identityResult.resolution.status === "not_enough_identity"
+            ? "unavailable"
+            : "real"
+        : "unavailable",
       source: identityResult?.metadata.source ?? input.source,
       warnings: identityResult?.warnings ?? [],
-      observations: identityResult?.sourceMatches.map((match) => ({
-        source: match.source,
-        table: match.source,
-        matchedBy: match.matchedBy,
-        identityType: match.identityType,
-        identityValue: match.identityValue,
-        sourceRecordId: match.sourceRecordId,
-        confidence: match.confidence,
-        customerKey: match.customerKey,
-        notes: match.notes
-      })) ?? []
+      observations:
+        identityResult?.sourceMatches.map((match) => ({
+          source: match.source,
+          table: match.source,
+          matchedBy: match.matchedBy,
+          identityType: match.identityType,
+          identityValue: match.identityValue,
+          sourceRecordId: match.sourceRecordId,
+          confidence: match.confidence,
+          customerKey: match.customerKey,
+          notes: match.notes
+        })) ?? []
     },
     relatedConversations: {
       state: input.relatedConversationRows.length > 0 ? "real" : "partial",
@@ -85,7 +102,7 @@ export function buildCustomerDetailReadModel(input: {
       warnings: input.relatedCaseRows.length > 0 ? [] : ["no_related_cases"],
       items: input.relatedCaseRows
     },
-      linkedSources: {
+    linkedSources: {
       state: identityResult && identityResult.sourceMatches.length > 0 ? "real" : "partial",
       source: identityResult?.metadata.source ?? input.source,
       warnings: identityResult?.warnings ?? [],
@@ -96,36 +113,11 @@ export function buildCustomerDetailReadModel(input: {
       ])
     },
     sections: {
-      ltv: {
-        state: "fixture",
-        source: "demo_projection",
-        warnings: ["ltv_not_backed"],
-        items: sectionItems([{ label: "LTV", value: "Datos de demostración" }])
-      },
-      scoring: {
-        state: "fixture",
-        source: "demo_projection",
-        warnings: ["scoring_not_backed"],
-        items: sectionItems([{ label: "Scoring", value: "Datos no disponibles" }])
-      },
-      segment: {
-        state: "fixture",
-        source: "demo_projection",
-        warnings: ["segment_not_backed"],
-        items: sectionItems([{ label: "Segmento", value: "Parcial" }])
-      },
-      notes: {
-        state: "fixture",
-        source: "demo_projection",
-        warnings: ["notes_not_backed"],
-        items: sectionItems([{ label: "Notas", value: "Datos de demostración" }])
-      },
-      campaigns: {
-        state: "fixture",
-        source: "demo_projection",
-        warnings: ["campaigns_not_backed"],
-        items: sectionItems([{ label: "Campañas", value: "Datos no disponibles" }])
-      }
+      ltv: unavailableSection("LTV", "no_backing_model", "ltv_not_backed"),
+      scoring: unavailableSection("Scoring", "no_backing_model", "scoring_not_backed"),
+      segment: unavailableSection("Segmento", "no_backing_model", "segment_not_backed"),
+      notes: unavailableSection("Notas", "no_backing_model", "notes_not_backed"),
+      campaigns: unavailableSection("Campañas", "no_backing_model", "campaigns_not_backed")
     },
     warnings: input.warnings ?? [],
     meta: {

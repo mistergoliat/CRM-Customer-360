@@ -5,3 +5,4 @@ export * from "./buildOutboxCommand";
 export * from "./evaluateExecutionGate";
 export * from "./executeActionThroughGate";
 export * from "./inMemoryRepositories";
+export * from "./sqlExecutionUnitOfWork";

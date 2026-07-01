@@ -1,4 +1,19 @@
 import type { SalesAgentInput } from "../salesAgentTypes";
+import {
+  CUSTOMER_READINESS_LEVELS,
+  PRODUCT_FIT_ASSESSMENTS,
+  QUALIFICATION_STATES,
+  SALES_AGENT_ACTION_TYPES,
+  SALES_AGENT_APPROVAL_REQUIREMENTS,
+  SALES_AGENT_CLAIM_TYPES,
+  SALES_AGENT_CONFIDENCE_LEVELS,
+  SALES_AGENT_DECISION_TYPES,
+  SALES_AGENT_ERROR_CODES,
+  SALES_AGENT_EVIDENCE_SOURCES,
+  SALES_AGENT_MESSAGE_INTENTS,
+  SALES_AGENT_OUTCOMES,
+  SALES_AGENT_RISK_LEVELS
+} from "../salesAgentConstants";
 import { sanitizeSalesAgentOutput } from "./sanitizeSalesAgentOutput";
 import {
   SALES_AGENT_PROMPT_VERSION,
@@ -80,9 +95,14 @@ function buildPromptText(sections: {
   ].join("\n");
 }
 
+function enumLine(name: string, values: readonly string[]) {
+  return `${name}: ${values.join(" | ")}`;
+}
+
 export function buildSalesAgentPromptPackage(input: SalesAgentPromptBuilderInput): SalesAgentPromptPackage {
   const currentTime = toIsoTimestamp(input.currentTime);
   const requestedMode = input.salesAgentInput.requestedMode;
+  const expectedRunId = input.expectedRunId?.trim() || "unknown";
   const commercialContext = buildCommercialContext(
     input.salesAgentInput,
     requestedMode,
@@ -105,6 +125,7 @@ export function buildSalesAgentPromptPackage(input: SalesAgentPromptBuilderInput
     `Prompt version: ${input.promptVersion}.`,
     `Runtime mode: ${input.runtimeMode}.`,
     `Requested mode: ${requestedMode}.`,
+    `runId MUST equal exactly: ${expectedRunId}.`,
     `Allowed capabilities: ${input.allowedCapabilities.length > 0 ? input.allowedCapabilities.join(", ") : "none"}.`,
     "Respect hard blocks and keep actions as proposals only.",
     "Ask for tool requests or human review when evidence is missing."
@@ -117,10 +138,107 @@ export function buildSalesAgentPromptPackage(input: SalesAgentPromptBuilderInput
     "Keep output structured and JSON serializable."
   ];
 
+  const responseTemplate = {
+    runId: expectedRunId,
+    contractVersion: input.contractVersion,
+    outcome: "response_proposed",
+    analysis: {
+      summary: "Brief commercial analysis.",
+      qualificationState: "pending",
+      customerReadiness: "developing",
+      productFit: "unknown",
+      confidence: "medium",
+      riskLevel: "low",
+      reasonCodes: ["customer_message_present"]
+    },
+    decision: {
+      type: "respond_now",
+      reason: "Safe response can be proposed from available context.",
+      confidence: "medium",
+      riskLevel: "low",
+      requiresApproval: "none",
+      errorCode: "none",
+      reasonCodes: ["customer_message_present"],
+      policyTags: ["commercial_reply"]
+    },
+    shouldRespondNow: true,
+    shouldRequestTool: false,
+    shouldRequestHuman: false,
+    shouldEvaluateFollowUp: false,
+    proposedActions: [],
+    toolRequests: [],
+    entityProposals: [],
+    responseProposal: {
+      messageIntent: "answer",
+      draftText: "Hola, te ayudo. Para recomendarte bien, cuentame tu objetivo principal y presupuesto aproximado.",
+      language: "es",
+      tone: "friendly",
+      questions: ["Cual es tu presupuesto aproximado?", "Que espacio tienes disponible?"],
+      claims: [],
+      disclaimers: [],
+      requiresApproval: "none",
+      blockedClaims: [],
+      confidence: "medium"
+    },
+    evidence: [
+      {
+        source: "customer_message",
+        summary: "Customer sent a commercial question.",
+        verified: true,
+        confidence: "high",
+        reference: "latest_inbound_message",
+        capturedAt: currentTime,
+        expiresAt: null
+      }
+    ],
+    policyAssessment: {
+      status: "allowed",
+      blocked: false,
+      reason: "No policy blocker detected in the available context.",
+      confidence: "medium",
+      riskLevel: "low",
+      approvalRequirement: "none",
+      errorCode: "none",
+      reasonCodes: [],
+      policyTags: ["commercial_reply"]
+    },
+    warnings: [],
+    rationale: {
+      summary: "Operational rationale only.",
+      evidence: ["latest inbound customer message"],
+      counterEvidence: [],
+      assumptions: [],
+      riskFlags: [],
+      missingInformation: [],
+      policyRulesApplied: []
+    },
+    metadata: {}
+  };
+
   const responseSchemaSummary = [
-    "SalesAgentResult fields: runId, contractVersion, outcome, analysis, decision, proposedActions, toolRequests, entityProposals, responseProposal, evidence, policyAssessment, warnings, rationale, metadata.",
-    "Outcome must remain inside the SalesAgentResult contract.",
-    "failed_safe is allowed and must remain non-executing."
+    "Return one JSON object only. Do not wrap it in markdown.",
+    "Required root fields: runId, contractVersion, outcome, analysis, decision, shouldRespondNow, shouldRequestTool, shouldRequestHuman, shouldEvaluateFollowUp, proposedActions, toolRequests, entityProposals, responseProposal, evidence, policyAssessment, warnings, rationale, metadata.",
+    `runId must be exactly ${expectedRunId}. contractVersion must be exactly ${input.contractVersion}.`,
+    enumLine("outcome", SALES_AGENT_OUTCOMES),
+    enumLine("decision.type", SALES_AGENT_DECISION_TYPES),
+    enumLine("decision.riskLevel / analysis.riskLevel / policyAssessment.riskLevel", SALES_AGENT_RISK_LEVELS),
+    enumLine("confidence fields", SALES_AGENT_CONFIDENCE_LEVELS),
+    enumLine("requiresApproval / approvalRequirement", SALES_AGENT_APPROVAL_REQUIREMENTS),
+    enumLine("messageIntent", SALES_AGENT_MESSAGE_INTENTS),
+    enumLine("proposedActions[].type", SALES_AGENT_ACTION_TYPES),
+    enumLine("claims[].type / blockedClaims[]", SALES_AGENT_CLAIM_TYPES),
+    enumLine("evidence[].source", SALES_AGENT_EVIDENCE_SOURCES),
+    enumLine("analysis.qualificationState", QUALIFICATION_STATES),
+    enumLine("analysis.customerReadiness", CUSTOMER_READINESS_LEVELS),
+    enumLine("analysis.productFit", PRODUCT_FIT_ASSESSMENTS),
+    enumLine("errorCode", SALES_AGENT_ERROR_CODES),
+    "If evidence for price, stock, delivery, dispatch, order status, promotion, or service availability is missing, do not claim it; request a tool or ask a clarifying question.",
+    "If responding now, set outcome=response_proposed, decision.type=respond_now, shouldRespondNow=true, responseProposal to a valid object, and proposedActions may stay empty.",
+    "If information is missing, use outcome=insufficient_context or response_proposed with messageIntent=clarify and safe questions.",
+    "If no safe commercial action exists, use outcome=no_commercial_action, decision.type=no_commercial_action, shouldRespondNow=false, responseProposal=null.",
+    "Never use enum values outside the lists above.",
+    "Use this exact JSON shape and replace only values that are supported by the context:",
+    JSON.stringify(responseTemplate)
   ];
 
   const messages: SalesAgentPromptMessage[] = [

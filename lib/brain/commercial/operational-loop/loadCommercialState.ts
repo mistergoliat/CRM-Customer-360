@@ -294,26 +294,35 @@ async function safeHasTable(tableName: string): Promise<boolean> {
 }
 
 function buildCandidateWhereClause(hints: CommercialOperationalIdentityHints) {
-  const clauses: string[] = [];
+  const identityClauses: string[] = [];
   const params: Array<string | number> = [];
 
-  const addClause = (column: string, value: string | number | null) => {
+  const addIdentityClause = (column: string, value: string | number | null) => {
     if (value === null || value === undefined || value === "") return;
-    clauses.push(`\`${column}\` = ?`);
+    identityClauses.push(`\`${column}\` = ?`);
     params.push(value);
   };
 
-  addClause("wa_id", hints.waId);
-  addClause("customer_candidate_id", hints.customerCandidateId);
-  addClause("customer_master_id", hints.customerMasterId);
-  addClause("lead_id", hints.leadId);
-  addClause("conversation_case_id", hints.conversationCaseId);
-  addClause("channel", hints.channel === "unknown" ? null : hints.channel);
+  addIdentityClause("wa_id", hints.waId);
+  addIdentityClause("customer_candidate_id", hints.customerCandidateId);
+  addIdentityClause("customer_master_id", hints.customerMasterId);
+  addIdentityClause("lead_id", hints.leadId);
+  addIdentityClause("conversation_case_id", hints.conversationCaseId);
 
-  return {
-    where: clauses.length > 0 ? `WHERE ${clauses.join(" OR ")}` : "",
-    params
-  };
+  // Channel is a FILTER, never an identity anchor: OR-ing `channel = 'whatsapp'`
+  // matched every WhatsApp opportunity in the table and bled state across
+  // unrelated customers (identity must never come from the channel alone).
+  if (identityClauses.length === 0) {
+    return { where: "", params: [] as Array<string | number> };
+  }
+
+  let where = `WHERE (${identityClauses.join(" OR ")})`;
+  if (hints.channel !== "unknown") {
+    where += " AND `channel` = ?";
+    params.push(hints.channel);
+  }
+
+  return { where, params };
 }
 
 async function loadLatestDecision(opportunityId: string | number) {

@@ -482,7 +482,8 @@ export async function runSalesAgentDryRun(input: SalesAgentRuntimeInput): Promis
     promptVersion,
     runtimeMode,
     currentTime,
-    allowedCapabilities
+    allowedCapabilities,
+    expectedRunId: input.expectedRunId ?? input.correlationId ?? null
   });
   const promptCharacters = promptPackage.promptText.length;
   const providerSummary = buildDefaultProviderSummary(input.provider);
@@ -558,7 +559,7 @@ export async function runSalesAgentDryRun(input: SalesAgentRuntimeInput): Promis
     });
   }
 
-  if (runtimeMode !== "dry_run" && runtimeMode !== "fixture" && runtimeMode !== "shadow") {
+  if (runtimeMode !== "dry_run" && runtimeMode !== "fixture" && runtimeMode !== "shadow" && runtimeMode !== "live") {
     const validationContext = buildValidationContext(input, allowedCapabilities, strictValidation, currentTime, safeRuntimeMetadata, contractVersion);
     const metrics: SalesAgentRuntimeMetrics = {
       startedAt,
@@ -640,49 +641,6 @@ export async function runSalesAgentDryRun(input: SalesAgentRuntimeInput): Promis
           level: "fatal",
           message: "Sales Agent runtime is disabled.",
           path: ["options", "enabled"]
-        }
-      ],
-      decisionType: "insufficient_context"
-    });
-  }
-
-  if (!dryRun) {
-    const completedAt = clock.toISOString(clock.now());
-    const metrics: SalesAgentRuntimeMetrics = {
-      startedAt,
-      completedAt,
-      durationMs: clock.now() - startedAtMs,
-      validationDurationMs: 0,
-      inputCharacters: promptCharacters,
-      timedOut: false,
-      retryCount: 0
-    };
-
-    return buildRuntimeFailure({
-      status: "invalid_input",
-      mode: runtimeMode,
-      dryRun,
-      validationContext,
-      validation: buildValidationSkipped(),
-      metrics,
-      provider: providerSummary,
-      versions,
-      metadata: {
-        ...metadata,
-        validationStatus: "skipped"
-      },
-      error: {
-        code: "invalid_input",
-        message: "dryRun must remain true for Sales Agent runtime.",
-        providerName: providerSummary.name
-      },
-      warnings: ["invalid_input", "provider_not_called"],
-      issues: [
-        {
-          code: "contract_incomplete",
-          level: "fatal",
-          message: "dryRun must remain true for Sales Agent runtime.",
-          path: ["options", "dryRun"]
         }
       ],
       decisionType: "insufficient_context"

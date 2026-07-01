@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { auditLog } from "@/lib/audit";
 import { queryRows, safeQueryRows, withTransaction } from "@/lib/db";
@@ -436,8 +437,12 @@ async function createOrUpdateNativeConversation(input: {
       ON DUPLICATE KEY UPDATE
         customer_id = COALESCE(VALUES(customer_id), customer_id),
         external_thread_id = COALESCE(VALUES(external_thread_id), external_thread_id),
-        ai_enabled = VALUES(ai_enabled),
-        human_owner_active = VALUES(human_owner_active),
+        -- Ownership flags are NEVER reset by an inbound: if an operator took
+        -- control (human_owner_active=1 / ai_enabled=0), a customer reply must
+        -- not silently hand the conversation back to the AI.
+        -- Reopen policy: a new inbound on a closed conversation reopens it,
+        -- preserving whatever ownership state it had.
+        status = IF(status IN ('closed','resolved','done','archived'), 'open', status),
         updated_at = VALUES(updated_at)
     `;
   if (connection) {
@@ -490,29 +495,6 @@ async function touchConversationAfterInbound(conversationId: number, occurredAt:
   await queryRows(sql, params);
 }
 
-async function touchConversationAfterOutbound(conversationId: number, occurredAt: string, aiEnabled?: boolean, humanOwnerActive?: boolean) {
-  await queryRows(
-    `
-      UPDATE conversation
-      SET
-        ai_enabled = COALESCE(?, ai_enabled),
-        human_owner_active = COALESCE(?, human_owner_active),
-        last_message_at = ?,
-        last_outbound_at = ?,
-        updated_at = ?
-      WHERE id = ?
-    `,
-    [
-      aiEnabled === undefined ? null : aiEnabled ? 1 : 0,
-      humanOwnerActive === undefined ? null : humanOwnerActive ? 1 : 0,
-      toMysqlDateTime(occurredAt),
-      toMysqlDateTime(occurredAt),
-      toMysqlDateTime(occurredAt),
-      conversationId
-    ]
-  );
-}
-
 async function loadConversationByPublicId(publicId: string) {
   const result = await safeQueryRows<NativeConversationRow>("SELECT * FROM conversation WHERE public_id = ? LIMIT 1", [publicId]);
   if (!result.ok) return null;
@@ -541,8 +523,8 @@ async function loadConversationMessageById(messageId: number) {
 }
 
 async function loadOutboxByProviderMessageId(providerMessageId: string) {
-  const result = await safeQueryRows<Record<string, unknown>>(
-    "SELECT provider_status FROM brain_message_outbox WHERE provider_message_id = ? LIMIT 1",
+  const result = await safeQueryRows<{ id: number; provider_status: string | null }>(
+    "SELECT id, provider_status FROM brain_message_outbox WHERE provider_message_id = ? LIMIT 1",
     [providerMessageId]
   );
   if (!result.ok) return null;
@@ -1061,6 +1043,38 @@ export async function processNativeWhatsAppInbound(input: {
     }
   });
 
+  // Fase 1 — native autonomous cycle (PR-14).
+  // Runs after inbound is durably persisted so a failure here never undoes the
+  // already-committed ConversationMessage / CommercialEvent (ADR-007 continuity).
+  // Gated by the same flag set as processInbound: BRAIN_SALES_AGENT_ENABLED,
+  // BRAIN_COMMERCIAL_SHADOW_ENABLED, BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED.
+  // No CommercialEvent is created here — the one persisted above is the
+  // canonical event for this inbound turn; the cycle reads it via context.
+  if (
+    !result.duplicate &&
+    result.conversationId &&
+    result.conversationPublicId &&
+    (process.env.BRAIN_SALES_AGENT_ENABLED === "true" ||
+      process.env.BRAIN_COMMERCIAL_SHADOW_ENABLED === "true" ||
+      process.env.BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED === "true")
+  ) {
+    try {
+      await runNativeAutonomousCycle({
+        conversationId: result.conversationId,
+        conversationPublicId: result.conversationPublicId as string,
+        customerMasterId: result.customerId ?? null,
+        waId: normalizedExternalId,
+        phoneNumberId: input.phoneNumberId,
+        messageId: result.messageId,
+        messageText: input.text,
+        correlationId: result.correlationId,
+        currentTime: nowIso()
+      });
+    } catch (error) {
+      console.error("native_autonomous_cycle_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return result;
 }
 
@@ -1100,7 +1114,11 @@ export async function applyMetaDeliveryStatus(input: {
   }
 
   const currentOutbox = await loadOutboxByProviderMessageId(input.providerMessageId);
-  if (shouldProjectDeliveryStatus((typeof currentOutbox?.provider_status === "string" ? currentOutbox.provider_status : null), input.status)) {
+  const outboxProjectionApplied = shouldProjectDeliveryStatus(
+    typeof currentOutbox?.provider_status === "string" ? currentOutbox.provider_status : null,
+    input.status
+  );
+  if (outboxProjectionApplied) {
     await queryRows(
       `
         UPDATE brain_message_outbox
@@ -1127,6 +1145,22 @@ export async function applyMetaDeliveryStatus(input: {
   });
 
   await recordCommercialEvent(deliveryEvent);
+
+  // Record ActionOutcome for delivery status changes — closes the execution loop.
+  // Only when the monotonic projection applied: a duplicate or out-of-order
+  // webhook must not create a duplicate outcome row.
+  if (currentOutbox?.id && outboxProjectionApplied) {
+    const { recordDeliveryOutcome } = await import("@/lib/brain/commercial/action-queue/persistActionOutcome");
+    await recordDeliveryOutcome(
+      currentOutbox.id,
+      input.providerMessageId,
+      input.status as "sent" | "delivered" | "read" | "failed",
+      input.occurredAt,
+      typeof input.rawPayload === "object" && input.rawPayload !== null
+        ? (input.rawPayload as Record<string, unknown>)
+        : null
+    ).catch(() => void 0); // best-effort, never fail the delivery status update
+  }
 
   await auditLog({
     action: "whatsapp.delivery_status.applied",

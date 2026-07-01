@@ -491,7 +491,7 @@ export async function appendConversationMessage(input: {
   conversationPublicId: string;
   provider: string;
   providerMessageId: string;
-  direction: "inbound" | "outbound";
+  direction: "inbound" | "outbound" | "system";
   senderType: string;
   messageType?: string;
   body: string;
@@ -532,7 +532,7 @@ async function insertConversationMessage(
     conversationPublicId: string;
     provider: string;
     providerMessageId: string;
-    direction: "inbound" | "outbound";
+    direction: "inbound" | "outbound" | "system";
     senderType: string;
     messageType?: string;
     body: string;

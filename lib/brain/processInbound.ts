@@ -13,17 +13,29 @@ import type { BrainExecutionSource, BrainExecuteRequest } from "./messaging/type
 import { makeBrainRequestId } from "./instructions";
 import type { BrainActionPolicy, BrainNormalizedAction } from "./actions/types";
 import { runCustomerOnboardingLoop } from "./commercial/customer-onboarding";
-import { COMMERCIAL_POLICY_DEFAULT_FLAGS } from "./commercial/policy";
-import { COMMERCIAL_SHADOW_DEFAULT_FEATURE_FLAGS, COMMERCIAL_SHADOW_RUNTIME_TIMEOUT_MS } from "./commercial/shadow";
+import {
+  buildCommercialShadowFeatureFlags,
+  buildCommercialLoopFeatureFlags,
+  buildCommercialBridgeFeatureFlags,
+  buildCommercialCyclePolicyFlags,
+  buildCommercialCycleTimeouts,
+  buildCommercialSalesAgentDryRun
+} from "./commercial/config/commercialCycleConfig";
 import { createCommercialShadowFailedSafe } from "./commercial/shadow/createCommercialShadowFailedSafe";
 import { runCommercialShadowEvaluation } from "./commercial/shadow/runCommercialShadowEvaluation";
 import { evaluateCommercialShadowResult } from "./commercial/evaluation";
 import { createPrestashopProductRepository, createSalesConsultativeOperationsRepository, runSalesConsultativeService } from "./commercial/sales-consultative";
 import { runCommercialOperationalLoop } from "./commercial/operational-loop";
+import { runCommercialExecutionBridge } from "./commercial/execution-bridge";
 import { COMMERCIAL_POLICY_VERSION } from "./commercial/policy";
 import type { CommercialShadowFeatureFlags, CommercialShadowInput, CommercialShadowResult } from "./commercial/shadow";
 import type { CommercialOperationalLoopFeatureFlags, CommercialOperationalLoopInput, CommercialOperationalLoopResult } from "./commercial/operational-loop";
-import { SALES_AGENT_CONTRACT_VERSION, SALES_AGENT_PROMPT_VERSION } from "./commercial/sales-agent/runtimeTypes";
+import type { CommercialExecutionBridgeFeatureFlags, CommercialExecutionBridgeResult } from "./commercial/execution-bridge";
+import {
+  SALES_AGENT_CONTRACT_VERSION,
+  SALES_AGENT_PROMPT_VERSION,
+  SALES_AGENT_RUNTIME_DEFAULT_MODE
+} from "./commercial/sales-agent/runtimeTypes";
 import type {
   BrainContextSummary,
   BrainError,
@@ -43,6 +55,12 @@ type BrainProcessInboundCommercialShadowDependencies = {
 type BrainProcessInboundCommercialOperationalLoopDependencies = {
   commercialOperationalLoopHook?: (input: CommercialOperationalLoopInput) => Promise<CommercialOperationalLoopResult>;
   commercialOperationalLoopFlags?: Partial<CommercialOperationalLoopFeatureFlags>;
+  runAfterSalesConsultative?: boolean;
+};
+
+type BrainProcessInboundCommercialExecutionBridgeDependencies = {
+  commercialExecutionBridgeHook?: typeof runCommercialExecutionBridge;
+  commercialExecutionBridgeFlags?: Partial<CommercialExecutionBridgeFeatureFlags>;
 };
 
 export type BrainProcessInboundDependencies = {
@@ -50,6 +68,8 @@ export type BrainProcessInboundDependencies = {
   resolveBrainAction?: typeof resolveBrainAction;
   commercialShadow?: BrainProcessInboundCommercialShadowDependencies;
   commercialOperationalLoop?: BrainProcessInboundCommercialOperationalLoopDependencies;
+  commercialExecutionBridge?: BrainProcessInboundCommercialExecutionBridgeDependencies;
+  abortSignal?: AbortSignal | null;
 };
 
 function mergeUniqueStrings(...groups: Array<string[] | undefined>): string[] {
@@ -895,6 +915,7 @@ function buildValidResponse(
   outboxPlanWarnings: string[] = [],
   commercialShadowResult: CommercialShadowResult | null = null,
   commercialOperationalLoopResult: CommercialOperationalLoopResult | null = null,
+  commercialExecutionBridgeResult: CommercialExecutionBridgeResult | null = null,
   customerOnboardingResult: Awaited<ReturnType<typeof runCustomerOnboardingLoop>> | null = null,
   salesConsultativeResult: Awaited<ReturnType<typeof runSalesConsultativeService>>["result"] | null = null
 ): BrainProcessInboundResponse {
@@ -922,6 +943,7 @@ function buildValidResponse(
     actionResponse.warnings,
     outboxPlanWarnings,
     commercialOperationalLoopResult?.warnings ?? [],
+    commercialExecutionBridgeResult?.warnings ?? [],
     request.options.debug ? [] : ["Full context payload is hidden unless debug=true."]
   );
   const errors = mergeBrainErrors(contextResponse.errors, actionResponse.errors);
@@ -955,6 +977,7 @@ function buildValidResponse(
       },
       commercialShadow: commercialShadowResult,
       commercialOperationalLoop: commercialOperationalLoopResult,
+      commercialExecutionBridge: commercialExecutionBridgeResult,
       customerOnboarding: customerOnboardingResult,
       salesConsultative: salesConsultativeResult
     },
@@ -970,21 +993,40 @@ function buildValidResponse(
   };
 }
 
+function readEnvFlag(name: string, fallback = false) {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
+}
+
 function buildCommercialShadowFlags(input: BrainProcessInboundCommercialShadowDependencies | undefined): CommercialShadowFeatureFlags {
-  return {
-    ...COMMERCIAL_SHADOW_DEFAULT_FEATURE_FLAGS,
-    ...(input?.commercialShadowFlags ?? {})
-  };
+  return buildCommercialShadowFeatureFlags(input?.commercialShadowFlags);
 }
 
 function buildCommercialOperationalLoopFlags(
   input: BrainProcessInboundCommercialOperationalLoopDependencies | undefined
 ): CommercialOperationalLoopFeatureFlags {
-  return {
-    commercialOperationalLoopEnabled: process.env.BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED === "true",
-    commercialStatePersistenceEnabled: process.env.BRAIN_COMMERCIAL_STATE_PERSISTENCE_ENABLED === "true",
-    ...(input?.commercialOperationalLoopFlags ?? {})
-  };
+  return buildCommercialLoopFeatureFlags(input?.commercialOperationalLoopFlags);
+}
+
+function shouldRunCommercialAutonomyAfterConsultative(input: BrainProcessInboundCommercialOperationalLoopDependencies | undefined) {
+  return input?.runAfterSalesConsultative ?? readEnvFlag("BRAIN_COMMERCIAL_AUTONOMY_AFTER_CONSULTATIVE_ENABLED", false);
+}
+
+function parseEnvCsv(name: string, fallback: string[] = []) {
+  const value = process.env[name]?.trim();
+  if (!value) return fallback;
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildCommercialExecutionBridgeFlags(
+  input: BrainProcessInboundCommercialExecutionBridgeDependencies | undefined
+): CommercialExecutionBridgeFeatureFlags {
+  return buildCommercialBridgeFeatureFlags(input?.commercialExecutionBridgeFlags);
 }
 
 function buildCommercialOperationalLoopInput(
@@ -1054,8 +1096,13 @@ function buildCommercialShadowInput(
   request: BrainNormalizedProcessInboundRequest,
   contextResponse: BrainContextResolveResponse,
   startedAt: number,
-  flags: CommercialShadowFeatureFlags
+  flags: CommercialShadowFeatureFlags,
+  abortSignal: AbortSignal | null = null
 ): CommercialShadowInput {
+  const salesAgentDryRun = buildCommercialSalesAgentDryRun();
+  const salesAgentMode = salesAgentDryRun ? "dry_run" : SALES_AGENT_RUNTIME_DEFAULT_MODE;
+  const { shadowTimeoutMs, contextTimeoutMs, runtimeTimeoutMs, policyTimeoutMs } = buildCommercialCycleTimeouts();
+
   return {
     inboundMessage: request,
     brainContext: contextResponse,
@@ -1064,40 +1111,35 @@ function buildCommercialShadowInput(
     currentTime: new Date(startedAt).toISOString(),
     timezone: "UTC",
     requestedMode: request.contextMode,
+    options: {
+      timeoutMs: shadowTimeoutMs,
+      contextTimeoutMs,
+      runtimeTimeoutMs,
+      policyTimeoutMs
+    },
     policyContext: undefined,
     provider: null,
     runtimeOptions: {
       enabled: true,
-      mode: "dry_run",
-      timeoutMs: COMMERCIAL_SHADOW_RUNTIME_TIMEOUT_MS,
+      mode: salesAgentMode,
+      timeoutMs: runtimeTimeoutMs,
       maxInputCharacters: 20000,
       maxOutputCharacters: 12000,
       strictValidation: true,
       allowedCapabilities: [],
       captureRawOutput: false,
       includePromptPreview: false,
-      dryRun: true,
-      abortSignal: null
+      dryRun: salesAgentDryRun,
+      abortSignal
     },
-    policyFlags: {
-      ...COMMERCIAL_POLICY_DEFAULT_FLAGS,
-      commercialPolicyEnabled: true,
-      allowDraftReplies: true,
-      allowToolRequests: true,
-      allowEntityProposals: true,
-      allowFollowUpEvaluation: true,
-      allowInternalTasks: true,
-      allowQuoteDraftRequests: true,
-      allowOperatorReviewRequests: true,
-      allowSensitiveClaims: false,
-      allowOutboundProposals: true
-    },
+    policyFlags: buildCommercialCyclePolicyFlags(true),
     shadowFlags: flags,
     contractVersion: SALES_AGENT_CONTRACT_VERSION,
     promptVersion: SALES_AGENT_PROMPT_VERSION,
     policyVersion: COMMERCIAL_POLICY_VERSION,
     allowedCapabilities: [],
-    metadata: request.metadata
+    metadata: request.metadata,
+    abortSignal
   };
 }
 
@@ -1131,6 +1173,10 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
   const commercialOperationalLoopHook =
     dependencies.commercialOperationalLoop?.commercialOperationalLoopHook ?? runCommercialOperationalLoop;
   const commercialOperationalLoopFlags = buildCommercialOperationalLoopFlags(dependencies.commercialOperationalLoop);
+  const commercialAutonomyAfterConsultativeEnabled = shouldRunCommercialAutonomyAfterConsultative(dependencies.commercialOperationalLoop);
+  const commercialExecutionBridgeHook =
+    dependencies.commercialExecutionBridge?.commercialExecutionBridgeHook ?? runCommercialExecutionBridge;
+  const commercialExecutionBridgeFlags = buildCommercialExecutionBridgeFlags(dependencies.commercialExecutionBridge);
 
   if (request.options.executeActions) {
     return buildFailClosedResponse(
@@ -1155,14 +1201,15 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
   const contextSummary = buildContextSummary(requestId, request, contextResponse);
   let commercialShadowResult: CommercialShadowResult | null = null;
   let commercialOperationalLoopResult: CommercialOperationalLoopResult | null = null;
+  let commercialExecutionBridgeResult: CommercialExecutionBridgeResult | null = null;
   let customerOnboardingResult: Awaited<ReturnType<typeof runCustomerOnboardingLoop>> | null = null;
   if (commercialShadowFlags.commercialShadowEnabled) {
     try {
-      commercialShadowResult = await commercialShadowHook(buildCommercialShadowInput(request, contextResponse, startedAt, commercialShadowFlags));
+      commercialShadowResult = await commercialShadowHook(buildCommercialShadowInput(request, contextResponse, startedAt, commercialShadowFlags, dependencies.abortSignal ?? null));
     } catch (error) {
       const message = error instanceof Error ? sanitizeCommercialShadowErrorMessage(error.message) : "Commercial shadow hook failed.";
       commercialShadowResult = createCommercialShadowFailedSafe({
-        input: buildCommercialShadowInput(request, contextResponse, startedAt, commercialShadowFlags),
+        input: buildCommercialShadowInput(request, contextResponse, startedAt, commercialShadowFlags, dependencies.abortSignal ?? null),
         status: "failed_safe",
         failureStage: "shadow_complete",
         reason: "Commercial shadow hook failed.",
@@ -1291,7 +1338,7 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
   outboxPlanResult = outboxPlanAttempt.result;
   outboxPlanWarnings = outboxPlanAttempt.warnings;
 
-  if (commercialOperationalLoopFlags.commercialOperationalLoopEnabled && !salesConsultativeResult) {
+  if (commercialOperationalLoopFlags.commercialOperationalLoopEnabled && (!salesConsultativeResult || commercialAutonomyAfterConsultativeEnabled)) {
     const commercialOperationalLoopInput = buildCommercialOperationalLoopInput(
       request,
       contextResponse,
@@ -1311,6 +1358,40 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
     }
   }
 
+  if (commercialExecutionBridgeFlags.actionQueueEnabled && (!salesConsultativeResult || commercialAutonomyAfterConsultativeEnabled)) {
+    try {
+      commercialExecutionBridgeResult = await commercialExecutionBridgeHook({
+        operationalLoopResult: commercialOperationalLoopResult,
+        currentTime: new Date(startedAt).toISOString(),
+        timezone: "UTC",
+        featureFlags: commercialExecutionBridgeFlags,
+        sandboxWaIds: parseEnvCsv("BRAIN_AUTONOMOUS_TEST_WA_IDS"),
+        allowedActionTypes: parseEnvCsv("BRAIN_AUTONOMOUS_ALLOWED_ACTION_TYPES", ["send_whatsapp_reply", "request_more_context"]),
+        maxRiskLevel: process.env.BRAIN_AUTONOMOUS_MAX_RISK_LEVEL?.trim() || "low"
+      });
+    } catch (error) {
+      const message = error instanceof Error ? sanitizeCommercialShadowErrorMessage(error.message) : "Commercial execution bridge failed.";
+      actionResponse.warnings.push(message);
+      commercialExecutionBridgeResult = {
+        status: "failed",
+        enabled: true,
+        action: null,
+        actionPersistence: null,
+        sandboxEvaluation: null,
+        executionGate: null,
+        warnings: ["commercial_execution_bridge_failed"],
+        error: message,
+        sideEffects: {
+          actionWritten: false,
+          outboxWritten: false,
+          messageSent: false,
+          metaCalled: false,
+          workerTriggered: false
+        }
+      };
+    }
+  }
+
   return buildValidResponse(
     request,
     startedAt,
@@ -1322,6 +1403,7 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
     outboxPlanWarnings,
     commercialShadowResult,
     commercialOperationalLoopResult,
+    commercialExecutionBridgeResult,
     customerOnboardingResult,
     salesConsultativeResult
   );
