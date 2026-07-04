@@ -13,4 +13,5 @@ export * from "./groundedResponse";
 export * from "./persistProposedFacts";
 export * from "./deferredActions";
 export * from "./requestFollowups";
+export * from "./requestsView";
 export * from "./runMultiRequestAutonomousCycle";
