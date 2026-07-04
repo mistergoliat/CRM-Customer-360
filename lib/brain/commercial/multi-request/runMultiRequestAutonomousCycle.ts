@@ -16,6 +16,7 @@ import type { ReducedRequestState } from "./reduceRequests";
 import { buildGroundedResponseInput, generateGroundedResponse } from "./groundedResponse";
 import type { GroundedResponseProvider, GroundedResponseResult } from "./groundedResponse";
 import { persistProposedFacts } from "./persistProposedFacts";
+import { listDeferredActionsForRequest } from "./deferredActions";
 import { isRequestFactsEnabled } from "../request-facts";
 import type { RequestFact } from "../request-facts";
 import type { TurnPlanRecord } from "./turnPlanTypes";
@@ -137,12 +138,21 @@ export async function runMultiRequestAutonomousCycle(input: MultiRequestCycleInp
       }))
   );
 
+  // Pending work already deferred for these requests is told to the customer
+  // honestly ("quede pendiente de..."), never claimed as done.
+  const deferredActions: { requestId: string; actionType: string; reason: string }[] = [];
+  for (const requestId of reducedIds) {
+    const deferred = await listDeferredActionsForRequest(requestId);
+    deferredActions.push(...deferred.map((action) => ({ requestId, actionType: action.actionType, reason: action.reason })));
+  }
+
   const responseDraft = await generateGroundedResponse(
     buildGroundedResponseInput({
       customerMessage: input.messageText,
       activeRequests: activeAfter,
       appliedOperations: operations.applied,
-      missingFacts
+      missingFacts,
+      deferredActions
     }),
     input.responseProvider ?? null
   );
