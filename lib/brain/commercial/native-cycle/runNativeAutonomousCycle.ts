@@ -15,6 +15,8 @@ import {
   readEnvFlag
 } from "../config/commercialCycleConfig";
 import { buildNativeBrainContextShim } from "./buildNativeBrainContextShim";
+import { isMultiRequestRuntimeEnabled, runMultiRequestAutonomousCycle } from "../multi-request";
+import type { MultiRequestCycleResult } from "../multi-request";
 import type { CommercialShadowResult } from "../shadow";
 import type { CommercialOperationalLoopResult } from "../operational-loop";
 import type { CommercialExecutionBridgeResult } from "../execution-bridge";
@@ -39,6 +41,7 @@ export type NativeAutonomousCycleResult = {
   shadow: CommercialShadowResult | null;
   loop: CommercialOperationalLoopResult | null;
   bridge: CommercialExecutionBridgeResult | null;
+  multiRequest?: MultiRequestCycleResult | null;
   warnings: string[];
 };
 
@@ -74,6 +77,27 @@ function isAutonomyCycleEnabled(): boolean {
 export async function runNativeAutonomousCycle(
   input: NativeAutonomousCycleInput
 ): Promise<NativeAutonomousCycleResult> {
+  // Authoritative runtime switch: with the multi-request flag on, the legacy
+  // single-intent pipeline below never runs for this turn - one runtime or
+  // the other, never both.
+  if (isMultiRequestRuntimeEnabled()) {
+    const multiRequest = await runMultiRequestAutonomousCycle({
+      conversationId: input.conversationId,
+      inboundMessageId: input.messageId === null || input.messageId === undefined ? "" : String(input.messageId),
+      messageText: input.messageText,
+      correlationId: input.correlationId
+    });
+    return {
+      ran: multiRequest.ran,
+      reason: multiRequest.reason ?? "multi_request_runtime",
+      shadow: null,
+      loop: null,
+      bridge: null,
+      multiRequest,
+      warnings: multiRequest.warnings
+    };
+  }
+
   if (!isAutonomyCycleEnabled()) {
     return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, warnings: [] };
   }
