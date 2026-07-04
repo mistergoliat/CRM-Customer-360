@@ -24,7 +24,7 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     domain: "sales",
     requiredFacts: ["products"],
     optionalFacts: ["quantity", "delivery_address_id"],
-    allowedCapabilities: ["search_products", "get_product_information", "get_product_price", "create_quote", "send_quote"],
+    allowedCapabilities: ["search_products", "get_product_information", "get_product_price", "list_customer_addresses", "get_customer_address", "create_quote", "send_quote"],
     resolutionConditions: [{ eventType: "quote_sent", resolutionType: "quote_sent" }],
     escalationConditions: HUMAN_ESCALATION,
     followupPolicy: { purpose: "quote_follow_up", delayMinutes: 60 * 24 }
@@ -44,7 +44,7 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     domain: "maintenance",
     requiredFacts: ["equipment_code"],
     optionalFacts: ["delivery_address_id", "preferred_datetime"],
-    allowedCapabilities: ["identify_equipment", "get_service_price", "create_quote", "send_quote"],
+    allowedCapabilities: ["identify_equipment", "get_service_price", "list_customer_addresses", "get_customer_address", "create_quote", "send_quote"],
     resolutionConditions: [{ eventType: "quote_sent", resolutionType: "quote_sent" }],
     escalationConditions: HUMAN_ESCALATION,
     followupPolicy: { purpose: "maintenance_quote_follow_up", delayMinutes: 60 * 24 }
