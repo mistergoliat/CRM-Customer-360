@@ -2,7 +2,7 @@ import type { BrainContextResolveResponse } from "../../context/types";
 import type { CommercialContextBuilderResult, CommercialContextSourceSummary, CommercialIntent, CommercialChannelReference } from "../types";
 import { COMMERCIAL_INTENTS } from "../constants";
 import type { BrainNormalizedProcessInboundRequest } from "../../inbound/types";
-import type { CommercialOperationalIdentityHints, CommercialOperationalLoadStateResult, CommercialOperationalOpportunityIdentityResolution } from "./types";
+import type { CommercialOperationalIdentityHints, CommercialOperationalLoadStateResult, CommercialOperationalOpportunityIdentityResolution, CommercialOperationalState } from "./types";
 import type { CommercialOperationalLoopWarning } from "./constants";
 
 export type CommercialOperationalIdentityResolutionInput = {
@@ -143,10 +143,35 @@ export function buildOpportunityKey(hints: CommercialOperationalIdentityHints) {
   ]).join(":");
 }
 
-function deriveSelectedState(loadResult: CommercialOperationalLoadStateResult | null) {
-  if (!loadResult) return null;
-  if (loadResult.activeState) return loadResult.activeState;
-  return loadResult.candidates[0] ?? null;
+function isTerminalOpportunityStatus(status: string) {
+  return status === "won" || status === "lost" || status === "cancelled" || status === "archived";
+}
+
+/**
+ * An "unknown" intent hint means this turn did not restate the topic (most
+ * continuation messages) - any identity match stays relevant, same as before
+ * this fix. A specific, known intent narrows relevance to opportunities that
+ * share it, so an unrelated topic never bleeds into this turn's resolution or
+ * counts toward ambiguity, and a terminal opportunity from a DIFFERENT topic
+ * can never be reused just because it happens to be the most recent row.
+ */
+function selectRelevantCandidates(
+  candidates: CommercialOperationalState[],
+  primaryIntent: CommercialIntent
+): CommercialOperationalState[] {
+  if (primaryIntent === "unknown") return candidates;
+  return candidates.filter((candidate) => candidate.primaryIntent === primaryIntent);
+}
+
+function deriveSelectedState(loadResult: CommercialOperationalLoadStateResult | null, hints: CommercialOperationalIdentityHints) {
+  if (!loadResult) return { selectedState: null as CommercialOperationalState | null, reopenCandidate: null as CommercialOperationalState | null, relevantCount: 0 };
+  const relevant = selectRelevantCandidates(loadResult.candidates, hints.primaryIntent);
+  const nonTerminalRelevant = relevant.filter((candidate) => !isTerminalOpportunityStatus(candidate.status));
+  const selectedState = nonTerminalRelevant.find((candidate) => !candidate.humanOwnerActive && !candidate.aiBlocked) ?? nonTerminalRelevant[0] ?? null;
+  // A candidate only counts as a reopen prospect when no non-terminal candidate
+  // was found for this intent - it must never override a live opportunity.
+  const reopenCandidate = selectedState ? null : relevant.find((candidate) => isTerminalOpportunityStatus(candidate.status)) ?? null;
+  return { selectedState, reopenCandidate, relevantCount: nonTerminalRelevant.length };
 }
 
 export function resolveOpportunityIdentity(input: CommercialOperationalIdentityResolutionInput): CommercialOperationalOpportunityIdentityResolution {
@@ -162,12 +187,15 @@ export function resolveOpportunityIdentity(input: CommercialOperationalIdentityR
       .filter((value): value is string | number => value !== null && value !== undefined)
       .map((value) => String(value))
   );
-  const selectedState = deriveSelectedState(loadResult);
+  const { selectedState, reopenCandidate, relevantCount } = deriveSelectedState(loadResult, hints);
   const opportunityKey = buildOpportunityKey(hints);
-  const isTerminal = Boolean(selectedState && ["won", "lost", "cancelled", "archived"].includes(selectedState.status));
-  const isAmbiguous = candidateOpportunityIds.length > 1;
+  // Ambiguity and reopen candidacy are computed over relevant (intent-matched
+  // when the intent is known, non-terminal) candidates only - a closed
+  // opportunity, or one about an unrelated topic, must never inflate the
+  // ambiguity count nor be silently reused as the active state.
+  const isAmbiguous = relevantCount > 1;
   const hasCommercialSignal = hints.hasCommercialSignal;
-  const isNewOpportunity = !selectedState && hasCommercialSignal;
+  const isNewOpportunity = !selectedState && !reopenCandidate && hasCommercialSignal;
 
   if (loadResult?.status === "error") {
     return {
@@ -239,17 +267,20 @@ export function resolveOpportunityIdentity(input: CommercialOperationalIdentityR
     };
   }
 
-  if (isTerminal && selectedState) {
+  if (reopenCandidate) {
     return {
-      status: "terminal",
+      status: "possible_reopen",
       opportunityKey,
-      opportunityId: selectedState.opportunityId,
+      opportunityId: null,
       candidateOpportunityIds,
-      selectedOpportunityId: selectedState.opportunityId,
-      selectedState,
+      selectedOpportunityId: null,
+      // Deliberately null: a terminal opportunity is never auto-selected as the
+      // active state, even when it shares this turn's intent - only an explicit
+      // decision (human or, later, the multi-request linker) may reopen it.
+      selectedState: null,
       primaryIntent: hints.primaryIntent,
       channel: hints.channel,
-      reason: `Opportunity ${selectedState.opportunityKey} is terminal and must not be reopened automatically.`,
+      reason: `Opportunity ${reopenCandidate.opportunityKey} is terminal and shares this intent; it was not reopened automatically.`,
       isNewOpportunity: false,
       isAmbiguous: false,
       isTerminal: true,
@@ -257,7 +288,9 @@ export function resolveOpportunityIdentity(input: CommercialOperationalIdentityR
       warnings: ["commercial_state_terminal"],
       metadata: {
         threadKey: hints.threadKey,
-        sourceSummary: hints.sourceSummary
+        sourceSummary: hints.sourceSummary,
+        reopenCandidateOpportunityId: reopenCandidate.opportunityId,
+        reopenCandidateOpportunityKey: reopenCandidate.opportunityKey
       }
     };
   }

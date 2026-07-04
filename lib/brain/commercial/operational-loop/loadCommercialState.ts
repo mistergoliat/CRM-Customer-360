@@ -446,14 +446,20 @@ export async function loadCommercialState(input: CommercialOperationalLoadInput)
     );
 
     const candidates = rows.map((row) => normalizeState(row));
-    const activeState =
-      candidates.find((state) => !isTerminalStatus(state.status) && !state.humanOwnerActive && !state.aiBlocked) ??
-      candidates.find((state) => !isTerminalStatus(state.status)) ??
-      candidates[0] ??
-      null;
+    // Bugfix: an "unknown" intent hint (most continuation turns that don't
+    // restate the topic) keeps the legacy behavior of considering every
+    // identity-matched candidate. A specific, known intent narrows relevance to
+    // opportunities that share it, so a candidate about a different topic never
+    // gets reused or counted as a conflict just for existing. In both cases,
+    // terminal candidates are excluded from "active" and from the conflict
+    // count - a closed opportunity (even a very recent one) must never be
+    // silently reused, nor make an unrelated new topic look ambiguous.
+    const relevantCandidates = hints.primaryIntent === "unknown" ? candidates : candidates.filter((state) => state.primaryIntent === hints.primaryIntent);
+    const nonTerminalRelevant = relevantCandidates.filter((state) => !isTerminalStatus(state.status));
+    const activeState = nonTerminalRelevant.find((state) => !state.humanOwnerActive && !state.aiBlocked) ?? nonTerminalRelevant[0] ?? null;
     const latestDecision = activeState ? await loadLatestDecision(activeState.opportunityId ?? activeState.opportunityKey) : null;
     const warnings = uniqueStrings([
-      candidates.length > 1 ? "commercial_state_conflict" : null,
+      nonTerminalRelevant.length > 1 ? "commercial_state_conflict" : null,
       candidates.some((candidate) => candidate.humanOwnerActive) ? "commercial_state_human_owner_active" : null,
       candidates.some((candidate) => candidate.aiBlocked) ? "commercial_state_ai_blocked" : null,
       candidates.some((candidate) => candidate.status === "stalled") ? "commercial_state_no_action" : null,

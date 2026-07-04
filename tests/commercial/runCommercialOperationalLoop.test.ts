@@ -8,6 +8,7 @@ import {
 } from "../../lib/brain/commercial/sales-agent/runtimeTypes";
 import { runCommercialShadowEvaluation } from "../../lib/brain/commercial/shadow/runCommercialShadowEvaluation";
 import { runCommercialOperationalLoop } from "../../lib/brain/commercial/operational-loop/runCommercialOperationalLoop";
+import { resolveOpportunityIdentity } from "../../lib/brain/commercial/operational-loop/resolveOpportunityIdentity";
 import type {
   CommercialOperationalLoadStateResult,
   CommercialOperationalLoopInput,
@@ -18,7 +19,7 @@ import type {
 import type { CommercialPolicyResult } from "../../lib/brain/commercial/policy";
 import type { CommercialShadowResult } from "../../lib/brain/commercial/shadow";
 import type { CommercialOperationalPersistenceResult } from "../../lib/brain/commercial/operational-loop";
-import { makeCommercialShadowInput, FIXED_TIME } from "./fixtures";
+import { makeCommercialShadowInput, makeNormalizedInboundMessage, makeBrainContextResolveResponse, FIXED_TIME } from "./fixtures";
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -385,6 +386,189 @@ test("persistence failures degrade safely", async () => {
   assert.equal(result.persistenceResult?.status, "failed_safe");
   assert.equal(result.sideEffects.commercialOpportunityWritten, false);
   assert.equal(result.sideEffects.commercialDecisionWritten, false);
+});
+
+function makeOperationalState(overrides: Partial<CommercialOperationalState> = {}): CommercialOperationalState {
+  return {
+    opportunityId: 1,
+    opportunityKey: "opportunity:56912345678:quote_request:whatsapp:thread",
+    customerCandidateId: null,
+    customerMasterId: null,
+    leadId: null,
+    conversationCaseId: 4821,
+    waId: "56912345678",
+    channel: "whatsapp",
+    primaryIntent: "quote_request",
+    status: "engaged",
+    stage: "discovery",
+    temperature: "unknown",
+    priority: "normal",
+    currentSummary: null,
+    requirements: [],
+    missingRequirements: [],
+    productInterests: [],
+    objections: [],
+    signals: [],
+    lastCustomerMessageId: null,
+    lastAgentDecisionId: null,
+    waitingFor: null,
+    nextActionType: null,
+    nextActionDueAt: null,
+    humanOwnerActive: false,
+    aiBlocked: false,
+    version: 1,
+    createdAt: FIXED_TIME,
+    updatedAt: FIXED_TIME,
+    lastActivityAt: FIXED_TIME,
+    closedAt: null,
+    previousDecision: null,
+    ...overrides
+  };
+}
+
+function buildIdentityInput(overrides: { serviceCode?: string; candidates?: CommercialOperationalState[] }) {
+  const brainContext = makeBrainContextResolveResponse({
+    case_context: {
+      active_case: {
+        conversation_case_id: 4821,
+        active_case_key: "case-001",
+        status: "open",
+        lifecycle_status: "open",
+        department: "ventas",
+        service_code: overrides.serviceCode ?? "unknown",
+        priority: "medium",
+        requires_human: false,
+        bot_replied: false,
+        final_action: "continue",
+        ai_blocked: false,
+        wa_id: "56912345678",
+        phone_number_id: "phone-001",
+        id_order: 20001,
+        id_customer: 10045,
+        invoice_number: 30001,
+        source_table: "n8n_cases",
+        source_id: 4821,
+        whatsapp_window_open: true,
+        last_message_at: FIXED_TIME,
+        created_at: FIXED_TIME,
+        updated_at: FIXED_TIME,
+        closed_at: null,
+        raw_status: "open"
+      },
+      latest_case: null,
+      open_cases: [],
+      case_count: 1,
+      waiting_human_case: false,
+      closed_or_rejected_case: false,
+      manual_operator_lock: false,
+      last_case_status: "open",
+      last_case_final_action: "continue"
+    }
+  });
+
+  // Minimal fixture: resolveOpportunityIdentity only reads sourceSummary/salesAgentInput
+  // off the commercial context, so a full CommercialContextBuilderResult isn't needed here.
+  const commercialContext: any = {
+    status: "complete",
+    sourceSummary: {
+      hasLatestCustomerMessage: true,
+      hasLatestOutboundMessage: false,
+      hasCustomerCandidate: false,
+      hasCustomerReference: false,
+      hasConversationHistory: false,
+      hasCommercialEntity: false,
+      orderContextAvailable: false,
+      productServiceContextAvailable: false,
+      humanOwnershipActive: false,
+      aiBlocked: false,
+      manualReplyActive: false,
+      channel: "whatsapp",
+      waId: "56912345678",
+      conversationCaseId: 4821
+    },
+    salesAgentInput: null
+  };
+
+  return {
+    inboundMessage: makeNormalizedInboundMessage(),
+    brainContext,
+    commercialContext,
+    loadResult: {
+      status: "loaded" as const,
+      candidates: overrides.candidates ?? [],
+      activeState: null,
+      latestDecision: null,
+      warnings: [],
+      metadata: {}
+    },
+    currentTime: FIXED_TIME,
+    correlationId: "corr-identity-001"
+  };
+}
+
+test("two opportunities of different intents are not ambiguous - each resolves to its own", () => {
+  const quoteOpportunity = makeOperationalState({ opportunityId: 1, opportunityKey: "opp-quote", primaryIntent: "quote_request", status: "engaged" });
+  const maintenanceOpportunity = makeOperationalState({ opportunityId: 2, opportunityKey: "opp-maintenance", primaryIntent: "maintenance_request", status: "engaged" });
+
+  const resultForQuote = resolveOpportunityIdentity(
+    buildIdentityInput({ serviceCode: "quote_requested", candidates: [quoteOpportunity, maintenanceOpportunity] })
+  );
+  assert.equal(resultForQuote.isAmbiguous, false);
+  assert.equal(resultForQuote.status, "continue_existing");
+  assert.equal(resultForQuote.selectedOpportunityId, 1);
+
+  const resultForMaintenance = resolveOpportunityIdentity(
+    buildIdentityInput({ serviceCode: "maintenance", candidates: [quoteOpportunity, maintenanceOpportunity] })
+  );
+  assert.equal(resultForMaintenance.isAmbiguous, false);
+  assert.equal(resultForMaintenance.status, "continue_existing");
+  assert.equal(resultForMaintenance.selectedOpportunityId, 2);
+});
+
+test("two active opportunities of the same intent are still ambiguous", () => {
+  const first = makeOperationalState({ opportunityId: 1, opportunityKey: "opp-quote-1", primaryIntent: "quote_request", status: "engaged" });
+  const second = makeOperationalState({ opportunityId: 2, opportunityKey: "opp-quote-2", primaryIntent: "quote_request", status: "engaged" });
+
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "quote_requested", candidates: [first, second] }));
+
+  assert.equal(result.isAmbiguous, true);
+  assert.equal(result.status, "ambiguous");
+  // Ambiguous never auto-acts, even though selectedState carries a candidate for context.
+  assert.equal(result.selectedOpportunityId, null);
+  assert.equal(result.opportunityId, null);
+});
+
+test("only terminal history for a new intent creates a new opportunity, not a reopen", () => {
+  const terminal = makeOperationalState({ opportunityId: 1, opportunityKey: "opp-old-maintenance", primaryIntent: "maintenance_request", status: "won" });
+
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "quote_requested", candidates: [terminal] }));
+
+  assert.equal(result.status, "create_new");
+  assert.equal(result.isAmbiguous, false);
+  assert.equal(result.selectedState, null);
+});
+
+test("terminal history matching the current intent is a possible reopen, not a blind reuse", () => {
+  const terminal = makeOperationalState({ opportunityId: 1, opportunityKey: "opp-old-quote", primaryIntent: "quote_request", status: "won" });
+
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "quote_requested", candidates: [terminal] }));
+
+  assert.equal(result.status, "possible_reopen");
+  assert.equal(result.isTerminal, true);
+  assert.equal(result.isAmbiguous, false);
+  // Never auto-selected: reopening a closed opportunity requires an explicit decision.
+  assert.equal(result.selectedState, null);
+  assert.equal(result.selectedOpportunityId, null);
+  assert.equal(result.metadata.reopenCandidateOpportunityId, 1);
+});
+
+test("unknown intent keeps legacy behavior: reuses the most recently active candidate regardless of intent", () => {
+  const other = makeOperationalState({ opportunityId: 1, opportunityKey: "opp-other", primaryIntent: "maintenance_request", status: "engaged" });
+
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "unknown", candidates: [other] }));
+
+  assert.equal(result.status, "continue_existing");
+  assert.equal(result.selectedOpportunityId, 1);
 });
 
 test("operational loop is deterministic and JSON serializable", async () => {
