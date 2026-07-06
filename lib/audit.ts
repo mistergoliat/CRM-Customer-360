@@ -33,7 +33,8 @@ export type AuditAction =
   | "outbox.send.cancelled"
   | "outbox.send.escalated"
   | "outbox.sent_after_cancel"
-  | "outbox.window_closed.escalated";
+  | "outbox.window_closed.escalated"
+  | "whatsapp.inbound.rejected";
 
 export async function ensureAuditTable() {
   await queryRows(`

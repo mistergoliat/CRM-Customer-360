@@ -29,7 +29,12 @@ export async function POST(request: Request, context: Context) {
   const result = await sendConversationManualReply({ conversationPublicId: id, text, operatorName });
 
   if (!result.ok) {
-    const statusCode = result.code === "conversation_not_found" ? 404 : result.code === "conversation_closed" ? 409 : 400;
+    const statusCode =
+      result.code === "conversation_not_found"
+        ? 404
+        : result.code === "conversation_closed" || result.code === "window_closed"
+          ? 409
+          : 400;
     return Response.json({ error: result.code, message: result.message }, { status: statusCode });
   }
 
