@@ -5,6 +5,7 @@ import { DataTable } from "@/components/ui/DataTable";
 import { StatusChip } from "@/components/ui/StatusChip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
+import { SurfaceBadge } from "@/components/p1m/SurfaceBadge";
 
 type CasesPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -22,6 +23,12 @@ function withPage(filters: Record<string, string>, page: number) {
   }
   params.set("page", String(page));
   return `/cases?${params.toString()}`;
+}
+
+function surfaceKindForMode(mode: string) {
+  if (mode === "real") return "real" as const;
+  if (mode === "partial") return "preview" as const;
+  return "notAvailable" as const;
 }
 
 export default async function CasesPage({ searchParams }: CasesPageProps) {
@@ -44,6 +51,7 @@ export default async function CasesPage({ searchParams }: CasesPageProps) {
     page: Number(rawFilters.page)
   });
   const totalPages = Math.max(1, Math.ceil(data.pagination.total / data.pagination.pageSize));
+  const badgeKind = surfaceKindForMode(data.meta.mode);
 
   return (
     <>
@@ -52,7 +60,12 @@ export default async function CasesPage({ searchParams }: CasesPageProps) {
         title="Bandeja operacional"
         description="Casos reales encapsulados por el dominio nuevo sobre el legado n8n."
         status={data.meta.mode}
-        actions={<StatusChip label={data.meta.source} tone="green" />}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <SurfaceBadge kind={badgeKind} />
+            <StatusChip label={data.meta.source} tone="green" />
+          </div>
+        }
       />
 
       <form className="hub-card mb-5 grid gap-3 p-4 md:grid-cols-6" action="/cases">

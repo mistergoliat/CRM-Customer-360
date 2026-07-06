@@ -24,7 +24,17 @@ export type AuditAction =
   | "customer.link.failed"
   | "customer.identity_conflict"
   | "ai_sdr.handoff.requested"
-  | "whatsapp.delivery_status.applied";
+  | "whatsapp.delivery_status.applied"
+  | "conversation.control.take"
+  | "conversation.control.release"
+  | "conversation.control.pause"
+  | "conversation.control.close"
+  | "conversation.control.reopen"
+  | "outbox.send.cancelled"
+  | "outbox.send.escalated"
+  | "outbox.sent_after_cancel"
+  | "outbox.window_closed.escalated"
+  | "whatsapp.inbound.rejected";
 
 export async function ensureAuditTable() {
   await queryRows(`

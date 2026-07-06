@@ -1,145 +1,251 @@
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusChip } from "@/components/ui/StatusChip";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { SurfaceBadge } from "@/components/p1m/SurfaceBadge";
 import { SectionCard } from "@/components/p1m/SectionCard";
 import { InfoGrid } from "@/components/p1m/InfoGrid";
 import { WorkspaceShell } from "@/components/p1m/WorkspaceShell";
-import { TabStrip } from "@/components/p1m/TabStrip";
-import { getOpportunityWorkspaceViewModel } from "@/lib/p1m/read-models";
+import { getOpportunityById } from "@/lib/domains/opportunities/service";
+import { getModuleModeLabel, type ModuleDataMode } from "@/lib/domains/runtime/data-source-status";
 
 type OpportunityDetailProps = {
   params: Promise<{ id: string }>;
 };
 
+function surfaceKindForMode(mode: ModuleDataMode) {
+  if (mode === "real") return "real" as const;
+  if (mode === "partial") return "preview" as const;
+  return "notAvailable" as const;
+}
+
+function toneForStatus(status: string) {
+  const normalized = status.trim().toLowerCase();
+  if (["won"].includes(normalized)) return "green" as const;
+  if (["lost", "archived", "cancelled"].includes(normalized)) return "red" as const;
+  if (["requires_review", "pending", "waiting", "blocked"].includes(normalized)) return "amber" as const;
+  if (["active", "open"].includes(normalized)) return "blue" as const;
+  return "gray" as const;
+}
+
+function toneForStage(stage: string) {
+  const normalized = stage.trim().toLowerCase();
+  if (["won"].includes(normalized)) return "green" as const;
+  if (["lost", "archived", "cancelled"].includes(normalized)) return "red" as const;
+  if (["quote_pending", "purchase_intent", "checkout_support"].includes(normalized)) return "amber" as const;
+  if (["discovery", "qualification", "recommendation", "objection_handling", "follow_up", "handoff"].includes(normalized)) return "blue" as const;
+  return "gray" as const;
+}
+
+function toneForRisk(risk: string) {
+  if (risk === "Alto") return "red" as const;
+  if (risk === "Medio") return "amber" as const;
+  if (risk === "Bajo") return "green" as const;
+  return "gray" as const;
+}
+
+function fallbackList(values: string[] | null | undefined, fallback = "No disponible") {
+  return values && values.length > 0 ? values : [fallback];
+}
+
 export default async function OpportunityDetailPage({ params }: OpportunityDetailProps) {
   const { id } = await params;
-  const opportunity = getOpportunityWorkspaceViewModel(id);
+  const data = await getOpportunityById(id);
+
+  if (!data || !data.opportunity) {
+    return <EmptyState title="Oportunidad no disponible" description={`No se encontro informacion operativa para ${id}.`} />;
+  }
+
+  const { opportunity, customer, profile, decision, actions, timeline, quote, copilot, warnings, meta } = data;
+  const badgeKind = surfaceKindForMode(meta.mode);
 
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Oportunidades"
-        title={opportunity.customer}
-        description="Workspace de oportunidad con AI SDR Copilot, cotización y acciones vinculadas."
-        status="Preview"
-        actions={<SurfaceBadge kind="fixture" />}
+        title={customer?.name ?? opportunity.customer}
+        description="Workspace operativo de oportunidad con decision, profile, timeline y acciones reales."
+        status={getModuleModeLabel(meta.mode)}
+        actions={<SurfaceBadge kind={badgeKind} />}
       />
+
+      {warnings.length > 0 ? <ErrorState title="Warnings de oportunidad" message={warnings.join(", ")} /> : null}
 
       <WorkspaceShell
         sidebar={
-          <SectionCard title="Resumen" eyebrow="Opportunity" description={opportunity.stage}>
-            <InfoGrid
-              items={[
-                { label: "Estado", value: opportunity.status },
-                { label: "Monto", value: opportunity.amount },
-                { label: "Fuente", value: opportunity.source },
-                { label: "Responsable", value: opportunity.owner },
-                { label: "Última actividad", value: opportunity.last_activity },
-                { label: "Ubicación", value: opportunity.location }
-              ]}
-            />
-            <div className="mt-4 space-y-3">
-              <div>
-                <p className="text-label-bold uppercase text-slate-500">Necesidades</p>
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-body-md text-slate-700">
-                  {opportunity.needs.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-              <div>
-                <p className="text-label-bold uppercase text-slate-500">Productos</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {opportunity.products.map((item) => <StatusChip key={item} label={item} tone="blue" />)}
-                </div>
-              </div>
-              <div>
-                <p className="text-label-bold uppercase text-slate-500">Objeciones</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {opportunity.objections.map((item) => <StatusChip key={item} label={item} tone="amber" />)}
-                </div>
-              </div>
-            </div>
-          </SectionCard>
-        }
-        main={
-          <SectionCard title="Detalle de oportunidad" eyebrow="Workspace" description="Tabs visuales y cotización sin lógica productiva.">
-            <TabStrip
-              tabs={[
-                { label: "Resumen", active: true },
-                { label: "Actividad" },
-                { label: "Cotización" },
-                { label: "Conversaciones" },
-                { label: "Casos" },
-                { label: "Acciones" }
-              ]}
-              className="mb-5"
-            />
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_360px]">
-              <div className="space-y-5">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-label-bold uppercase text-slate-500">Próximo paso</p>
-                  <p className="mt-2 text-body-md text-slate-700">{opportunity.next_step}</p>
-                </div>
-                <SectionCard title="Timeline" eyebrow="Activity" description="Línea de tiempo comercial">
-                  <div className="space-y-3">
-                    {opportunity.timeline.map((item) => (
-                      <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold text-on-surface">{item.title}</p>
-                          <StatusChip label={item.time} tone={item.tone} />
-                        </div>
-                        <p className="text-body-md text-slate-600">{item.subtitle}</p>
-                      </div>
-                    ))}
-                  </div>
-                </SectionCard>
-              </div>
-              <div className="space-y-5">
-                <SectionCard title="Cotización" eyebrow="Quote" description="Borrador visible">
+          <div className="space-y-5">
+            <SectionCard title="Resumen" eyebrow="Opportunity" description="Estado operativo actual" actions={<StatusChip label={opportunity.status} tone={toneForStatus(opportunity.status)} />}>
+              <InfoGrid
+                items={[
+                  { label: "Etapa", value: <StatusChip label={opportunity.stage} tone={toneForStage(opportunity.stage)} /> },
+                  { label: "Valor estimado", value: opportunity.estimatedValue },
+                  { label: "Responsable", value: opportunity.owner },
+                  { label: "Riesgo", value: <StatusChip label={opportunity.risk} tone={toneForRisk(opportunity.risk)} /> },
+                  { label: "Ultima actividad", value: opportunity.activity },
+                  { label: "Origen", value: opportunity.source }
+                ]}
+                columns={2}
+              />
+            </SectionCard>
+
+            <SectionCard title="Customer 360 provisional" eyebrow="Identity" description="La identidad sigue siendo provisional mientras no exista customer_master definitivo.">
+              <InfoGrid
+                items={[
+                  { label: "Email", value: customer?.email ?? "No disponible" },
+                  { label: "Plataforma", value: customer?.platformOrigin ?? "No disponible" },
+                  { label: "Fuente", value: customer?.source ?? "No disponible" }
+                ]}
+              />
+            </SectionCard>
+
+            <SectionCard title="Need profile" eyebrow="Profile" description="Lo que el sistema sabe hoy de la necesidad">
+              {profile ? (
+                <div className="space-y-4">
                   <InfoGrid
                     items={[
-                      { label: "Número", value: opportunity.quote.number },
-                      { label: "Estado", value: opportunity.quote.status },
-                      { label: "Monto", value: opportunity.quote.amount },
-                      { label: "Emitida", value: opportunity.quote.issued },
-                      { label: "Expira", value: opportunity.quote.expiry }
+                      { label: "Use case", value: profile.useCase ?? "No disponible" },
+                      { label: "Cliente", value: profile.customerType ?? "No disponible" },
+                      { label: "Urgencia", value: profile.purchaseUrgency ?? "No disponible" },
+                      { label: "Readiness", value: profile.decisionReadiness ?? "No disponible" },
+                      { label: "Experiencia", value: profile.experienceLevel ?? "No disponible" },
+                      { label: "Ultima actualizacion", value: profile.lastUpdatedAt }
                     ]}
+                    columns={2}
                   />
-                </SectionCard>
-                <SectionCard title="AI SDR Copilot" eyebrow="Preview" description="Sugerencia contextual del vendedor asistido.">
-                  <div className="space-y-3">
-                    <p className="text-body-md text-slate-700">{opportunity.copilot.summary}</p>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                        <p className="text-label-bold uppercase text-slate-500">Riesgo</p>
-                        <p className="mt-1 text-headline-md text-on-surface">{opportunity.copilot.risk}</p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                        <p className="text-label-bold uppercase text-slate-500">Aprobación</p>
-                        <p className="mt-1 text-headline-md text-on-surface">{opportunity.copilot.approval}</p>
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-label-bold uppercase text-slate-500">Evidencia</p>
-                      <ul className="mt-2 list-disc space-y-1 pl-5 text-body-md text-slate-700">
-                        {opportunity.copilot.evidence.map((item) => <li key={item}>{item}</li>)}
-                      </ul>
+                  <div>
+                    <p className="text-label-bold uppercase text-slate-500">Missing information</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {fallbackList(profile.missingInformation).map((item) => (
+                        <StatusChip key={item} label={item} tone="gray" />
+                      ))}
                     </div>
                   </div>
-                </SectionCard>
+                </div>
+              ) : (
+                <EmptyState title="Sin profile" description="El backend aun no tiene perfil de necesidades para esta oportunidad." />
+              )}
+            </SectionCard>
+          </div>
+        }
+        main={
+          <div className="space-y-5">
+            <SectionCard title="Timeline" eyebrow="Activity" description="Hechos operativos ordenados por recencia">
+              <div className="space-y-3">
+                {timeline.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold text-on-surface">{item.title}</p>
+                      <StatusChip label={item.time} tone={item.tone} />
+                    </div>
+                    <p className="mt-1 text-body-md text-slate-600">{item.subtitle}</p>
+                  </div>
+                ))}
               </div>
+            </SectionCard>
+
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_360px]">
+              <SectionCard title="Decision" eyebrow="Governance" description="Ultima decision registrada por el cerebro comercial">
+                {decision ? (
+                  <div className="space-y-4">
+                    <InfoGrid
+                      items={[
+                        { label: "Decision", value: decision.decisionId },
+                        { label: "Next status", value: decision.nextStatus },
+                        { label: "Next stage", value: decision.nextStage ?? "No disponible" },
+                        { label: "Created at", value: decision.createdAt }
+                      ]}
+                      columns={2}
+                    />
+                    <div>
+                      <p className="text-label-bold uppercase text-slate-500">Rationale</p>
+                      <p className="mt-2 text-body-md text-slate-700">{decision.rationale}</p>
+                    </div>
+                    {decision.warnings.length > 0 ? (
+                      <div>
+                        <p className="text-label-bold uppercase text-slate-500">Warnings</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {decision.warnings.map((item) => (
+                            <StatusChip key={item} label={item} tone="amber" />
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <EmptyState title="Sin decision" description="No hay una decision comercial registrada aun." />
+                )}
+              </SectionCard>
+
+              <SectionCard title="Quote" eyebrow="Commercial" description="La cotizacion sigue siendo una lectura real del backend">
+                {quote ? (
+                  <InfoGrid
+                    items={[
+                      { label: "Numero", value: quote.number },
+                      { label: "Estado", value: quote.status },
+                      { label: "Monto", value: quote.amount },
+                      { label: "Emitida", value: quote.issued },
+                      { label: "Expira", value: quote.expiry }
+                    ]}
+                  />
+                ) : (
+                  <EmptyState title="Sin cotizacion" description="El backend aun no expone una cotizacion para esta oportunidad." />
+                )}
+              </SectionCard>
             </div>
-          </SectionCard>
+
+            <SectionCard title="AI SDR Copilot" eyebrow="Copilot" description="Resumen operativo y evidencia factual">
+              <div className="space-y-4">
+                <p className="text-body-md text-slate-700">{copilot.summary}</p>
+                <InfoGrid
+                  items={[
+                    { label: "Next action", value: copilot.nextAction },
+                    { label: "Risk", value: copilot.risk },
+                    { label: "Approval", value: copilot.approval }
+                  ]}
+                  columns={3}
+                />
+                <div>
+                  <p className="text-label-bold uppercase text-slate-500">Evidence</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-body-md text-slate-700">
+                    {fallbackList(copilot.evidence).map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </SectionCard>
+          </div>
         }
         rail={
-          <SectionCard title="Acciones vinculadas" eyebrow="Action" description="Preview-only y bloqueadas.">
-            <div className="space-y-2">
-              {opportunity.actions.map((action) => (
-                <button key={action.label} type="button" disabled className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left">
-                  <span className="text-body-md font-semibold text-on-surface">{action.label}</span>
-                  <StatusChip label={action.state} tone={action.state === "blocked" ? "red" : "amber"} />
-                </button>
-              ))}
-            </div>
+          <SectionCard title="Acciones vinculadas" eyebrow="Action" description="Acciones reales asociadas a la oportunidad">
+            {actions.length > 0 ? (
+              <div className="space-y-3">
+                {actions.map((action) => (
+                  <div key={action.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-on-surface">{action.actionType}</p>
+                        <p className="text-label-sm text-slate-500">{action.actionId}</p>
+                      </div>
+                      <StatusChip label={action.status} tone={toneForStatus(action.status)} />
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      <InfoGrid
+                        items={[
+                          { label: "Risk", value: action.riskLevel },
+                          { label: "Approval", value: action.approvalRequirement },
+                          { label: "Owner", value: action.owner },
+                          { label: "Scheduled", value: action.scheduledFor ?? "No disponible" }
+                        ]}
+                        columns={2}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Sin acciones" description="Todavia no hay acciones de cola vinculadas a esta oportunidad." />
+            )}
           </SectionCard>
         }
       />

@@ -244,10 +244,10 @@ function makeRuntimeInput(overrides: Record<string, unknown> = {}): SalesAgentRu
   const strictValidation = typeof overrides.strictValidation === "boolean" ? overrides.strictValidation : true;
   const captureRawOutput = typeof overrides.captureRawOutput === "boolean" ? overrides.captureRawOutput : false;
   const includePromptPreview = typeof overrides.includePromptPreview === "boolean" ? overrides.includePromptPreview : false;
-  const dryRun = typeof overrides.dryRun === "boolean" ? overrides.dryRun : true;
+  const dryRun = typeof overrides.dryRun === "boolean" ? overrides.dryRun : false;
   const options = {
     enabled,
-    mode: (overrides.mode as "dry_run" | "fixture" | "shadow") ?? "dry_run",
+    mode: (overrides.mode as "dry_run" | "fixture" | "shadow" | "live") ?? "live",
     timeoutMs: (overrides.timeoutMs as number | undefined) ?? 25,
     maxInputCharacters: (overrides.maxInputCharacters as number | undefined) ?? SALES_AGENT_RUNTIME_MAX_INPUT_CHARACTERS,
     maxOutputCharacters: (overrides.maxOutputCharacters as number | undefined) ?? SALES_AGENT_RUNTIME_MAX_OUTPUT_CHARACTERS,
@@ -316,10 +316,50 @@ test("completes valid output from the fake provider", async () => {
   );
 
   assert.equal(result.status, "completed_valid");
+  assert.equal(result.mode, "live");
+  assert.equal(result.dryRun, false);
   assert.equal(result.result.outcome, "response_proposed");
   assert.equal(result.validation.status, "valid");
   assert.equal(result.metrics.providerRequestId, "fake-provider-request-id");
   assert.equal(result.metrics.model, "fake-sales-agent-model");
+});
+
+test("invokes provider when dryRun is false", async () => {
+  let invoked = 0;
+  let observedDryRun: boolean | null = null;
+  const provider: SalesAgentProvider = {
+    name: "live-spy-provider",
+    version: "spy.v1",
+    async invoke(_request, options) {
+      invoked += 1;
+      observedDryRun = options.dryRun;
+      return {
+        rawOutput: makeValidRawOutput(),
+        model: "spy-live-model",
+        inputTokens: 1,
+        outputTokens: 1,
+        estimatedCost: 0,
+        providerRequestId: "spy-live-request",
+        finishReason: "stop",
+        metadata: {}
+      };
+    }
+  };
+
+  const result = await runSalesAgentDryRun(
+    makeRuntimeInput({
+      enabled: true,
+      dryRun: false,
+      mode: "live",
+      provider
+    })
+  );
+
+  assert.equal(invoked, 1);
+  assert.equal(observedDryRun, false);
+  assert.equal(result.status, "completed_valid");
+  assert.equal(result.dryRun, false);
+  assert.equal(result.provider.model, "spy-live-model");
 });
 
 test("fails safe on invalid provider output", async () => {

@@ -14,7 +14,11 @@ export function getPool() {
   if (!pool) {
     const connection = resolveNamedDatabaseConnection("app");
     if (connection.url) {
-      pool = mysql.createPool(connection.url);
+      // The whole codebase writes DATETIME columns as UTC strings
+      // (toISOString-based) and re-parses string reads with a trailing "Z".
+      // timezone: "Z" makes mysql2's Date conversion follow the same
+      // convention instead of silently shifting reads by the local offset.
+      pool = mysql.createPool({ uri: connection.url, timezone: "Z" });
     } else {
       throw new Error("DATABASE_URL o variables DATABASE_* no configuradas");
     }
@@ -61,6 +65,24 @@ export async function safeQueryRows<T = DbRow>(sql: string, params: unknown[] = 
     return { ok: true, rows };
   } catch (error) {
     return { ok: false, rows: [], error: sanitizeDbError(error) };
+  }
+}
+
+/**
+ * For UPDATE/INSERT/DELETE where the caller needs affectedRows (e.g.
+ * compare-and-swap claims). safeQueryRows hides the ResultSetHeader, which
+ * silently breaks any `affectedRows > 0` check built on top of it.
+ */
+export async function safeExecute(
+  sql: string,
+  params: unknown[] = []
+): Promise<{ ok: true; affectedRows: number } | { ok: false; affectedRows: 0; error: string }> {
+  try {
+    const [result] = await getPool().execute(sql, params as Parameters<Pool["execute"]>[1]);
+    const header = result as { affectedRows?: number };
+    return { ok: true, affectedRows: header.affectedRows ?? 0 };
+  } catch (error) {
+    return { ok: false, affectedRows: 0, error: sanitizeDbError(error) };
   }
 }
 

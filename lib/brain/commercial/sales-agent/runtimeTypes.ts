@@ -15,7 +15,7 @@ export const SALES_AGENT_RUNTIME_STATUSES = [
 ] as const;
 export type SalesAgentRuntimeStatus = (typeof SALES_AGENT_RUNTIME_STATUSES)[number];
 
-export const SALES_AGENT_RUNTIME_MODES = ["dry_run", "fixture", "shadow"] as const;
+export const SALES_AGENT_RUNTIME_MODES = ["dry_run", "fixture", "shadow", "live"] as const;
 export type SalesAgentRuntimeMode = (typeof SALES_AGENT_RUNTIME_MODES)[number];
 
 export const SALES_AGENT_RUNTIME_ERROR_CODES = [
@@ -63,14 +63,14 @@ export type SalesAgentRuntimeWarning = (typeof SALES_AGENT_RUNTIME_WARNINGS)[num
 export const SALES_AGENT_RUNTIME_DEFAULT_TIMEOUT_MS = 15000;
 export const SALES_AGENT_RUNTIME_MAX_INPUT_CHARACTERS = 20000;
 export const SALES_AGENT_RUNTIME_MAX_OUTPUT_CHARACTERS = 12000;
-export const SALES_AGENT_RUNTIME_DEFAULT_MODE = "dry_run" as const;
+export const SALES_AGENT_RUNTIME_DEFAULT_MODE = "live" as const;
 export const SALES_AGENT_RUNTIME_DEFAULT_ENABLED = false;
-export const SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN = true;
+export const SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN = false;
 
 export const SALES_AGENT_PROMPT_VERSION = "sales-agent-runtime-v0.1.0" as const;
 export type SalesAgentPromptVersion = typeof SALES_AGENT_PROMPT_VERSION;
 
-export const SALES_AGENT_RUNTIME_VERSION = "sales-agent-runtime-dry-run-v0.1.0" as const;
+export const SALES_AGENT_RUNTIME_VERSION = "sales-agent-runtime-live-v0.2.0" as const;
 export const SALES_AGENT_CONTRACT_VERSION = SALES_AGENT_OUTPUT_CONTRACT_VERSION;
 
 export const BRAIN_SALES_AGENT_ENABLED = "BRAIN_SALES_AGENT_ENABLED" as const;
@@ -127,6 +127,7 @@ export type SalesAgentPromptBuilderInput = {
   runtimeMode: SalesAgentRuntimeMode;
   currentTime: string | Date;
   allowedCapabilities: readonly SalesAgentToolName[];
+  expectedRunId?: string | null;
 };
 
 export type SalesAgentProviderRequest = {
