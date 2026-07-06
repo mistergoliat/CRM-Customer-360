@@ -12,6 +12,7 @@ export * from "./aggregateOpportunityProjection";
 export * from "./groundedResponse";
 export * from "./persistProposedFacts";
 export * from "./deferredActions";
+export * from "./executeRequestTurn";
 export * from "./requestFollowups";
 export * from "./requestsView";
 export * from "./runMultiRequestAutonomousCycle";
