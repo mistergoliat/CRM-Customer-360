@@ -17,6 +17,9 @@ import { buildGroundedResponseInput, generateGroundedResponse } from "./grounded
 import type { GroundedResponseProvider, GroundedResponseResult } from "./groundedResponse";
 import { persistProposedFacts } from "./persistProposedFacts";
 import { listDeferredActionsForRequest } from "./deferredActions";
+import { executeRequestTurn } from "./executeRequestTurn";
+import type { ExecuteRequestTurnResult } from "./executeRequestTurn";
+import { findOpenEscalationForRequest } from "../request-escalations";
 import { isRequestFactsEnabled } from "../request-facts";
 import type { RequestFact } from "../request-facts";
 import type { TurnPlanRecord } from "./turnPlanTypes";
@@ -43,6 +46,7 @@ export type MultiRequestCycleResult = {
   opportunityProjections: OpportunityProjectionPlan[];
   persistedFacts: RequestFact[];
   definitionReductions: ApplyRequestReductionResult[];
+  executedTurns: ExecuteRequestTurnResult[];
   /** Drafted only - this cycle never sends; the outbox integration consumes it. */
   responseDraft: GroundedResponseResult | null;
   warnings: string[];
@@ -61,6 +65,7 @@ function emptyResult(reason: string, warnings: string[] = []): MultiRequestCycle
     opportunityProjections: [],
     persistedFacts: [],
     definitionReductions: [],
+    executedTurns: [],
     responseDraft: null,
     warnings
   };
@@ -125,6 +130,26 @@ export async function runMultiRequestAutonomousCycle(input: MultiRequestCycleInp
     if (result.warning) warnings.push(`definition_reduction_failed:${applied.requestId}:${result.warning}`);
   }
 
+  // Turn execution (AIPlan -> CapabilityEvaluation -> CommercialAction): only
+  // requests still `active` after the reduction above are ready to work.
+  // Execution may emit a fresh resolving/escalating event, so each executed
+  // request is reduced a second time to reflect that within the same turn.
+  const executedTurns: ExecuteRequestTurnResult[] = [];
+  for (const requestId of reducedIds) {
+    const current = await loadConversationRequest(requestId);
+    if (!current || current.status !== "active") continue;
+    const executed = await executeRequestTurn({ request: current, messageText: input.messageText, turnPlanId: record.turnPlanId });
+    executedTurns.push(executed);
+    if (executed.warning) warnings.push(`turn_execution_${executed.outcome}:${requestId}:${executed.warning}`);
+    if (!executed.attempted) continue;
+
+    const afterExecution = await loadConversationRequest(requestId);
+    if (!afterExecution) continue;
+    const secondPass = await applyRequestReduction(afterExecution);
+    definitionReductions.push(secondPass);
+    if (secondPass.warning) warnings.push(`definition_reduction_failed:${requestId}:${secondPass.warning}`);
+  }
+
   const activeAfter = await listActiveConversationRequests(input.conversationId);
   const projections = aggregateOpportunityProjection(activeAfter, record.turnPlanId);
 
@@ -141,9 +166,13 @@ export async function runMultiRequestAutonomousCycle(input: MultiRequestCycleInp
   // Pending work already deferred for these requests is told to the customer
   // honestly ("quede pendiente de..."), never claimed as done.
   const deferredActions: { requestId: string; actionType: string; reason: string }[] = [];
+  const escalations: { requestId: string; category: string; reason: string }[] = [];
   for (const requestId of reducedIds) {
     const deferred = await listDeferredActionsForRequest(requestId);
     deferredActions.push(...deferred.map((action) => ({ requestId, actionType: action.actionType, reason: action.reason })));
+
+    const escalation = await findOpenEscalationForRequest(requestId);
+    if (escalation) escalations.push({ requestId, category: escalation.category, reason: escalation.reason });
   }
 
   const responseDraft = await generateGroundedResponse(
@@ -152,7 +181,8 @@ export async function runMultiRequestAutonomousCycle(input: MultiRequestCycleInp
       activeRequests: activeAfter,
       appliedOperations: operations.applied,
       missingFacts,
-      deferredActions
+      deferredActions,
+      escalations
     }),
     input.responseProvider ?? null
   );
@@ -182,6 +212,7 @@ export async function runMultiRequestAutonomousCycle(input: MultiRequestCycleInp
     opportunityProjections: projections,
     persistedFacts,
     definitionReductions,
+    executedTurns,
     responseDraft,
     warnings
   };

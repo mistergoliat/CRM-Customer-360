@@ -7,6 +7,14 @@ const HUMAN_ESCALATION = [{ eventType: "human_escalation_created" as const }];
  * capabilities apply, and - decisive - which observed EVENTS resolve or
  * escalate the request. Resolution never comes from model output: only these
  * conditions, evaluated deterministically, can close a request.
+ *
+ * `autoEscalate` / `primaryCapability` drive the turn executor
+ * (executeRequestTurn.ts): they are the only two auto-execution strategies
+ * implemented so far. product_quote/maintenance_quote deliberately have
+ * neither - assembling a quote means picking a specific product for the
+ * customer, which needs real recommendation/candidate-selection (a separate,
+ * dedicated piece of work per ADR-006's "no inventar productos" boundary),
+ * not a one-line capability call. They stay gated on their required facts.
  */
 export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
   {
@@ -17,7 +25,9 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     allowedCapabilities: ["search_products", "get_product_information", "get_product_price"],
     resolutionConditions: [{ eventType: "information_provided", resolutionType: "information_provided" }],
     escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null
+    followupPolicy: null,
+    autoEscalate: null,
+    primaryCapability: { capability: "search_products", factKey: "product_hint", inputField: "query", fallbackToMessageText: true }
   },
   {
     intentType: "product_quote",
@@ -27,7 +37,9 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     allowedCapabilities: ["search_products", "get_product_information", "get_product_price", "list_customer_addresses", "get_customer_address", "create_quote", "send_quote"],
     resolutionConditions: [{ eventType: "quote_sent", resolutionType: "quote_sent" }],
     escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: { purpose: "quote_follow_up", delayMinutes: 60 * 24 }
+    followupPolicy: { purpose: "quote_follow_up", delayMinutes: 60 * 24 },
+    autoEscalate: null,
+    primaryCapability: null
   },
   {
     intentType: "maintenance_information",
@@ -37,7 +49,11 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     allowedCapabilities: ["identify_equipment", "get_service_price"],
     resolutionConditions: [{ eventType: "information_provided", resolutionType: "information_provided" }],
     escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null
+    followupPolicy: null,
+    autoEscalate: null,
+    // identify_equipment has no real source yet (implemented: false in the
+    // registry) - this will keep deferring honestly until a service catalog exists.
+    primaryCapability: { capability: "identify_equipment", factKey: "equipment_code", inputField: "query", fallbackToMessageText: true }
   },
   {
     intentType: "maintenance_quote",
@@ -47,7 +63,9 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     allowedCapabilities: ["identify_equipment", "get_service_price", "list_customer_addresses", "get_customer_address", "create_quote", "send_quote"],
     resolutionConditions: [{ eventType: "quote_sent", resolutionType: "quote_sent" }],
     escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: { purpose: "maintenance_quote_follow_up", delayMinutes: 60 * 24 }
+    followupPolicy: { purpose: "maintenance_quote_follow_up", delayMinutes: 60 * 24 },
+    autoEscalate: null,
+    primaryCapability: null
   },
   {
     intentType: "order_status",
@@ -57,7 +75,11 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     allowedCapabilities: ["find_order", "get_order_status"],
     resolutionConditions: [{ eventType: "order_status_provided", resolutionType: "order_status_provided" }],
     escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null
+    followupPolicy: null,
+    autoEscalate: null,
+    // No message-text fallback: an order identifier must come from a real
+    // fact, never a guess from free text.
+    primaryCapability: { capability: "get_order_status", factKey: "order_identifier", inputField: "orderIdentifier", fallbackToMessageText: false }
   },
   {
     intentType: "warranty",
@@ -67,11 +89,13 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     allowedCapabilities: ["find_order", "get_order_status"],
     resolutionConditions: [{ eventType: "information_provided", resolutionType: "information_provided" }],
     escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null
+    followupPolicy: null,
+    autoEscalate: null,
+    primaryCapability: { capability: "find_order", factKey: "order_identifier", inputField: "orderIdentifier", fallbackToMessageText: false }
   },
   {
     // A complaint never auto-resolves: only an operator closes it, so it has
-    // no resolution conditions at all.
+    // no resolution conditions at all - the turn executor escalates it directly.
     intentType: "complaint",
     domain: "support",
     requiredFacts: [],
@@ -79,7 +103,9 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     allowedCapabilities: ["request_human_assistance"],
     resolutionConditions: [],
     escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null
+    followupPolicy: null,
+    autoEscalate: { category: "customer_service", mode: "exclusive_handoff", reason: "complaint_requires_human_attention" },
+    primaryCapability: null
   },
   {
     intentType: "human_assistance",
@@ -89,7 +115,9 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     allowedCapabilities: ["request_human_assistance"],
     resolutionConditions: [],
     escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null
+    followupPolicy: null,
+    autoEscalate: { category: "customer_service", mode: "exclusive_handoff", reason: "customer_requested_human_assistance" },
+    primaryCapability: null
   },
   {
     intentType: "general_question",
@@ -99,7 +127,9 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     allowedCapabilities: ["search_products"],
     resolutionConditions: [{ eventType: "information_provided", resolutionType: "information_provided" }],
     escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null
+    followupPolicy: null,
+    autoEscalate: null,
+    primaryCapability: { capability: "search_products", factKey: null, inputField: "query", fallbackToMessageText: true }
   }
 ];
 
