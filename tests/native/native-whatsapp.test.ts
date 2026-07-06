@@ -377,6 +377,60 @@ test("native runtime files do not import legacy-n8n", () => {
   }
 });
 
+test("processNativeWhatsAppInbound runs the autonomous cycle from the multi-request flags alone, without any legacy shadow/loop flag", async () => {
+  // Regression for a real contradiction: an outer gate in service.ts only
+  // recognized BRAIN_SALES_AGENT_ENABLED / BRAIN_COMMERCIAL_SHADOW_ENABLED /
+  // BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED, so runNativeAutonomousCycle was
+  // never even called when only the multi-request runtime was enabled - the
+  // newer runtime silently never ran on a real inbound. Gating now lives
+  // entirely inside runNativeAutonomousCycle (single source of truth).
+  const previous = {
+    BRAIN_SALES_AGENT_ENABLED: process.env.BRAIN_SALES_AGENT_ENABLED,
+    BRAIN_COMMERCIAL_SHADOW_ENABLED: process.env.BRAIN_COMMERCIAL_SHADOW_ENABLED,
+    BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED: process.env.BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED,
+    BRAIN_MULTI_REQUEST_RUNTIME_ENABLED: process.env.BRAIN_MULTI_REQUEST_RUNTIME_ENABLED,
+    BRAIN_REQUEST_TRACKING_ENABLED: process.env.BRAIN_REQUEST_TRACKING_ENABLED,
+    BRAIN_TURN_PLAN_PERSISTENCE_ENABLED: process.env.BRAIN_TURN_PLAN_PERSISTENCE_ENABLED
+  };
+
+  Object.assign(process.env, {
+    BRAIN_SALES_AGENT_ENABLED: "false",
+    BRAIN_COMMERCIAL_SHADOW_ENABLED: "false",
+    BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED: "false",
+    BRAIN_MULTI_REQUEST_RUNTIME_ENABLED: "true",
+    BRAIN_REQUEST_TRACKING_ENABLED: "true",
+    BRAIN_TURN_PLAN_PERSISTENCE_ENABLED: "true"
+  });
+
+  try {
+    const providerMessageId = `wamid.${uniqueSuffix("gate-regression")}`;
+    const waId = `5699${String(Date.now()).slice(-8)}`;
+
+    const result = await processNativeWhatsAppInbound({
+      providerMessageId,
+      phoneNumberId: `phone-${uniqueSuffix("pnid")}`,
+      externalSenderId: waId,
+      senderPhone: waId,
+      senderName: "Cliente Gate Regression",
+      messageType: "text",
+      text: "Quiero cotizar una banca",
+      occurredAt: new Date().toISOString(),
+      rawPayload: { providerMessageId }
+    });
+
+    assert.equal(result.duplicate, false);
+    assert.ok(result.conversationId);
+
+    const requestCount = await countRows(
+      "SELECT COUNT(*) AS total FROM crm_conversation_requests WHERE conversation_id = ?",
+      [result.conversationId as number]
+    );
+    assert.ok(requestCount > 0, "the multi-request cycle must have run and created a ConversationRequest, proving the legacy-only outer gate is gone");
+  } finally {
+    Object.assign(process.env, previous);
+  }
+});
+
 test("native inbound path does not invoke consultative engine or outbox writers", () => {
   const routeSource = readFileSync(path.resolve("app/api/integrations/whatsapp/webhook/route.ts"), "utf8");
   assert.doesNotMatch(routeSource, /runSalesConsultativeService\s*\(/);

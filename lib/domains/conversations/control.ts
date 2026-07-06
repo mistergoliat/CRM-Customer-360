@@ -30,8 +30,8 @@ export function isConversationClosedStatus(status: string | null | undefined): b
 
 /**
  * Meta's 24h customer-service window opens with the last CUSTOMER (inbound)
- * message. Free-form text outside it will be rejected by Meta, so the backend
- * blocks it up front (templates are not implemented yet).
+ * message. Free-form text outside it will be rejected by Meta, so callers
+ * should switch to a template fallback when they want to keep the thread open.
  */
 export function isWhatsAppWindowOpen(lastInboundAt: unknown, now = Date.now()): boolean {
   if (lastInboundAt === null || lastInboundAt === undefined) return false;

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { processNativeWhatsAppInbound, applyMetaDeliveryStatus } from "@/lib/brain/native-whatsapp";
 import { normalizeWhatsAppRecipientDigits } from "@/lib/brain/messaging/whatsapp-transport/constants";
+import { auditLog } from "@/lib/audit";
 
 function parseCsv(value: string | undefined | null) {
   if (!value) return [];
@@ -160,6 +161,17 @@ export async function POST(request: Request) {
     }
 
     if (!allowed) {
+      // An allowlist-rejected inbound is otherwise invisible: nothing is
+      // persisted (by design, during a controlled pilot), and Meta never reads
+      // this response body. Without this audit row a real customer message
+      // could vanish with zero trace if BRAIN_WHATSAPP_ALLOWED_WA_IDS /
+      // BRAIN_AUTONOMOUS_TEST_WA_IDS were ever left configured by mistake.
+      await auditLog({
+        action: "whatsapp.inbound.rejected",
+        entityType: "whatsapp_inbound",
+        entityId: providerMessageId,
+        after: { reason: "sender_not_allowed", from, phoneNumberId }
+      });
       results.push({ kind: "inbound", ok: false, error: "sender_not_allowed", providerMessageId });
       continue;
     }

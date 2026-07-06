@@ -187,8 +187,11 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
       const nextAction = cycleResult.loop?.selectedNextAction?.type ?? "none";
       log(`[worker:followup] executed follow-up for ${candidate.wa_id} → loop decided: ${nextAction}`);
 
+      // CAS guard: only this claim's own 'executing' row may complete it, so a
+      // concurrent cancellation (e.g. an operator taking control mid-flight)
+      // is never silently clobbered by a late completion write.
       await safeQueryRows(
-        `UPDATE crm_agent_actions SET status = 'executed', executed_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ?`,
+        `UPDATE crm_agent_actions SET status = 'executed', executed_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ? AND status = 'executing'`,
         [candidate.action_id]
       );
       result.executed.push(candidate.action_id);
@@ -196,7 +199,7 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     } catch (error) {
       log(`[worker:followup] error for action ${candidate.action_id}: ${error instanceof Error ? error.message : String(error)}`);
       await safeQueryRows(
-        `UPDATE crm_agent_actions SET status = 'failed', failure_reason = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ?`,
+        `UPDATE crm_agent_actions SET status = 'failed', failure_reason = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ? AND status = 'executing'`,
         [error instanceof Error ? error.message : "unknown", candidate.action_id]
       );
       result.failed.push(candidate.action_id);

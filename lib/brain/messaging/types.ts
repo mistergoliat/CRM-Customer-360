@@ -76,6 +76,72 @@ export type BrainMetaWhatsAppTextPayloadPreview = {
   };
 };
 
+export type BrainMetaWhatsAppTemplateTextParameterPreview = {
+  type: "text";
+  text: string;
+};
+
+export type BrainMetaWhatsAppTemplateImageParameterPreview = {
+  type: "image";
+  image: {
+    link: string;
+  };
+};
+
+export type BrainMetaWhatsAppTemplateComponentPreview = {
+  type: "body" | "header" | "button";
+  sub_type?: string;
+  index?: string;
+  parameters?: Array<BrainMetaWhatsAppTemplateTextParameterPreview | BrainMetaWhatsAppTemplateImageParameterPreview>;
+};
+
+export type BrainMetaWhatsAppTemplatePayloadPreview = {
+  messaging_product: "whatsapp";
+  to: string;
+  type: "template";
+  template: {
+    name: string;
+    language: {
+      code: string;
+    };
+    components?: BrainMetaWhatsAppTemplateComponentPreview[];
+  };
+};
+
+export type BrainMetaWhatsAppTemplateTextParameter = {
+  type: "text";
+  text: string;
+};
+
+export type BrainMetaWhatsAppTemplateImageParameter = {
+  type: "image";
+  image: {
+    link: string;
+  };
+};
+
+export type BrainMetaWhatsAppTemplateComponent =
+  | {
+      type: "body";
+      parameters?: BrainMetaWhatsAppTemplateTextParameter[];
+    }
+  | {
+      type: "header";
+      parameters?: Array<BrainMetaWhatsAppTemplateTextParameter | BrainMetaWhatsAppTemplateImageParameter>;
+    }
+  | {
+      type: "button";
+      sub_type?: string;
+      index?: string;
+      parameters?: BrainMetaWhatsAppTemplateTextParameter[];
+    };
+
+export type BrainMetaWhatsAppTemplateRequest = {
+  name: string;
+  languageCode: string;
+  components?: BrainMetaWhatsAppTemplateComponent[];
+};
+
 export const BRAIN_META_SEND_ADAPTER_STATUSES = ["disabled", "configured", "missing_credentials"] as const;
 export type BrainMetaSendAdapterStatus = (typeof BRAIN_META_SEND_ADAPTER_STATUSES)[number];
 
@@ -102,7 +168,8 @@ export type BrainMetaSendOutcomeStatus = (typeof BRAIN_META_SEND_OUTCOME_STATUSE
 export type BrainMetaSendRequest = {
   waId: string;
   phoneNumberId: string;
-  messageText: string;
+  messageText?: string;
+  template?: BrainMetaWhatsAppTemplateRequest;
   timeoutMs?: number;
   source?: BrainExecutionSource;
   sourceRequestId?: string | null;
@@ -121,7 +188,7 @@ export type BrainMetaSendGuardResult = {
   warnings: string[];
   errorCode: BrainMetaSendErrorCode | null;
   errorMessage: string | null;
-  metaPayloadPreview: BrainMetaWhatsAppTextPayloadPreview | null;
+  metaPayloadPreview: BrainMetaWhatsAppTextPayloadPreview | BrainMetaWhatsAppTemplatePayloadPreview | null;
 };
 
 export type BrainMetaSendResponse = {
@@ -133,7 +200,7 @@ export type BrainMetaSendResponse = {
   warnings: string[];
   http_status?: number | null;
   provider_message_id?: string | null;
-  meta_payload_preview?: BrainMetaWhatsAppTextPayloadPreview | null;
+  meta_payload_preview?: BrainMetaWhatsAppTextPayloadPreview | BrainMetaWhatsAppTemplatePayloadPreview | null;
   response_body?: Record<string, unknown> | null;
   adapter_status?: BrainMetaSendAdapterStatus;
 };
@@ -461,7 +528,7 @@ export type BrainExecutionPlan = {
   source: BrainExecutionSource;
   blocked_reasons: string[];
   block_reasons: BrainExecutionBlockReason[];
-  meta_payload_preview?: BrainMetaWhatsAppTextPayloadPreview | null;
+  meta_payload_preview?: BrainMetaWhatsAppTextPayloadPreview | BrainMetaWhatsAppTemplatePayloadPreview | null;
   outbox_preview?: BrainOutboxPreview | null;
 };
 
@@ -496,7 +563,7 @@ export type BrainExecuteResponse = {
   outbox_result?: BrainOutboxResult | null;
   blocked_reasons: string[];
   block_reasons: BrainExecutionBlockReason[];
-  meta_payload_preview?: BrainMetaWhatsAppTextPayloadPreview | null;
+  meta_payload_preview?: BrainMetaWhatsAppTextPayloadPreview | BrainMetaWhatsAppTemplatePayloadPreview | null;
   outbox_preview?: BrainOutboxPreview | null;
   warnings: string[];
   errors: BrainError[];

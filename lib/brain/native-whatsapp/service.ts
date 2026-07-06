@@ -1046,18 +1046,14 @@ export async function processNativeWhatsAppInbound(input: {
   // Fase 1 — native autonomous cycle (PR-14).
   // Runs after inbound is durably persisted so a failure here never undoes the
   // already-committed ConversationMessage / CommercialEvent (ADR-007 continuity).
-  // Gated by the same flag set as processInbound: BRAIN_SALES_AGENT_ENABLED,
-  // BRAIN_COMMERCIAL_SHADOW_ENABLED, BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED.
+  // Gating (legacy shadow/loop flags OR the multi-request runtime flags) lives
+  // entirely inside runNativeAutonomousCycle — a single source of truth. Do not
+  // duplicate that check here: an outer gate that only recognized the legacy
+  // flags previously made the whole cycle a no-op whenever only the
+  // multi-request runtime was enabled, silently starving the newer runtime.
   // No CommercialEvent is created here — the one persisted above is the
   // canonical event for this inbound turn; the cycle reads it via context.
-  if (
-    !result.duplicate &&
-    result.conversationId &&
-    result.conversationPublicId &&
-    (process.env.BRAIN_SALES_AGENT_ENABLED === "true" ||
-      process.env.BRAIN_COMMERCIAL_SHADOW_ENABLED === "true" ||
-      process.env.BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED === "true")
-  ) {
+  if (!result.duplicate && result.conversationId && result.conversationPublicId) {
     try {
       await runNativeAutonomousCycle({
         conversationId: result.conversationId,
