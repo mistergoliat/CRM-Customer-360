@@ -1,12 +1,13 @@
 import clsx from "clsx";
 import { StatusChip } from "@/components/ui/StatusChip";
 import { formatDateTime } from "@/lib/format";
-import { MESSAGE_STATE_LABEL, messageStateTone, originLabel } from "./presentation";
+import { MESSAGE_STATE_LABEL, messageKindLabel, messageStateTone, originLabel } from "./presentation";
 import type { ConversationThreadMessage } from "@/lib/domains/conversations/thread";
 
 export function MessageBubble({ message }: { message: ConversationThreadMessage }) {
   const outbound = message.direction === "outbound";
   const isAi = message.origin === "ai";
+  const kindLabel = messageKindLabel(message.messageType);
   return (
     <div className={clsx("flex w-full", outbound ? "justify-end" : "justify-start")}>
       <div
@@ -18,6 +19,11 @@ export function MessageBubble({ message }: { message: ConversationThreadMessage 
         <div className="mb-0.5">
           <span className="text-[11px] font-bold uppercase text-slate-500">{originLabel(message.origin, message.operatorName)}</span>
         </div>
+        {kindLabel ? (
+          <div className="mb-2">
+            <StatusChip label={kindLabel} tone="amber" />
+          </div>
+        ) : null}
         {message.body ? (
           <p className="whitespace-pre-wrap break-words text-body-md text-slate-800">{message.body}</p>
         ) : (

@@ -15,9 +15,6 @@ type ConversationComposerProps = {
 function disabledReason(props: ConversationComposerProps): string | null {
   if (props.closed) return "La conversación está cerrada.";
   if (!props.writeEnabled) return "La escritura no está habilitada en este entorno (solo lectura).";
-  // Meta rejects free text outside the 24h window and templates are not
-  // implemented yet — the backend blocks it, so the composer does too.
-  if (!props.windowOpen) return "La ventana de 24 horas de WhatsApp está cerrada. No es posible enviar texto libre (plantillas no disponibles todavía).";
   return null;
 }
 
@@ -65,6 +62,12 @@ export function ConversationComposer(props: ConversationComposerProps) {
           Nota interna
         </span>
       </div>
+
+      {!props.closed && props.windowOpen ? null : !props.closed && !props.windowOpen ? (
+        <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-label-sm text-amber-800">
+          Ventana cerrada. El envío se mandará como plantilla <span className="font-bold">retomar_conversacion_v1</span>.
+        </div>
+      ) : null}
 
       {blocked ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-label-sm text-amber-800">{blocked}</div>

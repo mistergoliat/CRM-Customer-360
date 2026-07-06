@@ -5,6 +5,9 @@ import { sendWhatsAppText } from "./meta";
 import { errorResponse } from "./api-response";
 import { canPersistTraceability, dbWriteDisabledResponse, isDbWriteEnabled } from "./write-access";
 
+const WHATSAPP_REOPEN_TEMPLATE_NAME = "retomar_conversacion_v1";
+const WHATSAPP_REOPEN_TEMPLATE_LANGUAGE = "es_CL";
+
 function isTruthy(value: unknown) {
   return value === true || value === 1 || value === "1" || String(value).toLowerCase() === "true";
 }
@@ -51,14 +54,6 @@ export async function manualReply(id: string, messageText: string) {
     return errorResponse("CASE_CLOSED", "El caso esta cerrado. Reabrir antes de enviar respuesta manual.", 409);
   }
 
-  if ("whatsapp_window_open" in caseResult.row && !isTruthy(caseResult.row.whatsapp_window_open)) {
-    return errorResponse(
-      "TEMPLATE_REQUIRED",
-      "La ventana WhatsApp 24h esta cerrada. Se requiere template; no implementado en fase 1.",
-      409
-    );
-  }
-
   const waId = String(caseResult.row.wa_id || "");
   const phoneNumberId = String(caseResult.row.phone_number_id || process.env.DEFAULT_PHONE_NUMBER_ID || "");
   if (!waId) return errorResponse("MISSING_WA_ID", "El caso no tiene wa_id", 400);
@@ -67,7 +62,26 @@ export async function manualReply(id: string, messageText: string) {
   const writeAccess = await requireWriteAccess();
   if (writeAccess) return writeAccess;
 
-  const meta = await sendWhatsAppText({ phoneNumberId, to: waId, messageText });
+  const windowOpen = !("whatsapp_window_open" in caseResult.row) || isTruthy(caseResult.row.whatsapp_window_open);
+  const meta = await sendWhatsAppText(
+    windowOpen
+      ? { phoneNumberId, to: waId, messageText }
+      : {
+          phoneNumberId,
+          to: waId,
+          messageText,
+          template: {
+            name: WHATSAPP_REOPEN_TEMPLATE_NAME,
+            languageCode: WHATSAPP_REOPEN_TEMPLATE_LANGUAGE,
+            components: [
+              {
+                type: "body",
+                parameters: [{ type: "text", text: messageText }]
+              }
+            ]
+          }
+        }
+  );
   if (!meta.ok) {
     await auditLog({
       action: "meta_send_error",
@@ -95,7 +109,7 @@ export async function manualReply(id: string, messageText: string) {
     action: "manual_reply_sent",
     entityType: "case",
     entityId: id,
-    after: { provider_message_id: meta.providerMessageId, warnings }
+    after: { provider_message_id: meta.providerMessageId, warnings, template_used: !windowOpen }
   });
 
   return Response.json({

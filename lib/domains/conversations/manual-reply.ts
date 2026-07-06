@@ -5,6 +5,9 @@ import { appendConversationMessage } from "@/lib/brain/local-ai-sdr/repository";
 import { isConversationClosedStatus, isWhatsAppWindowOpen, takeHumanControlTx } from "./control";
 import type { ConversationThreadMessage } from "./thread";
 
+const WHATSAPP_REOPEN_TEMPLATE_NAME = "retomar_conversacion_v1";
+const WHATSAPP_REOPEN_TEMPLATE_LANGUAGE = "es_CL";
+
 /**
  * Operator manual reply with atomic AI/human control transfer.
  *
@@ -60,11 +63,6 @@ export async function sendConversationManualReply(input: {
   if (isConversationClosedStatus(conversation.status)) {
     return { ok: false, code: "conversation_closed", message: "La conversación está cerrada." };
   }
-  if (!isWhatsAppWindowOpen(conversation.last_inbound_at)) {
-    // Meta rejects free-form text outside the 24h customer window and templates
-    // are not implemented yet, so the backend blocks the attempt up front.
-    return { ok: false, code: "window_closed", message: "La ventana de 24 horas de WhatsApp está cerrada; no se puede enviar texto libre." };
-  }
 
   const nowIso = new Date().toISOString();
   const nowSql = toMysql(nowIso);
@@ -74,14 +72,28 @@ export async function sendConversationManualReply(input: {
     await takeHumanControlTx(connection, conversation.id, nowSql);
   });
 
-  // (3) Real send — the Meta client enforces the allowlist and send flags.
+  const windowOpen = isWhatsAppWindowOpen(conversation.last_inbound_at);
   const sendResult = await (input.sendFn ?? sendMetaWhatsAppTextMessage)({
     waId: conversation.external_contact_id,
     phoneNumberId: conversation.channel_account_id,
     messageText: text,
+    ...(windowOpen
+      ? {}
+      : {
+          template: {
+            name: WHATSAPP_REOPEN_TEMPLATE_NAME,
+            languageCode: WHATSAPP_REOPEN_TEMPLATE_LANGUAGE,
+            components: [
+              {
+                type: "body" as const,
+                parameters: [{ type: "text" as const, text }]
+              }
+            ]
+          }
+        }),
     source: "operator",
     conversationCaseId: conversation.id,
-    metadata: { manualReply: true, operator: input.operatorName ?? null }
+    metadata: { manualReply: true, operator: input.operatorName ?? null, transport: windowOpen ? "text" : "template" }
   });
 
   const sent = sendResult.ok && sendResult.status === "sent";
@@ -97,6 +109,7 @@ export async function sendConversationManualReply(input: {
     providerMessageId,
     direction: "outbound",
     senderType: "operator",
+    messageType: windowOpen ? "text" : "template",
     body: text,
     status,
     occurredAt: nowIso
@@ -121,7 +134,8 @@ export async function sendConversationManualReply(input: {
       state: status,
       occurredAt: nowIso,
       source: conversation.provider || "meta",
-      providerMessageId: sendResult.provider_message_id ?? null
+      providerMessageId: sendResult.provider_message_id ?? null,
+      messageType: windowOpen ? "text" : "template"
     }
   };
 }

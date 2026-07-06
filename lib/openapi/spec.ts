@@ -133,7 +133,7 @@ export const OPENAPI_SPEC = {
           required: true,
           content: { "application/json": { schema: { type: "object", properties: { text: { type: "string" }, operatorName: { type: "string", nullable: true } }, required: ["text"] } } }
         },
-        responses: { "200": { description: "sent" }, "409": { description: "window_closed u otra transicion invalida" }, "502": { description: "fallo el envio" } }
+        responses: { "200": { description: "sent" }, "409": { description: "conversation_closed u otra transicion invalida" }, "502": { description: "fallo el envio" } }
       }
     },
 

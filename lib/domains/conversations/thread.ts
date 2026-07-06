@@ -35,6 +35,7 @@ export type ConversationThreadMessage = {
   occurredAt: string | null;
   source: string;
   providerMessageId: string | null;
+  messageType?: string | null;
 };
 
 export type ConversationMessageRow = {
@@ -131,7 +132,8 @@ function messageRowToThread(row: ConversationMessageRow): ConversationThreadMess
     state: normalizeMessageState(row.direction, row.status),
     occurredAt: toIso(row.provider_timestamp ?? row.created_at),
     source: row.provider || "conversation_message",
-    providerMessageId: row.provider_message_id
+    providerMessageId: row.provider_message_id,
+    messageType: row.message_type
   };
 }
 

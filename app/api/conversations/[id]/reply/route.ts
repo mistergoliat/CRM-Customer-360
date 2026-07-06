@@ -32,12 +32,12 @@ export async function POST(request: Request, context: Context) {
     const statusCode =
       result.code === "conversation_not_found"
         ? 404
-        : result.code === "conversation_closed" || result.code === "window_closed"
+        : result.code === "conversation_closed"
           ? 409
           : 400;
     return Response.json({ error: result.code, message: result.message }, { status: statusCode });
   }
 
-  // 502 when the message was persisted but Meta rejected the send (e.g. session window closed).
+  // 502 when the message was persisted but Meta rejected the send.
   return Response.json(result, { status: result.status === "sent" ? 200 : 502 });
 }

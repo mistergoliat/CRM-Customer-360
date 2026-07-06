@@ -13,6 +13,13 @@ export const MESSAGE_STATE_LABEL: Record<ConversationMessageState, string> = {
   failed: "Falló"
 };
 
+export function messageKindLabel(messageType?: string | null): string | null {
+  const normalized = (messageType ?? "").trim().toLowerCase();
+  if (normalized === "template") return "Plantilla";
+  if (normalized === "text") return null;
+  return normalized ? normalized : null;
+}
+
 export function messageStateTone(state: ConversationMessageState): ChipTone {
   switch (state) {
     case "failed":

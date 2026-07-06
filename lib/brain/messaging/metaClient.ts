@@ -1,4 +1,7 @@
-import { buildMetaWhatsAppTextPayloadPreview } from "./metaPayload";
+import {
+  buildMetaWhatsAppTemplatePayloadPreview,
+  buildMetaWhatsAppTextPayloadPreview
+} from "./metaPayload";
 import { normalizeWhatsAppRecipientDigits } from "./whatsapp-transport/constants";
 import type { BrainMetaSendRequest, BrainMetaSendResponse } from "./types";
 
@@ -13,6 +16,12 @@ function asTrimmedString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function isTemplateRequest(input: BrainMetaSendRequest): input is BrainMetaSendRequest & {
+  template: NonNullable<BrainMetaSendRequest["template"]>;
+} {
+  return !!input.template && asTrimmedString(input.template.name) !== null && asTrimmedString(input.template.languageCode) !== null;
 }
 
 function normalizeTimeoutMs(timeoutMs: unknown) {
@@ -140,19 +149,77 @@ function sanitizeResponseBody(body: unknown) {
   return body;
 }
 
+function buildOutboundPayload(input: BrainMetaSendRequest) {
+  const waId = asTrimmedString(input.waId);
+  if (input.template && isTemplateRequest(input)) {
+    return waId
+      ? buildMetaWhatsAppTemplatePayloadPreview({
+          waId,
+          templateName: input.template.name,
+          languageCode: input.template.languageCode,
+          components: input.template.components
+        })
+      : null;
+  }
+
+  const messageText = asTrimmedString(input.messageText);
+  return waId && messageText
+    ? buildMetaWhatsAppTextPayloadPreview({
+        waId,
+        messageText
+      })
+    : null;
+}
+
+function buildMetaMessageBody(input: BrainMetaSendRequest) {
+  if (isTemplateRequest(input)) {
+    return {
+      messaging_product: "whatsapp",
+      to: input.waId,
+      type: "template" as const,
+      template: {
+        name: input.template.name,
+        language: {
+          code: input.template.languageCode
+        },
+        ...(input.template.components && input.template.components.length > 0
+          ? {
+              components: input.template.components
+            }
+          : {})
+      }
+    };
+  }
+
+  return {
+    messaging_product: "whatsapp",
+    to: input.waId,
+    type: "text" as const,
+    text: {
+      body: input.messageText ?? ""
+    }
+  };
+}
+
 export async function postMetaWhatsAppTextMessage(input: BrainMetaSendRequest): Promise<BrainMetaSendResponse> {
   const waId = asTrimmedString(input.waId);
   const phoneNumberId = asTrimmedString(input.phoneNumberId);
-  const messageText = asTrimmedString(input.messageText);
-  const metaPayloadPreview =
-    waId && messageText ? buildMetaWhatsAppTextPayloadPreview({ waId, messageText }) : null;
+  const metaPayloadPreview = buildOutboundPayload(input);
 
   if (!isMetaSendEnabled()) {
     return buildDisabledResponse(metaPayloadPreview);
   }
 
-  if (!waId || !phoneNumberId || !messageText) {
-    return buildInvalidPayloadResponse("waId, phoneNumberId y messageText son obligatorios.", metaPayloadPreview);
+  if (!waId || !phoneNumberId) {
+    return buildInvalidPayloadResponse("waId y phoneNumberId son obligatorios.", metaPayloadPreview);
+  }
+
+  if (input.template && !isTemplateRequest(input)) {
+    return buildInvalidPayloadResponse("template.name y template.languageCode son obligatorios para envíos de template.", metaPayloadPreview);
+  }
+
+  if (!input.template && !asTrimmedString(input.messageText)) {
+    return buildInvalidPayloadResponse("messageText es obligatorio para envíos de texto.", metaPayloadPreview);
   }
 
   const allowedRecipients = getAllowedRecipients();
@@ -185,14 +252,11 @@ export async function postMetaWhatsAppTextMessage(input: BrainMetaSendRequest): 
         authorization: `Bearer ${accessToken}`,
         "content-type": "application/json"
       },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to: waId,
-        type: "text",
-        text: {
-          body: messageText
-        }
-      }),
+      body: JSON.stringify(buildMetaMessageBody({
+        ...input,
+        waId,
+        phoneNumberId
+      })),
       signal: controller.signal
     });
 

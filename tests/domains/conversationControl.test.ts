@@ -164,13 +164,38 @@ test("escenario I: close blocks sends; a new inbound reopens the conversation", 
   assert.equal(reopen.ok ? reopen.status : "", "open");
 });
 
-test("escenario H: manual reply outside the 24h window is rejected by the backend", async () => {
+test("escenario H: manual reply outside the 24h window falls back to the reopen template", async () => {
   const conv = await createConversation("manual-window");
   await safeQueryRows("UPDATE conversation SET last_inbound_at = DATE_SUB(NOW(3), INTERVAL 25 HOUR) WHERE id = ?", [conv.conversationId]);
 
-  const reply = await sendConversationManualReply({ conversationPublicId: conv.conversationPublicId, text: "hola" });
-  assert.equal(reply.ok, false);
-  assert.equal(reply.ok ? "" : reply.code, "window_closed");
+  let capturedSend: Record<string, unknown> | null = null;
+  const reply = await sendConversationManualReply({
+    conversationPublicId: conv.conversationPublicId,
+    text: "hola",
+    sendFn: async (input) => {
+      capturedSend = input as Record<string, unknown>;
+      return {
+        ok: true,
+        status: "sent",
+        error_code: null,
+        error_message: null,
+        blocked_reasons: [],
+        warnings: [],
+        http_status: 200,
+        provider_message_id: "wamid.template-fallback",
+        meta_payload_preview: null,
+        response_body: null
+      };
+    }
+  });
+
+  assert.equal(reply.ok, true);
+  assert.equal(reply.ok ? reply.status : "", "sent");
+  assert.ok(capturedSend);
+  const captured = capturedSend as any;
+  assert.equal(captured.template?.name, "retomar_conversacion_v1");
+  assert.equal(captured.template?.languageCode, "es_CL");
+  assert.equal(captured.metadata?.transport, "template");
 });
 
 test("manual reply takes control atomically and persists the operator message", async () => {
