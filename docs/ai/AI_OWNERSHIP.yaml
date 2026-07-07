@@ -1,0 +1,72 @@
+version: 1
+
+integration:
+  branch: integration/autonomous-commerce
+  owner: claude
+  merge_policy: serial
+  self_merge_allowed: false
+
+locked:
+  - "ADR-*.md"
+  - "docs/product/autonomous-commerce-implementation-backlog.md"
+  - "package-lock.json"
+  - "pnpm-lock.yaml"
+  - "yarn.lock"
+
+agents:
+  claude:
+    role:
+      - architecture_owner
+      - commercial_core_implementer
+      - integrator
+    semantic_ownership:
+      - commercial_events_and_cycles
+      - commercial_context_integration
+      - opportunity_lifecycle
+      - commercial_decisions
+      - commercial_actions
+      - next_best_action
+      - policy_and_approval_semantics
+      - outcomes_and_escalations
+    default_paths:
+      - "lib/brain/commercial/**"
+      - "tests/commercial/**"
+      - "docs/architecture/**"
+
+  codex:
+    role:
+      - parallel_implementer
+      - verification_owner
+      - cross_reviewer
+    semantic_ownership:
+      - development_infrastructure
+      - provider_ingress
+      - catalog_boundary
+      - contract_testing
+      - end_to_end_verification
+      - architecture_conformance
+    default_paths:
+      - "infra/**"
+      - "app/api/integrations/**"
+      - "tests/native/**"
+      - "tests/integration/**"
+      - "tests/e2e/**"
+      - "lib/catalog/**"
+
+shared_change_policy:
+  require_explicit_task_scope: true
+  require_cross_review: true
+  examples:
+    - "middleware.ts"
+    - "package.json"
+    - "tsconfig.json"
+    - "migrations/**"
+    - "shared API schemas"
+    - "root environment files"
+
+forbidden_parallel_semantics:
+  - "same database lifecycle"
+  - "same source-of-truth contract"
+  - "same webhook effect"
+  - "same migration identifier"
+  - "same canonical backlog section"

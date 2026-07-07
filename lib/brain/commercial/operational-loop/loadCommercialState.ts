@@ -294,26 +294,35 @@ async function safeHasTable(tableName: string): Promise<boolean> {
 }
 
 function buildCandidateWhereClause(hints: CommercialOperationalIdentityHints) {
-  const clauses: string[] = [];
+  const identityClauses: string[] = [];
   const params: Array<string | number> = [];
 
-  const addClause = (column: string, value: string | number | null) => {
+  const addIdentityClause = (column: string, value: string | number | null) => {
     if (value === null || value === undefined || value === "") return;
-    clauses.push(`\`${column}\` = ?`);
+    identityClauses.push(`\`${column}\` = ?`);
     params.push(value);
   };
 
-  addClause("wa_id", hints.waId);
-  addClause("customer_candidate_id", hints.customerCandidateId);
-  addClause("customer_master_id", hints.customerMasterId);
-  addClause("lead_id", hints.leadId);
-  addClause("conversation_case_id", hints.conversationCaseId);
-  addClause("channel", hints.channel === "unknown" ? null : hints.channel);
+  addIdentityClause("wa_id", hints.waId);
+  addIdentityClause("customer_candidate_id", hints.customerCandidateId);
+  addIdentityClause("customer_master_id", hints.customerMasterId);
+  addIdentityClause("lead_id", hints.leadId);
+  addIdentityClause("conversation_case_id", hints.conversationCaseId);
 
-  return {
-    where: clauses.length > 0 ? `WHERE ${clauses.join(" OR ")}` : "",
-    params
-  };
+  // Channel is a FILTER, never an identity anchor: OR-ing `channel = 'whatsapp'`
+  // matched every WhatsApp opportunity in the table and bled state across
+  // unrelated customers (identity must never come from the channel alone).
+  if (identityClauses.length === 0) {
+    return { where: "", params: [] as Array<string | number> };
+  }
+
+  let where = `WHERE (${identityClauses.join(" OR ")})`;
+  if (hints.channel !== "unknown") {
+    where += " AND `channel` = ?";
+    params.push(hints.channel);
+  }
+
+  return { where, params };
 }
 
 async function loadLatestDecision(opportunityId: string | number) {
@@ -437,14 +446,20 @@ export async function loadCommercialState(input: CommercialOperationalLoadInput)
     );
 
     const candidates = rows.map((row) => normalizeState(row));
-    const activeState =
-      candidates.find((state) => !isTerminalStatus(state.status) && !state.humanOwnerActive && !state.aiBlocked) ??
-      candidates.find((state) => !isTerminalStatus(state.status)) ??
-      candidates[0] ??
-      null;
+    // Bugfix: an "unknown" intent hint (most continuation turns that don't
+    // restate the topic) keeps the legacy behavior of considering every
+    // identity-matched candidate. A specific, known intent narrows relevance to
+    // opportunities that share it, so a candidate about a different topic never
+    // gets reused or counted as a conflict just for existing. In both cases,
+    // terminal candidates are excluded from "active" and from the conflict
+    // count - a closed opportunity (even a very recent one) must never be
+    // silently reused, nor make an unrelated new topic look ambiguous.
+    const relevantCandidates = hints.primaryIntent === "unknown" ? candidates : candidates.filter((state) => state.primaryIntent === hints.primaryIntent);
+    const nonTerminalRelevant = relevantCandidates.filter((state) => !isTerminalStatus(state.status));
+    const activeState = nonTerminalRelevant.find((state) => !state.humanOwnerActive && !state.aiBlocked) ?? nonTerminalRelevant[0] ?? null;
     const latestDecision = activeState ? await loadLatestDecision(activeState.opportunityId ?? activeState.opportunityKey) : null;
     const warnings = uniqueStrings([
-      candidates.length > 1 ? "commercial_state_conflict" : null,
+      nonTerminalRelevant.length > 1 ? "commercial_state_conflict" : null,
       candidates.some((candidate) => candidate.humanOwnerActive) ? "commercial_state_human_owner_active" : null,
       candidates.some((candidate) => candidate.aiBlocked) ? "commercial_state_ai_blocked" : null,
       candidates.some((candidate) => candidate.status === "stalled") ? "commercial_state_no_action" : null,

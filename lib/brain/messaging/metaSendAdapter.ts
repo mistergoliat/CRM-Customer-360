@@ -1,4 +1,7 @@
-import { buildMetaWhatsAppTextPayloadPreview } from "./metaPayload";
+import {
+  buildMetaWhatsAppTemplatePayloadPreview,
+  buildMetaWhatsAppTextPayloadPreview
+} from "./metaPayload";
 import {
   getMetaAccessToken,
   getMetaDefaultPhoneNumberId,
@@ -44,6 +47,8 @@ function buildGuardResponse(
   const waId = asTrimmedString(input.waId);
   const phoneNumberId = asTrimmedString(input.phoneNumberId);
   const messageText = asTrimmedString(input.messageText);
+  const templateName = asTrimmedString(input.template?.name);
+  const templateLanguageCode = asTrimmedString(input.template?.languageCode);
   return {
     ok: false,
     adapterStatus,
@@ -51,13 +56,21 @@ function buildGuardResponse(
     warnings,
     errorCode,
     errorMessage,
-    metaPayloadPreview:
-      waId && phoneNumberId && messageText
-        ? buildMetaWhatsAppTextPayloadPreview({
+    metaPayloadPreview: waId && phoneNumberId
+      ? input.template && templateName && templateLanguageCode
+        ? buildMetaWhatsAppTemplatePayloadPreview({
             waId,
-            messageText
+            templateName,
+            languageCode: templateLanguageCode,
+            components: input.template.components
           })
-        : null
+        : messageText
+          ? buildMetaWhatsAppTextPayloadPreview({
+              waId,
+              messageText
+            })
+          : null
+      : null
   };
 }
 
@@ -145,6 +158,8 @@ export function validateMetaSendGuards(input: BrainMetaSendRequest): BrainMetaSe
   const waId = asTrimmedString(input.waId);
   const phoneNumberId = asTrimmedString(input.phoneNumberId);
   const messageText = asTrimmedString(input.messageText);
+  const templateName = asTrimmedString(input.template?.name);
+  const templateLanguageCode = asTrimmedString(input.template?.languageCode);
 
   if (adapterStatus === "disabled") {
     return buildGuardResponse(
@@ -168,10 +183,21 @@ export function validateMetaSendGuards(input: BrainMetaSendRequest): BrainMetaSe
     );
   }
 
-  if (!waId || !phoneNumberId || !messageText) {
+  if (!waId || !phoneNumberId) {
+    return buildInvalidPayloadResponse(input, "waId y phoneNumberId son obligatorios y no pueden venir vacios.");
+  }
+
+  if (input.template && (!templateName || !templateLanguageCode)) {
     return buildInvalidPayloadResponse(
       input,
-      "waId, phoneNumberId y messageText son obligatorios y no pueden venir vacios."
+      "template.name y template.languageCode son obligatorios y no pueden venir vacios."
+    );
+  }
+
+  if (!input.template && !messageText) {
+    return buildInvalidPayloadResponse(
+      input,
+      "messageText es obligatorio y no puede venir vacio."
     );
   }
 
@@ -187,10 +213,17 @@ export function validateMetaSendGuards(input: BrainMetaSendRequest): BrainMetaSe
     warnings: [],
     errorCode: null,
     errorMessage: null,
-    metaPayloadPreview: buildMetaWhatsAppTextPayloadPreview({
-      waId,
-      messageText
-    })
+    metaPayloadPreview: input.template
+      ? buildMetaWhatsAppTemplatePayloadPreview({
+          waId,
+          templateName: templateName!,
+          languageCode: templateLanguageCode!,
+          components: input.template.components
+        })
+      : buildMetaWhatsAppTextPayloadPreview({
+          waId,
+          messageText: messageText ?? ""
+        })
   };
 }
 
@@ -221,6 +254,7 @@ export async function sendMetaWhatsAppTextMessage(input: BrainMetaSendRequest): 
     waId: input.waId,
     phoneNumberId: input.phoneNumberId,
     messageText: input.messageText,
+    template: input.template,
     timeoutMs: input.timeoutMs
   });
 

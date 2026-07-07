@@ -45,6 +45,18 @@ export async function findExternalIdentityByProviderExternalId(provider: string,
   return { ok: true as const, error: null, row: rows.rows[0] ? toRow(rows.rows[0]) : null };
 }
 
+export async function findDistinctCustomersByNormalizedValue(provider: string, normalizedValue: string) {
+  const rows = await safeQueryRows<{ customer_id: number }>(
+    `SELECT DISTINCT customer_id FROM \`${TABLE}\` WHERE provider = ? AND normalized_value = ?`,
+    [provider, normalizedValue]
+  );
+  if (!rows.ok) return { ok: false as const, error: rows.error, customerIds: [] as number[] };
+  const customerIds = rows.rows
+    .map((row) => asNumber(row.customer_id))
+    .filter((id): id is number => id !== null);
+  return { ok: true as const, error: null, customerIds };
+}
+
 export async function findExternalIdentityByNormalizedValue(provider: string, normalizedValue: string) {
   const rows = await safeQueryRows<Record<string, unknown>>(
     `SELECT * FROM \`${TABLE}\` WHERE provider = ? AND normalized_value = ? ORDER BY is_verified DESC, updated_at DESC LIMIT 1`,

@@ -1,10 +1,17 @@
 import { createHash } from "node:crypto";
-import type { ResultSetHeader } from "mysql2/promise";
+import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
+import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { auditLog } from "@/lib/audit";
-import { queryRows, safeQueryRows } from "@/lib/db";
+import { queryRows, safeQueryRows, withTransaction } from "@/lib/db";
 import { createMasterCustomer } from "@/lib/integrations/customer-master/customer-repository";
 import { normalizeMasterCustomerEmail } from "@/lib/integrations/customer-master/mappers";
-import { findExternalIdentityByNormalizedValue, findExternalIdentityByProviderExternalId, upsertExternalIdentity } from "@/lib/integrations/customer-external-identity";
+import { findDistinctCustomersByNormalizedValue, findExternalIdentityByNormalizedValue, findExternalIdentityByProviderExternalId, upsertExternalIdentity } from "@/lib/integrations/customer-external-identity";
+import {
+  loadCommercialEventByDedupeKey,
+  normalizeMetaWhatsAppInboundCommercialEvent,
+  normalizeMetaWhatsAppStatusCommercialEvent,
+  recordCommercialEvent
+} from "@/lib/brain/commercial/events";
 import { normalizeWhatsAppRecipientDigits } from "@/lib/brain/messaging/whatsapp-transport/constants";
 import { appendConversationMessage } from "@/lib/brain/local-ai-sdr/repository";
 import { createPrestashopProductRepository, createSalesConsultativeOperationsRepository, runSalesConsultativeService } from "@/lib/brain/commercial/sales-consultative";
@@ -173,6 +180,7 @@ type NativeActionRow = {
 
 export type NativeWhatsAppProcessDependencies = {
   productRepository?: SalesConsultativeProductRepository;
+  commercialEventRecorder?: typeof recordCommercialEvent;
 };
 
 type NativeCustomerRow = {
@@ -237,6 +245,17 @@ function parseJsonObject(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
+function shouldProjectDeliveryStatus(currentStatus: string | null, nextStatus: "sent" | "delivered" | "read" | "failed") {
+  const current = currentStatus?.toLowerCase().trim() ?? null;
+  if (!current) return true;
+  if (current === nextStatus) return false;
+  if (current === "read") return false;
+  if (current === "delivered") return nextStatus === "read";
+  if (current === "sent") return nextStatus === "delivered" || nextStatus === "read" || nextStatus === "failed";
+  if (current === "failed") return false;
+  return true;
+}
+
 function stableId(parts: string[]) {
   return createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 24);
 }
@@ -261,6 +280,14 @@ async function loadCustomerById(customerId: number | null): Promise<NativeCustom
   return result.rows[0] ?? null;
 }
 
+type NativeIdentityConflict = {
+  type: "divergent_identity_links" | "customer_conversation_mismatch";
+  provider: string;
+  normalizedValue: string;
+  candidateCustomerIds: number[];
+  detectedAt: string;
+};
+
 async function resolveOrCreateNativeCustomer(input: {
   provider: string;
   identityType: string;
@@ -275,7 +302,27 @@ async function resolveOrCreateNativeCustomer(input: {
       customer,
       externalIdentityId: existingIdentity.row.id,
       warnings: [] as string[],
-      created: false
+      created: false,
+      identityConflict: null as NativeIdentityConflict | null
+    };
+  }
+
+  const distinctCustomers = await findDistinctCustomersByNormalizedValue(input.provider, input.normalizedValue);
+  if (distinctCustomers.ok && distinctCustomers.customerIds.length > 1) {
+    // PR-03A: do not silently pick a winner when the same normalized identity
+    // (e.g. phone number) is already linked to more than one distinct customer.
+    return {
+      customer: null,
+      externalIdentityId: null,
+      warnings: ["identity_conflict_divergent_customers"] as string[],
+      created: false,
+      identityConflict: {
+        type: "divergent_identity_links",
+        provider: input.provider,
+        normalizedValue: input.normalizedValue,
+        candidateCustomerIds: distinctCustomers.customerIds,
+        detectedAt: nowIso()
+      } as NativeIdentityConflict | null
     };
   }
 
@@ -295,7 +342,8 @@ async function resolveOrCreateNativeCustomer(input: {
         customer,
         externalIdentityId: identity.ok && identity.row ? identity.row.id : normalizedLookup.row.id,
         warnings: identity.ok ? [] : [identity.error ?? "external_identity_upsert_failed"],
-        created: false
+        created: false,
+        identityConflict: null as NativeIdentityConflict | null
       };
     }
   }
@@ -331,7 +379,8 @@ async function resolveOrCreateNativeCustomer(input: {
     },
     externalIdentityId: identity.ok && identity.row ? identity.row.id : null,
     warnings: identity.ok ? [] : [identity.error ?? "external_identity_upsert_failed"],
-    created: true
+    created: true,
+    identityConflict: null as NativeIdentityConflict | null
   };
 }
 
@@ -343,11 +392,29 @@ async function createOrUpdateNativeConversation(input: {
   occurredAt: string;
   aiEnabled?: boolean;
   humanOwnerActive?: boolean;
-}) {
+}, connection?: PoolConnection) {
   const publicId = `conv-${stableId([input.phoneNumberId, input.externalContactId])}`;
   const now = toMysqlDateTime(input.occurredAt);
-  await queryRows(
-    `
+  const params = [
+    publicId,
+    "whatsapp",
+    "meta",
+    input.phoneNumberId,
+    input.externalContactId,
+    input.externalThreadId ?? input.externalContactId,
+    input.customerId,
+    "open",
+    "ai_sdr",
+    "native_whatsapp",
+    input.aiEnabled === false ? 0 : 1,
+    input.humanOwnerActive ? 1 : 0,
+    null,
+    null,
+    null,
+    now,
+    now
+  ];
+  const sql = `
       INSERT INTO conversation (
         public_id,
         channel,
@@ -370,48 +437,42 @@ async function createOrUpdateNativeConversation(input: {
       ON DUPLICATE KEY UPDATE
         customer_id = COALESCE(VALUES(customer_id), customer_id),
         external_thread_id = COALESCE(VALUES(external_thread_id), external_thread_id),
-        ai_enabled = VALUES(ai_enabled),
-        human_owner_active = VALUES(human_owner_active),
+        -- Ownership flags are NEVER reset by an inbound: if an operator took
+        -- control (human_owner_active=1 / ai_enabled=0), a customer reply must
+        -- not silently hand the conversation back to the AI.
+        -- Reopen policy: a new inbound on a closed conversation reopens it,
+        -- preserving whatever ownership state it had.
+        status = IF(status IN ('closed','resolved','done','archived'), 'open', status),
         updated_at = VALUES(updated_at)
-    `,
-    [
-      publicId,
-      "whatsapp",
-      "meta",
-      input.phoneNumberId,
-      input.externalContactId,
-      input.externalThreadId ?? input.externalContactId,
-      input.customerId,
-      "open",
-      "ai_sdr",
-      "native_whatsapp",
-      input.aiEnabled === false ? 0 : 1,
-      input.humanOwnerActive ? 1 : 0,
-      null,
-      null,
-      null,
-      now,
-      now
-    ]
-  );
-
-  const rowResult = await safeQueryRows<NativeConversationRow>(
-    "SELECT * FROM conversation WHERE public_id = ? LIMIT 1",
-    [publicId]
-  );
-  if (!rowResult.ok) {
-    throw new Error(rowResult.error);
+    `;
+  if (connection) {
+    await connection.execute(sql, params);
+  } else {
+    await queryRows(sql, params);
   }
-  const row = rowResult.rows[0];
+
+  let row: NativeConversationRow | null = null;
+  if (connection) {
+    const [rows] = await connection.execute<RowDataPacket[]>(
+      "SELECT * FROM conversation WHERE public_id = ? LIMIT 1",
+      [publicId]
+    );
+    row = (rows[0] as NativeConversationRow | undefined) ?? null;
+  } else {
+    const rowResult = await safeQueryRows<NativeConversationRow>("SELECT * FROM conversation WHERE public_id = ? LIMIT 1", [publicId]);
+    if (!rowResult.ok) {
+      throw new Error(rowResult.error);
+    }
+    row = rowResult.rows[0] ?? null;
+  }
   if (!row) {
     throw new Error("conversation_not_found");
   }
   return row;
 }
 
-async function touchConversationAfterInbound(conversationId: number, occurredAt: string, customerId: number | null) {
-  await queryRows(
-    `
+async function touchConversationAfterInbound(conversationId: number, occurredAt: string, customerId: number | null, connection?: PoolConnection) {
+  const sql = `
       UPDATE conversation
       SET
         customer_id = COALESCE(?, customer_id),
@@ -419,38 +480,19 @@ async function touchConversationAfterInbound(conversationId: number, occurredAt:
         last_inbound_at = ?,
         updated_at = ?
       WHERE id = ?
-    `,
-    [
-      customerId,
-      toMysqlDateTime(occurredAt),
-      toMysqlDateTime(occurredAt),
-      toMysqlDateTime(occurredAt),
-      conversationId
-    ]
-  );
-}
-
-async function touchConversationAfterOutbound(conversationId: number, occurredAt: string, aiEnabled?: boolean, humanOwnerActive?: boolean) {
-  await queryRows(
-    `
-      UPDATE conversation
-      SET
-        ai_enabled = COALESCE(?, ai_enabled),
-        human_owner_active = COALESCE(?, human_owner_active),
-        last_message_at = ?,
-        last_outbound_at = ?,
-        updated_at = ?
-      WHERE id = ?
-    `,
-    [
-      aiEnabled === undefined ? null : aiEnabled ? 1 : 0,
-      humanOwnerActive === undefined ? null : humanOwnerActive ? 1 : 0,
-      toMysqlDateTime(occurredAt),
-      toMysqlDateTime(occurredAt),
-      toMysqlDateTime(occurredAt),
-      conversationId
-    ]
-  );
+    `;
+  const params = [
+    customerId,
+    toMysqlDateTime(occurredAt),
+    toMysqlDateTime(occurredAt),
+    toMysqlDateTime(occurredAt),
+    conversationId
+  ];
+  if (connection) {
+    await connection.execute(sql, params);
+    return;
+  }
+  await queryRows(sql, params);
 }
 
 async function loadConversationByPublicId(publicId: string) {
@@ -476,6 +518,15 @@ async function loadConversationMessageByProviderMessageId(provider: string, prov
 
 async function loadConversationMessageById(messageId: number) {
   const result = await safeQueryRows<NativeConversationMessageRow>("SELECT * FROM conversation_message WHERE id = ? LIMIT 1", [messageId]);
+  if (!result.ok) return null;
+  return result.rows[0] ?? null;
+}
+
+async function loadOutboxByProviderMessageId(providerMessageId: string) {
+  const result = await safeQueryRows<{ id: number; provider_status: string | null }>(
+    "SELECT id, provider_status FROM brain_message_outbox WHERE provider_message_id = ? LIMIT 1",
+    [providerMessageId]
+  );
   if (!result.ok) return null;
   return result.rows[0] ?? null;
 }
@@ -834,10 +885,12 @@ export async function processNativeWhatsAppInbound(input: {
   const normalizedSenderPhone = normalizeWhatsAppRecipientDigits(input.senderPhone) ?? normalizeWhatsAppRecipientDigits(input.externalSenderId) ?? safeExternalId;
   const normalizedExternalId = normalizeWhatsAppRecipientDigits(input.externalSenderId) ?? normalizedSenderPhone;
   const correlationId = `native-whatsapp:${stableId([input.providerMessageId, input.phoneNumberId, normalizedExternalId])}`;
+  const dedupeKey = `meta:whatsapp:inbound:${input.providerMessageId.trim()}`;
 
   const duplicate = await loadConversationMessageByProviderMessageId("meta", input.providerMessageId);
   if (duplicate) {
     const conversation = await loadConversationById(duplicate.conversation_id);
+    const commercialEvent = await loadCommercialEventByDedupeKey(dedupeKey);
     return {
       duplicate: true,
       correlationId,
@@ -846,7 +899,9 @@ export async function processNativeWhatsAppInbound(input: {
       conversationId: duplicate.conversation_id,
       conversationPublicId: conversation?.public_id ?? null,
       messageId: duplicate.id,
-      sales: null as Awaited<ReturnType<typeof processSalesInbound>> | null
+      messagePublicId: duplicate.public_id,
+      commercialEvent,
+      commercialEventStatus: commercialEvent ? "duplicate" : "missing"
     };
   }
 
@@ -858,70 +913,165 @@ export async function processNativeWhatsAppInbound(input: {
     senderName: input.senderName
   });
 
-  const conversation = await createOrUpdateNativeConversation({
-    customerId: identity.customer ? Number(identity.customer.id) : null,
-    phoneNumberId: input.phoneNumberId,
-    externalContactId: normalizedExternalId,
-    externalThreadId: normalizedExternalId,
-    occurredAt: input.occurredAt,
-    aiEnabled: true,
-    humanOwnerActive: false
-  });
-
-  const appendResult = await appendConversationMessage({
-    conversationPublicId: conversation.public_id,
-    provider: "meta",
-    providerMessageId: input.providerMessageId,
-    direction: "inbound",
-    senderType: "customer",
-    messageType: input.messageType || "text",
-    body: input.text,
-    status: "received",
-    occurredAt: input.occurredAt
-  });
-  if (!appendResult.ok) {
-    throw new Error(appendResult.error);
+  // PR-03A: if this conversation already has a confirmed customer link, never
+  // let a fresh resolution silently swap it. Detect the mismatch, keep the
+  // existing link (createOrUpdateNativeConversation's COALESCE preserves it
+  // when customerId is null here), and surface it instead of guessing.
+  const existingConversationPublicId = `conv-${stableId([input.phoneNumberId, normalizedExternalId])}`;
+  const existingConversation = await loadConversationByPublicId(existingConversationPublicId);
+  let resolvedCustomer = identity.customer;
+  let identityConflict = identity.identityConflict;
+  const identityWarnings = [...identity.warnings];
+  if (
+    existingConversation?.customer_id &&
+    resolvedCustomer &&
+    Number(existingConversation.customer_id) !== Number(resolvedCustomer.id)
+  ) {
+    identityConflict = {
+      type: "customer_conversation_mismatch",
+      provider: "whatsapp",
+      normalizedValue: normalizedSenderPhone,
+      candidateCustomerIds: [Number(existingConversation.customer_id), Number(resolvedCustomer.id)],
+      detectedAt: nowIso()
+    };
+    identityWarnings.push("identity_conflict_customer_conversation_mismatch");
+    resolvedCustomer = null;
   }
 
-  const messageRow = await loadConversationMessageByProviderMessageId("meta", input.providerMessageId);
-  if (!messageRow) {
-    throw new Error("inbound_message_not_persisted");
-  }
+  const result = await withTransaction(async (connection) => {
+    const conversation = await createOrUpdateNativeConversation(
+      {
+        customerId: resolvedCustomer ? Number(resolvedCustomer.id) : null,
+        phoneNumberId: input.phoneNumberId,
+        externalContactId: normalizedExternalId,
+        externalThreadId: normalizedExternalId,
+        occurredAt: input.occurredAt,
+        aiEnabled: true,
+        humanOwnerActive: false
+      },
+      connection
+    );
 
-  await touchConversationAfterInbound(conversation.id, input.occurredAt, identity.customer ? Number(identity.customer.id) : conversation.customer_id);
+    const appendResult = await appendConversationMessage(
+      {
+        conversationPublicId: conversation.public_id,
+        provider: "meta",
+        providerMessageId: input.providerMessageId,
+        direction: "inbound",
+        senderType: "customer",
+        messageType: input.messageType || "text",
+        body: input.text,
+        status: "received",
+        occurredAt: input.occurredAt
+      },
+      connection
+    );
+    if (!appendResult.ok) {
+      throw new Error(appendResult.error);
+    }
 
-  const sales = await processSalesInbound({
-    conversationId: conversation.id,
-    messageId: messageRow.id,
-    correlationId
-  }, dependencies);
+    const commercialEvent = normalizeMetaWhatsAppInboundCommercialEvent({
+      providerMessageId: input.providerMessageId,
+      phoneNumberId: input.phoneNumberId,
+      externalSenderId: normalizedExternalId,
+      senderPhone: normalizedSenderPhone,
+      senderName: input.senderName,
+      messageType: input.messageType || "text",
+      text: input.text,
+      occurredAt: input.occurredAt,
+      receivedAt: nowIso(),
+      customerId: resolvedCustomer ? Number(resolvedCustomer.id) : null,
+      conversationId: conversation.id,
+      opportunityId: null,
+      messageId: appendResult.messageId,
+      correlationId,
+      causationId: null,
+      metadata: {
+        conversationPublicId: conversation.public_id,
+        customerCreated: identity.created,
+        externalIdentityId: identity.externalIdentityId,
+        senderName: input.senderName,
+        senderPhone: normalizedSenderPhone,
+        identityConflict
+      }
+    });
+
+    const commercialEventResult = await (dependencies.commercialEventRecorder ?? recordCommercialEvent)(commercialEvent, connection);
+    if (!commercialEventResult.ok) {
+      throw new Error(commercialEventResult.warning);
+    }
+
+    await touchConversationAfterInbound(
+      conversation.id,
+      input.occurredAt,
+      resolvedCustomer ? Number(resolvedCustomer.id) : conversation.customer_id,
+      connection
+    );
+
+    return {
+      duplicate: false as const,
+      correlationId,
+      customerId: resolvedCustomer ? Number(resolvedCustomer.id) : null,
+      customer: resolvedCustomer,
+      externalIdentityId: identity.externalIdentityId,
+      conversationId: conversation.id,
+      conversationPublicId: conversation.public_id,
+      messageId: appendResult.messageId,
+      messagePublicId: appendResult.messagePublicId,
+      commercialEvent: commercialEventResult.event,
+      commercialEventStatus: commercialEventResult.status,
+      identityWarnings,
+      identityConflict
+    };
+  });
 
   await auditLog({
-    action: identity.created ? "customer.created" : "customer.linked",
+    action: identityConflict ? "customer.identity_conflict" : identity.created ? "customer.created" : "customer.linked",
     entityType: "conversation",
-    entityId: conversation.id,
+    entityId: result.conversationId,
     after: {
       providerMessageId: input.providerMessageId,
-      correlationId,
-      customerId: identity.customer ? Number(identity.customer.id) : null,
-      externalIdentityId: identity.externalIdentityId,
-      salesBlocked: sales.blockedByConversationState,
-      decisionId: sales.decision.decisionId,
-      messageId: messageRow.id
+      correlationId: result.correlationId,
+      customerId: result.customerId,
+      externalIdentityId: result.externalIdentityId,
+      messageId: result.messageId,
+      messagePublicId: result.messagePublicId,
+      commercialEventId: result.commercialEvent?.id ?? null,
+      commercialEventStatus: result.commercialEventStatus,
+      identityWarnings: result.identityWarnings,
+      identityConflict: result.identityConflict
     }
   });
 
-  return {
-    duplicate: false,
-    correlationId,
-    customerId: identity.customer ? Number(identity.customer.id) : null,
-    customer: identity.customer,
-    externalIdentityId: identity.externalIdentityId,
-    conversationId: conversation.id,
-    conversationPublicId: conversation.public_id,
-    messageId: messageRow.id,
-    sales
-  };
+  // Fase 1 — native autonomous cycle (PR-14).
+  // Runs after inbound is durably persisted so a failure here never undoes the
+  // already-committed ConversationMessage / CommercialEvent (ADR-007 continuity).
+  // Gating (legacy shadow/loop flags OR the multi-request runtime flags) lives
+  // entirely inside runNativeAutonomousCycle — a single source of truth. Do not
+  // duplicate that check here: an outer gate that only recognized the legacy
+  // flags previously made the whole cycle a no-op whenever only the
+  // multi-request runtime was enabled, silently starving the newer runtime.
+  // No CommercialEvent is created here — the one persisted above is the
+  // canonical event for this inbound turn; the cycle reads it via context.
+  if (!result.duplicate && result.conversationId && result.conversationPublicId) {
+    try {
+      await runNativeAutonomousCycle({
+        conversationId: result.conversationId,
+        conversationPublicId: result.conversationPublicId as string,
+        customerMasterId: result.customerId ?? null,
+        waId: normalizedExternalId,
+        phoneNumberId: input.phoneNumberId,
+        messageId: result.messageId,
+        messageText: input.text,
+        correlationId: result.correlationId,
+        currentTime: nowIso()
+      });
+    } catch (error) {
+      console.error("native_autonomous_cycle_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return result;
 }
 
 export async function applyMetaDeliveryStatus(input: {
@@ -940,34 +1090,76 @@ export async function applyMetaDeliveryStatus(input: {
     return { ok: false as const, warning: "conversation_not_found" };
   }
 
-  await queryRows(
-    `
-      UPDATE conversation_message
-      SET status = ?, metadata_json = ?, updated_at = ?
-      WHERE id = ?
-    `,
-    [
-      input.status,
-      JSON.stringify({
-        provider_status: input.status,
-        raw_payload: input.rawPayload
-      }),
-      toMysqlDateTime(input.occurredAt),
-      message.id
-    ]
-  );
+  if (shouldProjectDeliveryStatus(message.status, input.status)) {
+    await queryRows(
+      `
+        UPDATE conversation_message
+        SET status = ?, metadata_json = ?, updated_at = ?
+        WHERE id = ?
+      `,
+      [
+        input.status,
+        JSON.stringify({
+          provider_status: input.status,
+          raw_payload: input.rawPayload
+        }),
+        toMysqlDateTime(input.occurredAt),
+        message.id
+      ]
+    );
+  }
 
-  await queryRows(
-    `
-      UPDATE brain_message_outbox
-      SET provider_status = ?, provider_status_updated_at = ?, updated_at = ?
-      WHERE provider_message_id = ?
-    `,
-    [input.status, toMysqlDateTime(input.occurredAt), toMysqlDateTime(input.occurredAt), input.providerMessageId]
+  const currentOutbox = await loadOutboxByProviderMessageId(input.providerMessageId);
+  const outboxProjectionApplied = shouldProjectDeliveryStatus(
+    typeof currentOutbox?.provider_status === "string" ? currentOutbox.provider_status : null,
+    input.status
   );
+  if (outboxProjectionApplied) {
+    await queryRows(
+      `
+        UPDATE brain_message_outbox
+        SET provider_status = ?, provider_status_updated_at = ?, updated_at = ?
+        WHERE provider_message_id = ?
+      `,
+      [input.status, toMysqlDateTime(input.occurredAt), toMysqlDateTime(input.occurredAt), input.providerMessageId]
+    );
+  }
+
+  const deliveryEvent = normalizeMetaWhatsAppStatusCommercialEvent({
+    providerMessageId: input.providerMessageId,
+    status: input.status,
+    occurredAt: input.occurredAt,
+    customerId: conversation.customer_id,
+    conversationId: conversation.id,
+    opportunityId: null,
+    messageId: message.id,
+    metadata: {
+      conversationPublicId: conversation.public_id,
+      messagePublicId: message.public_id,
+      providerStatus: input.status
+    }
+  });
+
+  await recordCommercialEvent(deliveryEvent);
+
+  // Record ActionOutcome for delivery status changes — closes the execution loop.
+  // Only when the monotonic projection applied: a duplicate or out-of-order
+  // webhook must not create a duplicate outcome row.
+  if (currentOutbox?.id && outboxProjectionApplied) {
+    const { recordDeliveryOutcome } = await import("@/lib/brain/commercial/action-queue/persistActionOutcome");
+    await recordDeliveryOutcome(
+      currentOutbox.id,
+      input.providerMessageId,
+      input.status as "sent" | "delivered" | "read" | "failed",
+      input.occurredAt,
+      typeof input.rawPayload === "object" && input.rawPayload !== null
+        ? (input.rawPayload as Record<string, unknown>)
+        : null
+    ).catch(() => void 0); // best-effort, never fail the delivery status update
+  }
 
   await auditLog({
-    action: "ai_sdr.tool.executed",
+    action: "whatsapp.delivery_status.applied",
     entityType: "conversation_message",
     entityId: message.id,
     after: {

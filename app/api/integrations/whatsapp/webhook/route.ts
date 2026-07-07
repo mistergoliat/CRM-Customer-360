@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { processNativeWhatsAppInbound, applyMetaDeliveryStatus } from "@/lib/brain/native-whatsapp";
 import { normalizeWhatsAppRecipientDigits } from "@/lib/brain/messaging/whatsapp-transport/constants";
+import { auditLog } from "@/lib/audit";
 
 function parseCsv(value: string | undefined | null) {
   if (!value) return [];
@@ -24,6 +25,9 @@ function isAllowedRecipient(value: string) {
 function verifyMetaSignature(rawBody: string, signatureHeader: string | null) {
   const appSecret = process.env.META_WHATSAPP_APP_SECRET?.trim() || process.env.BRAIN_META_WHATSAPP_APP_SECRET?.trim() || null;
   if (!appSecret) {
+    if (process.env.NODE_ENV === "production") {
+      return { ok: false as const, warning: "meta_signature_secret_not_configured" };
+    }
     return { ok: true as const, warning: "meta_signature_secret_not_configured" };
   }
   if (!signatureHeader) {
@@ -157,6 +161,17 @@ export async function POST(request: Request) {
     }
 
     if (!allowed) {
+      // An allowlist-rejected inbound is otherwise invisible: nothing is
+      // persisted (by design, during a controlled pilot), and Meta never reads
+      // this response body. Without this audit row a real customer message
+      // could vanish with zero trace if BRAIN_WHATSAPP_ALLOWED_WA_IDS /
+      // BRAIN_AUTONOMOUS_TEST_WA_IDS were ever left configured by mistake.
+      await auditLog({
+        action: "whatsapp.inbound.rejected",
+        entityType: "whatsapp_inbound",
+        entityId: providerMessageId,
+        after: { reason: "sender_not_allowed", from, phoneNumberId }
+      });
       results.push({ kind: "inbound", ok: false, error: "sender_not_allowed", providerMessageId });
       continue;
     }

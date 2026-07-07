@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { readFileSync } from "node:fs";
 import path from "node:path";
-import { safeQueryRows, queryRows, getPool } from "@/lib/db";
-import { applyMetaDeliveryStatus, processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
-import { persistCanonicalOutboundMessage } from "@/lib/brain/messaging/outboundMessages";
+import { readFileSync } from "node:fs";
+import { getPool, queryRows, safeQueryRows } from "@/lib/db";
+import {
+  loadCommercialEventByDedupeKey,
+  buildInboundCommercialEventDedupeKey
+} from "@/lib/brain/commercial/events";
+import { processNativeWhatsAppInbound, applyMetaDeliveryStatus } from "@/lib/brain/native-whatsapp";
+import { createOutboxPlannedRecord } from "@/lib/brain/messaging/outbox";
 
 Object.assign(process.env, {
   NODE_ENV: "development",
@@ -38,74 +42,14 @@ function uniqueSuffix(label: string) {
   return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
-const stubProductRepository = {
-  async searchProducts() {
-    return [
-      {
-        id: "p1",
-        reference: "JAULA-01",
-        name: "Jaula Compacta",
-        category: "Fitness",
-        description: "Jaula para entrenamiento en casa",
-        price: 490000,
-        currency: "CLP",
-        stockQuantity: 5,
-        dimensions: { width: 120, height: 210, length: 120, unit: "cm" },
-        features: ["compacta", "resistente"],
-        compatibility: ["hogar"],
-        relatedProductIds: ["p2"],
-        manufacturer: "FitHome",
-        imageUrl: null,
-        source: "test_catalog"
-      }
-    ];
-  },
-  async getProductDetails() {
-    return null;
-  },
-  async getProductPrice() {
-    return 490000;
-  },
-  async getProductStock() {
-    return 5;
-  },
-  async getProductDimensions() {
-    return { width: 120, height: 210, length: 120, unit: "cm" };
-  },
-  async getProductCompatibility() {
-    return ["hogar"];
-  },
-  async getRelatedProducts() {
-    return [
-      {
-        id: "p2",
-        reference: "JAULA-02",
-        name: "Jaula Compacta Pro",
-        category: "Fitness",
-        description: "Alternativa más robusta",
-        price: 540000,
-        currency: "CLP",
-        stockQuantity: 2,
-        dimensions: { width: 125, height: 215, length: 125, unit: "cm" },
-        features: ["compacta", "robusta"],
-        compatibility: ["hogar"],
-        relatedProductIds: ["p1"],
-        manufacturer: "FitHome",
-        imageUrl: null,
-        source: "test_catalog"
-      }
-    ];
-  }
-};
-
 async function countRows(sql: string, params: Array<string | number>) {
   const result = await safeQueryRows<{ total: number }>(sql, params);
   assert.ok(result.ok, result.ok ? "" : result.error);
   return Number(result.rows[0]?.total ?? 0);
 }
 
-test("native inbound creates a single conversation, decision and outbox, and duplicate webhook does not duplicate rows", async () => {
-  const providerMessageId = `wamid.${uniqueSuffix("inbound")}`;
+test("native inbound persists conversation, message and CommercialEvent once", async () => {
+  const providerMessageId = `wamid.${uniqueSuffix("commercial-event")}`;
   const waId = `5699${String(Date.now()).slice(-8)}`;
   const phoneNumberId = `phone-${uniqueSuffix("pnid")}`;
 
@@ -116,15 +60,18 @@ test("native inbound creates a single conversation, decision and outbox, and dup
     senderPhone: waId,
     senderName: "Cliente Prueba",
     messageType: "text",
-    text: "Lo voy a pensar.",
+    text: "Busco una jaula para entrenar en casa.",
     occurredAt: new Date().toISOString(),
     rawPayload: { providerMessageId }
-  }, { productRepository: stubProductRepository });
+  });
 
   assert.equal(first.duplicate, false);
   assert.ok(first.conversationId);
   assert.ok(first.messageId);
-  assert.ok(first.customerId);
+  assert.ok(first.commercialEvent?.id);
+  assert.equal(first.commercialEvent?.contractName, "CommercialEvent");
+  assert.equal(first.commercialEvent?.schemaVersion, "1.0");
+  assert.equal(first.commercialEvent?.eventType, "customer_message_received");
 
   const duplicate = await processNativeWhatsAppInbound({
     providerMessageId,
@@ -133,90 +80,87 @@ test("native inbound creates a single conversation, decision and outbox, and dup
     senderPhone: waId,
     senderName: "Cliente Prueba",
     messageType: "text",
-    text: "Lo voy a pensar.",
+    text: "Busco una jaula para entrenar en casa.",
     occurredAt: new Date().toISOString(),
     rawPayload: { providerMessageId }
-  }, { productRepository: stubProductRepository });
+  });
 
   assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.commercialEventStatus, "duplicate");
 
   const messageCount = await countRows(
     "SELECT COUNT(*) AS total FROM conversation_message WHERE provider = ? AND provider_message_id = ?",
     ["meta", providerMessageId]
   );
-  const decisionCount = await countRows(
-    "SELECT COUNT(*) AS total FROM crm_agent_decisions WHERE correlation_id = ?",
-    [first.correlationId]
+  const eventCount = await countRows(
+    "SELECT COUNT(*) AS total FROM commercial_event WHERE dedupe_key = ?",
+    [buildInboundCommercialEventDedupeKey(providerMessageId)]
   );
-  const conversationCount = await countRows(
-    "SELECT COUNT(*) AS total FROM conversation WHERE id = ?",
-    [first.conversationId]
+  const opportunityCount = await countRows(
+    "SELECT COUNT(*) AS total FROM crm_opportunities WHERE conversation_case_id = ?",
+    [String(first.conversationId)]
   );
   const outboxCount = await countRows(
     "SELECT COUNT(*) AS total FROM brain_message_outbox WHERE wa_id = ?",
     [waId]
   );
+  const aiExecutionCount = await countRows(
+    "SELECT COUNT(*) AS total FROM ai_agent_execution WHERE conversation_id = ?",
+    [String(first.conversationId)]
+  );
 
   assert.equal(messageCount, 1);
-  assert.equal(decisionCount, 1);
-  assert.equal(conversationCount, 1);
-  assert.equal(outboxCount, 1);
+  assert.equal(eventCount, 1);
+  assert.equal(opportunityCount, 0);
+  assert.equal(outboxCount, 0);
+  assert.equal(aiExecutionCount, 0);
+
+  const loadedEvent = await loadCommercialEventByDedupeKey(buildInboundCommercialEventDedupeKey(providerMessageId));
+  assert.ok(loadedEvent);
+  assert.equal(loadedEvent?.correlationId, first.correlationId);
+  assert.equal(loadedEvent?.conversationId, String(first.conversationId));
 });
 
-test("canonical outbound persists to native timeline and delivery status projects back to outbox", async () => {
-  const providerMessageId = `wamid.${uniqueSuffix("outbound")}`;
+test("delivery status updates the native timeline and records a CommercialEvent", async () => {
+  const providerMessageId = `wamid.${uniqueSuffix("delivery")}`;
   const waId = `5698${String(Date.now()).slice(-8)}`;
   const phoneNumberId = `phone-${uniqueSuffix("pnid")}`;
 
   const inbound = await processNativeWhatsAppInbound({
-    providerMessageId: `wamid.${uniqueSuffix("seed")}`,
+    providerMessageId,
     phoneNumberId,
     externalSenderId: waId,
     senderPhone: waId,
     senderName: "Cliente Prueba",
     messageType: "text",
-    text: "Busco una jaula para entrenar en casa.",
+    text: "Lo voy a pensar.",
     occurredAt: new Date().toISOString(),
-    rawPayload: { seed: true }
-  }, { productRepository: stubProductRepository });
-
-  assert.ok(inbound.conversationId);
-
-  const outboxRowResult = await safeQueryRows<{ id: number; dedupe_key: string; message_text: string | null }>(
-    "SELECT id, dedupe_key, message_text FROM brain_message_outbox WHERE wa_id = ? ORDER BY id DESC LIMIT 1",
-    [waId]
-  );
-  assert.ok(outboxRowResult.ok, outboxRowResult.ok ? "" : outboxRowResult.error);
-  const outboxRow = outboxRowResult.rows[0];
-  assert.ok(outboxRow);
-  assert.ok(outboxRow.message_text);
-
-  await queryRows(
-    "UPDATE brain_message_outbox SET status = 'sent', provider_message_id = ?, provider_status = 'sent', provider_status_updated_at = NOW() WHERE id = ?",
-    [providerMessageId, outboxRow.id]
-  );
-
-  const persistResult = await persistCanonicalOutboundMessage({
-    enabled: true,
-    outboxId: outboxRow.id,
-    dedupeKey: outboxRow.dedupe_key,
-    sourceRequestId: outboxRow.dedupe_key,
-    outboxStatus: "sent",
-    conversationCaseId: inbound.conversationId,
-    waId,
-    phoneNumberId,
-    messageText: outboxRow.message_text,
-    providerMessageId,
-    sentAt: new Date().toISOString()
+    rawPayload: { providerMessageId }
   });
 
-  assert.ok(["persisted", "existing"].includes(persistResult.status));
+  assert.ok(inbound.messageId);
 
-  const outboundCount = await countRows(
-    "SELECT COUNT(*) AS total FROM conversation_message WHERE provider = ? AND provider_message_id = ? AND direction = ?",
-    ["meta", providerMessageId, "outbound"]
-  );
-  assert.equal(outboundCount, 1);
+  const outbox = await createOutboxPlannedRecord({
+    dedupeKeyInput: {
+      source: "brain",
+      actionType: "send_whatsapp_message",
+      channel: "whatsapp",
+      waId,
+      phoneNumberId,
+      conversationCaseId: String(inbound.conversationId),
+      sourceRequestId: providerMessageId
+    },
+    status: "sent",
+    source: "brain",
+    waId,
+    phoneNumberId,
+    conversationCaseId: String(inbound.conversationId),
+    messageText: "Hola",
+    providerMessageId
+  });
+  assert.equal(outbox.ok, true);
+  assert.ok(outbox.row.id);
+  await queryRows("UPDATE brain_message_outbox SET provider_message_id = ?, status = 'sent' WHERE id = ?", [providerMessageId, outbox.row.id as number]);
 
   const deliveryResult = await applyMetaDeliveryStatus({
     providerMessageId,
@@ -224,19 +168,200 @@ test("canonical outbound persists to native timeline and delivery status project
     occurredAt: new Date().toISOString(),
     rawPayload: { id: providerMessageId, status: "delivered" }
   });
+
   assert.equal(deliveryResult.ok, true);
 
   const deliveryMessageCount = await countRows(
     "SELECT COUNT(*) AS total FROM conversation_message WHERE provider = ? AND provider_message_id = ? AND status = ?",
     ["meta", providerMessageId, "delivered"]
   );
-  const outboxDeliveredCount = await countRows(
-    "SELECT COUNT(*) AS total FROM brain_message_outbox WHERE id = ? AND provider_status = ?",
-    [outboxRow.id, "delivered"]
+  const deliveryEventCount = await countRows(
+    "SELECT COUNT(*) AS total FROM commercial_event WHERE dedupe_key = ?",
+    [`meta:whatsapp:status:${providerMessageId}:delivered`]
+  );
+  const outboxCount = await countRows(
+    "SELECT COUNT(*) AS total FROM brain_message_outbox WHERE provider_message_id = ?",
+    [providerMessageId]
+  );
+  const outboxStatus = await safeQueryRows<{ provider_status: string | null }>(
+    "SELECT provider_status FROM brain_message_outbox WHERE provider_message_id = ? LIMIT 1",
+    [providerMessageId]
   );
 
   assert.equal(deliveryMessageCount, 1);
-  assert.equal(outboxDeliveredCount, 1);
+  assert.equal(deliveryEventCount, 1);
+  assert.equal(outboxCount, 1);
+  assert.ok(outboxStatus.ok);
+  assert.equal(outboxStatus.rows[0]?.provider_status, "delivered");
+});
+
+test("duplicate delivery status does not duplicate CommercialEvent", async () => {
+  const providerMessageId = `wamid.${uniqueSuffix("delivery-dup")}`;
+  const waId = `5698${String(Date.now()).slice(-8)}`;
+  const phoneNumberId = `phone-${uniqueSuffix("pnid")}`;
+
+  const inbound = await processNativeWhatsAppInbound({
+    providerMessageId,
+    phoneNumberId,
+    externalSenderId: waId,
+    senderPhone: waId,
+    senderName: "Cliente Prueba",
+    messageType: "text",
+    text: "Lo voy a pensar.",
+    occurredAt: new Date().toISOString(),
+    rawPayload: { providerMessageId }
+  });
+
+  assert.ok(inbound.messageId);
+
+  const first = await applyMetaDeliveryStatus({
+    providerMessageId,
+    status: "delivered",
+    occurredAt: new Date().toISOString(),
+    rawPayload: { id: providerMessageId, status: "delivered" }
+  });
+  const second = await applyMetaDeliveryStatus({
+    providerMessageId,
+    status: "delivered",
+    occurredAt: new Date().toISOString(),
+    rawPayload: { id: providerMessageId, status: "delivered" }
+  });
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+
+  const eventCount = await countRows(
+    "SELECT COUNT(*) AS total FROM commercial_event WHERE dedupe_key = ?",
+    [`meta:whatsapp:status:${providerMessageId}:delivered`]
+  );
+  const projectedStatus = await safeQueryRows<{ status: string | null }>(
+    "SELECT status FROM conversation_message WHERE provider = ? AND provider_message_id = ? LIMIT 1",
+    ["meta", providerMessageId]
+  );
+
+  assert.ok(projectedStatus.ok);
+  assert.equal(eventCount, 1);
+  assert.equal(projectedStatus.rows[0]?.status, "delivered");
+});
+
+test("delivery statuses progress forward and stale statuses do not regress projections", async () => {
+  const providerMessageId = `wamid.${uniqueSuffix("delivery-order")}`;
+  const waId = `5698${String(Date.now()).slice(-8)}`;
+  const phoneNumberId = `phone-${uniqueSuffix("pnid")}`;
+
+  const inbound = await processNativeWhatsAppInbound({
+    providerMessageId,
+    phoneNumberId,
+    externalSenderId: waId,
+    senderPhone: waId,
+    senderName: "Cliente Prueba",
+    messageType: "text",
+    text: "Lo voy a pensar.",
+    occurredAt: new Date().toISOString(),
+    rawPayload: { providerMessageId }
+  });
+
+  assert.ok(inbound.messageId);
+
+  const outbox = await createOutboxPlannedRecord({
+    dedupeKeyInput: {
+      source: "brain",
+      actionType: "send_whatsapp_message",
+      channel: "whatsapp",
+      waId,
+      phoneNumberId,
+      conversationCaseId: String(inbound.conversationId),
+      sourceRequestId: providerMessageId
+    },
+    status: "sent",
+    source: "brain",
+    waId,
+    phoneNumberId,
+    conversationCaseId: String(inbound.conversationId),
+    messageText: "Hola",
+    providerMessageId
+  });
+  assert.equal(outbox.ok, true);
+  assert.ok(outbox.row.id);
+  await queryRows("UPDATE brain_message_outbox SET provider_message_id = ?, status = 'sent' WHERE id = ?", [providerMessageId, outbox.row.id as number]);
+
+  await applyMetaDeliveryStatus({
+    providerMessageId,
+    status: "delivered",
+    occurredAt: new Date().toISOString(),
+    rawPayload: { id: providerMessageId, status: "delivered" }
+  });
+  await applyMetaDeliveryStatus({
+    providerMessageId,
+    status: "read",
+    occurredAt: new Date().toISOString(),
+    rawPayload: { id: providerMessageId, status: "read" }
+  });
+  await applyMetaDeliveryStatus({
+    providerMessageId,
+    status: "sent",
+    occurredAt: new Date().toISOString(),
+    rawPayload: { id: providerMessageId, status: "sent" }
+  });
+
+  const projectedStatus = await safeQueryRows<{ status: string | null }>(
+    "SELECT status FROM conversation_message WHERE provider = ? AND provider_message_id = ? LIMIT 1",
+    ["meta", providerMessageId]
+  );
+  const outboxStatus = await safeQueryRows<{ provider_status: string | null }>(
+    "SELECT provider_status FROM brain_message_outbox WHERE provider_message_id = ? LIMIT 1",
+    [providerMessageId]
+  );
+  const eventCount = await countRows(
+    "SELECT COUNT(*) AS total FROM commercial_event WHERE source = ? AND source_event_id = ? AND event_type LIKE ?",
+    ["meta_whatsapp", providerMessageId, "outbound_message_%"]
+  );
+
+  assert.ok(projectedStatus.ok);
+  assert.ok(outboxStatus.ok);
+  assert.equal(projectedStatus.rows[0]?.status, "read");
+  assert.equal(outboxStatus.rows[0]?.provider_status, "read");
+  assert.equal(eventCount, 3);
+});
+
+test("native inbound rollback prevents message and event persistence when the transaction fails", async () => {
+  const providerMessageId = `wamid.${uniqueSuffix("rollback")}`;
+  const waId = `5697${String(Date.now()).slice(-8)}`;
+  const phoneNumberId = `phone-${uniqueSuffix("pnid")}`;
+
+  await assert.rejects(
+    processNativeWhatsAppInbound({
+      providerMessageId,
+      phoneNumberId,
+      externalSenderId: waId,
+      senderPhone: waId,
+      senderName: "Cliente Prueba",
+      messageType: "text",
+      text: "Prueba de rollback.",
+      occurredAt: new Date().toISOString(),
+      rawPayload: { providerMessageId }
+    }, {
+      commercialEventRecorder: async () => ({ ok: false as const, status: "error", event: null, warning: "forced_failure" })
+    }),
+    /forced_failure/
+  );
+
+  const messageCount = await countRows(
+    "SELECT COUNT(*) AS total FROM conversation_message WHERE provider = ? AND provider_message_id = ?",
+    ["meta", providerMessageId]
+  );
+  const eventCount = await countRows(
+    "SELECT COUNT(*) AS total FROM commercial_event WHERE dedupe_key = ?",
+    [buildInboundCommercialEventDedupeKey(providerMessageId)]
+  );
+  const conversationCount = await countRows(
+    "SELECT COUNT(*) AS total FROM conversation WHERE channel = ? AND channel_account_id = ? AND external_contact_id = ?",
+    ["whatsapp", phoneNumberId, waId]
+  );
+
+  assert.equal(messageCount, 0);
+  assert.equal(eventCount, 0);
+  assert.equal(conversationCount, 0);
 });
 
 test("native runtime files do not import legacy-n8n", () => {
@@ -250,4 +375,80 @@ test("native runtime files do not import legacy-n8n", () => {
     const source = readFileSync(file, "utf8");
     assert.equal(source.includes("legacy-n8n"), false, file);
   }
+});
+
+test("processNativeWhatsAppInbound runs the autonomous cycle from the multi-request flags alone, without any legacy shadow/loop flag", async () => {
+  // Regression for a real contradiction: an outer gate in service.ts only
+  // recognized BRAIN_SALES_AGENT_ENABLED / BRAIN_COMMERCIAL_SHADOW_ENABLED /
+  // BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED, so runNativeAutonomousCycle was
+  // never even called when only the multi-request runtime was enabled - the
+  // newer runtime silently never ran on a real inbound. Gating now lives
+  // entirely inside runNativeAutonomousCycle (single source of truth).
+  const previous = {
+    BRAIN_SALES_AGENT_ENABLED: process.env.BRAIN_SALES_AGENT_ENABLED,
+    BRAIN_COMMERCIAL_SHADOW_ENABLED: process.env.BRAIN_COMMERCIAL_SHADOW_ENABLED,
+    BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED: process.env.BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED,
+    BRAIN_MULTI_REQUEST_RUNTIME_ENABLED: process.env.BRAIN_MULTI_REQUEST_RUNTIME_ENABLED,
+    BRAIN_REQUEST_TRACKING_ENABLED: process.env.BRAIN_REQUEST_TRACKING_ENABLED,
+    BRAIN_TURN_PLAN_PERSISTENCE_ENABLED: process.env.BRAIN_TURN_PLAN_PERSISTENCE_ENABLED
+  };
+
+  Object.assign(process.env, {
+    BRAIN_SALES_AGENT_ENABLED: "false",
+    BRAIN_COMMERCIAL_SHADOW_ENABLED: "false",
+    BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED: "false",
+    BRAIN_MULTI_REQUEST_RUNTIME_ENABLED: "true",
+    BRAIN_REQUEST_TRACKING_ENABLED: "true",
+    BRAIN_TURN_PLAN_PERSISTENCE_ENABLED: "true"
+  });
+
+  try {
+    const providerMessageId = `wamid.${uniqueSuffix("gate-regression")}`;
+    const waId = `5699${String(Date.now()).slice(-8)}`;
+
+    const result = await processNativeWhatsAppInbound({
+      providerMessageId,
+      phoneNumberId: `phone-${uniqueSuffix("pnid")}`,
+      externalSenderId: waId,
+      senderPhone: waId,
+      senderName: "Cliente Gate Regression",
+      messageType: "text",
+      text: "Quiero cotizar una banca",
+      occurredAt: new Date().toISOString(),
+      rawPayload: { providerMessageId }
+    });
+
+    assert.equal(result.duplicate, false);
+    assert.ok(result.conversationId);
+
+    const requestCount = await countRows(
+      "SELECT COUNT(*) AS total FROM crm_conversation_requests WHERE conversation_id = ?",
+      [result.conversationId as number]
+    );
+    assert.ok(requestCount > 0, "the multi-request cycle must have run and created a ConversationRequest, proving the legacy-only outer gate is gone");
+  } finally {
+    Object.assign(process.env, previous);
+  }
+});
+
+test("native inbound path does not invoke consultative engine or outbox writers", () => {
+  const routeSource = readFileSync(path.resolve("app/api/integrations/whatsapp/webhook/route.ts"), "utf8");
+  assert.doesNotMatch(routeSource, /runSalesConsultativeService\s*\(/);
+  assert.doesNotMatch(routeSource, /processSalesInbound\s*\(/);
+  assert.doesNotMatch(routeSource, /persistCanonicalOutboundMessage\s*\(/);
+  assert.doesNotMatch(routeSource, /sendMetaWhatsAppTextMessage\s*\(/);
+
+  const serviceSource = readFileSync(path.resolve("lib/brain/native-whatsapp/service.ts"), "utf8");
+  const start = serviceSource.indexOf("export async function processNativeWhatsAppInbound");
+  const end = serviceSource.indexOf("export async function applyMetaDeliveryStatus");
+  const inboundBody = serviceSource.slice(start, end);
+  assert.doesNotMatch(inboundBody, /runSalesConsultativeService\s*\(/);
+  assert.doesNotMatch(inboundBody, /processSalesInbound\s*\(/);
+  assert.doesNotMatch(inboundBody, /persistCanonicalOutboundMessage\s*\(/);
+  assert.doesNotMatch(inboundBody, /queueCustomerMessage\s*\(/);
+  assert.doesNotMatch(inboundBody, /sendMetaWhatsAppTextMessage\s*\(/);
+  assert.doesNotMatch(inboundBody, /brain_message_outbox/);
+  assert.doesNotMatch(inboundBody, /crm_opportunities/);
+  assert.doesNotMatch(inboundBody, /crm_agent_decisions/);
+  assert.doesNotMatch(inboundBody, /crm_agent_actions/);
 });

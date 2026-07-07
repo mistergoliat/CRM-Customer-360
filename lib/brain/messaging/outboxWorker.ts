@@ -948,6 +948,7 @@ function buildCandidateQuery(debug: boolean) {
       updated_at
     FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\`
     WHERE status = 'planned'
+      AND (next_attempt_at IS NULL OR next_attempt_at <= NOW(3))
     ORDER BY planned_at ASC, id ASC
     LIMIT ?
   `;

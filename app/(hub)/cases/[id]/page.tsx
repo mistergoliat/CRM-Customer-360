@@ -4,6 +4,7 @@ import { isDbWriteEnabled } from "@/lib/write-access";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { CaseConsoleHeader } from "@/components/cases/CaseConsoleHeader";
 import { AiSdrCopilotPanel, CaseChatPanel, CaseContextSidebar, CaseDetailShell } from "@/components/cases/case-detail-layout";
+import { SurfaceBadge } from "@/components/p1m/SurfaceBadge";
 
 type CaseDetailProps = {
   params: Promise<{ id: string }>;
@@ -20,10 +21,15 @@ export default async function CaseDetailPage({ params }: CaseDetailProps) {
   const { caseRow, timeline, sourceQueue, notes, commercialShadowReview, commercialOperatorPilot, commercialActionQueue } = result.data;
   const closed = ["closed", "resolved", "done"].includes(String(caseRow.status ?? "").toLowerCase());
   const writeEnabled = isDbWriteEnabled();
+  const badgeKind = timeline.ok ? "real" : "preview";
 
   return (
     <div className="space-y-6">
       <CaseConsoleHeader caseId={id} serviceCode={caseRow.service_code} department={caseRow.department} updatedAt={caseRow.updated_at || caseRow.last_message_at} />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <SurfaceBadge kind={badgeKind} />
+      </div>
 
       <CaseDetailShell
         sidebar={

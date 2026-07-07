@@ -19,6 +19,12 @@ function param(searchParams: Record<string, string | string[] | undefined>, key:
   return Array.isArray(value) ? value[0] : value;
 }
 
+function surfaceKindForMode(mode: string) {
+  if (mode === "real") return "real" as const;
+  if (mode === "partial") return "preview" as const;
+  return "notAvailable" as const;
+}
+
 export default async function CustomersPage({ searchParams }: CustomersPageProps) {
   const sp = await searchParams;
   const search = param(sp, "search") || "";
@@ -26,6 +32,7 @@ export default async function CustomersPage({ searchParams }: CustomersPageProps
   const selectedId = param(sp, "id");
   const data = await listCustomers({ search, page, pageSize: 25 });
   const selected = selectedId ? await getCustomerById(selectedId) : data.items[0] ? await getCustomerById(data.items[0].id) : null;
+  const badgeKind = surfaceKindForMode(data.meta.mode);
 
   return (
     <div className="space-y-6">
@@ -34,7 +41,7 @@ export default async function CustomersPage({ searchParams }: CustomersPageProps
         title="Clientes"
         description="Directorio real sobre `master_customer` con perfil consolidado y creación funcional."
         status={data.meta.mode}
-        actions={<SurfaceBadge kind="real" />}
+        actions={<SurfaceBadge kind={badgeKind} />}
       />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

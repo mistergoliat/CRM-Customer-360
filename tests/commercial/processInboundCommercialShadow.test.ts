@@ -193,6 +193,54 @@ test("shadow enabled observes the commercial result without changing the product
   assert.equal(enabledResult.adapters.commercialShadow?.correlationId, enabledResult.requestId);
 });
 
+test("env flags build live commercial shadow runtime input", async () => {
+  const previousEnv = {
+    BRAIN_SALES_AGENT_ENABLED: process.env.BRAIN_SALES_AGENT_ENABLED,
+    BRAIN_SALES_AGENT_DRY_RUN: process.env.BRAIN_SALES_AGENT_DRY_RUN,
+    BRAIN_COMMERCIAL_SHADOW_ENABLED: process.env.BRAIN_COMMERCIAL_SHADOW_ENABLED,
+    BRAIN_COMMERCIAL_RUNTIME_ENABLED: process.env.BRAIN_COMMERCIAL_RUNTIME_ENABLED,
+    BRAIN_COMMERCIAL_POLICY_ENABLED: process.env.BRAIN_COMMERCIAL_POLICY_ENABLED,
+    BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER: process.env.BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER
+  };
+  const deps = makeProcessInboundDeps(async (input) => {
+    assert.equal(input.shadowFlags.commercialShadowEnabled, true);
+    assert.equal(input.shadowFlags.commercialRuntimeEnabled, true);
+    assert.equal(input.shadowFlags.commercialPolicyEnabled, true);
+    assert.equal(input.shadowFlags.commercialShadowAllowRealProvider, true);
+    assert.equal(input.runtimeOptions.mode, "live");
+    assert.equal(input.runtimeOptions.dryRun, false);
+    return makeShadowHookResult("completed");
+  });
+
+  try {
+    process.env.BRAIN_SALES_AGENT_ENABLED = "true";
+    process.env.BRAIN_SALES_AGENT_DRY_RUN = "false";
+    process.env.BRAIN_COMMERCIAL_SHADOW_ENABLED = "true";
+    process.env.BRAIN_COMMERCIAL_RUNTIME_ENABLED = "true";
+    process.env.BRAIN_COMMERCIAL_POLICY_ENABLED = "true";
+    process.env.BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER = "true";
+
+    const result = await processInbound(makeInboundRequest(), Date.parse("2026-06-17T12:00:00.000Z"), {
+      resolveBackendBrainContext: deps.resolveBackendBrainContext,
+      resolveBrainAction: deps.resolveBrainAction,
+      commercialShadow: {
+        commercialShadowHook: deps.commercialShadow.commercialShadowHook
+      }
+    });
+
+    assert.equal(deps.counters.shadowCalls, 1);
+    assert.equal(result.adapters.commercialShadow?.status, "completed");
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (typeof value === "undefined") {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
 test("shadow hook failures do not break inbound", async () => {
   const deps = makeProcessInboundDeps(async () => {
     throw new Error("Authorization: Bearer sk-test-123");
@@ -229,4 +277,73 @@ test("shadow timeout summaries do not alter inbound", async () => {
   assert.equal(result.ok, true);
   assert.equal(result.adapters.commercialShadow?.status, "timeout");
   assert.equal(result.adapters.commercialShadow?.sideEffects.messagesSent, 0);
+});
+
+test("commercial execution bridge adapter can run without changing inbound response", async () => {
+  const deps = makeProcessInboundDeps();
+  let bridgeCalls = 0;
+  const defaultContext = makeBrainContextResolveResponse();
+  const nonConsultativeContext = makeBrainContextResolveResponse({
+    input_event: {
+      ...defaultContext.input_event,
+      message_text: "Hola, necesito ayuda con mi cuenta"
+    },
+    service_context: {
+      ...defaultContext.service_context,
+      primary_service: "support",
+      service_code: "general_support",
+      source_domain: "support",
+      suggested_agent: "support_agent"
+    }
+  });
+
+  const result = await processInbound(makeInboundRequest({ messageText: "Hola, necesito ayuda con mi cuenta" }), Date.parse("2026-06-17T12:00:00.000Z"), {
+    resolveBackendBrainContext: async () => nonConsultativeContext,
+    resolveBrainAction: deps.resolveBrainAction,
+    commercialShadow: {
+      commercialShadowHook: deps.commercialShadow.commercialShadowHook,
+      commercialShadowFlags: {
+        ...makeCommercialShadowFlags(),
+        commercialShadowEnabled: false
+      }
+    },
+    commercialExecutionBridge: {
+      commercialExecutionBridgeFlags: {
+        actionQueueEnabled: true,
+        actionPersistenceEnabled: false,
+        executionGateEnabled: false,
+        outboxBridgeEnabled: false,
+        sandboxEnabled: true,
+        autonomousReplyEnabled: true,
+        sandboxModeRequired: false
+      },
+      commercialExecutionBridgeHook: async (input) => {
+        bridgeCalls += 1;
+        assert.equal(input.operationalLoopResult, null);
+        return {
+          status: "skipped",
+          enabled: true,
+          action: null,
+          actionPersistence: null,
+          sandboxEvaluation: null,
+          executionGate: null,
+          warnings: ["bridge_test_warning"],
+          error: null,
+          sideEffects: {
+            actionWritten: false,
+            outboxWritten: false,
+            messageSent: false,
+            metaCalled: false,
+            workerTriggered: false
+          }
+        };
+      }
+    }
+  });
+
+  assert.equal(bridgeCalls, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.adapters.commercialExecutionBridge?.status, "skipped");
+  assert.equal(result.adapters.commercialExecutionBridge?.sideEffects.messageSent, false);
+  assert.ok(result.warnings.includes("bridge_test_warning"));
 });

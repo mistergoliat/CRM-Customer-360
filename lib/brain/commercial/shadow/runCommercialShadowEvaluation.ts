@@ -1,6 +1,7 @@
 import { sanitizeCommercialObject } from "../context/adapters";
 import { buildCommercialContext } from "../context/buildCommercialContext";
 import { COMMERCIAL_POLICY_CONTRACT_VERSION, COMMERCIAL_POLICY_VERSION, evaluateCommercialPolicy } from "../policy";
+import { createHttpSalesAgentProvider } from "../sales-agent/providers";
 import { createFakeSalesAgentProvider } from "../sales-agent/providers/fakeSalesAgentProvider";
 import { runSalesAgentDryRun } from "../sales-agent/runSalesAgentDryRun";
 import {
@@ -32,6 +33,15 @@ import type {
   CommercialShadowStatus,
   CommercialShadowWarning
 } from "./shadowConstants";
+
+function shouldUseHttpProvider(input: CommercialShadowInput) {
+  if (!input.shadowFlags.commercialShadowAllowRealProvider) return false;
+  if (input.provider) return false;
+  const endpoint = process.env.BRAIN_MODEL_API_URL?.trim();
+  const apiKey = process.env.BRAIN_MODEL_API_KEY?.trim();
+  const dryRun = input.runtimeOptions.dryRun ?? SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN;
+  return Boolean(endpoint && apiKey && dryRun === false);
+}
 
 type EvaluationState = {
   warnings: CommercialShadowWarning[];
@@ -186,7 +196,7 @@ function buildChannelContext(commercialContext: CommercialContextBuilderResult, 
     quietHoursActive: false,
     humanOwnerActive: Boolean(sourceSummary.humanOwnershipActive),
     aiBlocked: Boolean(sourceSummary.aiBlocked),
-    identityConflict: Boolean(input.brainContext.resolver_identity.identity_type === "mixed"),
+    identityConflict: Boolean(input.brainContext.resolver_identity?.identity_type === "mixed"),
     recentCustomerReply: Boolean(sourceSummary.hasLatestCustomerMessage),
     recentHumanContact: Boolean(sourceSummary.manualReplyActive)
   };
@@ -640,12 +650,14 @@ export async function runCommercialShadowEvaluation(input: CommercialShadowInput
     const runtimeProvider =
       input.shadowFlags.commercialShadowAllowRealProvider && input.provider
         ? input.provider
-        : createFakeSalesAgentProvider({ behavior: "valid" });
+        : shouldUseHttpProvider(input)
+          ? createHttpSalesAgentProvider()
+          : createFakeSalesAgentProvider({ behavior: "valid" });
     if (input.provider && !input.shadowFlags.commercialShadowAllowRealProvider) {
       state.warnings.push("shadow_real_provider_blocked");
     }
 
-    if (input.shadowFlags.commercialShadowAllowRealProvider && !input.provider) {
+    if (input.shadowFlags.commercialShadowAllowRealProvider && !input.provider && !shouldUseHttpProvider(input)) {
       return createCommercialShadowFailedSafe({
         input,
         status: "runtime_failed",

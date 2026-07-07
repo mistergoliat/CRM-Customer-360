@@ -85,6 +85,7 @@ export type CommercialOperationalLoopEvaluationSummary = {
 export type CommercialOperationalOpportunityIdentityResolutionStatus =
   | "continue_existing"
   | "create_new"
+  | "possible_reopen"
   | "ambiguous"
   | "terminal"
   | "no_commercial_signal"

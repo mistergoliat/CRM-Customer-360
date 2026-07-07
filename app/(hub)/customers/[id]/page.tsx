@@ -13,19 +13,26 @@ type CustomerDetailProps = {
   params: Promise<{ id: string }>;
 };
 
+function surfaceKindForMode(mode: string) {
+  if (mode === "real") return "real" as const;
+  if (mode === "partial") return "preview" as const;
+  return "notAvailable" as const;
+}
+
 export default async function CustomerDetailPage({ params }: CustomerDetailProps) {
   const { id } = await params;
   const result = await getCustomerById(id);
   if (!result) notFound();
+  const badgeKind = surfaceKindForMode(result.meta.mode);
 
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="CRM"
         title={`Cliente #${result.customer?.id ?? id}`}
-        description="Perfil real con identidad, relaciones y secciones parciales bien marcadas."
+        description="Perfil real con identidad, relaciones y secciones no respaldadas por backend."
         status={result.meta.mode}
-        actions={<SurfaceBadge kind="real" />}
+        actions={<SurfaceBadge kind={badgeKind} />}
       />
 
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_360px]">
@@ -107,13 +114,13 @@ export default async function CustomerDetailPage({ params }: CustomerDetailProps
           </div>
         </SectionCard>
 
-        <SectionCard title="Secciones parciales" eyebrow="Demo-only" description="LTV, scoring, segmento, notas y campañas quedan marcadas como demo o no disponibles.">
+        <SectionCard title="Secciones no respaldadas" eyebrow="No disponible" description="LTV, scoring, segmento, notas y campañas no tienen backend operativo aun.">
           <div className="space-y-3">
             {Object.entries(result.sections).map(([key, section]) => (
               <div key={key} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="mb-2 flex items-center justify-between">
                   <p className="text-label-bold uppercase text-slate-500">{key}</p>
-                  <StatusChip label={section.state} tone={section.state === "fixture" ? "gray" : section.state === "real" ? "green" : "amber"} />
+                  <StatusChip label={section.state} tone={section.state === "real" ? "green" : section.state === "partial" ? "amber" : "gray"} />
                 </div>
                 <div className="space-y-1">
                   {section.items.map((item) => (
