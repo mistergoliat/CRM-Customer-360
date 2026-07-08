@@ -18,7 +18,8 @@ export type CustomerIdentityResolutionStatus =
   | "identified"
   | "identification_required"
   | "conflict"
-  | "temporarily_unavailable";
+  | "temporarily_unavailable"
+  | "invalid_input";
 
 export type CustomerIdentityConflictType = "external_identity_vs_phone" | "phone_ambiguous";
 
@@ -44,9 +45,17 @@ export type CustomerIdentityLookupResult =
 
 // Boundary the service depends on. The local adapter is one implementation;
 // a future Customer Service could implement this same port over HTTP.
+//
+// findCustomerByExternalIdentity is scoped to a single provider (contract
+// section 5, step 1: "provider + wa_id" exact match).
+// findCustomersByNormalizedPhone is provider-agnostic on purpose (contract
+// section 5, step 2: "telefono normalizado" - a historical customer may have
+// their phone on file through a different channel than the one they are
+// messaging from now). It may combine more than one read-only source, but
+// must return candidates deduplicated by customerId.
 export interface CustomerIdentityPort {
   findCustomerByExternalIdentity(input: { provider: string; externalId: string }): Promise<CustomerIdentityLookupResult>;
-  findCustomersByNormalizedPhone(input: { provider: string; normalizedPhone: string }): Promise<CustomerIdentityLookupResult>;
+  findCustomersByNormalizedPhone(input: { normalizedPhone: string }): Promise<CustomerIdentityLookupResult>;
 }
 
 export type CustomerIdentityResolutionService = {

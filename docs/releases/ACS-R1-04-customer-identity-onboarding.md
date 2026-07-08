@@ -59,7 +59,8 @@ Permitir que un mensaje entrante de WhatsApp resuelva una identidad existente, c
 | -- | ----- | ------ | ------------ | ------------------- |
 | ACS-R1-04-T01 | Definir contrato de onboarding e identidad | done | ACTIVE_RELEASE, PRD, CAPABILITY_MATRIX, ADRs y contratos relacionados | [customer-onboarding-identity-contract](../data/customer-onboarding-identity-contract.md) |
 | ACS-R1-04-T02 | Implementar resolucion por `wa_id` y telefono normalizado | done | ACS-R1-04-T01 | [lib/domains/customer-identity](../../lib/domains/customer-identity), [tests/domains/customerIdentity.test.ts](../../tests/domains/customerIdentity.test.ts) |
-| ACS-R1-04-T03 | Persistir onboarding multi-turno | in_progress | ACS-R1-04-T02 | pending |
+| ACS-R1-04-T02.1 | Corregir clasificacion de input y resolucion telefonica canonica | done | ACS-R1-04-T02 | [lib/domains/customer-identity](../../lib/domains/customer-identity), [lib/integrations/customer-external-identity/repository.ts](../../lib/integrations/customer-external-identity/repository.ts), [tests/domains/customerIdentity.test.ts](../../tests/domains/customerIdentity.test.ts) |
+| ACS-R1-04-T03 | Persistir onboarding multi-turno | in_progress | ACS-R1-04-T02.1 | pending |
 | ACS-R1-04-T04 | Definir reglas de creacion y vinculacion canonica | ready | ACS-R1-04-T03 | pending |
 | ACS-R1-04-T05 | Incorporar Customer 360 al contexto autonomo | ready | ACS-R1-04-T04 | pending |
 | ACS-R1-04-T06 | Conectar identidad y onboarding al inbound nativo | ready | ACS-R1-04-T05 | pending |
@@ -88,7 +89,7 @@ Ver contrato canonico: [customer-onboarding-identity-contract.md, seccion 11 - E
 - `ACS-R1-01` conserva deuda de hardening del capability gateway.
 - `ACS-R1-03` conserva deuda de acceptance formal y cierre de auditoria.
 - Address Book, Quote, Policy, Shipping, Checkout y Voice quedan fuera de este incremento.
-- `ACS-R1-04-T02` (`CustomerIdentityResolutionService`) resuelve por `wa_id` y telefono normalizado dentro de `customer_external_identity` filtrado por `provider = channel` (`whatsapp`). No busca telefono entre providers distintos (p. ej. un telefono cargado solo desde Prestashop). No esta conectado al inbound nativo, al Gateway ni a Customer 360 todavia (eso es T04-T06).
+- `ACS-R1-04-T02.1` corrigio el alcance de `CustomerIdentityResolutionService`: la resolucion por `wa_id` (`provider + external_id` exacto) sigue scoped a `provider = channel`; la resolucion por telefono ahora busca en `customer_external_identity` **sin** filtrar por provider (telefono historico registrado por cualquier canal), via `findDistinctCustomersByNormalizedValueAcrossProviders`. Fuentes de telefono revisadas y descartadas conscientemente: `customer_addresses.recipient_phone` (es contacto de despacho, no identidad verificada del titular) y `ps_customer` de Prestashop (no existe bridge verificado entre `ps_customer.id_customer` y `master_customer.id` en este repo - ningun writer crea filas `customer_external_identity` con `provider = 'prestashop'`). Un input invalido ahora es `invalid_input`, distinto de `identification_required`. Sigue sin estar conectado al inbound nativo, al Gateway ni a Customer 360 (eso es T04-T06).
 
 ## Regla de actualizacion
 

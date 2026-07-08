@@ -13,7 +13,7 @@ function uniqueIds(values: string[]) {
 }
 
 function unresolved(
-  status: "identification_required" | "conflict" | "temporarily_unavailable",
+  status: "identification_required" | "conflict" | "temporarily_unavailable" | "invalid_input",
   input: { conflicts?: CustomerIdentityConflict[]; warnings?: string[] }
 ): ResolveCustomerIdentityResult {
   return {
@@ -39,9 +39,12 @@ export function createCustomerIdentityResolutionService(
 
   return {
     async resolveIdentity(input: ResolveCustomerIdentityInput): Promise<ResolveCustomerIdentityResult> {
+      // Invalid input is a distinct outcome from "no match" - it means the
+      // request itself could not be classified, so no source is consulted
+      // and nothing here may seed onboarding or customer creation downstream.
       const normalizedExternalId = normalizeWaId(input.externalId);
       if (!normalizedExternalId) {
-        return unresolved("identification_required", { warnings: ["invalid_external_id"] });
+        return unresolved("invalid_input", { warnings: ["invalid_external_id"] });
       }
 
       const externalLookup = await port.findCustomerByExternalIdentity({
@@ -60,10 +63,7 @@ export function createCustomerIdentityResolutionService(
 
       let phoneCandidates: string[] = [];
       if (normalizedPhone) {
-        const phoneLookup = await port.findCustomersByNormalizedPhone({
-          provider: input.channel,
-          normalizedPhone
-        });
+        const phoneLookup = await port.findCustomersByNormalizedPhone({ normalizedPhone });
         if (!phoneLookup.ok) {
           return unresolved("temporarily_unavailable", { warnings: [...warnings, phoneLookup.error] });
         }

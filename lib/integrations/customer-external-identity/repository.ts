@@ -57,6 +57,24 @@ export async function findDistinctCustomersByNormalizedValue(provider: string, n
   return { ok: true as const, error: null, customerIds };
 }
 
+/**
+ * Provider-agnostic phone lookup: a customer's phone can be on file through
+ * any channel (whatsapp, hub_operator, import, ...), not only the one the
+ * current inbound arrived on. Used to recognize historical customers who
+ * message from a wa_id that was never linked before.
+ */
+export async function findDistinctCustomersByNormalizedValueAcrossProviders(normalizedValue: string) {
+  const rows = await safeQueryRows<{ customer_id: number }>(
+    `SELECT DISTINCT customer_id FROM \`${TABLE}\` WHERE normalized_value = ?`,
+    [normalizedValue]
+  );
+  if (!rows.ok) return { ok: false as const, error: rows.error, customerIds: [] as number[] };
+  const customerIds = rows.rows
+    .map((row) => asNumber(row.customer_id))
+    .filter((id): id is number => id !== null);
+  return { ok: true as const, error: null, customerIds };
+}
+
 export async function findExternalIdentityByNormalizedValue(provider: string, normalizedValue: string) {
   const rows = await safeQueryRows<Record<string, unknown>>(
     `SELECT * FROM \`${TABLE}\` WHERE provider = ? AND normalized_value = ? ORDER BY is_verified DESC, updated_at DESC LIMIT 1`,
