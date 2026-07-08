@@ -3,8 +3,8 @@ release: ACS-R1-04
 title: Customer Identity Resolution + Onboarding
 status: active
 updated_at: 2026-07-08
-current_task: ACS-R1-04-T02
-next_task: ACS-R1-04-T03
+current_task: ACS-R1-04-T03
+next_task: ACS-R1-04-T04
 blocked: false
 doc_id: release-active
 source_of_truth_for:
@@ -54,8 +54,8 @@ Permitir que un mensaje entrante de WhatsApp resuelva identidad existente, mante
 | ID | Tarea | Estado | Dependencias | Evidencia de cierre |
 | -- | ----- | ------ | ------------ | ------------------- |
 | ACS-R1-04-T01 | Definir contrato de onboarding e identidad | done | PRD, ACTIVE_RELEASE, CAPABILITY_MATRIX, ADRs y contratos relacionados | [customer-onboarding-identity-contract](data/customer-onboarding-identity-contract.md) |
-| ACS-R1-04-T02 | Implementar resolucion por `wa_id` y telefono normalizado | in_progress | ACS-R1-04-T01 | pending |
-| ACS-R1-04-T03 | Persistir onboarding multi-turno | ready | ACS-R1-04-T02 | pending |
+| ACS-R1-04-T02 | Implementar resolucion por `wa_id` y telefono normalizado | done | ACS-R1-04-T01 | [lib/domains/customer-identity](../lib/domains/customer-identity), [tests/domains/customerIdentity.test.ts](../tests/domains/customerIdentity.test.ts) |
+| ACS-R1-04-T03 | Persistir onboarding multi-turno | in_progress | ACS-R1-04-T02 | pending |
 | ACS-R1-04-T04 | Definir reglas de creacion y vinculacion canonica | ready | ACS-R1-04-T03 | pending |
 | ACS-R1-04-T05 | Incorporar Customer 360 al contexto autonomo | ready | ACS-R1-04-T04 | pending |
 | ACS-R1-04-T06 | Conectar identidad y onboarding al inbound nativo | ready | ACS-R1-04-T05 | pending |
@@ -65,23 +65,15 @@ Permitir que un mensaje entrante de WhatsApp resuelva identidad existente, mante
 
 ## Tarea actual
 
-`ACS-R1-04-T02`
+`ACS-R1-04-T03`
 
 ## Definition of Done de la tarea actual
 
-- Estados de identidad definidos.
-- Contrato de entrada y salida definido.
-- Provisional representable.
-- Customer existente representable.
-- Conflicto representable.
-- Ninguna creacion automatica de customer por cada inbound.
-- Reglas de confidence y `matchedBy` documentadas.
-- Tests requeridos definidos.
-- Ninguna dependencia de `n8n_*` ni fixtures productivos.
+Ver [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-customer-identity-onboarding.md#definition-of-done-de-la-tarea-actual), que apunta al contrato canonico (`customer-onboarding-identity-contract.md`, seccion 11) para `CustomerOnboardingState`.
 
 ## Siguiente tarea
 
-`ACS-R1-04-T03`
+`ACS-R1-04-T04`
 
 ## Bloqueos
 
@@ -92,6 +84,7 @@ Permitir que un mensaje entrante de WhatsApp resuelva identidad existente, mante
 - `ACS-R1-01` — hardening del capability gateway (`ACS-R1-01.1`) completado: retry unico en el HTTP adapter (el gateway es el unico propietario del retry), flags productivas documentadas (incl. la contradiccion de `BRAIN_SALES_AGENT_DRY_RUN`), aprobacion derivada de metadata de la capability en vez de `blocking` reportado por el LLM, nombres canonicos snake_case centralizados en un solo alias table, etapa de ejecucion generica (`runCapabilityExecutionStage`), seleccion de producto por ranker deterministico auditado, smoke test real y prueba integrada multi-turno. Ver `docs/audits/acs-r1-01-1-capability-gateway-hardening-evidence.md`. Deuda restante: `propose_followup` no esta conectado al scheduling real de follow-ups (due_at/worker); el registry de capabilities de multi-request aun lee PrestaShop por SQL directo (no este Catalog Port); `denied` no dispara escalamiento formal todavia.
 - `ACS-R1-03` conserva deuda de acceptance formal y cierre de auditoria.
 - Address Book, Quote, Policy, Shipping, Checkout y Voice quedan fuera de este incremento.
+- `ACS-R1-04-T02` (`CustomerIdentityResolutionService`) resuelve por `wa_id` y telefono normalizado dentro de `customer_external_identity` filtrado por `provider = channel` (`whatsapp`). No busca telefono entre providers distintos. No esta conectado al inbound nativo, al Gateway ni a Customer 360 todavia (eso es T04-T06).
 
 ## Regla de actualizacion
 
