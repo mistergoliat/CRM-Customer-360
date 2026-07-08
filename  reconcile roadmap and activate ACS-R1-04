@@ -1,0 +1,431 @@
+[1mdiff --git a/AGENTS.md b/AGENTS.md[m
+[1mindex 6bfb8cc..fad7d27 100644[m
+[1m--- a/AGENTS.md[m
+[1m+++ b/AGENTS.md[m
+[36m@@ -22,6 +22,21 @@[m [mLa meta estrategica es:[m
+ 6. La experiencia visual del CRM es ahora el foco activo de discovery y validacion.[m
+ 7. La identidad continua siendo provisional mientras no exista `customer_master`.[m
+ [m
+[32m+[m[32m## Flujo obligatorio de trabajo[m
+[32m+[m
+[32m+[m[32mAntes de modificar el repositorio:[m
+[32m+[m
+[32m+[m[32m1. Leer `docs/00-START-HERE.md`.[m
+[32m+[m[32m2. Leer `docs/ACTIVE_RELEASE.md`.[m
+[32m+[m[32m3. Trabajar unicamente en `current_task`.[m
+[32m+[m[32m4. No iniciar `next_task` hasta cerrar la tarea actual.[m
+[32m+[m[32m5. No abrir otra release mientras exista una release activa.[m
+[32m+[m[32m6. Actualizar `docs/ACTIVE_RELEASE.md` en el mismo cambio que completa una tarea.[m
+[32m+[m[32m7. Actualizar `docs/CAPABILITY_MATRIX.md` cuando cambie el estado tecnico real.[m
+[32m+[m[32m8. No modificar auditorias historicas.[m
+[32m+[m[32m9. Registrar desvios como deuda o bloqueo.[m
+[32m+[m[32m10. No implementar trabajo fuera de alcance sin autorizacion explicita.[m
+[32m+[m
+ ## Fases activas[m
+ [m
+ ### P1K - Brain MVP y demostracion[m
+[1mdiff --git a/CLAUDE.md b/CLAUDE.md[m
+[1mindex 5d3d669..4173a9c 100644[m
+[1m--- a/CLAUDE.md[m
+[1m+++ b/CLAUDE.md[m
+[36m@@ -31,6 +31,21 @@[m [mEres un agente de desarrollo persistente. Tu trabajo es avanzar el repositorio s[m
+ 4. Si un path tiene parentesis o caracteres especiales, usa `-LiteralPath`.[m
+ 5. No asumas tablas, vistas o workflows no observados.[m
+ [m
+[32m+[m[32m## Flujo obligatorio de trabajo[m
+[32m+[m
+[32m+[m[32mAntes de modificar el repositorio:[m
+[32m+[m
+[32m+[m[32m1. Leer `docs/00-START-HERE.md`.[m
+[32m+[m[32m2. Leer `docs/ACTIVE_RELEASE.md`.[m
+[32m+[m[32m3. Trabajar unicamente en `current_task`.[m
+[32m+[m[32m4. No iniciar `next_task` hasta cerrar la tarea actual.[m
+[32m+[m[32m5. No abrir otra release mientras exista una release activa.[m
+[32m+[m[32m6. Actualizar `docs/ACTIVE_RELEASE.md` en el mismo cambio que completa una tarea.[m
+[32m+[m[32m7. Actualizar `docs/CAPABILITY_MATRIX.md` cuando cambie el estado tecnico real.[m
+[32m+[m[32m8. No modificar auditorias historicas.[m
+[32m+[m[32m9. Registrar desvios como deuda o bloqueo.[m
+[32m+[m[32m10. No implementar trabajo fuera de alcance sin autorizacion explicita.[m
+[32m+[m
+ ## Modo de trabajo[m
+ [m
+ 1. Empieza por entender el estado actual.[m
+[1mdiff --git a/docs/ACTIVE_RELEASE.md b/docs/ACTIVE_RELEASE.md[m
+[1mnew file mode 100644[m
+[1mindex 0000000..6b7cad4[m
+[1m--- /dev/null[m
+[1m+++ b/docs/ACTIVE_RELEASE.md[m
+[36m@@ -0,0 +1,107 @@[m
+[32m+[m[32m---[m
+[32m+[m[32mrelease: ACS-R1-04[m
+[32m+[m[32mtitle: Customer Identity Resolution + Onboarding[m
+[32m+[m[32mstatus: active[m
+[32m+[m[32mupdated_at: 2026-07-08[m
+[32m+[m[32mcurrent_task: ACS-R1-04-T01[m
+[32m+[m[32mnext_task: ACS-R1-04-T02[m
+[32m+[m[32mblocked: false[m
+[32m+[m[32mdoc_id: release-active[m
+[32m+[m[32msource_of_truth_for:[m
+[32m+[m[32m  - active release[m
+[32m+[m[32m  - current task[m
+[32m+[m[32m  - next task[m
+[32m+[m[32m  - blocked state[m
+[32m+[m[32m  - active release objective[m
+[32m+[m[32mdepends_on:[m
+[32m+[m[32m  - ./00-START-HERE.md[m
+[32m+[m[32m  - ./releases/README.md[m
+[32m+[m[32m  - ./releases/ACS-R1-04-customer-identity-onboarding.md[m
+[32m+[m[32m  - ./CAPABILITY_MATRIX.md[m
+[32m+[m[32mtags:[m
+[32m+[m[32m  - release[m
+[32m+[m[32m  - product[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m# ACTIVE_RELEASE[m
+[32m+[m
+[32m+[m[32m## Objetivo del incremento[m
+[32m+[m
+[32m+[m[32mPermitir que un mensaje entrante de WhatsApp resuelva identidad existente, mantenga identidad provisional cuando no haya coincidencia, detecte conflictos sin fusionar customers automaticamente, inicie onboarding minimo, cargue Customer 360 cuando exista `customerId`, incorpore contexto historico al ciclo autonomo y persista el estado entre mensajes.[m
+[32m+[m
+[32m+[m[32m## Resultado esperado[m
+[32m+[m
+[32m+[m[32m- Un unico release activo.[m
+[32m+[m[32m- Una sola tarea `in_progress`.[m
+[32m+[m[32m- El estado de identidad queda explicitado sin confundir customer existente, provisional o en conflicto.[m
+[32m+[m[32m- Customer 360 sigue siendo un read model, no un master.[m
+[32m+[m[32m- El onboarding minimo queda listo para continuar en la siguiente ejecucion.[m
+[32m+[m
+[32m+[m[32m## No objetivos[m
+[32m+[m
+[32m+[m[32m- Address Book operativo.[m
+[32m+[m[32m- Confirmacion de direccion.[m
+[32m+[m[32m- Quote.[m
+[32m+[m[32m- Shipping.[m
+[32m+[m[32m- Checkout.[m
+[32m+[m[32m- Voice.[m
+[32m+[m[32m- Nuevas pantallas.[m
+[32m+[m[32m- Merge automatico de customers.[m
+[32m+[m[32m- Redisenio de Customer 360.[m
+[32m+[m
+[32m+[m[32m## Tabla de tareas[m
+[32m+[m
+[32m+[m[32m| ID | Tarea | Estado | Dependencias | Evidencia de cierre |[m
+[32m+[m[32m| -- | ----- | ------ | ------------ | ------------------- |[m
+[32m+[m[32m| ACS-R1-04-T01 | Definir contrato de resolucion de identidad y estados canonicos | in_progress | PRD, ACTIVE_RELEASE, CAPABILITY_MATRIX, ADRs y contratos relacionados | pending |[m
+[32m+[m[32m| ACS-R1-04-T02 | Implementar resolucion por `wa_id` y telefono normalizado | ready | ACS-R1-04-T01 | pending |[m
+[32m+[m[32m| ACS-R1-04-T03 | Persistir onboarding multi-turno | ready | ACS-R1-04-T02 | pending |[m
+[32m+[m[32m| ACS-R1-04-T04 | Definir reglas de creacion y vinculacion canonica | ready | ACS-R1-04-T03 | pending |[m
+[32m+[m[32m| ACS-R1-04-T05 | Incorporar Customer 360 al contexto autonomo | ready | ACS-R1-04-T04 | pending |[m
+[32m+[m[32m| ACS-R1-04-T06 | Conectar identidad y onboarding al inbound nativo | ready | ACS-R1-04-T05 | pending |[m
+[32m+[m[32m| ACS-R1-04-T07 | Persistir executions, outcomes y advertencias | ready | ACS-R1-04-T06 | pending |[m
+[32m+[m[32m| ACS-R1-04-T08 | Ejecutar pruebas end-to-end: nuevo, antiguo y conflicto | ready | ACS-R1-04-T07 | pending |[m
+[32m+[m[32m| ACS-R1-04-T09 | Auditoria de aceptacion y cierre | ready | ACS-R1-04-T08 | pending |[m
+[32m+[m
+[32m+[m[32m## Tarea actual[m
+[32m+[m
+[32m+[m[32m`ACS-R1-04-T01`[m
+[32m+[m
+[32m+[m[32m## Definition of Done de la tarea actual[m
+[32m+[m
+[32m+[m[32m- Estados de identidad definidos.[m
+[32m+[m[32m- Contrato de entrada y salida definido.[m
+[32m+[m[32m- Provisional representable.[m
+[32m+[m[32m- Customer existente representable.[m
+[32m+[m[32m- Conflicto representable.[m
+[32m+[m[32m- Ninguna creacion automatica de customer por cada inbound.[m
+[32m+[m[32m- Reglas de confidence y `matchedBy` documentadas.[m
+[32m+[m[32m- Tests requeridos definidos.[m
+[32m+[m[32m- Ninguna dependencia de `n8n_*` ni fixtures productivos.[m
+[32m+[m
+[32m+[m[32m## Siguiente tarea[m
+[32m+[m
+[32m+[m[32m`ACS-R1-04-T02`[m
+[32m+[m
+[32m+[m[32m## Bloqueos[m
+[32m+[m
+[32m+[m[32m- Ninguno documentado en este momento.[m
+[32m+[m
+[32m+[m[32m## Deudas fuera del incremento[m
+[32m+[m
+[32m+[m[32m- `ACS-R1-01` — hardening del capability gateway (`ACS-R1-01.1`) completado: retry unico en el HTTP adapter (el gateway es el unico propietario del retry), flags productivas documentadas (incl. la contradiccion de `BRAIN_SALES_AGENT_DRY_RUN`), aprobacion derivada de metadata de la capability en vez de `blocking` reportado por el LLM, nombres canonicos snake_case centralizados en un solo alias table, etapa de ejecucion generica (`runCapabilityExecutionStage`), seleccion de producto por ranker deterministico auditado, smoke test real y prueba integrada multi-turno. Ver `docs/audits/acs-r1-01-1-capability-gateway-hardening-evidence.md`. Deuda restante: `propose_followup` no esta conectado al scheduling real de follow-ups (due_at/worker); el registry de capabilities de multi-request aun lee PrestaShop por SQL directo (no este Catalog Port); `denied` no dispara escalamiento formal todavia.[m
+[32m+[m[32m- `ACS-R1-03` conserva deuda de acceptance formal y cierre de auditoria.[m
+[32m+[m[32m- Address Book, Quote, Policy, Shipping, Checkout y Voice quedan fuera de este incremento.[m
+[32m+[m
+[32m+[m[32m## Regla de actualizacion[m
+[32m+[m
+[32m+[m[32mCuando la tarea actual termine:[m
+[32m+[m
+[32m+[m[32m1. Cambiar su estado a `done`.[m
+[32m+[m[32m2. Mover la siguiente tarea a `in_progress`.[m
+[32m+[m[32m3. Actualizar `current_task`.[m
+[32m+[m[32m4. Actualizar `next_task`.[m
+[32m+[m[32m5. Agregar evidencia de cierre.[m
+[32m+[m[32m6. Actualizar `CAPABILITY_MATRIX.md` si cambio la implementacion real.[m
+[32m+[m[32m7. No crear una auditoria por cada tarea.[m
+[32m+[m[32m8. Crear auditoria solo al cerrar una release.[m
+[1mdiff --git a/docs/CAPABILITY_MATRIX.md b/docs/CAPABILITY_MATRIX.md[m
+[1mnew file mode 100644[m
+[1mindex 0000000..b2aff62[m
+[1m--- /dev/null[m
+[1m+++ b/docs/CAPABILITY_MATRIX.md[m
+[36m@@ -0,0 +1,96 @@[m
+[32m+[m[32m---[m
+[32m+[m[32mtitle: CAPABILITY_MATRIX[m
+[32m+[m[32mdoc_id: product-capability-matrix[m
+[32m+[m[32mstatus: active[m
+[32m+[m[32mversion: "1.2.0"[m
+[32m+[m[32mowner: architecture[m
+[32m+[m[32mlast_reviewed: 2026-07-08[m
+[32m+[m[32msource_of_truth_for:[m
+[32m+[m[32m  - capability inventory[m
+[32m+[m[32m  - domain implementation status[m
+[32m+[m[32m  - port status[m
+[32m+[m[32m  - adapter status[m
+[32m+[m[32m  - gateway registration[m
+[32m+[m[32m  - runtime connection[m
+[32m+[m[32m  - operational verification[m
+[32m+[m[32mdepends_on:[m
+[32m+[m[32m  - ./ACTIVE_RELEASE.md[m
+[32m+[m[32m  - ./releases/ACS-R1-04-customer-identity-onboarding.md[m
+[32m+[m[32m  - ./releases/ACS-R1-03-customer-360.md[m
+[32m+[m[32m  - ./audits/acs-r1-01-capability-gateway-evidence.md[m
+[32m+[m[32m  - ./audits/autonomous-commerce-current-state-audit.md[m
+[32m+[m[32m  - ./audits/autonomous-commerce-transactional-closure-audit.md[m
+[32m+[m[32m  - ./audits/acs-r1-03-customer-360-acceptance.md[m
+[32m+[m[32m  - ./capabilities/customer-360-read-model.md[m
+[32m+[m[32m  - ./capabilities/customer-addresses.md[m
+[32m+[m[32m  - ./data/customer-360-contract.md[m
+[32m+[m[32m  - ./data/customer-address-contract.md[m
+[32m+[m[32m  - ./data/customer-lifecycle-event-contract.md[m
+[32m+[m[32msupersedes: [][m
+[32m+[m[32mtags:[m
+[32m+[m[32m  - capability[m
+[32m+[m[32m  - product[m
+[32m+[m[32m  - release[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m# CAPABILITY_MATRIX[m
+[32m+[m
+[32m+[m[32mLa matriz representa estado tecnico real, no intencion de roadmap.[m
+[32m+[m
+[32m+[m[32m## Leyenda[m
+[32m+[m
+[32m+[m[32m- `Type`: `tool`, `read_model`, `service`, `command`, `policy`, `channel`[m
+[32m+[m[32m- `Domain`: `implemented`, `implemented_partial`, `active_development`, `planned`[m
+[32m+[m[32m- `Port`: `implemented`, `partial`, `planned`, `not_applicable`[m
+[32m+[m[32m- `Adapter`: `implemented`, `partial`, `planned`, `not_applicable`[m
+[32m+[m[32m- `Gateway`: `registered`, `not_registered`, `not_applicable`[m
+[32m+[m[32m- `Runtime`: `connected`, `internal_context_only`, `multi_request_only`, `not_connected`[m
+[32m+[m[32m- `Operational`: `verified`, `pending_smoke_test`, `connected`, `planned`, `not_verified`[m
+[32m+[m[32m- `State`: `accepted_with_debt`, `active_development`, `implemented_partial`, `planned`[m
+[32m+[m
+[32m+[m[32m## Catalog[m
+[32m+[m
+[32m+[m[32m| Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |[m
+[32m+[m[32m| ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |[m
+[32m+[m[32m| `search_products` | `tool` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `verified` | `accepted_with_debt` | ACS-R1-01.1 closed: single HTTP call per invocation (gateway owns retry), governance-derived approval (not LLM `blocking`), real smoke test (`scripts/manual-test/catalog-service-smoke.ts`) - see `audits/acs-r1-01-1-capability-gateway-hardening-evidence.md`. Remaining: multi-request's own catalog registry (`lib/brain/commercial/capabilities/registry.ts`) still reads PrestaShop SQL directly, not this port; `propose_followup` in the canonical loop is not wired to the real follow-up scheduling worker |[m
+[32m+[m[32m| `get_product_details` | `tool` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `verified` | `accepted_with_debt` | ACS-R1-01.1 closed: single HTTP call, governance-derived approval, real smoke test - see `audits/acs-r1-01-1-capability-gateway-hardening-evidence.md`. Only reachable via the deterministic ranker (`rankCatalogSearchResults.ts`) after a search - no direct LLM tool alias yet |[m
+[32m+[m
+[32m+[m[32m## Customer Identity[m
+[32m+[m
+[32m+[m[32m| Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |[m
+[32m+[m[32m| ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |[m
+[32m+[m[32m| `resolve_customer` | `service` | `active_development` | `partial` | `partial` | `not_registered` | `not_connected` | `not_verified` | `active_development` | canonical identity contract still evolving; no automatic merge |[m
+[32m+[m[32m| `get_customer` | `service` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | depends on Customer Service boundary and onboarding state |[m
+[32m+[m[32m| `create_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | no automatic customer creation per inbound |[m
+[32m+[m[32m| `update_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | canonical update rules not yet approved |[m
+[32m+[m[32m| `link_external_identity` | `command` | `implemented_partial` | `partial` | `partial` | `not_registered` | `not_connected` | `not_verified` | `implemented_partial` | external identity relations exist, canonical rules still pending |[m
+[32m+[m
+[32m+[m[32m## Customer 360[m
+[32m+[m
+[32m+[m[32m| Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |[m
+[32m+[m[32m| ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |[m
+[32m+[m[32m| `get_customer_context` | `read_model` | `implemented` | `implemented` | `implemented` | `not_applicable` | `internal_context_only` | `connected` | `accepted_with_debt` | Customer 360 exists, but no autonomous runtime connection is assumed |[m
+[32m+[m[32m| `get_customer_addresses` | `read_model` | `implemented` | `implemented` | `implemented` | `not_applicable` | `internal_context_only` | `connected` | `accepted_with_debt` | read model exists; operational write/confirmation flow still planned |[m
+[32m+[m[32m| `create_customer_address` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | Address Book operational capability not active yet |[m
+[32m+[m
+[32m+[m[32m## Commercial Execution[m
+[32m+[m
+[32m+[m[32m| Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |[m
+[32m+[m[32m| ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |[m
+[32m+[m[32m| `prepare_quote` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | quote flow not productively wired yet; policy alignment pending |[m
+[32m+[m[32m| `business_policy` | `policy` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | policy boundary not yet productized |[m
+[32m+[m[32m| `calculate_shipping` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | carrier integration not wired |[m
+[32m+[m[32m| `create_checkout_link` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | checkout handoff not wired |[m
+[32m+[m[32m| `find_order` | `read_model` | `implemented_partial` | `partial` | `partial` | `not_registered` | `multi_request_only` | `connected` | `implemented_partial` | order projection exists, but no independent orders boundary yet |[m
+[32m+[m[32m| `get_order_status` | `read_model` | `implemented_partial` | `partial` | `partial` | `not_registered` | `multi_request_only` | `connected` | `implemented_partial` | order projection exists, but no independent orders boundary yet |[m
+[32m+[m[32m| `place_sales_call` | `channel` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | voice capability not productized |[m
+[32m+[m
+[32m+[m[32m## Notes[m
+[32m+[m
+[32m+[m[32m- `Customer 360` is represented as a read model, capability contract and evidence, not as an agent tool.[m
+[32m+[m[32m- `get_customer_context` and `get_customer_addresses` are read models, not gateway tools.[m
+[32m+[m[32m- `resolve_customer` is the active identity workstream.[m
+[32m+[m[32m- `ACS-R1-04` is the only active release increment.[m
+[32m+[m[32m- `multi_request_only` means the capability exists only in a non-canonical helper path.[m
+[32m+[m[32m- `accepted_with_debt` means usable and documented, but still carrying explicit debt.[m
+[32m+[m[32m- Planned rows are roadmap only; they are not productively wired just because docs exist.[m
+[1mdiff --git a/docs/ROADMAP.md b/docs/ROADMAP.md[m
+[1mnew file mode 100644[m
+[1mindex 0000000..e02ed0c[m
+[1m--- /dev/null[m
+[1m+++ b/docs/ROADMAP.md[m
+[36m@@ -0,0 +1,42 @@[m
+[32m+[m[32m---[m
+[32m+[m[32mtitle: ROADMAP[m
+[32m+[m[32mdoc_id: product-roadmap[m
+[32m+[m[32mstatus: active[m
+[32m+[m[32mversion: "1.0.0"[m
+[32m+[m[32mowner: product[m
+[32m+[m[32mlast_reviewed: 2026-07-08[m
+[32m+[m[32msource_of_truth_for:[m
+[32m+[m[32m  - roadmap entry point[m
+[32m+[m[32m  - navigation to product roadmap[m
+[32m+[m[32mdepends_on:[m
+[32m+[m[32m  - ./releases/README.md[m
+[32m+[m[32m  - ./ACTIVE_RELEASE.md[m
+[32m+[m[32msupersedes: [][m
+[32m+[m[32mtags:[m
+[32m+[m[32m  - product[m
+[32m+[m[32m  - release[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m# ROADMAP[m
+[32m+[m
+[32m+[m[32mLa ruta canonica del roadmap vive en [docs/releases/README.md](releases/README.md).[m
+[32m+[m
+[32m+[m[32m## Releases[m
+[32m+[m
+[32m+[m[32m| Release | Estado | Dependencia | Resultado habilitado | Siguiente release |[m
+[32m+[m[32m|---|---|---|---|---|[m
+[32m+[m[32m| `ACS-R1-01` | `accepted_with_debt` | Catalog Capability Gateway y runtime canonico | Search/get product details operativos | `ACS-R1-03` |[m
+[32m+[m[32m| `ACS-R1-02` | `superseded` | Plan de Customer Service absorbido por `ACS-R1-04` | Ninguno independiente | `ACS-R1-04` |[m
+[32m+[m[32m| `ACS-R1-03` | `accepted_with_debt` | Customer 360 read model y contratos de datos | Vista consolidada de cliente | `ACS-R1-04` |[m
+[32m+[m[32m| `ACS-R1-04` | `active` | Identity Resolution + Onboarding | Resolucion de identidad y onboarding minimo | `ACS-R1-05` |[m
+[32m+[m[32m| `ACS-R1-05` | `planned` | ACS-R1-04 | Address Book + Address Confirmation | `ACS-R1-06` |[m
+[32m+[m[32m| `ACS-R1-06` | `planned` | ACS-R1-04 y ACS-R1-05 | Business Policy | `ACS-R1-07` |[m
+[32m+[m[32m| `ACS-R1-07` | `planned` | ACS-R1-06 | Quote | `ACS-R1-08` |[m
+[32m+[m[32m| `ACS-R1-08` | `planned` | ACS-R1-04 y ACS-R1-07 | Operator Readiness | `ACS-R1-09` |[m
+[32m+[m[32m| `ACS-R1-09` | `planned` | ACS-R1-08 | Voice | `ACS-R2` |[m
+[32m+[m[32m| `ACS-R2` | `planned` | ACS-R1-07 y ACS-R1-09 | Capabilities transaccionales | future roadmap |[m
+[32m+[m
+[32m+[m[32m## Regla[m
+[32m+[m
+[32m+[m[32m- `ACS-R1-04` es el unico incremento activo.[m
+[32m+[m[32m- La roadmap resume secuencia y dependencias, no tareas detalladas de implementacion.[m
+[1mdiff --git a/docs/releases/ACS-R1-04-customer-identity-onboarding.md b/docs/releases/ACS-R1-04-customer-identity-onboarding.md[m
+[1mnew file mode 100644[m
+[1mindex 0000000..aaf426b[m
+[1m--- /dev/null[m
+[1m+++ b/docs/releases/ACS-R1-04-customer-identity-onboarding.md[m
+[36m@@ -0,0 +1,110 @@[m
+[32m+[m[32m---[m
+[32m+[m[32mrelease: ACS-R1-04[m
+[32m+[m[32mtitle: Customer Identity Resolution + Onboarding[m
+[32m+[m[32mdoc_id: release-acs-r1-04-customer-identity-onboarding[m
+[32m+[m[32mstatus: active[m
+[32m+[m[32mupdated_at: 2026-07-08[m
+[32m+[m[32mcurrent_task: ACS-R1-04-T01[m
+[32m+[m[32mnext_task: ACS-R1-04-T02[m
+[32m+[m[32mblocked: false[m
+[32m+[m[32mowner: product[m
+[32m+[m[32msource_of_truth_for:[m
+[32m+[m[32m  - ACS-R1-04 release scope[m
+[32m+[m[32m  - ACS-R1-04 task queue[m
+[32m+[m[32m  - ACS-R1-04 definition of done[m
+[32m+[m[32mdepends_on:[m
+[32m+[m[32m  - ../ACTIVE_RELEASE.md[m
+[32m+[m[32m  - ../CAPABILITY_MATRIX.md[m
+[32m+[m[32m  - ../product/autonomous-commerce-prd.md[m
+[32m+[m[32m  - ../architecture/adr/ADR-008-customer-360-boundary.md[m
+[32m+[m[32m  - ../capabilities/customer-360-read-model.md[m
+[32m+[m[32m  - ../data/customer-360-contract.md[m
+[32m+[m[32m  - ../data/customer-lifecycle-event-contract.md[m
+[32m+[m[32msupersedes:[m
+[32m+[m[32m  - ACS-R1-02[m
+[32m+[m[32mtags:[m
+[32m+[m[32m  - release[m
+[32m+[m[32m  - product[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m# ACS-R1-04 - Customer Identity Resolution + Onboarding[m
+[32m+[m
+[32m+[m[32m## Objetivo[m
+[32m+[m
+[32m+[m[32mPermitir que un mensaje entrante de WhatsApp resuelva una identidad existente, conserve una identidad provisional cuando no exista coincidencia, detecte conflictos sin fusionar customers automaticamente, inicie onboarding minimo, cargue Customer 360 cuando exista `customerId`, incorpore contexto historico al ciclo autonomo y persista el estado entre mensajes.[m
+[32m+[m
+[32m+[m[32m## Resultado esperado[m
+[32m+[m
+[32m+[m[32m- La identidad provisional, la identidad existente y el conflicto quedan representados de forma canonica.[m
+[32m+[m[32m- El onboarding minimo puede continuar entre mensajes.[m
+[32m+[m[32m- Customer 360 se usa como contexto, no como Customer Master.[m
+[32m+[m[32m- El estado persiste entre turnos sin depender de `n8n_*`.[m
+[32m+[m
+[32m+[m[32m## No objetivos[m
+[32m+[m
+[32m+[m[32m- Address Book operativo.[m
+[32m+[m[32m- Confirmacion de direccion.[m
+[32m+[m[32m- Quote.[m
+[32m+[m[32m- Shipping.[m
+[32m+[m[32m- Checkout.[m
+[32m+[m[32m- Voice.[m
+[32m+[m[32m- Nuevas pantallas.[m
+[32m+[m[32m- Merge automatico de customers.[m
+[32m+[m[32m- Redisenio de Customer 360.[m
+[32m+[m
+[32m+[m[32m## Tareas[m
+[32m+[m
+[32m+[m[32m| ID | Tarea | Estado | Dependencias | Evidencia de cierre |[m
+[32m+[m[32m| -- | ----- | ------ | ------------ | ------------------- |[m
+[32m+[m[32m| ACS-R1-04-T01 | Definir contrato de resolucion de identidad y estados canonicos | in_progress | ACTIVE_RELEASE, PRD, CAPABILITY_MATRIX, ADRs y contratos relacionados | pending |[m
+[32m+[m[32m| ACS-R1-04-T02 | Implementar resolucion por `wa_id` y telefono normalizado | ready | ACS-R1-04-T01 | pending |[m
+[32m+[m[32m| ACS-R1-04-T03 | Persistir onboarding multi-turno | ready | ACS-R1-04-T02 | pending |[m
+[32m+[m[32m| ACS-R1-04-T04 | Definir reglas de creacion y vinculacion canonica | ready | ACS-R1-04-T03 | pending |[m
+[32m+[m[32m| ACS-R1-04-T05 | Incorporar Customer 360 al contexto autonomo | ready | ACS-R1-04-T04 | pending |[m
+[32m+[m[32m| ACS-R1-04-T06 | Conectar identidad y onboarding al inbound nativo | ready | ACS-R1-04-T05 | pending |[m
+[32m+[m[32m| ACS-R1-04-T07 | Persistir executions, outcomes y advertencias | ready | ACS-R1-04-T06 | pending |[m
+[32m+[m[32m| ACS-R1-04-T08 | Ejecutar pruebas end-to-end: nuevo, antiguo y conflicto | ready | ACS-R1-04-T07 | pending |[m
+[32m+[m[32m| ACS-R1-04-T09 | Auditoria de aceptacion y cierre | ready | ACS-R1-04-T08 | pending |[m
+[32m+[m
+[32m+[m[32m## Tarea actual[m
+[32m+[m
+[32m+[m[32m`ACS-R1-04-T01`[m
+[32m+[m
+[32m+[m[32m## Definition of Done[m
+[32m+[m
+[32m+[m[32m- Estados de identidad definidos.[m
+[32m+[m[32m- Contrato de entrada y salida definido.[m
+[32m+[m[32m- Provisional representable.[m
+[32m+[m[32m- Customer existente representable.[m
+[32m+[m[32m- Conflicto representable.[m
+[32m+[m[32m- Ninguna creacion automatica de customer por cada inbound.[m
+[32m+[m[32m- Reglas de confidence y `matchedBy` documentadas.[m
+[32m+[m[32m- Tests requeridos definidos.[m
+[32m+[m[32m- Ninguna dependencia de `n8n_*` ni fixtures productivos.[m
+[32m+[m
+[32m+[m[32m## Siguiente tarea[m
+[32m+[m
+[32m+[m[32m`ACS-R1-04-T02`[m
+[32m+[m
+[32m+[m[32m## Bloqueos[m
+[32m+[m
+[32m+[m[32m- Ninguno documentado en este momento.[m
+[32m+[m
+[32m+[m[32m## Deudas fuera del incremento[m
+[32m+[m
+[32m+[m[32m- `ACS-R1-01` conserva deuda de hardening del capability gateway.[m
+[32m+[m[32m- `ACS-R1-03` conserva deuda de acceptance formal y cierre de auditoria.[m
+[32m+[m[32m- Address Book, Quote, Policy, Shipping, Checkout y Voice quedan fuera de este incremento.[m
+[32m+[m
+[32m+[m[32m## Regla de actualizacion[m
+[32m+[m
+[32m+[m[32mCuando la tarea actual termine:[m
+[32m+[m
+[32m+[m[32m1. Cambiar su estado a `done`.[m
+[32m+[m[32m2. Mover la siguiente tarea a `in_progress`.[m
+[32m+[m[32m3. Actualizar `ACTIVE_RELEASE.md`.[m
+[32m+[m[32m4. Actualizar `current_task` y `next_task`.[m
+[32m+[m[32m5. Agregar evidencia de cierre.[m
+[32m+[m[32m6. Actualizar `CAPABILITY_MATRIX.md` si cambio la implementacion real.[m
+[32m+[m[32m7. No crear una auditoria por cada tarea.[m
+[32m+[m[32m8. Crear auditoria solo al cerrar una release.[m

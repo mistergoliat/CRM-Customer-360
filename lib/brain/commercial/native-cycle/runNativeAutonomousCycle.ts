@@ -21,6 +21,21 @@ import type { CommercialShadowResult } from "../shadow";
 import type { CommercialOperationalLoopResult } from "../operational-loop";
 import type { CommercialExecutionBridgeResult } from "../execution-bridge";
 import type { BrainContextResolveResponse } from "../../context/types";
+import { runCapabilityExecutionStage } from "./runCapabilityExecutionStage";
+import { buildCatalogGroundedMessage } from "./buildCatalogGroundedMessage";
+import type { CatalogGroundingResult } from "./buildCatalogGroundedMessage";
+import { applyCatalogGroundingToNextAction } from "./applyCatalogGroundingToNextAction";
+import { listAliasedSalesAgentToolNames } from "../capability-gateway/toolAliases";
+import type { SalesAgentProvider } from "../sales-agent/runtimeTypes";
+
+/**
+ * Capabilities the native cycle's sales agent is allowed to request this
+ * turn. Derived from the single centralized alias table (never a hardcoded
+ * list here): only LLM tool names backed by a registered Capability Gateway
+ * capability are advertised - advertising a tool the backend cannot execute
+ * would let policy keep a request nothing ever fulfills.
+ */
+const NATIVE_CYCLE_ALLOWED_CAPABILITIES = listAliasedSalesAgentToolNames();
 
 export type NativeAutonomousCycleInput = {
   conversationId: number;
@@ -33,6 +48,8 @@ export type NativeAutonomousCycleInput = {
   correlationId: string;
   currentTime: string;
   abortSignal?: AbortSignal | null;
+  /** Test-only injection point; production callers never set this (defaults to the configured runtime provider). */
+  provider?: SalesAgentProvider | null;
 };
 
 export type NativeAutonomousCycleResult = {
@@ -42,6 +59,7 @@ export type NativeAutonomousCycleResult = {
   loop: CommercialOperationalLoopResult | null;
   bridge: CommercialExecutionBridgeResult | null;
   multiRequest?: MultiRequestCycleResult | null;
+  catalogCapability?: CatalogGroundingResult | null;
   warnings: string[];
 };
 
@@ -94,12 +112,13 @@ export async function runNativeAutonomousCycle(
       loop: null,
       bridge: null,
       multiRequest,
+      catalogCapability: null,
       warnings: multiRequest.warnings
     };
   }
 
   if (!isAutonomyCycleEnabled()) {
-    return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, warnings: [] };
+    return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
   }
 
   const shadowFlags = buildCommercialShadowFeatureFlags();
@@ -107,7 +126,7 @@ export async function runNativeAutonomousCycle(
   const bridgeFlags = buildCommercialBridgeFeatureFlags();
 
   if (!shadowFlags.commercialShadowEnabled) {
-    return { ran: false, reason: "shadow_disabled", shadow: null, loop: null, bridge: null, warnings: [] };
+    return { ran: false, reason: "shadow_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
   }
 
   const warnings: string[] = [];
@@ -121,7 +140,7 @@ export async function runNativeAutonomousCycle(
   });
 
   if (snapshot.status === "not_found") {
-    return { ran: false, reason: "conversation_not_found", shadow: null, loop: null, bridge: null, warnings: [] };
+    return { ran: false, reason: "conversation_not_found", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
   }
 
   // Build shim objects that the legacy pipeline can consume via its
@@ -173,7 +192,7 @@ export async function runNativeAutonomousCycle(
       timezone: "UTC",
       requestedMode: "standard",
       options: { timeoutMs: shadowTimeoutMs, contextTimeoutMs, runtimeTimeoutMs, policyTimeoutMs },
-      provider: null,
+      provider: input.provider ?? null,
       runtimeOptions: {
         enabled: true,
         mode: salesAgentDryRun ? "dry_run" : "live",
@@ -181,7 +200,7 @@ export async function runNativeAutonomousCycle(
         maxInputCharacters: 20000,
         maxOutputCharacters: 12000,
         strictValidation: true,
-        allowedCapabilities: [],
+        allowedCapabilities: NATIVE_CYCLE_ALLOWED_CAPABILITIES,
         captureRawOutput: false,
         includePromptPreview: false,
         dryRun: salesAgentDryRun,
@@ -192,7 +211,7 @@ export async function runNativeAutonomousCycle(
       contractVersion: SALES_AGENT_CONTRACT_VERSION,
       promptVersion: SALES_AGENT_PROMPT_VERSION,
       policyVersion: COMMERCIAL_POLICY_VERSION,
-      allowedCapabilities: [],
+      allowedCapabilities: NATIVE_CYCLE_ALLOWED_CAPABILITIES,
       metadata: inboundMessageShim.metadata,
       abortSignal: input.abortSignal ?? null
     });
@@ -242,12 +261,39 @@ export async function runNativeAutonomousCycle(
     }
   }
 
+  // Fase 3.5: Capability Gateway - generic execution stage runs whatever
+  // tool requests survived policy (today: search_products via the
+  // searchProducts alias), then the catalog-specific projector grounds the
+  // loop's draft message in that verified data (never the LLM's own
+  // unverified claim). Runs after the loop so opportunityId is known.
+  let catalogCapability: CatalogGroundingResult | null = null;
+  let groundedLoop = loop;
+  if (loop) {
+    try {
+      const opportunityId = loop.resultingState?.opportunityId ?? null;
+      const stage = await runCapabilityExecutionStage({
+        shadow,
+        conversationId: input.conversationId,
+        opportunityId,
+        correlationId: input.correlationId
+      });
+      catalogCapability = await buildCatalogGroundedMessage(stage.executions, {
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        opportunityId: typeof opportunityId === "number" ? opportunityId : null
+      });
+      groundedLoop = applyCatalogGroundingToNextAction(loop, catalogCapability);
+    } catch (error) {
+      warnings.push(`catalog_capability_failed: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+  }
+
   // Fase 4: execution bridge (action queue + outbox)
   let bridge: CommercialExecutionBridgeResult | null = null;
-  if (loop && bridgeFlags.actionQueueEnabled) {
+  if (groundedLoop && bridgeFlags.actionQueueEnabled) {
     try {
       bridge = await runCommercialExecutionBridge({
-        operationalLoopResult: loop,
+        operationalLoopResult: groundedLoop,
         currentTime,
         timezone: "UTC",
         featureFlags: bridgeFlags,
@@ -263,8 +309,9 @@ export async function runNativeAutonomousCycle(
   return {
     ran: true,
     shadow,
-    loop,
+    loop: groundedLoop,
     bridge,
+    catalogCapability,
     warnings
   };
 }

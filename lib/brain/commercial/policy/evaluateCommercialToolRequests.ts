@@ -1,4 +1,7 @@
 import { SALES_AGENT_TOOL_NAMES } from "../salesAgentConstants";
+import { resolveCapabilityGovernance } from "../capability-gateway/registry";
+import { resolveCapabilityNameForSalesAgentTool } from "../capability-gateway/toolAliases";
+import type { SalesAgentToolName } from "../salesAgentTypes";
 import type {
   CommercialPolicyApprovalRequirement,
   CommercialPolicyDecision,
@@ -27,18 +30,35 @@ function isToolAllowed(toolName: string, allowedCapabilities: readonly string[])
   return SALES_AGENT_TOOL_NAMES.includes(toolName as never) && allowedCapabilities.includes(toolName);
 }
 
+/**
+ * Whether a tool request should be treated as blocking/needs-approval.
+ * Governed capabilities (registered in the Capability Gateway) are backend
+ * classified via their `governance.authority` - the LLM's own `blocking`
+ * flag is never trusted for those, since a model can set it however it
+ * likes (ACS-R1-01.1). Tools outside the Capability Gateway (not yet
+ * migrated) keep the legacy behavior of trusting the reported flag.
+ */
+function resolveEffectiveBlocking(tool: SalesAgentToolName, reportedBlocking: boolean): boolean {
+  const capabilityName = resolveCapabilityNameForSalesAgentTool(tool);
+  if (!capabilityName) return reportedBlocking;
+  const governance = resolveCapabilityGovernance(capabilityName);
+  if (!governance) return reportedBlocking;
+  return governance.authority === "requires_approval";
+}
+
 function evaluateToolRequest(input: CommercialPolicyInput, index: number): CommercialPolicyToolRequestAssessment {
   const toolRequest = input.salesAgentResult.toolRequests[index];
   const issues: CommercialPolicyIssue[] = [];
   const ruleIds: CommercialPolicyRuleId[] = [toolRuleId(toolRequest.tool)];
   const allowed = isToolAllowed(toolRequest.tool, input.allowedCapabilities);
   const executionClaimed = hasSensitiveBlockedText(toolRequest.purpose) || hasSensitiveBlockedText(toolRequest.reason);
-  const needsApproval = toolRequest.blocking || toolRequest.status === "blocked" || toolRequest.status === "planned";
+  const effectiveBlocking = resolveEffectiveBlocking(toolRequest.tool, toolRequest.blocking);
+  const needsApproval = effectiveBlocking || toolRequest.status === "blocked" || toolRequest.status === "planned";
 
   let status: CommercialPolicyToolRequestAssessment["status"] = "allowed";
   let decision: CommercialPolicyDecision = "allow";
   let approvalRequirement: CommercialPolicyApprovalRequirement = needsApproval ? "operator_review" : "none";
-  let riskLevel: CommercialPolicyRiskLevel = toolRequest.blocking ? "high" : "low";
+  let riskLevel: CommercialPolicyRiskLevel = effectiveBlocking ? "high" : "low";
   let unavailable = false;
 
   if (!allowed) {
@@ -68,7 +88,7 @@ function evaluateToolRequest(input: CommercialPolicyInput, index: number): Comme
     riskLevel = "blocked";
     unavailable = true;
     decision = "remove";
-  } else if (toolRequest.blocking && !input.featureFlags.allowToolRequests) {
+  } else if (effectiveBlocking && !input.featureFlags.allowToolRequests) {
     issues.push(
       buildPolicyIssue("tool_unavailable", "Blocking tool requests are disabled by policy flags.", ["toolRequests", String(index)], ruleIds[0], { tool: toolRequest.tool }, "error")
     );
@@ -77,7 +97,7 @@ function evaluateToolRequest(input: CommercialPolicyInput, index: number): Comme
     riskLevel = "high";
     unavailable = true;
     decision = "remove";
-  } else if (toolRequest.blocking) {
+  } else if (effectiveBlocking) {
     status = "review";
     approvalRequirement = "operator_review";
     riskLevel = "high";

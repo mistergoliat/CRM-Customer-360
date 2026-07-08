@@ -1,15 +1,40 @@
+﻿---
+title: ADR-005 - Catalog Boundary
+doc_id: adr-005-catalog-boundary
+status: approved
+version: "1.0.0"
+owner: architecture
+last_reviewed: 2026-07-08
+source_of_truth_for:
+  - catalog boundary
+  - product catalog access
+depends_on:
+  - product/autonomous-commerce-prd
+supersedes: []
+tags:
+  - adr
+---
 # ADR-005: Catalog Boundary
+
+## Relaciones
+
+- Gobernado por: [Autonomous Commerce PRD](../../product/autonomous-commerce-prd.md)
+- Depende de: [ACTIVE_RELEASE](../../ACTIVE_RELEASE.md)
+- Implementa: boundary para `CatalogService`
+- Evidencia: [CAPABILITY_MATRIX](../../CAPABILITY_MATRIX.md)
+- Context pack: [ACS-R1-01.1](../../context-packs/ACS-R1-01.1.md)
+- Reemplaza: none
 
 ## Estado
 
 Accepted
 
-## Decisión
+## DecisiÃ³n
 
 ```text
 Commercial Domain
-→ CatalogService
-→ PrestashopCatalogAdapter | SnapshotCatalogAdapter | futuros adapters
+â†’ CatalogService
+â†’ PrestashopCatalogAdapter | SnapshotCatalogAdapter | futuros adapters
 ```
 
 ## Modelo de dominio
@@ -46,7 +71,7 @@ discontinued
 unknown
 ```
 
-Puede incluir cantidad, ubicación, lead time, fuente y timestamp. Disponibilidad no equivale a reserva.
+Puede incluir cantidad, ubicaciÃ³n, lead time, fuente y timestamp. Disponibilidad no equivale a reserva.
 
 ### Dimensions
 
@@ -62,7 +87,7 @@ Incluye tenant, shop, customer, channel, locale, currency, quantity y fecha efec
 
 ### Provenance
 
-Todo dato crítico incluye source, retrieved_at, freshness y quality/confidence.
+Todo dato crÃ­tico incluye source, retrieved_at, freshness y quality/confidence.
 
 ## Interfaz conceptual
 
@@ -80,12 +105,12 @@ interface CatalogService {
 }
 ```
 
-## Semántica de unknown
+## SemÃ¡ntica de unknown
 
 ```text
-unknown ≠ false
-unknown ≠ zero
-unknown ≠ out_of_stock
+unknown â‰  false
+unknown â‰  zero
+unknown â‰  out_of_stock
 ```
 
 - precio unknown no se comunica;
@@ -95,13 +120,13 @@ unknown ≠ out_of_stock
 
 ## Snapshot local
 
-Se adopta `SnapshotCatalogAdapter` para desarrollo offline y tests determinísticos. No es fuente productiva.
+Se adopta `SnapshotCatalogAdapter` para desarrollo offline y tests determinÃ­sticos. No es fuente productiva.
 
 ## Facultades derivadas
 
-Debe soportar recomendación, comparación, alternativa, cross-sell, upsell, bundles, carrito, cotización, checkout y reactivación por stock/precio.
+Debe soportar recomendaciÃ³n, comparaciÃ³n, alternativa, cross-sell, upsell, bundles, carrito, cotizaciÃ³n, checkout y reactivaciÃ³n por stock/precio.
 
-## Límites
+## LÃ­mites
 
 La IA no puede inventar productos, precio, disponibilidad, compatibilidad ni reserva.
 
@@ -111,14 +136,14 @@ La IA no puede inventar productos, precio, disponibilidad, compatibilidad ni res
 2. Engine depende de `CatalogService`.
 3. Producto y variante separados.
 4. Precio con moneda y vigencia.
-5. Disponibilidad con estado explícito.
+5. Disponibilidad con estado explÃ­cito.
 6. Dimensiones con unidades.
 7. Compatibilidad con evidencia.
 8. Unknown se conserva.
 9. Snapshot y PrestaShop cumplen el mismo contrato.
 10. Reserva fuera de alcance.
 
-## Criterio de validación
+## Criterio de validaciÃ³n
 
 - motor funciona con ambos adapters;
 - precio unknown no se comunica;
