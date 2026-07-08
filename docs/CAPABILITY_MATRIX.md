@@ -26,6 +26,7 @@ depends_on:
   - ./data/customer-360-contract.md
   - ./data/customer-address-contract.md
   - ./data/customer-lifecycle-event-contract.md
+  - ./data/customer-onboarding-identity-contract.md
 supersedes: []
 tags:
   - capability
@@ -59,7 +60,7 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 
 | Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |
 | ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |
-| `resolve_customer` | `service` | `active_development` | `partial` | `partial` | `not_registered` | `not_connected` | `not_verified` | `active_development` | canonical identity contract still evolving; no automatic merge |
+| `resolve_customer` | `service` | `implemented` | `implemented` | `implemented` | `not_registered` | `not_connected` | `not_verified` | `implemented_partial` | domain-ready read-only resolver (`lib/domains/customer-identity`, ACS-R1-04-T02 + T02.1): resolves by exact `wa_id` (provider-scoped) and canonical/historical normalized phone (provider-agnostic, across `customer_external_identity`), returns `identified/identification_required/conflict/temporarily_unavailable/invalid_input`, never creates or links. `customer_addresses.recipient_phone` and `ps_customer` reviewed and intentionally not connected (delivery contact and unbridged external id-space, respectively). Not yet registered in the Gateway, not connected to the native inbound runtime, no operational smoke test |
 | `get_customer` | `service` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | depends on Customer Service boundary and onboarding state |
 | `create_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | no automatic customer creation per inbound |
 | `update_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | canonical update rules not yet approved |
