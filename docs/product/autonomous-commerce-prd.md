@@ -1,3 +1,21 @@
+---
+title: PRD - Sistema Autonomo de Gestion Comercial para E-commerce
+doc_id: product-autonomous-commerce-prd
+status: draft
+version: "0.1"
+owner: product
+last_reviewed: 2026-07-08
+source_of_truth_for:
+  - product vision
+  - scope
+  - commercial principles
+  - roadmap framing
+depends_on: []
+supersedes: []
+tags:
+  - product
+---
+
 # PRD — Sistema Autónomo de Gestión Comercial para E-commerce
 
 **Estado:** Borrador rector

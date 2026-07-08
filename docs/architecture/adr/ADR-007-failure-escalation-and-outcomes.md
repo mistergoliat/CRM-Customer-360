@@ -1,4 +1,30 @@
+﻿---
+title: ADR-007 - Failure Escalation and Outcomes
+doc_id: adr-007-failure-escalation-and-outcomes
+status: approved
+version: "1.0.0"
+owner: architecture
+last_reviewed: 2026-07-08
+source_of_truth_for:
+  - failure escalation
+  - outcomes
+  - terminal behavior
+depends_on:
+  - product/autonomous-commerce-prd
+supersedes: []
+tags:
+  - adr
+---
 # ADR-007: Failure Continuity, Escalation and Outcomes
+
+## Relaciones
+
+- Gobernado por: [Autonomous Commerce PRD](../../product/autonomous-commerce-prd.md)
+- Depende de: [ACTIVE_RELEASE](../../ACTIVE_RELEASE.md)
+- Implementa: escalamiento de fallos, outcomes y continuidad comercial
+- Evidencia: [CAPABILITY_MATRIX](../../CAPABILITY_MATRIX.md)
+- Context pack: [ACS-R1-01.1](../../context-packs/ACS-R1-01.1.md)
+- Reemplaza: none
 
 ## Estado
 
@@ -6,11 +32,11 @@ Accepted
 
 ## Contexto
 
-El sistema debe atender 24/7 y nunca dejar al cliente abandonado por fallos del modelo, proveedor, tool, output, capability, datos, política o intervención humana.
+El sistema debe atender 24/7 y nunca dejar al cliente abandonado por fallos del modelo, proveedor, tool, output, capability, datos, polÃ­tica o intervenciÃ³n humana.
 
-## Decisión
+## DecisiÃ³n
 
-Se separan fallo técnico, restricción, escalamiento, outcome y continuidad comercial.
+Se separan fallo tÃ©cnico, restricciÃ³n, escalamiento, outcome y continuidad comercial.
 
 ## Restricciones versus fallos
 
@@ -25,19 +51,19 @@ Restricciones:
 
 Producen replanteamiento o espera.
 
-`failed` solo ocurre después de intentar una capability válida y autorizada.
+`failed` solo ocurre despuÃ©s de intentar una capability vÃ¡lida y autorizada.
 
 ## Continuidad
 
 ```text
 retry limitado
-→ proveedor/capability alternativa
-→ mensaje seguro, cuando corresponda
-→ escalamiento
-→ acción humana
+â†’ proveedor/capability alternativa
+â†’ mensaje seguro, cuando corresponda
+â†’ escalamiento
+â†’ acciÃ³n humana
 ```
 
-El sistema no pierde inbound, no cierra oportunidad por fallo técnico, no bloquea otras conversaciones, no deja caso sin owner y no promete plazos desconocidos.
+El sistema no pierde inbound, no cierra oportunidad por fallo tÃ©cnico, no bloquea otras conversaciones, no deja caso sin owner y no promete plazos desconocidos.
 
 ## Escalation
 
@@ -51,7 +77,7 @@ Asigna a una entidad organizacional.
 - user;
 - external system.
 
-### Categorías
+### CategorÃ­as
 
 - sales;
 - customer_service;
@@ -85,14 +111,14 @@ expired
 
 ## Visibilidad operativa
 
-- error recuperado: auditoría;
-- error con derivación: visible en cola;
+- error recuperado: auditorÃ­a;
+- error con derivaciÃ³n: visible en cola;
 - falla repetida: incidente agrupado;
-- falla sistémica: alerta crítica y circuit breaker.
+- falla sistÃ©mica: alerta crÃ­tica y circuit breaker.
 
 ## ActionOutcome
 
-### Técnicos
+### TÃ©cnicos
 
 - queued;
 - sent;
@@ -133,7 +159,7 @@ expired
 
 Cada outcome puede generar un nuevo `CommercialEvent`.
 
-## Cuarta iteración
+## Cuarta iteraciÃ³n
 
 1. detener replanning;
 2. usar salida segura validada;
@@ -145,21 +171,21 @@ Cada outcome puede generar un nuevo `CommercialEvent`.
 
 ## Invariantes
 
-1. Toda derivación tiene target.
+1. Toda derivaciÃ³n tiene target.
 2. Todo caso derivado tiene owner o queue.
 3. `failed` no equivale a abandonado.
-4. Oportunidad no se marca lost por fallo técnico.
-5. Handoff exclusivo y aprobación puntual son distintos.
-6. Acción puede tener múltiples outcomes.
-7. Outcome técnico no reemplaza comercial.
-8. Falla sistémica puede deshabilitar una capability, no todo el sistema.
+4. Oportunidad no se marca lost por fallo tÃ©cnico.
+5. Handoff exclusivo y aprobaciÃ³n puntual son distintos.
+6. AcciÃ³n puede tener mÃºltiples outcomes.
+7. Outcome tÃ©cnico no reemplaza comercial.
+8. Falla sistÃ©mica puede deshabilitar una capability, no todo el sistema.
 9. Cliente recibe continuidad sin promesas inventadas.
 10. IA puede retomar cuando humano libera el caso, salvo handoff exclusivo vigente.
 
-## Criterio de validación
+## Criterio de validaciÃ³n
 
 - falla de IA deriva sin bloquear otras conversaciones;
-- toda escalación llega a una entidad;
+- toda escalaciÃ³n llega a una entidad;
 - operador ve motivo, intentos y contexto;
 - cliente no queda sin continuidad;
 - outcomes disparan el siguiente ciclo.
