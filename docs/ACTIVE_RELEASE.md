@@ -3,8 +3,8 @@ release: ACS-R1-04
 title: Customer Identity Resolution + Onboarding
 status: active
 updated_at: 2026-07-08
-current_task: ACS-R1-04-T01
-next_task: ACS-R1-04-T02
+current_task: ACS-R1-04-T02
+next_task: ACS-R1-04-T03
 blocked: false
 doc_id: release-active
 source_of_truth_for:
@@ -53,8 +53,8 @@ Permitir que un mensaje entrante de WhatsApp resuelva identidad existente, mante
 
 | ID | Tarea | Estado | Dependencias | Evidencia de cierre |
 | -- | ----- | ------ | ------------ | ------------------- |
-| ACS-R1-04-T01 | Definir contrato de resolucion de identidad y estados canonicos | in_progress | PRD, ACTIVE_RELEASE, CAPABILITY_MATRIX, ADRs y contratos relacionados | pending |
-| ACS-R1-04-T02 | Implementar resolucion por `wa_id` y telefono normalizado | ready | ACS-R1-04-T01 | pending |
+| ACS-R1-04-T01 | Definir contrato de onboarding e identidad | done | PRD, ACTIVE_RELEASE, CAPABILITY_MATRIX, ADRs y contratos relacionados | [customer-onboarding-identity-contract](data/customer-onboarding-identity-contract.md) |
+| ACS-R1-04-T02 | Implementar resolucion por `wa_id` y telefono normalizado | in_progress | ACS-R1-04-T01 | pending |
 | ACS-R1-04-T03 | Persistir onboarding multi-turno | ready | ACS-R1-04-T02 | pending |
 | ACS-R1-04-T04 | Definir reglas de creacion y vinculacion canonica | ready | ACS-R1-04-T03 | pending |
 | ACS-R1-04-T05 | Incorporar Customer 360 al contexto autonomo | ready | ACS-R1-04-T04 | pending |
@@ -65,7 +65,7 @@ Permitir que un mensaje entrante de WhatsApp resuelva identidad existente, mante
 
 ## Tarea actual
 
-`ACS-R1-04-T01`
+`ACS-R1-04-T02`
 
 ## Definition of Done de la tarea actual
 
@@ -81,7 +81,7 @@ Permitir que un mensaje entrante de WhatsApp resuelva identidad existente, mante
 
 ## Siguiente tarea
 
-`ACS-R1-04-T02`
+`ACS-R1-04-T03`
 
 ## Bloqueos
 
