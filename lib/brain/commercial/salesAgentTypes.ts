@@ -3,6 +3,7 @@ import type { CommercialChannelReference, LeadReadModel, LeadSource, Opportunity
 import type { FollowUpDecisionResult } from "./followUpTypes";
 import type { AutonomousCustomerContext } from "./context/autonomousCustomerContext";
 import type { AutonomousCustomerContextLoadState } from "./context/loadAutonomousCustomerContext";
+import type { CustomerSessionDecisionContext } from "./native-cycle/customer-session";
 
 export type SerializableId = string | number | null;
 export type SalesAgentRequestedMode = "minimal" | "standard" | "recovery";
@@ -139,6 +140,8 @@ export type SalesAgentInput = {
   /** ACS-R1-04-T05: reduced, allowlisted Customer 360 history - never the full snapshot. Loaded once, upstream of this input. */
   customer360?: AutonomousCustomerContext | null;
   customer360State?: AutonomousCustomerContextLoadState;
+  /** ACS-R1-04-T06: minimized identity/onboarding decision context - never customerId/PII/consent. Resolved once, upstream of this input. */
+  customerSession?: CustomerSessionDecisionContext | null;
   metadata: Record<string, unknown>;
   runId?: string;
   lead?: Record<string, unknown> | null;

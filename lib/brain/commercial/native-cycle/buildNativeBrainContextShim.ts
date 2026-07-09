@@ -151,6 +151,11 @@ export function buildNativeBrainContextShim(
     // loaded once by runNativeAutonomousCycle before this shim was built.
     // Never re-loaded here, never the full snapshot.
     customer360: snapshot.customer360,
-    customer360State: snapshot.customer360State
+    customer360State: snapshot.customer360State,
+
+    // ACS-R1-04-T06: minimized identity/onboarding decision context - already
+    // resolved once by resolveNativeCustomerSession. Never the execution
+    // context, never re-resolved here.
+    customerSession: snapshot.customerSession
   };
 }

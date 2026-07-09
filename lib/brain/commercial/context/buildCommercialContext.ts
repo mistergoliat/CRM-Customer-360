@@ -362,6 +362,7 @@ export function buildCommercialContext(input: CommercialContextBuilderInput): Co
     policyContext: normalizeCommercialPolicyContext(input.policyContext),
     customer360: mergedContext.customer360,
     customer360State: mergedContext.customer360State,
+    customerSession: mergedContext.customerSession,
     metadata
   };
 

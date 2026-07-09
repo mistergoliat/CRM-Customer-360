@@ -117,6 +117,15 @@ export const BRAIN_TOOL_REGISTRY: Record<BrainToolName, BrainToolDefinition> = {
     riskLevel: "low",
     defaultMode: "read_only",
     inputSchema: "brain.tool.getCustomerContext.v1"
+  },
+  linkExternalIdentity: {
+    name: "linkExternalIdentity",
+    description: "Link the current WhatsApp identity to a resolved customer, after explicit consent.",
+    readOnly: false,
+    enabled: true,
+    riskLevel: "medium",
+    defaultMode: "noop",
+    inputSchema: "brain.tool.linkExternalIdentity.v1"
   }
 };
 

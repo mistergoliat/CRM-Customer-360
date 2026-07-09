@@ -1,6 +1,7 @@
 import { createCatalogPort } from "@/lib/catalog";
 import type { CatalogPort, CatalogProduct, CatalogSearchResult } from "@/lib/catalog";
 import type { CapabilityGatewayContext, CapabilityGatewayDefinition, CapabilityGovernanceMetadata } from "./types";
+import { CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS } from "./customerIdentityCapabilities";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -136,7 +137,10 @@ export function resetCapabilityGatewayCatalogPortForTests() {
 
 export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[] = [
   searchProductsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
-  getProductDetailsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition
+  getProductDetailsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
+  // ACS-R1-04-T06. record_customer_interest is deliberately not registered:
+  // no operational persistence exists yet (docs/CAPABILITY_MATRIX.md).
+  ...CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS
 ];
 
 const CAPABILITIES_BY_NAME = new Map(CAPABILITY_GATEWAY_REGISTRY.map((definition) => [definition.capability, definition]));

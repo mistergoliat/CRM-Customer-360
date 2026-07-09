@@ -1,7 +1,10 @@
 import { createCustomer360QueryService } from "@/lib/domains/customer-360";
+import { normalizePhoneChile } from "@/lib/customer-identity/normalize";
 import { buildNativeCommercialContext } from "../context/buildNativeCommercialContext";
 import { loadAutonomousCustomerContext } from "../context/loadAutonomousCustomerContext";
 import type { AutonomousCustomerContextLoadResult, AutonomousCustomerContextLoadState, LoadCustomer360Fn } from "../context/loadAutonomousCustomerContext";
+import { resolveNativeCustomerSession } from "./customer-session";
+import type { CustomerSessionDecisionContext, ResolveNativeCustomerSessionDependencies } from "./customer-session";
 import { runCommercialShadowEvaluation } from "../shadow/runCommercialShadowEvaluation";
 import { runCommercialOperationalLoop } from "../operational-loop";
 import { runCommercialExecutionBridge } from "../execution-bridge";
@@ -63,6 +66,8 @@ export type NativeAutonomousCycleInput = {
   provider?: SalesAgentProvider | null;
   /** Test-only injection point; production callers never set this (defaults to the real Customer 360 query service). */
   loadCustomer360?: LoadCustomer360Fn | null;
+  /** Test-only injection point; production callers never set this (defaults to the real identity/onboarding/Gateway services). */
+  customerSessionDependencies?: ResolveNativeCustomerSessionDependencies | null;
 };
 
 export type NativeAutonomousCycleResult = {
@@ -75,6 +80,8 @@ export type NativeAutonomousCycleResult = {
   catalogCapability?: CatalogGroundingResult | null;
   /** ACS-R1-04-T05: state of the single Customer 360 load for this turn ("not_requested" when there was no customerMasterId to load). */
   customerContextState?: AutonomousCustomerContextLoadState;
+  /** ACS-R1-04-T06: the minimized decision context handed to whichever runtime ran this turn. */
+  customerSession?: CustomerSessionDecisionContext;
   warnings: string[];
 };
 
@@ -130,14 +137,37 @@ export async function runNativeAutonomousCycle(
     }
   }
 
-  // Step 3: exactly one runtime is about to run below - load Customer 360
-  // once, from input.customerMasterId only (never re-resolved by wa_id,
-  // phone or email here - identity resolution is out of scope for T05).
+  // Step 3 (ACS-R1-04-T06): resolve the customer session once - local
+  // identity resolution, onboarding load/reconciliation, at-most-one
+  // external resolve_customer call, this-turn consent, and the Customer 360
+  // access gate. Uses only input.customerMasterId (the pre-existing native
+  // resolver's conversation.customer_id) as a reconciliation signal, never
+  // as authoritative identity - see resolveNativeCustomerSession.
+  const normalizedPhone = normalizePhoneChile(input.waId) ?? input.waId;
+  const session = await resolveNativeCustomerSession({
+    conversationId: String(input.conversationId),
+    opportunityId: null,
+    trustedInbound: {
+      channel: "whatsapp",
+      externalId: input.waId,
+      normalizedPhone,
+      messageId: String(input.messageId ?? input.correlationId),
+      receivedAt: input.currentTime
+    },
+    messageText: input.messageText,
+    correlationId: input.correlationId,
+    priorConversationCustomerId: input.customerMasterId === null || input.customerMasterId === undefined ? null : String(input.customerMasterId),
+    dependencies: input.customerSessionDependencies ?? undefined
+  });
+
+  // Step 3 continued (ACS-R1-04-T05, gated): Customer 360 loads at most once
+  // per turn, using the customerId only when contextAccess authorizes it -
+  // never simply because a customer was identified (task section 11).
   const loadCustomer360 = input.loadCustomer360 ?? defaultLoadCustomer360;
-  const customerId = input.customerMasterId === null || input.customerMasterId === undefined ? null : String(input.customerMasterId);
+  const customerId = session.execution.contextAccess === "none" ? null : session.execution.identity.customerId;
   const customer360: AutonomousCustomerContextLoadResult = await loadAutonomousCustomerContext({ customerId, loadCustomer360 });
 
-  // Step 4/5: select exactly one runtime and hand it the reduced projection.
+  // Step 4/5: select exactly one runtime and hand it the reduced projections.
   if (multiRequestEnabled) {
     const multiRequest = await runMultiRequestAutonomousCycle({
       conversationId: input.conversationId,
@@ -145,7 +175,8 @@ export async function runNativeAutonomousCycle(
       messageText: input.messageText,
       correlationId: input.correlationId,
       customerContext: customer360.context,
-      customerContextState: customer360.state
+      customerContextState: customer360.state,
+      customerSession: session.decision
     });
     return {
       ran: multiRequest.ran,
@@ -156,8 +187,9 @@ export async function runNativeAutonomousCycle(
       multiRequest,
       catalogCapability: null,
       customerContextState: customer360.state,
-      // Step 6: structured Customer 360 warnings, merged with the runtime's own.
-      warnings: dedupeWarnings([...multiRequest.warnings, ...customer360.warnings])
+      customerSession: session.decision,
+      // Step 6: structured Customer 360 + session warnings, merged with the runtime's own.
+      warnings: dedupeWarnings([...multiRequest.warnings, ...customer360.warnings, ...session.warnings])
     };
   }
 
@@ -165,7 +197,7 @@ export async function runNativeAutonomousCycle(
   const loopFlags = buildCommercialLoopFeatureFlags();
   const bridgeFlags = buildCommercialBridgeFeatureFlags();
 
-  const warnings: string[] = [...customer360.warnings];
+  const warnings: string[] = [...customer360.warnings, ...session.warnings];
   const startedAt = Date.now();
   const currentTime = input.currentTime;
 
@@ -175,7 +207,7 @@ export async function runNativeAutonomousCycle(
     conversationPublicId: input.conversationPublicId,
     currentTime
   });
-  const snapshot = { ...rawSnapshot, customer360: customer360.context, customer360State: customer360.state };
+  const snapshot = { ...rawSnapshot, customer360: customer360.context, customer360State: customer360.state, customerSession: session.decision };
 
   if (snapshot.status === "not_found") {
     return {
@@ -186,6 +218,7 @@ export async function runNativeAutonomousCycle(
       bridge: null,
       catalogCapability: null,
       customerContextState: customer360.state,
+      customerSession: session.decision,
       warnings: dedupeWarnings(warnings)
     };
   }
@@ -322,7 +355,8 @@ export async function runNativeAutonomousCycle(
         shadow,
         conversationId: input.conversationId,
         opportunityId,
-        correlationId: input.correlationId
+        correlationId: input.correlationId,
+        trustedCustomerSession: session.execution
       });
       catalogCapability = await buildCatalogGroundedMessage(stage.executions, {
         correlationId: input.correlationId,
@@ -360,6 +394,7 @@ export async function runNativeAutonomousCycle(
     bridge,
     catalogCapability,
     customerContextState: customer360.state,
+    customerSession: session.decision,
     warnings: dedupeWarnings(warnings)
   };
 }

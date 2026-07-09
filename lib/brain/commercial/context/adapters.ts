@@ -11,6 +11,7 @@ import type {
 import type { CommercialContextBuilderMetadata, CommercialContextSourceSummary } from "../types";
 import type { AutonomousCustomerContext } from "./autonomousCustomerContext";
 import type { AutonomousCustomerContextLoadState } from "./loadAutonomousCustomerContext";
+import type { CustomerSessionDecisionContext } from "../native-cycle/customer-session";
 
 type SerializableRecord = Record<string, unknown>;
 type PathKey = string | number;
@@ -54,6 +55,7 @@ export type NormalizedCommercialBrainContext = {
   hasConversationHistory: boolean;
   customer360: AutonomousCustomerContext | null;
   customer360State: AutonomousCustomerContextLoadState;
+  customerSession: CustomerSessionDecisionContext | null;
   metadata: Record<string, unknown>;
 };
 
@@ -510,6 +512,7 @@ function normalizeCommercialContext(input: unknown): {
   // explicit allowlist projector, not arbitrary caller input.
   const customer360 = (getValue(root, ["customer360"]) as AutonomousCustomerContext | null) ?? null;
   const customer360State = (getValue(root, ["customer360State"]) as AutonomousCustomerContextLoadState | undefined) ?? "not_requested";
+  const customerSession = (getValue(root, ["customerSession"]) as CustomerSessionDecisionContext | null) ?? null;
 
   const lead = sanitizeCommercialObject(getValue(root, ["lead"]) ?? getValue(root, ["lead_context"]) ?? null).value ?? undefined;
   const opportunity = sanitizeCommercialObject(getValue(root, ["opportunity"]) ?? getValue(root, ["opportunity_context"]) ?? null).value ?? undefined;
@@ -583,6 +586,7 @@ function normalizeCommercialContext(input: unknown): {
       hasConversationHistory,
       customer360,
       customer360State,
+      customerSession,
       metadata: metadataResult.value ?? {}
     }
   };

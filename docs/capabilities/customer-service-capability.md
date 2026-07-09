@@ -2,7 +2,7 @@
 title: Capability - Customer Service (create_customer, link_external_identity, record_customer_interest)
 doc_id: capability-customer-service
 status: approved
-version: "1.0.0"
+version: "1.1.0"
 owner: product
 last_reviewed: 2026-07-09
 source_of_truth_for:
@@ -25,7 +25,7 @@ tags:
 
 - Gobernado por: [customer-creation-linking-authority-contract](../data/customer-creation-linking-authority-contract.md)
 - Depende de: [customer-onboarding-identity-contract](../data/customer-onboarding-identity-contract.md), [Customer Service HTTP contract](../integrations/customer-service-http-contract.md), [ADR-006](../architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md)
-- Implementa: `lib/domains/customer-service` (port, policy, service), `lib/integrations/customer-service/http-adapter.ts`
+- Implementa: `lib/domains/customer-service` (port, policy, service), `lib/integrations/customer-service/http-adapter.ts`, `lib/brain/commercial/capability-gateway/customerIdentityCapabilities.ts` (registro y ejecucion en el Gateway), `lib/brain/commercial/native-cycle/customer-session` (orquestador de sesion que invoca `resolve_customer` y ensambla el input de `create_customer`/`link_external_identity`)
 - Evidencia: [CAPABILITY_MATRIX](../CAPABILITY_MATRIX.md)
 - Reemplaza: none
 
@@ -33,18 +33,20 @@ tags:
 
 Frontera tecnica de ACS hacia el microservicio externo Customer Service: `resolve_customer` (read-only), `create_customer` y `link_external_identity` como capabilities con efecto secundario, mas policy y tipos (sin persistencia) para `record_customer_interest`.
 
-## Estado en ACS-R1-04-T04.1
+## Estado en ACS-R1-04-T06
 
 ```text
 domain: implemented
 port: implemented
 http_adapter: implemented
 policy: implemented
-gateway: not_connected
-runtime: not_connected
+gateway: registered
+runtime: connected
 operational: not_verified
-status: implemented_partial
+status: accepted_with_debt
 ```
+
+`resolve_customer`, `create_customer` y `link_external_identity` estan registrados en el Capability Gateway (`CAPABILITY_GATEWAY_REGISTRY`) y conectados al inbound nativo via `resolveNativeCustomerSession` (`resolve_customer`, autonomo, hasta una vez por turno) y al runtime legacy como herramientas del sales agent (`create_customer`/`link_external_identity`, via el alias table y `runCapabilityExecutionStage`). `operational: not_verified` porque las pruebas de T06 corrieron contra un servidor HTTP local (mismo patron que T04.1), no contra un Customer Service real desplegado - no hay validacion end-to-end verificada todavia (`ACS-R1-04-T08`). El runtime multi-request recibe `customerSession` solo a nivel de tipos e input hash; no ejecuta estas capabilities via herramientas del LLM todavia (mismo patron de deuda que Customer 360 en T05).
 
 `record_customer_interest`:
 
@@ -57,7 +59,7 @@ runtime: not_connected
 status: designed_partial
 ```
 
-Ninguna de estas operaciones esta conectada al inbound nativo, al LLM, al Capability Gateway o a Customer 360. La conexion real es `ACS-R1-04-T06`.
+`record_customer_interest` sigue sin registrar en el Gateway y sin efecto operacional - T06 no le agrego un no-op ni le dio persistencia. Customer 360 sigue sin recibir escritura de ninguna de estas operaciones; su lectura ahora esta detras de una compuerta de acceso explicita (`contextAccess`, ver [ACS-R1-04-T05/T06](../releases/ACS-R1-04-customer-identity-onboarding.md)) que no depende de estas capabilities.
 
 ## Entrada / Salida
 
@@ -81,7 +83,7 @@ Las tres policies puras (`lib/domains/customer-service/authority-policy.ts`) dev
 | `record_customer_interest` provisional | mutating | autonomous/policy | low |
 | `record_customer_interest` con follow-up | mutating | requires_consent | medium |
 
-Esta tabla es documental en `T04.1`: no hay registro real en el Capability Gateway (`gateway: not_connected`) hasta `T06`.
+Esta tabla describe la autoridad conceptual (contrato seccion 9). El Capability Gateway ya tiene registradas las tres capabilities desde `T06` (`gateway: registered`), pero su campo `authority` es binario (`autonomous` | `requires_approval`, sobre aprobacion de operador) y no modela directamente `policy`/`requires_consent`; las tres quedaron registradas como `authority: autonomous` porque el gate real (policy o consentimiento explicito) corre dentro de `execute()`, no como aprobacion previa de un operador - ver el comentario inline en `customerIdentityCapabilities.ts`.
 
 ## Reglas
 
@@ -98,6 +100,6 @@ Esta tabla es documental en `T04.1`: no hay registro real en el Capability Gatew
 `lib/domains/customer-identity` (T02/T02.1) sigue siendo la resolucion de sesion local y provisional, sin cambios en `T04.1`. No hay dual-read ni fallback entre ese resolver y este port. Ver [customer-onboarding-identity-contract](../data/customer-onboarding-identity-contract.md).
 
 ```text
-customer identity local resolution: implemented, not runtime-connected
-external Customer Service port: implemented, not runtime-connected
+customer identity local resolution: implemented, runtime-connected (ACS-R1-04-T06, via resolveNativeCustomerSession)
+external Customer Service port: implemented, runtime-connected (ACS-R1-04-T06, via the Capability Gateway)
 ```

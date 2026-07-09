@@ -11,7 +11,8 @@ export const BRAIN_TOOL_NAMES = [
   "lookupCustomerByEmail",
   "createCustomer",
   "linkCustomerToConversation",
-  "getCustomerContext"
+  "getCustomerContext",
+  "linkExternalIdentity"
 ] as const;
 
 export type BrainToolName = (typeof BRAIN_TOOL_NAMES)[number];

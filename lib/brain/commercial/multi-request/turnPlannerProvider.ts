@@ -1,6 +1,7 @@
 import type { ConversationRequestDomain } from "../conversation-request";
 import type { AutonomousCustomerContext } from "../context/autonomousCustomerContext";
 import type { AutonomousCustomerContextLoadState } from "../context/loadAutonomousCustomerContext";
+import type { CustomerSessionDecisionContext } from "../native-cycle/customer-session";
 import type { RequestCandidate } from "./buildDeterministicCandidates";
 import type { DetectedTurnIntent } from "./turnPlanTypes";
 
@@ -14,6 +15,14 @@ export type TurnPlannerProviderInput = {
    */
   customerContext?: AutonomousCustomerContext | null;
   customerContextState?: AutonomousCustomerContextLoadState;
+  /**
+   * ACS-R1-04-T06: minimized identity/onboarding decision context, already
+   * resolved once upstream. A future LLM provider can propose resolve_customer/
+   * create_customer/link_external_identity by name only - it never receives
+   * customerId, PII or consent evidence; those are assembled server-side at
+   * execution time. The deterministic provider below ignores this field.
+   */
+  customerSession?: CustomerSessionDecisionContext | null;
 };
 
 export type TurnPlannerProviderOutput = {

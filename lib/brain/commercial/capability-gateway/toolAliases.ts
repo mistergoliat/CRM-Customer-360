@@ -8,7 +8,12 @@ import type { SalesAgentToolName } from "../salesAgentTypes";
  * directly (ACS-R1-01.1 objective 4).
  */
 const CAPABILITY_TOOL_ALIASES: Partial<Record<SalesAgentToolName, string>> = {
-  searchProducts: "search_products"
+  searchProducts: "search_products",
+  // ACS-R1-04-T06. resolve_customer is deliberately absent: it is autonomous
+  // (contract section 9) and invoked directly by resolveNativeCustomerSession,
+  // never proposed by the sales agent as a tool request.
+  createCustomer: "create_customer",
+  linkExternalIdentity: "link_external_identity"
 };
 
 /** The reverse map, built once so lookups by capability name are O(1) too. */

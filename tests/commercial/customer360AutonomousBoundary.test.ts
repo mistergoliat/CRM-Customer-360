@@ -9,6 +9,8 @@ import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle/runNativeAutonomousCycle";
 import { projectAutonomousCustomerContext } from "@/lib/brain/commercial/context/autonomousCustomerContext";
 import { loadAutonomousCustomerContext } from "@/lib/brain/commercial/context/loadAutonomousCustomerContext";
+import type { ResolveNativeCustomerSessionDependencies } from "@/lib/brain/commercial/native-cycle/customer-session";
+import type { CustomerOnboardingService, CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
 
 Object.assign(process.env, {
   NODE_ENV: "development",
@@ -52,6 +54,60 @@ function uniqueSuffix(label: string) {
 
 function uniqueConversationId() {
   return 900000000 + Math.floor(Math.random() * 99999999);
+}
+
+function notUsedInTest(name: string) {
+  return async () => {
+    throw new Error(`${name} must not be called in this test`);
+  };
+}
+
+/**
+ * ACS-R1-04-T06 gates the Customer 360 load behind contextAccess (task
+ * section 11): a resolved customerId alone no longer authorizes a load, so
+ * these T05-era boundary tests must force a "commercial_history" access
+ * grant via DI rather than relying on a bare customerMasterId.
+ */
+function commercialHistorySessionDependencies(conversationId: string, customerId: string): ResolveNativeCustomerSessionDependencies {
+  // status "completed" (with a customerId matching the identity fake) grants
+  // commercial_history without resolveNativeCustomerSession attempting any
+  // onboarding transition - keeps the onboardingService fake fully inert.
+  const onboardingState: CustomerOnboardingState = {
+    id: 1,
+    conversationId,
+    opportunityId: null,
+    status: "completed",
+    purpose: "quote",
+    collected: {},
+    pendingFields: [],
+    customerId,
+    failedVerificationAttempts: 0,
+    version: 1,
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    completedAt: new Date(0).toISOString()
+  };
+  const onboardingService: CustomerOnboardingService = {
+    async getState() {
+      return onboardingState;
+    },
+    startOnboarding: notUsedInTest("startOnboarding"),
+    collectFields: notUsedInTest("collectFields"),
+    markResolving: notUsedInTest("markResolving"),
+    completeOnboarding: notUsedInTest("completeOnboarding"),
+    markConflict: notUsedInTest("markConflict"),
+    markTemporarilyUnavailable: notUsedInTest("markTemporarilyUnavailable"),
+    retryResolution: notUsedInTest("retryResolution"),
+    recordVerificationFailure: notUsedInTest("recordVerificationFailure")
+  };
+  return {
+    identityService: {
+      async resolveIdentity() {
+        return { status: "identified", customerId, matchedBy: "phone", confidence: "verified", conflicts: [], warnings: [] };
+      }
+    },
+    onboardingService
+  };
 }
 
 function makeSnapshot(overrides: Partial<Pick<Customer360Snapshot, "customerId">> & { displayName?: string; email?: string | null } = {}): Customer360Snapshot {
@@ -209,11 +265,12 @@ test("boundary invariant 3: the T05 modules never import identity resolution, on
   assert.doesNotMatch(source, /capability-gateway/);
 });
 
-test("boundary invariant 4: runNativeAutonomousCycle hands the loader exactly String(customerMasterId), never wa_id/phone/email", async () => {
+test("boundary invariant 4: runNativeAutonomousCycle hands the loader only the access-gated resolved customerId, never wa_id/phone/email", async () => {
   await withEnv(MULTI_REQUEST_ENV, async () => {
+    const conversationId = uniqueConversationId();
     let receivedCustomerId: string | null = null;
     await runNativeAutonomousCycle({
-      conversationId: uniqueConversationId(),
+      conversationId,
       conversationPublicId: uniqueSuffix("conv-pub"),
       customerMasterId: 4242,
       waId: "56900000000",
@@ -225,7 +282,10 @@ test("boundary invariant 4: runNativeAutonomousCycle hands the loader exactly St
       loadCustomer360: async (customerId) => {
         receivedCustomerId = customerId;
         return { status: "not_found", snapshot: null, warnings: [] };
-      }
+      },
+      // ACS-R1-04-T06: customerMasterId alone no longer authorizes a load -
+      // the session must resolve+grant access first (task section 11).
+      customerSessionDependencies: commercialHistorySessionDependencies(String(conversationId), "4242")
     });
     assert.equal(receivedCustomerId, "4242");
     assert.notEqual(receivedCustomerId, "56900000000");
@@ -256,17 +316,15 @@ test("boundary invariant 5: customerMasterId = null produces zero Customer 360 l
 
 test("boundary invariant 6: reading Customer 360 for a real customer never writes to master_customer", async () => {
   const customerId = await seedRealCustomer();
-  const before = await safeQueryRows<{ total: number }>("SELECT COUNT(*) AS total FROM master_customer", []);
   const beforeRow = await safeQueryRows<Record<string, unknown>>("SELECT * FROM master_customer WHERE id = ?", [customerId]);
 
   const service = createCustomer360QueryService();
   await service.loadByCustomerId(String(customerId));
   await service.loadByCustomerId(String(customerId));
 
-  const after = await safeQueryRows<{ total: number }>("SELECT COUNT(*) AS total FROM master_customer", []);
+  // Scoped to this test's own row - a table-wide COUNT(*) is racy here since
+  // other tests in this file concurrently seed unrelated customers.
   const afterRow = await safeQueryRows<Record<string, unknown>>("SELECT * FROM master_customer WHERE id = ?", [customerId]);
-
-  assert.equal(after.ok && before.ok ? after.rows[0]?.total : null, before.ok ? before.rows[0]?.total : null);
   assert.deepEqual(afterRow.ok ? afterRow.rows[0] : null, beforeRow.ok ? beforeRow.rows[0] : null);
 });
 
@@ -281,8 +339,9 @@ test("boundary invariant 7: the projection never contains address confirmation d
 
 test("boundary invariant 8: a loader failure degrades to unavailable and never stops the runtime", async () => {
   await withEnv(MULTI_REQUEST_ENV, async () => {
+    const conversationId = uniqueConversationId();
     const result = await runNativeAutonomousCycle({
-      conversationId: uniqueConversationId(),
+      conversationId,
       conversationPublicId: uniqueSuffix("conv-pub"),
       customerMasterId: 4343,
       waId: "56900000002",
@@ -293,7 +352,10 @@ test("boundary invariant 8: a loader failure degrades to unavailable and never s
       currentTime: new Date().toISOString(),
       loadCustomer360: async () => {
         throw new Error("customer 360 exploded");
-      }
+      },
+      // ACS-R1-04-T06: the loader only runs when the session grants access -
+      // force that grant so this test still exercises the loader failure path.
+      customerSessionDependencies: commercialHistorySessionDependencies(String(conversationId), "4343")
     });
     assert.equal(result.ran, true);
     assert.equal(result.customerContextState, "unavailable");

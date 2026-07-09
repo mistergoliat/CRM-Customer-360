@@ -5,6 +5,8 @@ import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle/runNativeAutonomousCycle";
 import type { SalesAgentProvider, SalesAgentProviderRequest } from "@/lib/brain/commercial/sales-agent/runtimeTypes";
 import type { Customer360LoadResult } from "@/lib/domains/customer-360";
+import type { ResolveNativeCustomerSessionDependencies } from "@/lib/brain/commercial/native-cycle/customer-session";
+import type { CustomerOnboardingService, CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
 
 Object.assign(process.env, {
   NODE_ENV: "development",
@@ -66,6 +68,62 @@ function countingLoader(result: Customer360LoadResult | (() => Customer360LoadRe
 }
 
 const NOT_FOUND: Customer360LoadResult = { status: "not_found", snapshot: null, warnings: [] };
+
+function notUsedInTest(name: string) {
+  return async () => {
+    throw new Error(`${name} must not be called in this test`);
+  };
+}
+
+/**
+ * ACS-R1-04-T06 gates the Customer 360 load behind contextAccess (task
+ * section 11) - an identified customer alone no longer authorizes a load.
+ * These tests care only about Customer 360 loading mechanics, so they inject
+ * a fixed "identified customer + active quote onboarding" session (the
+ * documented commercial_history case) instead of exercising real identity
+ * resolution, which has its own dedicated T06 test coverage.
+ */
+function commercialHistorySessionDependencies(conversationId: string, customerId: string): ResolveNativeCustomerSessionDependencies {
+  // status "completed" (with a customerId matching the identity fake) grants
+  // commercial_history without resolveNativeCustomerSession attempting any
+  // onboarding transition - keeps the onboardingService fake fully inert.
+  const onboardingState: CustomerOnboardingState = {
+    id: 1,
+    conversationId,
+    opportunityId: null,
+    status: "completed",
+    purpose: "quote",
+    collected: {},
+    pendingFields: [],
+    customerId,
+    failedVerificationAttempts: 0,
+    version: 1,
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    completedAt: new Date(0).toISOString()
+  };
+  const onboardingService: CustomerOnboardingService = {
+    async getState() {
+      return onboardingState;
+    },
+    startOnboarding: notUsedInTest("startOnboarding"),
+    collectFields: notUsedInTest("collectFields"),
+    markResolving: notUsedInTest("markResolving"),
+    completeOnboarding: notUsedInTest("completeOnboarding"),
+    markConflict: notUsedInTest("markConflict"),
+    markTemporarilyUnavailable: notUsedInTest("markTemporarilyUnavailable"),
+    retryResolution: notUsedInTest("retryResolution"),
+    recordVerificationFailure: notUsedInTest("recordVerificationFailure")
+  };
+  return {
+    identityService: {
+      async resolveIdentity() {
+        return { status: "identified", customerId, matchedBy: "phone", confidence: "verified", conflicts: [], warnings: [] };
+      }
+    },
+    onboardingService
+  };
+}
 
 /** Minimal provider: responds now, requests no tools, so the pipeline completes without HTTP dependencies. */
 function createCapturingSalesAgentProvider(onInvoke: (request: SalesAgentProviderRequest) => void): SalesAgentProvider {
@@ -191,6 +249,7 @@ function withEnv<T>(overrides: Record<string, string>, fn: () => Promise<T>): Pr
 test("native cycle: Customer 360 loads exactly once per turn (legacy runtime)", async () => {
   await withEnv(LEGACY_ENV, async () => {
     const seeded = await seedConversation();
+    assert.ok(seeded.customerId, "seeded conversation must have a customer");
     const loader = countingLoader(NOT_FOUND);
     await runNativeAutonomousCycle({
       conversationId: seeded.conversationId!,
@@ -203,7 +262,8 @@ test("native cycle: Customer 360 loads exactly once per turn (legacy runtime)", 
       correlationId: uniqueSuffix("corr"),
       currentTime: new Date().toISOString(),
       loadCustomer360: loader.loadCustomer360,
-      provider: createCapturingSalesAgentProvider(() => {})
+      provider: createCapturingSalesAgentProvider(() => {}),
+      customerSessionDependencies: commercialHistorySessionDependencies(String(seeded.conversationId), String(seeded.customerId))
     });
     assert.equal(loader.calls.length, 1);
   });
@@ -233,6 +293,7 @@ test("native cycle: no customerMasterId means zero Customer 360 calls", async ()
 test("native cycle: the legacy runtime receives the reduced Customer 360 projection, never the full snapshot", async () => {
   await withEnv(LEGACY_ENV, async () => {
     const seeded = await seedConversation();
+    assert.ok(seeded.customerId, "seeded conversation must have a customer");
     const loader = countingLoader(NOT_FOUND);
     let captured: SalesAgentProviderRequest | null = null;
     await runNativeAutonomousCycle({
@@ -248,7 +309,8 @@ test("native cycle: the legacy runtime receives the reduced Customer 360 project
       loadCustomer360: loader.loadCustomer360,
       provider: createCapturingSalesAgentProvider((request) => {
         captured = request;
-      })
+      }),
+      customerSessionDependencies: commercialHistorySessionDependencies(String(seeded.conversationId), String(seeded.customerId))
     });
     assert.ok(captured, "provider must have been invoked");
     const input = (captured as unknown as SalesAgentProviderRequest).salesAgentInput;
@@ -261,6 +323,7 @@ test("native cycle: the legacy runtime receives the reduced Customer 360 project
 test("native cycle: a Customer 360 failure never stops the cycle", async () => {
   await withEnv(LEGACY_ENV, async () => {
     const seeded = await seedConversation();
+    assert.ok(seeded.customerId, "seeded conversation must have a customer");
     const loader = countingLoader(() => {
       throw new Error("customer 360 exploded");
     });
@@ -275,7 +338,8 @@ test("native cycle: a Customer 360 failure never stops the cycle", async () => {
       correlationId: uniqueSuffix("corr"),
       currentTime: new Date().toISOString(),
       loadCustomer360: loader.loadCustomer360,
-      provider: createCapturingSalesAgentProvider(() => {})
+      provider: createCapturingSalesAgentProvider(() => {}),
+      customerSessionDependencies: commercialHistorySessionDependencies(String(seeded.conversationId), String(seeded.customerId))
     });
     assert.equal(result.ran, true);
     assert.equal(result.customerContextState, "unavailable");
@@ -285,6 +349,7 @@ test("native cycle: a Customer 360 failure never stops the cycle", async () => {
 test("native cycle: Customer 360 warnings are visible on the final result", async () => {
   await withEnv(LEGACY_ENV, async () => {
     const seeded = await seedConversation();
+    assert.ok(seeded.customerId, "seeded conversation must have a customer");
     const loader = countingLoader(NOT_FOUND);
     const result = await runNativeAutonomousCycle({
       conversationId: seeded.conversationId!,
@@ -297,7 +362,8 @@ test("native cycle: Customer 360 warnings are visible on the final result", asyn
       correlationId: uniqueSuffix("corr"),
       currentTime: new Date().toISOString(),
       loadCustomer360: loader.loadCustomer360,
-      provider: createCapturingSalesAgentProvider(() => {})
+      provider: createCapturingSalesAgentProvider(() => {}),
+      customerSessionDependencies: commercialHistorySessionDependencies(String(seeded.conversationId), String(seeded.customerId))
     });
     assert.ok(result.warnings.includes("customer_360_not_found"));
   });

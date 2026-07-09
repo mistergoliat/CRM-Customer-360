@@ -5,6 +5,7 @@ import { COMMERCIAL_CONTEXT_MAX_RECENT_MESSAGES } from "../constants";
 import { hasStaleCommercialContext } from "./adapters";
 import type { AutonomousCustomerContext } from "./autonomousCustomerContext";
 import type { AutonomousCustomerContextLoadState } from "./loadAutonomousCustomerContext";
+import type { CustomerSessionDecisionContext } from "../native-cycle/customer-session";
 
 export const COMMERCIAL_CONTEXT_CONTRACT_NAME = "CommercialContext" as const;
 export const COMMERCIAL_CONTEXT_SCHEMA_VERSION = "1.0" as const;
@@ -102,6 +103,12 @@ export type CommercialContextSnapshot = {
    */
   customer360: AutonomousCustomerContext | null;
   customer360State: AutonomousCustomerContextLoadState;
+  /**
+   * ACS-R1-04-T06: never resolved by this function - always null here. The
+   * caller (runNativeAutonomousCycle) resolves the session once and merges
+   * it in before handing the snapshot to buildNativeBrainContextShim.
+   */
+  customerSession: CustomerSessionDecisionContext | null;
   metadata: {
     source: "native_mariadb";
     conversationPublicId: string;
@@ -221,6 +228,7 @@ function buildEmptySnapshot(input: {
     warnings: input.warnings,
     customer360: null,
     customer360State: "not_requested",
+    customerSession: null,
     metadata: {
       source: "native_mariadb",
       conversationPublicId: input.conversationPublicId,
@@ -390,6 +398,7 @@ export async function buildNativeCommercialContext(input: BuildNativeCommercialC
     warnings,
     customer360: null,
     customer360State: "not_requested",
+    customerSession: null,
     metadata: {
       source: "native_mariadb",
       conversationPublicId: input.conversationPublicId,
