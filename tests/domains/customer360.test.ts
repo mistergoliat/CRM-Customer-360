@@ -365,6 +365,101 @@ test("Customer360QueryService degrades when address source is unavailable", asyn
   assert.ok(snapshot?.metadata.warnings.includes("address_source_down"));
 });
 
+// ---------------------------------------------------------------------------
+// loadByCustomerId (ACS-R1-04-T05, tests 1-5): found/not_found/unavailable.
+// ---------------------------------------------------------------------------
+
+test("loadByCustomerId: customer found returns status found with the snapshot", async () => {
+    const service = createCustomer360QueryService({
+      profilePort: {
+        async loadCustomerProfile(): Promise<CustomerProfilePortResult> {
+          return { state: "real", source: "fake-profile-port", warnings: [], profile: makeProfileProjection() };
+        }
+      },
+      addressBookPort: {
+        async loadAddressBook(): Promise<AddressBookPortResult> {
+          return { state: "real", source: "fake-address-port", warnings: [], addresses: section("customer_addresses", []) };
+        }
+      },
+      now: () => new Date("2026-07-08T12:05:00.000Z")
+    });
+
+    const result = await service.loadByCustomerId("123");
+    assert.equal(result.status, "found");
+    assert.ok(result.snapshot);
+    assert.equal(result.snapshot?.customerId, "123");
+  });
+
+  test("loadByCustomerId: a genuinely nonexistent customer returns status not_found", async () => {
+    const service = createCustomer360QueryService({
+      profilePort: {
+        async loadCustomerProfile(): Promise<CustomerProfilePortResult> {
+          // Query succeeded, zero rows - only the not_found marker, no infra warning.
+          return { state: "unavailable", source: "fake-profile-port", warnings: ["customer_not_found"], profile: null };
+        }
+      },
+      addressBookPort: {
+        async loadAddressBook(): Promise<AddressBookPortResult> {
+          return { state: "real", source: "fake-address-port", warnings: [], addresses: section("customer_addresses", []) };
+        }
+      }
+    });
+
+    const result = await service.loadByCustomerId("999");
+    assert.equal(result.status, "not_found");
+    assert.equal(result.snapshot, null);
+  });
+
+  test("loadByCustomerId: a table/query/profile failure returns status unavailable, never not_found", async () => {
+    const service = createCustomer360QueryService({
+      profilePort: {
+        async loadCustomerProfile(): Promise<CustomerProfilePortResult> {
+          return { state: "partial", source: "fake-profile-port", warnings: ["master_customer_unavailable", "customer_not_found"], profile: null };
+        }
+      },
+      addressBookPort: {
+        async loadAddressBook(): Promise<AddressBookPortResult> {
+          return { state: "real", source: "fake-address-port", warnings: [], addresses: section("customer_addresses", []) };
+        }
+      }
+    });
+
+    const result = await service.loadByCustomerId("123");
+    assert.equal(result.status, "unavailable");
+    assert.equal(result.snapshot, null);
+  });
+
+  test("loadByCustomerId: getByCustomerId stays backward compatible for both found and missing cases", async () => {
+    const foundService = createCustomer360QueryService({
+      profilePort: { async loadCustomerProfile() { return { state: "real", source: "p", warnings: [], profile: makeProfileProjection() }; } },
+      addressBookPort: { async loadAddressBook() { return { state: "real", source: "a", warnings: [], addresses: section("customer_addresses", []) }; } }
+    });
+    assert.ok(await foundService.getByCustomerId("123"));
+
+    const missingService = createCustomer360QueryService({
+      profilePort: { async loadCustomerProfile() { return { state: "unavailable", source: "p", warnings: ["customer_not_found"], profile: null }; } },
+      addressBookPort: { async loadAddressBook() { return { state: "real", source: "a", warnings: [], addresses: section("customer_addresses", []) }; } }
+    });
+    assert.equal(await missingService.getByCustomerId("999"), null);
+  });
+
+  test("loadByCustomerId: the found snapshot keeps the exact same shape as before this change", async () => {
+    const service = createCustomer360QueryService({
+      profilePort: { async loadCustomerProfile() { return { state: "real", source: "p", warnings: [], profile: makeProfileProjection() }; } },
+      addressBookPort: { async loadAddressBook() { return { state: "real", source: "a", warnings: [], addresses: section("customer_addresses", []) }; } },
+      now: () => new Date("2026-07-08T12:05:00.000Z")
+    });
+
+    const result = await service.loadByCustomerId("123");
+    assert.equal(result.status, "found");
+    assert.deepEqual(
+      Object.keys(result.snapshot ?? {}).sort(),
+      ["contractName", "schemaVersion", "snapshotVersion", "customerId", "identity", "profile", "sections", "lifecycle", "metadata"].sort()
+    );
+    assert.equal(result.snapshot?.contractName, "Customer360Snapshot");
+    assert.equal(result.snapshot?.identity.displayName, "Camila Rojas");
+});
+
 test("Customer360 route enforces operator auth", async () => {
   const handler = createCustomer360GetHandler({
     requireOperator: async () => ({ ok: false as const, response: NextResponse.json({ error: "unauthorized" }, { status: 401 }) }),

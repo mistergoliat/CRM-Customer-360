@@ -1,4 +1,11 @@
+import { createCustomer360QueryService } from "@/lib/domains/customer-360";
+import { normalizePhoneChile } from "@/lib/customer-identity/normalize";
 import { buildNativeCommercialContext } from "../context/buildNativeCommercialContext";
+import { loadAutonomousCustomerContext } from "../context/loadAutonomousCustomerContext";
+import type { AutonomousCustomerContextLoadResult, AutonomousCustomerContextLoadState, LoadCustomer360Fn } from "../context/loadAutonomousCustomerContext";
+import { resolveNativeCustomerSession, runCustomerOnboardingPostPlanStage } from "./customer-session";
+import type { CustomerSessionDecisionContext, ResolveNativeCustomerSessionDependencies } from "./customer-session";
+import { applyOnboardingGroundingToNextAction } from "./applyOnboardingGroundingToNextAction";
 import { runCommercialShadowEvaluation } from "../shadow/runCommercialShadowEvaluation";
 import { runCommercialOperationalLoop } from "../operational-loop";
 import { runCommercialExecutionBridge } from "../execution-bridge";
@@ -37,6 +44,14 @@ import type { SalesAgentProvider } from "../sales-agent/runtimeTypes";
  */
 const NATIVE_CYCLE_ALLOWED_CAPABILITIES = listAliasedSalesAgentToolNames();
 
+// ACS-R1-04-T05: shared, lazily-created Customer 360 query service - same
+// cached-singleton pattern as getSharedCatalogPort in capability-gateway/registry.ts.
+let cachedCustomer360Service: ReturnType<typeof createCustomer360QueryService> | null = null;
+const defaultLoadCustomer360: LoadCustomer360Fn = (customerId) => {
+  if (!cachedCustomer360Service) cachedCustomer360Service = createCustomer360QueryService();
+  return cachedCustomer360Service.loadByCustomerId(customerId);
+};
+
 export type NativeAutonomousCycleInput = {
   conversationId: number;
   conversationPublicId: string;
@@ -50,6 +65,10 @@ export type NativeAutonomousCycleInput = {
   abortSignal?: AbortSignal | null;
   /** Test-only injection point; production callers never set this (defaults to the configured runtime provider). */
   provider?: SalesAgentProvider | null;
+  /** Test-only injection point; production callers never set this (defaults to the real Customer 360 query service). */
+  loadCustomer360?: LoadCustomer360Fn | null;
+  /** Test-only injection point; production callers never set this (defaults to the real identity/onboarding/Gateway services). */
+  customerSessionDependencies?: ResolveNativeCustomerSessionDependencies | null;
 };
 
 export type NativeAutonomousCycleResult = {
@@ -60,6 +79,10 @@ export type NativeAutonomousCycleResult = {
   bridge: CommercialExecutionBridgeResult | null;
   multiRequest?: MultiRequestCycleResult | null;
   catalogCapability?: CatalogGroundingResult | null;
+  /** ACS-R1-04-T05: state of the single Customer 360 load for this turn ("not_requested" when there was no customerMasterId to load). */
+  customerContextState?: AutonomousCustomerContextLoadState;
+  /** ACS-R1-04-T06: the minimized decision context handed to whichever runtime ran this turn. */
+  customerSession?: CustomerSessionDecisionContext;
   warnings: string[];
 };
 
@@ -75,6 +98,10 @@ function isAutonomyCycleEnabled(): boolean {
     readEnvFlag("BRAIN_COMMERCIAL_SHADOW_ENABLED", false) ||
     readEnvFlag("BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED", false)
   );
+}
+
+function dedupeWarnings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 /**
@@ -95,15 +122,62 @@ function isAutonomyCycleEnabled(): boolean {
 export async function runNativeAutonomousCycle(
   input: NativeAutonomousCycleInput
 ): Promise<NativeAutonomousCycleResult> {
-  // Authoritative runtime switch: with the multi-request flag on, the legacy
-  // single-intent pipeline below never runs for this turn - one runtime or
-  // the other, never both.
-  if (isMultiRequestRuntimeEnabled()) {
+  // Step 1: which runtime, if any, is enabled this turn. Multi-request is
+  // authoritative when on - the legacy pipeline below never runs the same
+  // turn (checked first, same priority as before ACS-R1-04-T05).
+  const multiRequestEnabled = isMultiRequestRuntimeEnabled();
+
+  if (!multiRequestEnabled) {
+    if (!isAutonomyCycleEnabled()) {
+      // Step 2: nothing will run this turn - Customer 360 is never loaded.
+      return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+    }
+    if (!buildCommercialShadowFeatureFlags().commercialShadowEnabled) {
+      // Step 2: legacy is gated off too - Customer 360 is never loaded.
+      return { ran: false, reason: "shadow_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+    }
+  }
+
+  // Step 3 (ACS-R1-04-T06): resolve the customer session once - local
+  // identity resolution, onboarding load/reconciliation, at-most-one
+  // external resolve_customer call, this-turn consent, and the Customer 360
+  // access gate. Uses only input.customerMasterId (the pre-existing native
+  // resolver's conversation.customer_id) as a reconciliation signal, never
+  // as authoritative identity - see resolveNativeCustomerSession.
+  const normalizedPhone = normalizePhoneChile(input.waId) ?? input.waId;
+  const session = await resolveNativeCustomerSession({
+    conversationId: String(input.conversationId),
+    opportunityId: null,
+    trustedInbound: {
+      channel: "whatsapp",
+      externalId: input.waId,
+      normalizedPhone,
+      messageId: String(input.messageId ?? input.correlationId),
+      receivedAt: input.currentTime
+    },
+    messageText: input.messageText,
+    correlationId: input.correlationId,
+    priorConversationCustomerId: input.customerMasterId === null || input.customerMasterId === undefined ? null : String(input.customerMasterId),
+    dependencies: input.customerSessionDependencies ?? undefined
+  });
+
+  // Step 3 continued (ACS-R1-04-T05, gated): Customer 360 loads at most once
+  // per turn, using the customerId only when contextAccess authorizes it -
+  // never simply because a customer was identified (task section 11).
+  const loadCustomer360 = input.loadCustomer360 ?? defaultLoadCustomer360;
+  const customerId = session.execution.contextAccess === "none" ? null : session.execution.identity.customerId;
+  const customer360: AutonomousCustomerContextLoadResult = await loadAutonomousCustomerContext({ customerId, loadCustomer360 });
+
+  // Step 4/5: select exactly one runtime and hand it the reduced projections.
+  if (multiRequestEnabled) {
     const multiRequest = await runMultiRequestAutonomousCycle({
       conversationId: input.conversationId,
       inboundMessageId: input.messageId === null || input.messageId === undefined ? "" : String(input.messageId),
       messageText: input.messageText,
-      correlationId: input.correlationId
+      correlationId: input.correlationId,
+      customerContext: customer360.context,
+      customerContextState: customer360.state,
+      customerSession: session.decision
     });
     return {
       ran: multiRequest.ran,
@@ -113,34 +187,41 @@ export async function runNativeAutonomousCycle(
       bridge: null,
       multiRequest,
       catalogCapability: null,
-      warnings: multiRequest.warnings
+      customerContextState: customer360.state,
+      customerSession: session.decision,
+      // Step 6: structured Customer 360 + session warnings, merged with the runtime's own.
+      warnings: dedupeWarnings([...multiRequest.warnings, ...customer360.warnings, ...session.warnings])
     };
-  }
-
-  if (!isAutonomyCycleEnabled()) {
-    return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
   }
 
   const shadowFlags = buildCommercialShadowFeatureFlags();
   const loopFlags = buildCommercialLoopFeatureFlags();
   const bridgeFlags = buildCommercialBridgeFeatureFlags();
 
-  if (!shadowFlags.commercialShadowEnabled) {
-    return { ran: false, reason: "shadow_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
-  }
-
-  const warnings: string[] = [];
+  const warnings: string[] = [...customer360.warnings, ...session.warnings];
   const startedAt = Date.now();
   const currentTime = input.currentTime;
 
-  // Fase 1: build native commercial context
-  const snapshot = await buildNativeCommercialContext({
+  // Fase 1: build native commercial context. Never loads Customer 360 itself
+  // - the already-loaded projection is merged in right after.
+  const rawSnapshot = await buildNativeCommercialContext({
     conversationPublicId: input.conversationPublicId,
     currentTime
   });
+  const snapshot = { ...rawSnapshot, customer360: customer360.context, customer360State: customer360.state, customerSession: session.decision };
 
   if (snapshot.status === "not_found") {
-    return { ran: false, reason: "conversation_not_found", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+    return {
+      ran: false,
+      reason: "conversation_not_found",
+      shadow: null,
+      loop: null,
+      bridge: null,
+      catalogCapability: null,
+      customerContextState: customer360.state,
+      customerSession: session.decision,
+      warnings: dedupeWarnings(warnings)
+    };
   }
 
   // Build shim objects that the legacy pipeline can consume via its
@@ -275,7 +356,8 @@ export async function runNativeAutonomousCycle(
         shadow,
         conversationId: input.conversationId,
         opportunityId,
-        correlationId: input.correlationId
+        correlationId: input.correlationId,
+        trustedCustomerSession: session.execution
       });
       catalogCapability = await buildCatalogGroundedMessage(stage.executions, {
         correlationId: input.correlationId,
@@ -285,6 +367,27 @@ export async function runNativeAutonomousCycle(
       groundedLoop = applyCatalogGroundingToNextAction(loop, catalogCapability);
     } catch (error) {
       warnings.push(`catalog_capability_failed: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+  }
+
+  // Fase 3.6 (ACS-R1-04-T06.1): onboarding post-plan stage - legacy runtime
+  // only. Reuses session.execution built in Step 3 (never reloads onboarding,
+  // never re-resolves identity, never loads Customer 360 again). The
+  // structured planned operation is the canonical loop's own next-action
+  // type - never free-text keyword search.
+  if (groundedLoop) {
+    try {
+      const postPlanResult = await runCustomerOnboardingPostPlanStage({
+        plannedOperation: { operation: groundedLoop.selectedNextAction?.type ?? null },
+        messageText: input.messageText,
+        correlationId: input.correlationId,
+        customerSessionExecution: session.execution,
+        dependencies: input.customerSessionDependencies ?? undefined
+      });
+      warnings.push(...postPlanResult.warnings);
+      groundedLoop = applyOnboardingGroundingToNextAction(groundedLoop, postPlanResult);
+    } catch (error) {
+      warnings.push(`customer_onboarding_post_plan_failed: ${error instanceof Error ? error.message : "unknown"}`);
     }
   }
 
@@ -312,6 +415,8 @@ export async function runNativeAutonomousCycle(
     loop: groundedLoop,
     bridge,
     catalogCapability,
-    warnings
+    customerContextState: customer360.state,
+    customerSession: session.decision,
+    warnings: dedupeWarnings(warnings)
   };
 }

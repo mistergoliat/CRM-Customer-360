@@ -2,7 +2,7 @@
 title: Customer creation, linking and interest authority contract
 doc_id: data-customer-creation-linking-authority-contract
 status: approved
-version: "1.0.1"
+version: "1.0.2"
 owner: product
 last_reviewed: 2026-07-09
 source_of_truth_for:
@@ -31,7 +31,7 @@ tags:
 
 ## Schema version
 
-`1.0.0`
+`1.0.2`
 
 ## Principio central
 
@@ -282,12 +282,23 @@ type CreateCustomerResult =
       reason: string;
     }
   | {
+      status: "invalid_input";
+      fields: string[];
+    }
+  | {
       status: "temporarily_unavailable";
+      retryable: boolean;
+    }
+  | {
+      status: "failed";
+      code: string;
       retryable: boolean;
     };
 ```
 
 `matched_existing` es obligatorio para manejar condiciones de carrera entre resolucion y creacion.
+
+`invalid_input` y `failed` distinguen, respectivamente, un request estructuralmente invalido y una falla de Customer Service que no encaja en ninguno de los otros outcomes (seccion 8). `code` en `failed` es un identificador estable y no sensible - nunca un mensaje SQL, stack trace ni una respuesta interna cruda.
 
 Customer Service debe volver a verificar duplicados durante la creacion.
 
@@ -354,7 +365,16 @@ type LinkExternalIdentityResult =
       reason: string;
     }
   | {
+      status: "invalid_input";
+      fields: string[];
+    }
+  | {
       status: "temporarily_unavailable";
+      retryable: boolean;
+    }
+  | {
+      status: "failed";
+      code: string;
       retryable: boolean;
     };
 ```
@@ -479,6 +499,8 @@ Reglas:
 - los errores no deben exponer fuentes internas ni candidatos;
 - los side effects deben fallar de forma segura.
 
+Desde la version `1.0.2`, `invalid_input` y `failed` son variantes explicitas de `CreateCustomerResult` y `LinkExternalIdentityResult` (secciones 4 y 5), no solo categorias descriptivas de esta seccion. `resolve_customer` mantiene su conjunto original de cinco outcomes (`resolved`/`no_match`/`conflict`/`invalid_input`/`temporarily_unavailable`, seccion 1) sin `failed`: la implementacion (`ACS-R1-04-T04.1`) pliega cualquier fallo de transporte no clasificado hacia `temporarily_unavailable` en ese caso, en vez de inventar un sexto status.
+
 ## 9. Gobernanza
 
 Metadata conceptual:
@@ -552,6 +574,7 @@ T04 queda terminada cuando:
 ## Notes
 
 - Este contrato define autoridad y contratos conceptuales de datos para `create_customer`, `link_external_identity` y `record_customer_interest`. No implementa codigo: la implementacion (Customer Service Port, policy real, capabilities) se aborda en `ACS-R1-04-T04.1` y tareas posteriores.
+- `ACS-R1-04-T04.1` implemento el `CustomerServicePort` (`lib/domains/customer-service`), las tres policies puras (`authority-policy.ts`) y el adapter HTTP fail-closed (`lib/integrations/customer-service/http-adapter.ts`, contrato en [customer-service-http-contract](../integrations/customer-service-http-contract.md)). Bump a `1.0.2` con `invalid_input`/`failed` explicitos en `CreateCustomerResult`/`LinkExternalIdentityResult` (seccion 3 de la tarea, secciones 4-5-8 de este documento). No se conecto al inbound, al LLM, al Capability Gateway, a Customer 360 ni se persistio ningun interes - eso sigue en `ACS-R1-04-T05`/`T06`.
 - No reemplaza ni modifica [customer-onboarding-identity-contract](./customer-onboarding-identity-contract.md); lo extiende en el punto donde ese contrato declara la separacion `resolve_customer != create_customer != link_external_identity` (seccion 6) y agrega `record_customer_interest` como una cuarta operacion distinta.
 - `master_customer` sigue sin ser escrito directamente por ACS; toda creacion y vinculacion pasa por Customer Service (ver seccion 2), consistente con [persistence-architecture-decision](./persistence-architecture-decision.md) y ADR-008.
 - Este contrato no agrega reglas deterministicas sobre como debe conversar la IA: la seccion 3 documenta la separacion entre autonomia estrategica (que explorar, preguntar o proponer) y autoridad operacional (que capability puede ejecutarse y bajo que precondiciones), no un guion de conversacion.

@@ -360,6 +360,9 @@ export function buildCommercialContext(input: CommercialContextBuilderInput): Co
     structuralSignals,
     availableCapabilities: [...input.availableCapabilities],
     policyContext: normalizeCommercialPolicyContext(input.policyContext),
+    customer360: mergedContext.customer360,
+    customer360State: mergedContext.customer360State,
+    customerSession: mergedContext.customerSession,
     metadata
   };
 

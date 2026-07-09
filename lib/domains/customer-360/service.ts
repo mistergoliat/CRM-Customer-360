@@ -1,4 +1,4 @@
-import type { Customer360Metadata, Customer360QueryService, Customer360QueryServiceDependencies, Customer360Snapshot, CustomerLifecycleSection } from "./types";
+import type { Customer360LoadResult, Customer360Metadata, Customer360QueryService, Customer360QueryServiceDependencies, Customer360Snapshot, CustomerLifecycleSection } from "./types";
 import { createLifecycleEventAssembler } from "./assembler";
 import { createLocalAddressBookAdapter, createLocalCustomerProfileAdapter } from "./local-adapter";
 
@@ -43,17 +43,35 @@ function computeFreshness(input: { source: string; now: Date; lastActivityAt: st
   };
 }
 
+/**
+ * loadCustomerProfile returning a null profile is ambiguous by itself
+ * (Customer360SectionState reuses "unavailable" for both a clean "no such
+ * row" and a source failure). createLocalCustomerProfileAdapter always adds
+ * a "customer_not_found" marker to warnings when the row lookup came back
+ * empty; any OTHER warning alongside it (missing table, query error) means
+ * the source itself failed. Conservatively: only exactly that marker, alone,
+ * counts as a genuine not_found - anything else, or its absence, is
+ * unavailable (a failure is never optimistically read as "no such customer").
+ */
+function classifyMissingCustomerProfile(warnings: string[]): "not_found" | "unavailable" {
+  const hasNotFoundMarker = warnings.includes("customer_not_found");
+  const hasOtherWarnings = warnings.some((warning) => warning !== "customer_not_found");
+  return hasNotFoundMarker && !hasOtherWarnings ? "not_found" : "unavailable";
+}
+
 export function createCustomer360QueryService(dependencies: Customer360QueryServiceDependencies = {}): Customer360QueryService {
   const profilePort = dependencies.profilePort ?? createLocalCustomerProfileAdapter();
   const addressBookPort = dependencies.addressBookPort ?? createLocalAddressBookAdapter();
   const lifecycleEventAssembler = dependencies.lifecycleEventAssembler ?? createLifecycleEventAssembler();
   const now = dependencies.now ?? (() => new Date());
 
-  return {
-    async getByCustomerId(customerId: string): Promise<Customer360Snapshot | null> {
+  async function loadByCustomerId(customerId: string): Promise<Customer360LoadResult> {
       const currentTime = now();
       const [profileResult, addressResult] = await Promise.all([profilePort.loadCustomerProfile(customerId), addressBookPort.loadAddressBook(customerId)]);
-      if (!profileResult.profile) return null;
+      if (!profileResult.profile) {
+        const warnings = [...new Set(profileResult.warnings)];
+        return { status: classifyMissingCustomerProfile(warnings), snapshot: null, warnings };
+      }
 
       const addressSection = addressResult.addresses ?? {
         state: addressResult.state,
@@ -114,7 +132,7 @@ export function createCustomer360QueryService(dependencies: Customer360QueryServ
         completeness
       });
 
-      return {
+      const snapshot: Customer360Snapshot = {
         contractName: "Customer360Snapshot",
         schemaVersion: "1.0.0",
         snapshotVersion: 1,
@@ -125,6 +143,15 @@ export function createCustomer360QueryService(dependencies: Customer360QueryServ
         lifecycle,
         metadata
       };
+
+      return { status: "found", snapshot, warnings: metadata.warnings };
+  }
+
+  return {
+    loadByCustomerId,
+    async getByCustomerId(customerId: string): Promise<Customer360Snapshot | null> {
+      const result = await loadByCustomerId(customerId);
+      return result.status === "found" ? result.snapshot : null;
     }
   };
 }

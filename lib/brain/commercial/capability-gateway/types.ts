@@ -3,6 +3,7 @@
  * capability must implement. The gateway informs availability, executes,
  * persists and returns evidence - it never decides commercial strategy.
  */
+import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 
 export const CAPABILITY_AVAILABILITY_STATUSES = [
   "available",
@@ -72,6 +73,14 @@ export type CapabilityGatewayContext = {
   decisionId?: string | null;
   actionId?: string | null;
   requestId?: string | null;
+  /**
+   * ACS-R1-04-T06. Server-side trusted session (identity, onboarding,
+   * trusted inbound, this-turn consent, fresh resolve_customer evidence).
+   * Only create_customer/link_external_identity/resolve_customer read this -
+   * every other capability ignores it. Never derived from LLM/tool-request
+   * input; always assembled by resolveNativeCustomerSession.
+   */
+  trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
 };
 
 export type CapabilityGatewayDefinition<TInput = Record<string, unknown>, TOutput = Record<string, unknown>> = {

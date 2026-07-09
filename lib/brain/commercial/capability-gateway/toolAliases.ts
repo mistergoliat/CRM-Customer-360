@@ -9,6 +9,14 @@ import type { SalesAgentToolName } from "../salesAgentTypes";
  */
 const CAPABILITY_TOOL_ALIASES: Partial<Record<SalesAgentToolName, string>> = {
   searchProducts: "search_products"
+  // ACS-R1-04-T06/T06.1. resolve_customer, create_customer and
+  // link_external_identity are all deliberately absent: they are invoked
+  // directly by the customer-session pipeline (resolveNativeCustomerSession
+  // for resolve_customer, runCustomerOnboardingPostPlanStage for the other
+  // two), never proposed by the sales agent as a tool request. This is the
+  // single mechanism that decides whether/when to execute them - a second,
+  // LLM-tool-driven path to the same capabilities would risk a duplicate
+  // execution in the same turn (contract section 20).
 };
 
 /** The reverse map, built once so lookups by capability name are O(1) too. */

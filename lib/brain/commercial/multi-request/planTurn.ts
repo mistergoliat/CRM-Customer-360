@@ -6,6 +6,9 @@ import { validateTurnPlan } from "./validateTurnPlan";
 import type { TurnPlanValidationIssue } from "./validateTurnPlan";
 import { buildTurnPlanInputHash, loadExistingTurnPlan, persistTurnPlan } from "./persistTurnPlan";
 import type { ConversationRequest } from "../conversation-request";
+import type { AutonomousCustomerContext } from "../context/autonomousCustomerContext";
+import type { AutonomousCustomerContextLoadState } from "../context/loadAutonomousCustomerContext";
+import type { CustomerSessionDecisionContext } from "../native-cycle/customer-session";
 import type { ResponseRequirement, TurnPlan, TurnPlanExecutionBudget, TurnPlanRecord } from "./turnPlanTypes";
 
 export const DEFAULT_TURN_PLAN_EXECUTION_BUDGET: TurnPlanExecutionBudget = {
@@ -24,6 +27,11 @@ export type PlanTurnInput = {
   activeRequests: readonly ConversationRequest[];
   provider?: TurnPlannerProvider | null;
   executionBudget?: TurnPlanExecutionBudget;
+  /** ACS-R1-04-T05: reduced Customer 360 history, loaded once upstream. Included in the plan's inputHash - never in the plan's identity/reuse key. */
+  customerContext?: AutonomousCustomerContext | null;
+  customerContextState?: AutonomousCustomerContextLoadState;
+  /** ACS-R1-04-T06: minimized identity/onboarding decision context, resolved once upstream. Included in the plan's inputHash - never in the plan's identity/reuse key. */
+  customerSession?: CustomerSessionDecisionContext | null;
 };
 
 export type PlanTurnResult =
@@ -44,10 +52,13 @@ export async function planTurn(input: PlanTurnInput): Promise<PlanTurnResult> {
 
   const provider = input.provider ?? createDeterministicTurnPlannerProvider();
   const candidates = buildDeterministicCandidates(input.activeRequests);
+  const customerContext = input.customerContext ?? null;
+  const customerContextState = input.customerContextState ?? "not_requested";
+  const customerSession = input.customerSession ?? null;
 
   let detections;
   try {
-    ({ detections } = await provider.plan({ messageText: input.messageText, candidates }));
+    ({ detections } = await provider.plan({ messageText: input.messageText, candidates, customerContext, customerContextState, customerSession }));
   } catch (error) {
     return {
       ok: false,
@@ -86,7 +97,7 @@ export async function planTurn(input: PlanTurnInput): Promise<PlanTurnResult> {
     correlationId: input.correlationId,
     conversationId: input.conversationId,
     inboundMessageId: input.inboundMessageId,
-    inputHash: buildTurnPlanInputHash({ messageText: input.messageText, candidates }),
+    inputHash: buildTurnPlanInputHash({ messageText: input.messageText, candidates, customerContext, customerContextState, customerSession }),
     plan
   });
 

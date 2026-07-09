@@ -4,12 +4,15 @@ import { resolveCapabilityNameForSalesAgentTool } from "../capability-gateway/to
 import type { CapabilityGatewayContext, CapabilityGatewayResult } from "../capability-gateway/types";
 import type { SalesAgentToolRequest } from "../sales-agent/validationTypes";
 import type { CommercialShadowResult } from "../shadow";
+import type { NativeCustomerSessionExecutionContext } from "./customer-session";
 
 export type CapabilityExecutionStageInput = {
   shadow: CommercialShadowResult | null;
   conversationId: number;
   opportunityId: number | string | null;
   correlationId: string;
+  /** ACS-R1-04-T06: only create_customer/link_external_identity read this - every other capability ignores it. */
+  trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
 };
 
 export type CapabilityExecutionStageExecution = {
@@ -43,7 +46,8 @@ export async function runCapabilityExecutionStage(input: CapabilityExecutionStag
   const gatewayContext: CapabilityGatewayContext = {
     correlationId: input.correlationId,
     conversationId: input.conversationId,
-    opportunityId: typeof input.opportunityId === "number" ? input.opportunityId : null
+    opportunityId: typeof input.opportunityId === "number" ? input.opportunityId : null,
+    trustedCustomerSession: input.trustedCustomerSession ?? null
   };
 
   const executions: CapabilityExecutionStageExecution[] = [];

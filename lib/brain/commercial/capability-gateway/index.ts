@@ -8,6 +8,12 @@ export {
 } from "./registry";
 export { insertCapabilityExecution } from "./repository";
 export {
+  CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS,
+  resetCustomerServicePortForTests,
+  resetOnboardingServiceForTests,
+  setOnboardingServiceForTests
+} from "./customerIdentityCapabilities";
+export {
   resolveCapabilityNameForSalesAgentTool,
   resolveSalesAgentToolForCapabilityName,
   listAliasedSalesAgentToolNames

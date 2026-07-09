@@ -22,6 +22,9 @@ import type { ExecuteRequestTurnResult } from "./executeRequestTurn";
 import { findOpenEscalationForRequest } from "../request-escalations";
 import { isRequestFactsEnabled } from "../request-facts";
 import type { RequestFact } from "../request-facts";
+import type { AutonomousCustomerContext } from "../context/autonomousCustomerContext";
+import type { AutonomousCustomerContextLoadState } from "../context/loadAutonomousCustomerContext";
+import type { CustomerSessionDecisionContext } from "../native-cycle/customer-session";
 import type { TurnPlanRecord } from "./turnPlanTypes";
 
 export type MultiRequestCycleInput = {
@@ -32,6 +35,11 @@ export type MultiRequestCycleInput = {
   correlationId: string;
   provider?: TurnPlannerProvider | null;
   responseProvider?: GroundedResponseProvider | null;
+  /** ACS-R1-04-T05: reduced Customer 360 history, loaded once by runNativeAutonomousCycle - never re-loaded here. */
+  customerContext?: AutonomousCustomerContext | null;
+  customerContextState?: AutonomousCustomerContextLoadState;
+  /** ACS-R1-04-T06: minimized identity/onboarding decision context, resolved once by runNativeAutonomousCycle. */
+  customerSession?: CustomerSessionDecisionContext | null;
 };
 
 export type MultiRequestCycleResult = {
@@ -95,7 +103,10 @@ export async function runMultiRequestAutonomousCycle(input: MultiRequestCycleInp
     messageText: input.messageText,
     correlationId: input.correlationId,
     activeRequests: activeBefore,
-    provider: input.provider ?? null
+    provider: input.provider ?? null,
+    customerContext: input.customerContext ?? null,
+    customerContextState: input.customerContextState ?? "not_requested",
+    customerSession: input.customerSession ?? null
   });
 
   if (!planned.ok) {
