@@ -37,10 +37,12 @@ test("51: governance metadata matches the documented table for all three identit
   assert.equal(link?.riskClass, "medium");
 });
 
-test("52: createCustomer and linkExternalIdentity have sales-agent tool aliases; resolve_customer has none - it is never a proposable LLM tool", () => {
-  assert.equal(resolveCapabilityNameForSalesAgentTool("createCustomer"), "create_customer");
-  assert.equal(resolveCapabilityNameForSalesAgentTool("linkExternalIdentity"), "link_external_identity");
+test("52: none of the three identity capabilities have a sales-agent tool alias - ACS-R1-04-T06.1 made create/link deterministic (post-plan-driven) too, never LLM-tool-proposed", () => {
+  assert.equal(resolveCapabilityNameForSalesAgentTool("createCustomer"), null);
+  assert.equal(resolveCapabilityNameForSalesAgentTool("linkExternalIdentity"), null);
   assert.equal(resolveSalesAgentToolForCapabilityName("resolve_customer"), null);
+  assert.equal(resolveSalesAgentToolForCapabilityName("create_customer"), null);
+  assert.equal(resolveSalesAgentToolForCapabilityName("link_external_identity"), null);
 });
 
 test("53: resolveCapabilityGatewayDefinition resolves all three canonical names and rejects unregistered/ad-hoc names", () => {
@@ -51,16 +53,17 @@ test("53: resolveCapabilityGatewayDefinition resolves all three canonical names 
   assert.equal(resolveCapabilityGatewayDefinition("create_customer_v2"), null, "no ad-hoc alias outside the canonical table");
 });
 
-test("54: the aliased sales-agent tool list includes createCustomer/linkExternalIdentity but no resolve_customer stand-in", () => {
+test("54: the aliased sales-agent tool list contains no identity capability stand-in at all (createCustomer/linkExternalIdentity/resolveCustomer)", () => {
   const tools = listAliasedSalesAgentToolNames();
-  assert.ok(tools.includes("createCustomer"));
-  assert.ok(tools.includes("linkExternalIdentity"));
+  assert.ok(!tools.includes("createCustomer"));
+  assert.ok(!tools.includes("linkExternalIdentity"));
   assert.ok(!tools.some((tool) => tool.toLowerCase().includes("resolvecustomer")));
 });
 
-test("55: tool <-> capability alias round-trips for createCustomer/linkExternalIdentity, through the single centralized table only", () => {
-  assert.equal(resolveSalesAgentToolForCapabilityName(resolveCapabilityNameForSalesAgentTool("createCustomer") as string), "createCustomer");
-  assert.equal(resolveSalesAgentToolForCapabilityName(resolveCapabilityNameForSalesAgentTool("linkExternalIdentity") as string), "linkExternalIdentity");
+test("55: the three canonical identity capability names never resolve back to any sales-agent tool, through the single centralized table", () => {
+  assert.equal(resolveSalesAgentToolForCapabilityName("resolve_customer"), null);
+  assert.equal(resolveSalesAgentToolForCapabilityName("create_customer"), null);
+  assert.equal(resolveSalesAgentToolForCapabilityName("link_external_identity"), null);
 });
 
 test("56: all three identity capabilities set maxRetries to 0 - the Gateway is the sole retry owner (contract section 17)", () => {

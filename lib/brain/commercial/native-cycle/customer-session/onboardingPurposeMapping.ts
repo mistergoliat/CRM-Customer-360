@@ -1,5 +1,5 @@
 import { CREATE_CUSTOMER_ALLOWED_PURPOSES, type CreateCustomerCommercialPurpose } from "@/lib/domains/customer-service";
-import type { CustomerOnboardingPurpose } from "@/lib/domains/customer-onboarding";
+import type { CustomerOnboardingPendingField, CustomerOnboardingPurpose } from "@/lib/domains/customer-onboarding";
 
 /**
  * The single, typed mapping from real operation/capability/intent names to
@@ -15,14 +15,28 @@ import type { CustomerOnboardingPurpose } from "@/lib/domains/customer-onboardin
  * - the identity capabilities themselves, when a plan explicitly proposes them
  */
 const OPERATION_TO_ONBOARDING_PURPOSE: Record<string, CustomerOnboardingPurpose> = {
-  // multi-request canonical intents
+  // multi-request canonical intents (multi-request has no side-effect
+  // execution yet - ACS-R1-04-T06.1 section 21 - these keys are reserved for
+  // when multi-request activates onboarding of its own, not reachable today).
   product_quote: "quote",
   maintenance_quote: "quote",
   order_status: "order_inquiry",
   complaint: "complaint",
   warranty: "warranty",
 
-  // legacy Sales Agent decision/action types
+  // ACS-R1-04-T06.1: the legacy runtime's real, live post-plan signal -
+  // CommercialOperationalLoopNextActionType from selectNextCommercialAction.ts.
+  // "prepare_quote" is the only next-action type today that implies a new
+  // commercial relationship; no next-action type currently exists for
+  // order_inquiry/complaint/warranty/return, so those purposes stay
+  // unreachable from the legacy runtime's structured next action until that
+  // vocabulary grows (documented debt, not a T06.1 gap).
+  prepare_quote: "quote",
+
+  // legacy Sales Agent decision/action types (salesAgentTypes.ts) - kept for
+  // forward compatibility, but never produced by the live runtime today
+  // (verified: selectNextCommercialAction.ts and runCommercialOperationalLoop.ts
+  // never reference SalesAgentDecisionType/SalesAgentActionType at all).
   request_quote_draft: "quote",
   create_quote_draft: "quote",
   request_order_lookup: "order_inquiry",
@@ -61,4 +75,31 @@ export function mapOnboardingPurposeToCommercialPurpose(purpose: CustomerOnboard
 
 export function isAllowedCreateCustomerPurpose(purpose: string): purpose is CreateCustomerCommercialPurpose {
   return (CREATE_CUSTOMER_ALLOWED_PURPOSES as readonly string[]).includes(purpose);
+}
+
+/**
+ * ACS-R1-04-T06.1: the single, centralized required-field list per onboarding
+ * purpose (contract section 7). `phoneNumber` is never listed here - it
+ * always comes from the trusted inbound, never from captured fields.
+ */
+const REQUIRED_ONBOARDING_FIELDS_BY_PURPOSE: Record<CustomerOnboardingPurpose, CustomerOnboardingPendingField[]> = {
+  quote: ["firstName", "email"],
+  purchase: ["firstName", "email"],
+  order_inquiry: ["orderReference"],
+  complaint: ["orderReference"],
+  warranty: ["orderReference"],
+  return: ["orderReference"],
+  account_update: ["email"]
+};
+
+export function requiredOnboardingFieldsForPurpose(purpose: CustomerOnboardingPurpose): CustomerOnboardingPendingField[] {
+  return [...REQUIRED_ONBOARDING_FIELDS_BY_PURPOSE[purpose]];
+}
+
+/** Required fields for `purpose` that are not yet present in `collected`. */
+export function computePendingOnboardingFields(
+  purpose: CustomerOnboardingPurpose,
+  collected: Partial<Record<CustomerOnboardingPendingField, string>>
+): CustomerOnboardingPendingField[] {
+  return requiredOnboardingFieldsForPurpose(purpose).filter((field) => !collected[field]);
 }

@@ -46,8 +46,8 @@ export type ResolveNativeCustomerSessionInput = {
   dependencies?: ResolveNativeCustomerSessionDependencies;
 };
 
-/** Calls resolve_customer through the same Capability Gateway boundary every other capability uses - never the HTTP adapter directly. */
-async function defaultResolveCustomerExternal(input: ResolveCustomerInput, context: { correlationId: string }): Promise<CustomerResolutionEvidence> {
+/** Calls resolve_customer through the same Capability Gateway boundary every other capability uses - never the HTTP adapter directly. Exported for reuse by runCustomerOnboardingPostPlanStage (ACS-R1-04-T06.1), which needs the identical default when pre-plan didn't already attempt resolution this turn. */
+export async function defaultResolveCustomerExternal(input: ResolveCustomerInput, context: { correlationId: string }): Promise<CustomerResolutionEvidence> {
   const result = await executeGovernedCapability("resolve_customer", input as unknown as Record<string, unknown>, { correlationId: context.correlationId });
   if (result.status === "completed" && result.data) {
     return result.data as unknown as CustomerResolutionEvidence;

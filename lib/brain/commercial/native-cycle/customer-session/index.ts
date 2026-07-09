@@ -4,3 +4,5 @@ export * from "./onboardingPurposeMapping";
 export * from "./onboardingTransitions";
 export * from "./consentEvidence";
 export * from "./resolveNativeCustomerSession";
+export * from "./extractCustomerOnboardingFields";
+export * from "./runCustomerOnboardingPostPlanStage";

@@ -3,8 +3,9 @@ import { normalizePhoneChile } from "@/lib/customer-identity/normalize";
 import { buildNativeCommercialContext } from "../context/buildNativeCommercialContext";
 import { loadAutonomousCustomerContext } from "../context/loadAutonomousCustomerContext";
 import type { AutonomousCustomerContextLoadResult, AutonomousCustomerContextLoadState, LoadCustomer360Fn } from "../context/loadAutonomousCustomerContext";
-import { resolveNativeCustomerSession } from "./customer-session";
+import { resolveNativeCustomerSession, runCustomerOnboardingPostPlanStage } from "./customer-session";
 import type { CustomerSessionDecisionContext, ResolveNativeCustomerSessionDependencies } from "./customer-session";
+import { applyOnboardingGroundingToNextAction } from "./applyOnboardingGroundingToNextAction";
 import { runCommercialShadowEvaluation } from "../shadow/runCommercialShadowEvaluation";
 import { runCommercialOperationalLoop } from "../operational-loop";
 import { runCommercialExecutionBridge } from "../execution-bridge";
@@ -366,6 +367,27 @@ export async function runNativeAutonomousCycle(
       groundedLoop = applyCatalogGroundingToNextAction(loop, catalogCapability);
     } catch (error) {
       warnings.push(`catalog_capability_failed: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+  }
+
+  // Fase 3.6 (ACS-R1-04-T06.1): onboarding post-plan stage - legacy runtime
+  // only. Reuses session.execution built in Step 3 (never reloads onboarding,
+  // never re-resolves identity, never loads Customer 360 again). The
+  // structured planned operation is the canonical loop's own next-action
+  // type - never free-text keyword search.
+  if (groundedLoop) {
+    try {
+      const postPlanResult = await runCustomerOnboardingPostPlanStage({
+        plannedOperation: { operation: groundedLoop.selectedNextAction?.type ?? null },
+        messageText: input.messageText,
+        correlationId: input.correlationId,
+        customerSessionExecution: session.execution,
+        dependencies: input.customerSessionDependencies ?? undefined
+      });
+      warnings.push(...postPlanResult.warnings);
+      groundedLoop = applyOnboardingGroundingToNextAction(groundedLoop, postPlanResult);
+    } catch (error) {
+      warnings.push(`customer_onboarding_post_plan_failed: ${error instanceof Error ? error.message : "unknown"}`);
     }
   }
 

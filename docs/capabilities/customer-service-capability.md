@@ -2,7 +2,7 @@
 title: Capability - Customer Service (create_customer, link_external_identity, record_customer_interest)
 doc_id: capability-customer-service
 status: approved
-version: "1.1.0"
+version: "1.2.0"
 owner: product
 last_reviewed: 2026-07-09
 source_of_truth_for:
@@ -25,7 +25,7 @@ tags:
 
 - Gobernado por: [customer-creation-linking-authority-contract](../data/customer-creation-linking-authority-contract.md)
 - Depende de: [customer-onboarding-identity-contract](../data/customer-onboarding-identity-contract.md), [Customer Service HTTP contract](../integrations/customer-service-http-contract.md), [ADR-006](../architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md)
-- Implementa: `lib/domains/customer-service` (port, policy, service), `lib/integrations/customer-service/http-adapter.ts`, `lib/brain/commercial/capability-gateway/customerIdentityCapabilities.ts` (registro y ejecucion en el Gateway), `lib/brain/commercial/native-cycle/customer-session` (orquestador de sesion que invoca `resolve_customer` y ensambla el input de `create_customer`/`link_external_identity`)
+- Implementa: `lib/domains/customer-service` (port, policy, service), `lib/integrations/customer-service/http-adapter.ts`, `lib/brain/commercial/capability-gateway/customerIdentityCapabilities.ts` (registro y ejecucion en el Gateway), `lib/brain/commercial/native-cycle/customer-session` (orquestador de sesion pre-plan que invoca `resolve_customer`; `runCustomerOnboardingPostPlanStage.ts`, ACS-R1-04-T06.1, que ensambla y ejecuta `create_customer`/`link_external_identity`)
 - Evidencia: [CAPABILITY_MATRIX](../CAPABILITY_MATRIX.md)
 - Reemplaza: none
 
@@ -33,7 +33,7 @@ tags:
 
 Frontera tecnica de ACS hacia el microservicio externo Customer Service: `resolve_customer` (read-only), `create_customer` y `link_external_identity` como capabilities con efecto secundario, mas policy y tipos (sin persistencia) para `record_customer_interest`.
 
-## Estado en ACS-R1-04-T06
+## Estado en ACS-R1-04-T06.1
 
 ```text
 domain: implemented
@@ -46,7 +46,7 @@ operational: not_verified
 status: accepted_with_debt
 ```
 
-`resolve_customer`, `create_customer` y `link_external_identity` estan registrados en el Capability Gateway (`CAPABILITY_GATEWAY_REGISTRY`) y conectados al inbound nativo via `resolveNativeCustomerSession` (`resolve_customer`, autonomo, hasta una vez por turno) y al runtime legacy como herramientas del sales agent (`create_customer`/`link_external_identity`, via el alias table y `runCapabilityExecutionStage`). `operational: not_verified` porque las pruebas de T06 corrieron contra un servidor HTTP local (mismo patron que T04.1), no contra un Customer Service real desplegado - no hay validacion end-to-end verificada todavia (`ACS-R1-04-T08`). El runtime multi-request recibe `customerSession` solo a nivel de tipos e input hash; no ejecuta estas capabilities via herramientas del LLM todavia (mismo patron de deuda que Customer 360 en T05).
+`resolve_customer`, `create_customer` y `link_external_identity` estan registrados en el Capability Gateway (`CAPABILITY_GATEWAY_REGISTRY`) y conectados al inbound nativo, todas de forma deterministica - ninguna es una herramienta que el sales agent proponga. `resolve_customer` lo invoca `resolveNativeCustomerSession` (fase pre-plan, hasta una vez por turno). `create_customer`/`link_external_identity` los invoca `runCustomerOnboardingPostPlanStage` (fase post-plan, ACS-R1-04-T06.1, runtime legacy exclusivamente) - T06 los registraba tambien como herramientas del sales agent (`createCustomer`/`linkExternalIdentity` via el alias table), pero T06.1 elimino ese alias: una segunda via LLM-propuesta hacia la misma capability arriesgaba una ejecucion duplicada en el mismo turno (contrato seccion 20), asi que el post-plan stage quedo como el unico punto de decision. `operational: not_verified` porque las pruebas de T06/T06.1 corrieron contra un servidor HTTP local (mismo patron que T04.1), no contra un Customer Service real desplegado - no hay validacion end-to-end verificada todavia (`ACS-R1-04-T08`). El runtime multi-request recibe `customerSession` solo a nivel de tipos e input hash; no ejecuta estas capabilities (mismo patron de deuda que Customer 360 en T05, confirmado explicitamente por T06.1).
 
 `record_customer_interest`:
 
