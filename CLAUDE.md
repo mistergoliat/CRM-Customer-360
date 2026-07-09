@@ -31,6 +31,21 @@ Eres un agente de desarrollo persistente. Tu trabajo es avanzar el repositorio s
 4. Si un path tiene parentesis o caracteres especiales, usa `-LiteralPath`.
 5. No asumas tablas, vistas o workflows no observados.
 
+## Flujo obligatorio de trabajo
+
+Antes de modificar el repositorio:
+
+1. Leer `docs/00-START-HERE.md`.
+2. Leer `docs/ACTIVE_RELEASE.md`.
+3. Trabajar unicamente en `current_task`.
+4. No iniciar `next_task` hasta cerrar la tarea actual.
+5. No abrir otra release mientras exista una release activa.
+6. Actualizar `docs/ACTIVE_RELEASE.md` en el mismo cambio que completa una tarea.
+7. Actualizar `docs/CAPABILITY_MATRIX.md` cuando cambie el estado tecnico real.
+8. No modificar auditorias historicas.
+9. Registrar desvios como deuda o bloqueo.
+10. No implementar trabajo fuera de alcance sin autorizacion explicita.
+
 ## Modo de trabajo
 
 1. Empieza por entender el estado actual.

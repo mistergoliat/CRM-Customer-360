@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCustomerService } from "../../lib/domains/customers/service";
+import { createMysqlCustomerRepository } from "../../lib/domains/customers/repository";
 import { isPlatformOrigin, parsePlatformOrigin } from "../../lib/domains/customers/platform-origin";
 import { validateCreateCustomerPayload } from "../../lib/domains/customers/validation";
 import { mapMasterCustomerRow } from "../../lib/integrations/customer-master/mappers";
@@ -39,6 +40,43 @@ test("customers list maps repository data into a read model", async () => {
   assert.equal(result.items[0].displayName, "Camila Rojas");
   assert.equal(result.items[0].platformOrigin, "hub");
   assert.equal(result.meta.source, "master_customer");
+});
+
+test("customers repository degrades list and detail reads when master customer queries fail", async () => {
+  const repository = createMysqlCustomerRepository({
+    listMasterCustomers: async () => ({
+      ok: false,
+      error: "Access denied for user 'crm_app'@'172.21.0.1' (using password: YES)",
+      warnings: []
+    }),
+    getMasterCustomerById: async () => ({
+      ok: false,
+      error: "Access denied for user 'crm_app'@'172.21.0.1' (using password: YES)",
+      warnings: []
+    }),
+    findMasterCustomerByEmail: async () => ({
+      ok: false,
+      error: "Access denied for user 'crm_app'@'172.21.0.1' (using password: YES)",
+      warnings: []
+    }),
+    createMasterCustomer: async () => ({
+      ok: false,
+      error: "customer_create_failed",
+      warnings: []
+    })
+  });
+
+  const listResult = await repository.list({ page: 2, pageSize: 10 });
+  assert.equal(listResult.items.length, 0);
+  assert.equal(listResult.pagination.page, 2);
+  assert.equal(listResult.pagination.pageSize, 10);
+  assert.equal(listResult.pagination.total, 0);
+  assert.equal(listResult.meta.mode, "error");
+  assert.deepEqual(listResult.meta.warnings, ["Access denied for user 'crm_app'@'172.21.0.1' (using password: YES)"]);
+
+  const detailResult = await repository.getById("10");
+  assert.equal(detailResult.customer, null);
+  assert.deepEqual(detailResult.warnings, ["Access denied for user 'crm_app'@'172.21.0.1' (using password: YES)"]);
 });
 
 test("customers detail returns null when the repository cannot find the row", async () => {

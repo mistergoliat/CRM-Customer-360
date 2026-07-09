@@ -1,24 +1,24 @@
-# Dual-agent development ecosystem
+---
+title: docs/README
+doc_id: docs-readme
+status: non-normative
+version: "1.0.0"
+owner: documentation
+last_reviewed: 2026-07-08
+source_of_truth_for:
+  - pointer to vault entry point
+depends_on:
+  - ./00-START-HERE.md
+supersedes: []
+tags:
+  - non-normative
+---
 
-This package coordinates Claude Code and OpenAI Codex working concurrently on the Autonomous Commerce System.
+# docs/README
 
-It does not let both agents edit the same checkout. The operating model is:
+This file is a pointer only.
 
-- one repository;
-- two isolated Git worktrees;
-- one task owner per task;
-- explicit path ownership;
-- frozen ADR contracts;
-- structured handoffs;
-- cross-review;
-- serial integration.
-
-Copy the contents into the repository root. Merge the supplied instruction sections into existing `CLAUDE.md` or `AGENTS.md` files instead of overwriting project-specific content.
-
-Start with:
-
-```bash
-bash scripts/ai/create-worktrees.sh
-```
-
-Then open Claude Code in the Claude worktree and Codex in the Codex worktree using the prompts under `docs/ai/prompts/`.
+- Canonical entry point: [00-START-HERE.md](00-START-HERE.md)
+- Active release board: [ACTIVE_RELEASE.md](ACTIVE_RELEASE.md)
+- Release index: [releases/README.md](releases/README.md)
+- Capability matrix: [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md)

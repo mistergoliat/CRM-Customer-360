@@ -1,3 +1,21 @@
+---
+title: Autonomous Commerce Roadmap
+doc_id: product-autonomous-commerce-roadmap
+status: active
+version: "1.0.0"
+owner: product
+last_reviewed: 2026-07-08
+source_of_truth_for:
+  - roadmap
+  - capability sequence
+depends_on:
+  - product/autonomous-commerce-prd
+supersedes: []
+tags:
+  - product
+  - release
+---
+
 # Autonomous Commerce Roadmap
 
 This roadmap is organized by complete capabilities, not by historical phase labels.

@@ -1,0 +1,50 @@
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'AGENTS.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'CLAUDE.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/(hub)/customers/[id]/page.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/AGENTS.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/architecture/adr/ADR-001-commercial-vs-ai-decisions.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/architecture/adr/ADR-002-ai-runtime-observability-boundary.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/architecture/adr/ADR-003-commercial-action-source-of-truth.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/architecture/adr/ADR-004-next-best-action-ownership.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/architecture/adr/ADR-005-catalog-boundary.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/architecture/adr/ADR-007-failure-escalation-and-outcomes.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/data/persistence-architecture-decision.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/product/agent-capability-matrix.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/product/autonomous-commerce-capability-map.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/product/autonomous-commerce-current-state.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/product/autonomous-commerce-prd.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/product/autonomous-commerce-roadmap.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/product/p1k-final-acceptance-report.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/verification/autonomous-operator-readiness.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'lib/domains/customers/repository.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'lib/integrations/customer-master/customer-repository.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/domains/customers.test.ts', LF will be replaced by CRLF the next time Git touches it
+M	.env.example
+M	.gitignore
+M	AGENTS.md
+M	CLAUDE.md
+M	app/(hub)/customers/[id]/page.tsx
+M	docs/AGENTS.md
+M	docs/README.md
+M	docs/architecture/adr/ADR-001-commercial-vs-ai-decisions.md
+M	docs/architecture/adr/ADR-002-ai-runtime-observability-boundary.md
+M	docs/architecture/adr/ADR-003-commercial-action-source-of-truth.md
+M	docs/architecture/adr/ADR-004-next-best-action-ownership.md
+M	docs/architecture/adr/ADR-005-catalog-boundary.md
+M	docs/architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md
+M	docs/architecture/adr/ADR-007-failure-escalation-and-outcomes.md
+M	docs/data/persistence-architecture-decision.md
+M	docs/product/agent-capability-matrix.md
+M	docs/product/autonomous-commerce-capability-map.md
+M	docs/product/autonomous-commerce-current-state.md
+M	docs/product/autonomous-commerce-prd.md
+M	docs/product/autonomous-commerce-roadmap.md
+M	docs/verification/autonomous-operator-readiness.md
+M	lib/brain/commercial/native-cycle/runNativeAutonomousCycle.ts
+M	lib/brain/commercial/policy/evaluateCommercialToolRequests.ts
+M	lib/domains/customers/repository.ts
+M	scripts/manual-test/README.md
+M	tests/domains/customers.test.ts

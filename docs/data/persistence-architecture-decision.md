@@ -1,3 +1,20 @@
+﻿---
+title: Persistence architecture decision
+doc_id: data-persistence-architecture-decision
+status: approved
+version: "1.0.0"
+owner: architecture
+last_reviewed: 2026-07-08
+source_of_truth_for:
+  - persistence architecture
+  - storage boundary
+depends_on:
+  - product/autonomous-commerce-prd
+supersedes: []
+tags:
+  - data-contract
+  - adr
+---
 # Persistence Architecture Decision
 
 ## 1. Executive summary

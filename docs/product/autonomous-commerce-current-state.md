@@ -1,3 +1,20 @@
+---
+title: Autonomous Commerce Current State
+doc_id: product-autonomous-commerce-current-state
+status: historical
+version: "1.0.0"
+owner: product
+last_reviewed: 2026-07-08
+source_of_truth_for:
+  - historical current state snapshot
+depends_on:
+  - product/autonomous-commerce-prd
+supersedes: []
+tags:
+  - product
+  - historical
+---
+
 # Autonomous Commerce Current State
 
 ## Context
@@ -147,6 +164,7 @@ Current gaps:
 
 - Implemented and real:
   - conversations list/detail read native tables
+  - customer detail now projects a read-only Customer 360 snapshot with provisional identity, commercial sections and address book metadata
   - case detail still exists as product UI
   - AI SDR related surfaces exist, but some remain preview or operator views
 - Evidence:

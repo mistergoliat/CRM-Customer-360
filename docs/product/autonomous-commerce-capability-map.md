@@ -1,3 +1,20 @@
+---
+title: Autonomous Commerce Capability Map
+doc_id: product-autonomous-commerce-capability-map
+status: historical
+version: "1.0.0"
+owner: product
+last_reviewed: 2026-07-08
+source_of_truth_for:
+  - historical capability map
+depends_on:
+  - product/autonomous-commerce-prd
+supersedes: []
+tags:
+  - product
+  - historical
+---
+
 # Autonomous Commerce Capability Map
 
 This map derives commercial work units from the PRD and aligns them with the repo state.
@@ -10,6 +27,8 @@ This map derives commercial work units from the PRD and aligns them with the rep
 | Resolve customer | inbound from known/unknown sender | Identify the customer | sender phone, sender id, account ids | customer + external identity | identity repo, master customer repo | customer resolved or provisional created | resolution rate, conflict rate | 1-2 | implemented | customer_master, customer_external_identity |
 | Maintain conversation | inbound or outbound event | Preserve thread state | customer, channel, thread ids, timestamps | conversation, conversation_message | conversation repository | one durable thread per customer/channel | conversation reuse, duplicate prevention | 1-2 | implemented | conversation tables |
 | Build need profile | qualifying message or new signal | Persist sales need context | text, recent messages, product context | crm_sales_need_profiles | consultative repo | profile updated, missing info tracked | profile completeness, stability | 1-2 | implemented | CRM tables |
+| Project Customer 360 | customer open, operator view, or read API request | Consolidate the customer read model without becoming source of truth | customer identity, conversations, opportunities, profiles, actions, outcomes, quotes, orders, addresses, lifecycle events | customer 360 snapshot | Customer360QueryService + ports/adapters | read-only 360 snapshot with source/freshness/completeness metadata | snapshot coverage, partial-failure survival, freshness | 1-2 | implemented | master_customer, customer_external_identity, conversation tables, CRM tables, customer_addresses |
+| Manage customer addresses | delivery or quote preparation | Persist and reuse multiple addresses per customer | customer, address book, selection context | customer_addresses, request facts | customer-addresses domain | address chosen, confirmed or rejected explicitly | selection correctness, confirmation rate | 1-2 | implemented | customer_addresses |
 | Create/update opportunity | commercial intent | Keep one active commercial record | customer context, profile, stage hints | crm_opportunities | consultative repo | opportunity created or updated | opportunity reuse, stage progression | 1-3 | implemented | CRM tables |
 | Decide next best action | each inbound/commercial turn | Choose one primary action | conversation, profile, opportunity, catalog findings | crm_agent_decisions, crm_agent_actions | sales consultative engine | decision persisted with action | stage fit, action fit, handoff rate | 2-3 | implemented | consultative engine |
 | Consult catalog | recommendation or objection | Find valid products | need profile, price range, space, compatibility | catalog read model | search/get detail/price/stock/dimensions/compatibility | candidate set and recommendation | recommendation validity, stock fit | 1-3 | partial | product repository / Prestashop adapter |

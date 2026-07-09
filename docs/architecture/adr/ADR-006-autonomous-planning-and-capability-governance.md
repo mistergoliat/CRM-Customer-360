@@ -1,4 +1,30 @@
+﻿---
+title: ADR-006 - Autonomous Planning and Capability Governance
+doc_id: adr-006-autonomous-planning-and-capability-governance
+status: approved
+version: "1.0.0"
+owner: architecture
+last_reviewed: 2026-07-08
+source_of_truth_for:
+  - autonomous planning
+  - capability governance
+  - replanning limits
+depends_on:
+  - product/autonomous-commerce-prd
+supersedes: []
+tags:
+  - adr
+---
 # ADR-006: Autonomous Planning and Capability Governance
+
+## Relaciones
+
+- Gobernado por: [Autonomous Commerce PRD](../../product/autonomous-commerce-prd.md)
+- Depende de: [ACTIVE_RELEASE](../../ACTIVE_RELEASE.md)
+- Implementa: gobierno de capacidades y replanning autonomo
+- Evidencia: [CAPABILITY_MATRIX](../../CAPABILITY_MATRIX.md)
+- Context pack: [ACS-R1-01.1](../../context-packs/ACS-R1-01.1.md)
+- Reemplaza: none
 
 ## Estado
 
@@ -6,19 +32,19 @@ Accepted
 
 ## Contexto
 
-El producto debe operar como vendedor 24/7 con libertad para comprender, definir objetivos, contrastar estrategias, proponer acciones, replanificar, reactivar oportunidades, negociar dentro de políticas y escalar.
+El producto debe operar como vendedor 24/7 con libertad para comprender, definir objetivos, contrastar estrategias, proponer acciones, replanificar, reactivar oportunidades, negociar dentro de polÃ­ticas y escalar.
 
-## Decisión
+## DecisiÃ³n
 
 Se adopta:
 
 ```text
 AIPlan
-→ AIProposal
-→ CapabilityEvaluation
-→ replanificar o aceptar
-→ CommercialDecision
-→ CommercialAction
+â†’ AIProposal
+â†’ CapabilityEvaluation
+â†’ replanificar o aceptar
+â†’ CommercialDecision
+â†’ CommercialAction
 ```
 
 ## AIPlan
@@ -28,18 +54,18 @@ Incluye:
 - assessment;
 - objetivo;
 - estrategia;
-- acción principal;
+- acciÃ³n principal;
 - alternativas;
 - capabilities;
 - outcomes esperados;
 - condiciones de replanteamiento;
 - stop conditions;
 - escalamiento;
-- reactivación;
+- reactivaciÃ³n;
 - evidencia;
 - idempotencia.
 
-El plan puede ser amplio, pero solo una acción principal se acepta por ciclo.
+El plan puede ser amplio, pero solo una acciÃ³n principal se acepta por ciclo.
 
 ## Capability Gateway
 
@@ -48,8 +74,8 @@ El Brain informa:
 - capabilities existentes;
 - disponibilidad;
 - argumentos;
-- políticas;
-- información faltante;
+- polÃ­ticas;
+- informaciÃ³n faltante;
 - restricciones;
 - alternativas disponibles.
 
@@ -85,32 +111,32 @@ El sistema se define principalmente por lo que no puede hacer.
 - autoaprobar acciones restringidas;
 - afirmar efectos sin evidencia.
 
-### Requieren aprobación inicial
+### Requieren aprobaciÃ³n inicial
 
-- envío de cotizaciones;
-- descuentos/promociones no automáticas;
+- envÃ­o de cotizaciones;
+- descuentos/promociones no automÃ¡ticas;
 - excepciones comerciales;
 - condiciones especiales.
 
 ### Fuera de alcance inicial
 
 - reserva de stock;
-- modificación de inventario;
-- devolución de dinero;
-- cancelación automática de pedidos;
-- garantías autónomas.
+- modificaciÃ³n de inventario;
+- devoluciÃ³n de dinero;
+- cancelaciÃ³n automÃ¡tica de pedidos;
+- garantÃ­as autÃ³nomas.
 
 ## Replanning
 
-Máximo tres iteraciones. La cuarta produce salida segura o escalamiento.
+MÃ¡ximo tres iteraciones. La cuarta produce salida segura o escalamiento.
 
 Una tool denegada no se vuelve a pedir sin cambio de contexto.
 
 ## Facultades del vendedor
 
-Puede proponer responder, preguntar, buscar, recomendar, comparar, cross-sell, upsell, preparar cotización, solicitar aprobación, crear carrito, crear checkout, calcular despacho, informar pagos, follow-up, reactivar, escalar, llamar cuando exista capability, cerrar oportunidades y crear oportunidades relacionadas.
+Puede proponer responder, preguntar, buscar, recomendar, comparar, cross-sell, upsell, preparar cotizaciÃ³n, solicitar aprobaciÃ³n, crear carrito, crear checkout, calcular despacho, informar pagos, follow-up, reactivar, escalar, llamar cuando exista capability, cerrar oportunidades y crear oportunidades relacionadas.
 
-## Reactivación
+## ReactivaciÃ³n
 
 Distingue retomar dormant, crear oportunidad relacionada, cross-sell, upgrade, replacement, quote recovery y no contactar.
 
@@ -120,10 +146,10 @@ Una oportunidad won/lost no se reabre silenciosamente.
 
 La IA no necesita repetir exactamente el mismo plan. El sistema evita duplicados en eventos, ciclos, decisiones, acciones, cotizaciones, outbox y efectos.
 
-## Criterio de validación
+## Criterio de validaciÃ³n
 
 - capability inexistente produce replanning;
 - backend deniega sin decidir estrategia alternativa;
-- solo acción aceptada produce efectos;
+- solo acciÃ³n aceptada produce efectos;
 - tres rechazos terminan en salida segura o escalamiento;
 - mismo evento no duplica efectos.
