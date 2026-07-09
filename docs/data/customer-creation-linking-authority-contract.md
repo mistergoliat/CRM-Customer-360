@@ -2,9 +2,9 @@
 title: Customer creation, linking and interest authority contract
 doc_id: data-customer-creation-linking-authority-contract
 status: approved
-version: "1.0.0"
+version: "1.0.1"
 owner: product
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-09
 source_of_truth_for:
   - CreateCustomerInput / CreateCustomerResult
   - LinkExternalIdentityInput / LinkExternalIdentityResult
@@ -182,6 +182,13 @@ La IA utiliza ese outcome para decidir como continuar.
 
 La IA puede proponer `create_customer`.
 
+```text
+create_customer
+→ crea o resuelve un customer canonico mediante Customer Service
+→ devuelve customerId
+→ no vincula identidades externas como efecto secundario
+```
+
 La ejecucion solo se permite cuando:
 
 ```text
@@ -227,8 +234,8 @@ interface CreateCustomerInput {
   email: string;
   phoneNumber: string;
 
-  externalIdentity: {
-    provider: "whatsapp";
+  origin: {
+    channel: "whatsapp";
     externalId: string;
   };
 
@@ -239,8 +246,7 @@ interface CreateCustomerInput {
     | "account_request";
 
   consent: {
-    createAccount: boolean;
-    linkWhatsApp: boolean;
+    createCustomer: true;
     messageId: string;
     capturedAt: string;
   };
@@ -248,6 +254,8 @@ interface CreateCustomerInput {
   idempotencyKey: string;
 }
 ```
+
+`origin` es trazabilidad: registra el canal y la identidad externa que originaron la solicitud de creacion. No autoriza ni ejecuta una vinculacion - vincular ese `wa_id` al `customerId` resultante requiere una llamada posterior y separada a `link_external_identity` (seccion 5), con su propio consentimiento.
 
 ### Resultado conceptual
 
@@ -507,6 +515,11 @@ resolve_customer nunca crea
 resolve_customer nunca vincula
 create_customer requiere no_match real
 create_customer vuelve a deduplicar en ejecucion
+create_customer no ejecuta link_external_identity
+create_customer no crea automaticamente una cuenta de login en PrestaShop
+create_customer no propaga automaticamente el customer hacia SAP, POS u otras fuentes
+origin.externalId solo registra el canal que origino la creacion
+la vinculacion de WhatsApp requiere una ejecucion posterior y separada de link_external_identity
 una caida tecnica no equivale a no_match
 una operacion historica nunca crea customer
 link_external_identity requiere consentimiento
