@@ -10,11 +10,15 @@
 -- (a legacy string case id, not conversation.id), its state enum
 -- (unresolved/email_requested/customer_found/...) does not match the
 -- contract's CustomerOnboardingStatus, it has no purpose field, no version
--- column for optimistic locking, and it stores fields this contract
--- explicitly forbids here (firstname/lastname/email as plain columns,
--- last_response_text, context_json, warnings_json - see contract section
--- 12, Privacidad). It is left intact and untouched by this migration; no
--- dual-write and no fallback are added between the two tables.
+-- column for optimistic locking, and - unlike this table, which keeps
+-- firstname/lastname/email/orderReference inside collected_json exactly as
+-- the contract's CustomerOnboardingCollectedData allows (section 11) - it
+-- exposes firstname/lastname/email as separate top-level plain columns and
+-- additionally stores last_response_text, context_json and warnings_json,
+-- which contract section 12 (Privacidad) does forbid here (messages,
+-- prompts, arbitrary payloads). It is left intact and untouched by this
+-- migration; no dual-write and no fallback are added between the two
+-- tables.
 --
 -- Column types mirror the real referenced tables:
 --   conversation_id  -> conversation.id             (BIGINT UNSIGNED, migration 008)
@@ -24,6 +28,32 @@
 -- "Unica fila activa por conversation_id" is enforced with a UNIQUE key -
 -- there is no append-only transition history in this increment (T03 scope
 -- excludes it explicitly), so exactly one row exists per conversation.
+--
+-- ACS-R1-04-T03.1: customer_id uses ON DELETE RESTRICT, not SET NULL. The
+-- "completed" invariant (contract section 11 + 14) requires a non-null,
+-- resolved customerId - silently nulling it out on a master_customer
+-- deletion would leave a completed row that no longer satisfies its own
+-- invariant. Deleting a master_customer that has a completed onboarding
+-- must fail loudly instead. conversation_id (CASCADE) and opportunity_id
+-- (SET NULL) are unaffected: neither carries a "must stay non-null once
+-- completed" invariant.
+--
+-- A row-level CHECK (status <> 'completed' OR customer_id IS NOT NULL) was
+-- attempted as well, but MariaDB 11.4 (infra/docker-compose.dev.yml)
+-- rejects it: "Function or expression 'customer_id' cannot be used in the
+-- CHECK clause" (error 1901) - MariaDB does not allow a column that
+-- participates in a FOREIGN KEY to also be referenced by a CHECK
+-- constraint on the same table, confirmed by direct reproduction (a
+-- standalone CHECK on customer_id works; adding the FK on the same column,
+-- via CREATE TABLE or a later ALTER TABLE, makes the identical CHECK fail
+-- with the same error either way). Adding it would make this migration
+-- fail to install from a clean database, which is exactly the invariant
+-- ACS-R1-04-T03.1 exists to protect - so it is intentionally not present.
+-- The invariant is instead enforced by ON DELETE RESTRICT above (no
+-- customer referenced by a completed row can be deleted) and by the
+-- domain layer (lib/domains/customer-onboarding/service.ts:
+-- completeOnboarding is the only path that sets status = 'completed', and
+-- it requires a non-empty customerId before doing so).
 
 CREATE TABLE IF NOT EXISTS crm_customer_onboarding_state (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -68,7 +98,7 @@ CREATE TABLE IF NOT EXISTS crm_customer_onboarding_state (
   CONSTRAINT fk_crm_customer_onboarding_state_customer
     FOREIGN KEY (customer_id)
     REFERENCES master_customer(id)
-    ON DELETE SET NULL
+    ON DELETE RESTRICT
     ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

@@ -775,3 +775,87 @@ test("integration 9: foreign keys son validas cuando existen las entidades relac
   });
   assert.equal(invalid.ok, false);
 });
+
+// ---------------------------------------------------------------------------
+// ACS-R1-04-T03.1: customer_id FK is ON DELETE RESTRICT (not SET NULL), so a
+// completed onboarding can never be left with customer_id = NULL by deleting
+// the referenced master_customer row - the delete itself must fail instead.
+// ---------------------------------------------------------------------------
+
+test("integration 10: la FK de customer no convierte un onboarding completed en customer nulo", async () => {
+  const conversationId = await makeConversationId("fk-restrict-completed");
+  const customerId = await makeCustomerId("FkRestrictCompleted");
+  const service = createCustomerOnboardingService();
+
+  const started = await service.startOnboarding({ conversationId, purpose: "quote", pendingFields: ["email"] });
+  let version = started.ok ? started.state.version : 0;
+  const collected = await service.collectFields({ conversationId, expectedVersion: version, collectedPatch: { email: "restrict@db.cl" }, pendingFields: [] });
+  version = collected.ok ? collected.state.version : 0;
+  const resolving = await service.markResolving({ conversationId, expectedVersion: version });
+  version = resolving.ok ? resolving.state.version : 0;
+  const completed = await service.completeOnboarding({ conversationId, expectedVersion: version, customerId });
+  assert.equal(completed.ok, true);
+
+  // Deleting the referenced customer must be rejected outright by the FK,
+  // not silently accepted while nulling customer_id out from under a
+  // completed row (that would violate the "completed requires customerId"
+  // invariant - contract sections 11 and 14).
+  await assert.rejects(() => queryRows(`DELETE FROM master_customer WHERE id = ?`, [customerId]));
+
+  const rows = await queryRows<{ status: string; customer_id: string | number | null }>(
+    `SELECT status, customer_id FROM crm_customer_onboarding_state WHERE conversation_id = ?`,
+    [conversationId]
+  );
+  assert.equal(rows[0].status, "completed");
+  assert.equal(String(rows[0].customer_id), customerId);
+});
+
+// ---------------------------------------------------------------------------
+// ACS-R1-04-T03.1: proves the currently-connected database was installed by
+// applying migrations/*.sql in order with matching checksums (the same
+// bookkeeping scripts/db-migrate.ts relies on), not by hand-patching a
+// table into an otherwise-stale or partially-migrated database. If this
+// fails, whatever DB the suite is pointed at was not cleanly installed via
+// the canonical chain.
+// ---------------------------------------------------------------------------
+
+test("integration 11: el esquema instalado corresponde a la cadena canonica 001-023 con checksums correctos", async () => {
+  const crypto = await import("node:crypto");
+  const { readFile, readdir } = await import("node:fs/promises");
+  const path = await import("node:path");
+
+  const migrationsDir = path.resolve(process.cwd(), "migrations");
+  const filenames = (await readdir(migrationsDir))
+    .filter((file) => file.toLowerCase().endsWith(".sql"))
+    .sort((left, right) => left.localeCompare(right));
+  assert.ok(filenames.includes("023_crm_customer_onboarding_state.sql"));
+
+  const trackedRows = await queryRows<{ filename: string; checksum: string }>(
+    `SELECT filename, checksum FROM schema_migrations`
+  );
+  const trackedByFile = new Map(trackedRows.map((row) => [row.filename, row.checksum]));
+
+  for (const filename of filenames) {
+    const sql = await readFile(path.join(migrationsDir, filename), "utf8");
+    const digest = crypto.createHash("sha256").update(sql).digest("hex");
+    const tracked = trackedByFile.get(filename);
+    assert.ok(tracked, `${filename} is not recorded in schema_migrations - the DB under test was not installed via the canonical chain`);
+    assert.equal(tracked, digest, `${filename} checksum mismatch between disk and schema_migrations`);
+  }
+
+  // Schema shape sanity, independent of the ORM-level repository: the FK on
+  // customer_id must carry RESTRICT semantics (no ON DELETE SET NULL/CASCADE
+  // action), and conversation_id must remain unique.
+  const fkRows = await queryRows<{ DELETE_RULE: string }>(
+    `SELECT DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS
+     WHERE CONSTRAINT_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'crm_customer_onboarding_state'
+       AND CONSTRAINT_NAME = 'fk_crm_customer_onboarding_state_customer'`
+  );
+  assert.equal(fkRows[0]?.DELETE_RULE, "RESTRICT");
+
+  const uniqueRows = await queryRows<{ Non_unique: number }>(
+    `SHOW INDEX FROM crm_customer_onboarding_state WHERE Key_name = 'uq_crm_customer_onboarding_state_conversation_id'`
+  );
+  assert.equal(Number(uniqueRows[0]?.Non_unique), 0);
+});
