@@ -2,9 +2,9 @@
 title: CAPABILITY_MATRIX
 doc_id: product-capability-matrix
 status: active
-version: "1.3.0"
+version: "1.4.0"
 owner: architecture
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-09
 source_of_truth_for:
   - capability inventory
   - domain implementation status
@@ -27,6 +27,9 @@ depends_on:
   - ./data/customer-address-contract.md
   - ./data/customer-lifecycle-event-contract.md
   - ./data/customer-onboarding-identity-contract.md
+  - ./data/customer-creation-linking-authority-contract.md
+  - ./integrations/customer-service-http-contract.md
+  - ./capabilities/customer-service-capability.md
 supersedes: []
 tags:
   - capability
@@ -62,9 +65,10 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 | ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |
 | `resolve_customer` | `service` | `implemented` | `implemented` | `implemented` | `not_registered` | `not_connected` | `not_verified` | `implemented_partial` | domain-ready read-only resolver (`lib/domains/customer-identity`, ACS-R1-04-T02 + T02.1): resolves by exact `wa_id` (provider-scoped) and canonical/historical normalized phone (provider-agnostic, across `customer_external_identity`), returns `identified/identification_required/conflict/temporarily_unavailable/invalid_input`, never creates or links. `customer_addresses.recipient_phone` and `ps_customer` reviewed and intentionally not connected (delivery contact and unbridged external id-space, respectively). Not yet registered in the Gateway, not connected to the native inbound runtime, no operational smoke test |
 | `get_customer` | `service` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | depends on Customer Service boundary and onboarding state |
-| `create_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | no automatic customer creation per inbound |
+| `create_customer` | `command` | `implemented` | `implemented` | `implemented` | `not_registered` | `not_connected` | `not_verified` | `implemented_partial` | ACS-R1-04-T04.1: `CustomerServicePort` (`lib/domains/customer-service`), pure authority policy (`evaluateCreateCustomerAuthority` - real `resolveCustomer` evidence required, no LLM-asserted booleans), fail-closed HTTP adapter (`lib/integrations/customer-service/http-adapter.ts`, contract in `docs/integrations/customer-service-http-contract.md`). ACS-generated idempotency key (`customer-service:create:<capabilityExecutionId>`), never agent-chosen. Not registered in the Gateway, not connected to the inbound runtime, no operational smoke test - see `docs/capabilities/customer-service-capability.md` |
 | `update_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | canonical update rules not yet approved |
-| `link_external_identity` | `command` | `implemented_partial` | `partial` | `partial` | `not_registered` | `not_connected` | `not_verified` | `implemented_partial` | external identity relations exist, canonical rules still pending |
+| `link_external_identity` | `command` | `implemented` | `implemented` | `implemented` | `not_registered` | `not_connected` | `not_verified` | `implemented_partial` | ACS-R1-04-T04.1: same `CustomerServicePort`/adapter as `create_customer`. Policy (`evaluateLinkExternalIdentityAuthority`) requires the wa_id being linked to match the one the current inbound channel verified (never a number typed in message text), explicit consent with messageId/capturedAt, and no known conflict. Always a separate call after `create_customer`, never an automatic side effect. Not registered in the Gateway, not connected to the inbound runtime |
+| `record_customer_interest` | `command` | `implemented_partial` | `not_applicable` | `not_applicable` | `not_registered` | `not_connected` | `planned` | `designed_partial` | ACS-R1-04-T04.1: contract types (`RecordCustomerInterestInput`) and pure policy (`evaluateCustomerInterestAuthority`) implemented - distinguishes `operational_context` (always allowed, no customer needed), `persistent_customer_interest` (requires `customerId` + `consent.storeInterest`) and `proactive_followup` (requires a separate `consent.allowFollowUp`). No persistence, no follow-up scheduling, no customer creation as a side effect - policy/types only |
 
 ## Customer Onboarding
 
