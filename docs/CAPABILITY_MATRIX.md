@@ -2,7 +2,7 @@
 title: CAPABILITY_MATRIX
 doc_id: product-capability-matrix
 status: active
-version: "1.4.0"
+version: "1.5.0"
 owner: architecture
 last_reviewed: 2026-07-09
 source_of_truth_for:
@@ -80,9 +80,10 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 
 | Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |
 | ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |
-| `get_customer_context` | `read_model` | `implemented` | `implemented` | `implemented` | `not_applicable` | `internal_context_only` | `connected` | `accepted_with_debt` | Customer 360 exists, but no autonomous runtime connection is assumed |
+| `get_customer_context` | `read_model` | `implemented` | `implemented` | `implemented` | `not_applicable` | `internal_context_only` | `connected` | `accepted_with_debt` | Customer 360 exists, full-snapshot Hub API; the autonomous cycle now consumes a separate reduced projection instead (see `autonomous_customer_context` below) |
 | `get_customer_addresses` | `read_model` | `implemented` | `implemented` | `implemented` | `not_applicable` | `internal_context_only` | `connected` | `accepted_with_debt` | read model exists; operational write/confirmation flow still planned |
 | `create_customer_address` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | Address Book operational capability not active yet |
+| `autonomous_customer_context` | `read_model` | `implemented` | `implemented` | `not_applicable` | `not_applicable` | `connected` | `not_verified` | `implemented_partial` | ACS-R1-04-T05: `AutonomousCustomerContext` (`lib/brain/commercial/context/autonomousCustomerContext.ts`), an allowlisted (never denylisted), history-only projection of `Customer360Snapshot` - max 3 recent opportunities/need profiles/quotes, newest-first, no PII (no email/phone/wa_id/linked identities/addresses/order refs/invoice numbers/message bodies/provider ids/full snapshot). `loadAutonomousCustomerContext` (`loadAutonomousCustomerContext.ts`) is the single load point: `customerId` null makes zero calls, a thrown/failed load degrades to `unavailable` and never stops the cycle. Wired into both `runNativeAutonomousCycle` runtimes (multi-request and legacy, mutually exclusive as before) via typed fields on `MultiRequestCycleInput`/`PlanTurnInput`/`TurnPlannerProviderInput` and `CommercialContextSnapshot`/`SalesAgentInput` - never inside a generic `metadata` bag. Customer 360 never resolves identity, creates customers, links identities or confirms addresses; `customerMasterId` still comes from the pre-existing native inbound resolver, not from T02/T04.1 - that wiring is `ACS-R1-04-T06`. No operational smoke test yet |
 
 ## Commercial Execution
 

@@ -9,6 +9,8 @@ import type {
   SalesAgentStructuralSignal
 } from "../salesAgentTypes";
 import type { CommercialContextBuilderMetadata, CommercialContextSourceSummary } from "../types";
+import type { AutonomousCustomerContext } from "./autonomousCustomerContext";
+import type { AutonomousCustomerContextLoadState } from "./loadAutonomousCustomerContext";
 
 type SerializableRecord = Record<string, unknown>;
 type PathKey = string | number;
@@ -50,6 +52,8 @@ export type NormalizedCommercialBrainContext = {
   hasCustomerReference: boolean;
   hasCommercialEntity: boolean;
   hasConversationHistory: boolean;
+  customer360: AutonomousCustomerContext | null;
+  customer360State: AutonomousCustomerContextLoadState;
   metadata: Record<string, unknown>;
 };
 
@@ -501,6 +505,12 @@ function normalizeCommercialContext(input: unknown): {
     getValue(businessContext, ["mantenciones_queue", "estado_caso"])
   );
 
+  // ACS-R1-04-T05: already-reduced, already-loaded Customer 360 projection.
+  // Passed through as-is (never re-sanitized/re-shaped) - it was built by an
+  // explicit allowlist projector, not arbitrary caller input.
+  const customer360 = (getValue(root, ["customer360"]) as AutonomousCustomerContext | null) ?? null;
+  const customer360State = (getValue(root, ["customer360State"]) as AutonomousCustomerContextLoadState | undefined) ?? "not_requested";
+
   const lead = sanitizeCommercialObject(getValue(root, ["lead"]) ?? getValue(root, ["lead_context"]) ?? null).value ?? undefined;
   const opportunity = sanitizeCommercialObject(getValue(root, ["opportunity"]) ?? getValue(root, ["opportunity_context"]) ?? null).value ?? undefined;
   const metadataResult = sanitizeCommercialObject(getValue(root, ["metadata"]) ?? null);
@@ -571,6 +581,8 @@ function normalizeCommercialContext(input: unknown): {
       hasCustomerReference,
       hasCommercialEntity,
       hasConversationHistory,
+      customer360,
+      customer360State,
       metadata: metadataResult.value ?? {}
     }
   };

@@ -1,10 +1,19 @@
 import type { ConversationRequestDomain } from "../conversation-request";
+import type { AutonomousCustomerContext } from "../context/autonomousCustomerContext";
+import type { AutonomousCustomerContextLoadState } from "../context/loadAutonomousCustomerContext";
 import type { RequestCandidate } from "./buildDeterministicCandidates";
 import type { DetectedTurnIntent } from "./turnPlanTypes";
 
 export type TurnPlannerProviderInput = {
   messageText: string;
   candidates: readonly RequestCandidate[];
+  /**
+   * ACS-R1-04-T05: reduced Customer 360 history, already loaded once upstream
+   * - a future LLM provider can read it without querying Customer 360 again.
+   * The deterministic provider below ignores both fields.
+   */
+  customerContext?: AutonomousCustomerContext | null;
+  customerContextState?: AutonomousCustomerContextLoadState;
 };
 
 export type TurnPlannerProviderOutput = {

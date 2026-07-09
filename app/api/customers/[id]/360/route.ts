@@ -6,7 +6,7 @@ type Context = {
 };
 
 type Customer360RouteDependencies = {
-  service?: Customer360QueryService;
+  service?: Pick<Customer360QueryService, "getByCustomerId">;
   requireOperator?: typeof requireOperator;
 };
 

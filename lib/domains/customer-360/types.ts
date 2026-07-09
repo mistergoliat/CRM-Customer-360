@@ -298,6 +298,17 @@ export type LifecycleEventAssemblerInput = {
 
 export type LifecycleEventAssembler = (input: LifecycleEventAssemblerInput) => CustomerLifecycleSection;
 
+// Additive result for ACS-R1-04-T05: getByCustomerId() alone collapses "no
+// such customer" and "profile source unavailable" into the same `null`. This
+// preserves that public contract while giving loadAutonomousCustomerContext
+// (lib/brain/commercial/context) a way to tell the two apart, per
+// docs/data/customer-360-contract.md and ADR-008's failure model.
+export type Customer360LoadResult =
+  | { status: "found"; snapshot: Customer360Snapshot; warnings: string[] }
+  | { status: "not_found"; snapshot: null; warnings: string[] }
+  | { status: "unavailable"; snapshot: null; warnings: string[] };
+
 export type Customer360QueryService = {
   getByCustomerId(customerId: string): Promise<Customer360Snapshot | null>;
+  loadByCustomerId(customerId: string): Promise<Customer360LoadResult>;
 };

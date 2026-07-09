@@ -1,4 +1,7 @@
+import { createCustomer360QueryService } from "@/lib/domains/customer-360";
 import { buildNativeCommercialContext } from "../context/buildNativeCommercialContext";
+import { loadAutonomousCustomerContext } from "../context/loadAutonomousCustomerContext";
+import type { AutonomousCustomerContextLoadResult, AutonomousCustomerContextLoadState, LoadCustomer360Fn } from "../context/loadAutonomousCustomerContext";
 import { runCommercialShadowEvaluation } from "../shadow/runCommercialShadowEvaluation";
 import { runCommercialOperationalLoop } from "../operational-loop";
 import { runCommercialExecutionBridge } from "../execution-bridge";
@@ -37,6 +40,14 @@ import type { SalesAgentProvider } from "../sales-agent/runtimeTypes";
  */
 const NATIVE_CYCLE_ALLOWED_CAPABILITIES = listAliasedSalesAgentToolNames();
 
+// ACS-R1-04-T05: shared, lazily-created Customer 360 query service - same
+// cached-singleton pattern as getSharedCatalogPort in capability-gateway/registry.ts.
+let cachedCustomer360Service: ReturnType<typeof createCustomer360QueryService> | null = null;
+const defaultLoadCustomer360: LoadCustomer360Fn = (customerId) => {
+  if (!cachedCustomer360Service) cachedCustomer360Service = createCustomer360QueryService();
+  return cachedCustomer360Service.loadByCustomerId(customerId);
+};
+
 export type NativeAutonomousCycleInput = {
   conversationId: number;
   conversationPublicId: string;
@@ -50,6 +61,8 @@ export type NativeAutonomousCycleInput = {
   abortSignal?: AbortSignal | null;
   /** Test-only injection point; production callers never set this (defaults to the configured runtime provider). */
   provider?: SalesAgentProvider | null;
+  /** Test-only injection point; production callers never set this (defaults to the real Customer 360 query service). */
+  loadCustomer360?: LoadCustomer360Fn | null;
 };
 
 export type NativeAutonomousCycleResult = {
@@ -60,6 +73,8 @@ export type NativeAutonomousCycleResult = {
   bridge: CommercialExecutionBridgeResult | null;
   multiRequest?: MultiRequestCycleResult | null;
   catalogCapability?: CatalogGroundingResult | null;
+  /** ACS-R1-04-T05: state of the single Customer 360 load for this turn ("not_requested" when there was no customerMasterId to load). */
+  customerContextState?: AutonomousCustomerContextLoadState;
   warnings: string[];
 };
 
@@ -75,6 +90,10 @@ function isAutonomyCycleEnabled(): boolean {
     readEnvFlag("BRAIN_COMMERCIAL_SHADOW_ENABLED", false) ||
     readEnvFlag("BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED", false)
   );
+}
+
+function dedupeWarnings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 /**
@@ -95,15 +114,38 @@ function isAutonomyCycleEnabled(): boolean {
 export async function runNativeAutonomousCycle(
   input: NativeAutonomousCycleInput
 ): Promise<NativeAutonomousCycleResult> {
-  // Authoritative runtime switch: with the multi-request flag on, the legacy
-  // single-intent pipeline below never runs for this turn - one runtime or
-  // the other, never both.
-  if (isMultiRequestRuntimeEnabled()) {
+  // Step 1: which runtime, if any, is enabled this turn. Multi-request is
+  // authoritative when on - the legacy pipeline below never runs the same
+  // turn (checked first, same priority as before ACS-R1-04-T05).
+  const multiRequestEnabled = isMultiRequestRuntimeEnabled();
+
+  if (!multiRequestEnabled) {
+    if (!isAutonomyCycleEnabled()) {
+      // Step 2: nothing will run this turn - Customer 360 is never loaded.
+      return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+    }
+    if (!buildCommercialShadowFeatureFlags().commercialShadowEnabled) {
+      // Step 2: legacy is gated off too - Customer 360 is never loaded.
+      return { ran: false, reason: "shadow_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+    }
+  }
+
+  // Step 3: exactly one runtime is about to run below - load Customer 360
+  // once, from input.customerMasterId only (never re-resolved by wa_id,
+  // phone or email here - identity resolution is out of scope for T05).
+  const loadCustomer360 = input.loadCustomer360 ?? defaultLoadCustomer360;
+  const customerId = input.customerMasterId === null || input.customerMasterId === undefined ? null : String(input.customerMasterId);
+  const customer360: AutonomousCustomerContextLoadResult = await loadAutonomousCustomerContext({ customerId, loadCustomer360 });
+
+  // Step 4/5: select exactly one runtime and hand it the reduced projection.
+  if (multiRequestEnabled) {
     const multiRequest = await runMultiRequestAutonomousCycle({
       conversationId: input.conversationId,
       inboundMessageId: input.messageId === null || input.messageId === undefined ? "" : String(input.messageId),
       messageText: input.messageText,
-      correlationId: input.correlationId
+      correlationId: input.correlationId,
+      customerContext: customer360.context,
+      customerContextState: customer360.state
     });
     return {
       ran: multiRequest.ran,
@@ -113,34 +155,39 @@ export async function runNativeAutonomousCycle(
       bridge: null,
       multiRequest,
       catalogCapability: null,
-      warnings: multiRequest.warnings
+      customerContextState: customer360.state,
+      // Step 6: structured Customer 360 warnings, merged with the runtime's own.
+      warnings: dedupeWarnings([...multiRequest.warnings, ...customer360.warnings])
     };
-  }
-
-  if (!isAutonomyCycleEnabled()) {
-    return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
   }
 
   const shadowFlags = buildCommercialShadowFeatureFlags();
   const loopFlags = buildCommercialLoopFeatureFlags();
   const bridgeFlags = buildCommercialBridgeFeatureFlags();
 
-  if (!shadowFlags.commercialShadowEnabled) {
-    return { ran: false, reason: "shadow_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
-  }
-
-  const warnings: string[] = [];
+  const warnings: string[] = [...customer360.warnings];
   const startedAt = Date.now();
   const currentTime = input.currentTime;
 
-  // Fase 1: build native commercial context
-  const snapshot = await buildNativeCommercialContext({
+  // Fase 1: build native commercial context. Never loads Customer 360 itself
+  // - the already-loaded projection is merged in right after.
+  const rawSnapshot = await buildNativeCommercialContext({
     conversationPublicId: input.conversationPublicId,
     currentTime
   });
+  const snapshot = { ...rawSnapshot, customer360: customer360.context, customer360State: customer360.state };
 
   if (snapshot.status === "not_found") {
-    return { ran: false, reason: "conversation_not_found", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+    return {
+      ran: false,
+      reason: "conversation_not_found",
+      shadow: null,
+      loop: null,
+      bridge: null,
+      catalogCapability: null,
+      customerContextState: customer360.state,
+      warnings: dedupeWarnings(warnings)
+    };
   }
 
   // Build shim objects that the legacy pipeline can consume via its
@@ -312,6 +359,7 @@ export async function runNativeAutonomousCycle(
     loop: groundedLoop,
     bridge,
     catalogCapability,
-    warnings
+    customerContextState: customer360.state,
+    warnings: dedupeWarnings(warnings)
   };
 }

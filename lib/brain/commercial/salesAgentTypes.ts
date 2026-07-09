@@ -1,6 +1,8 @@
 import type { BrainToolName } from "../tools/types";
 import type { CommercialChannelReference, LeadReadModel, LeadSource, OpportunityReadModel } from "./types";
 import type { FollowUpDecisionResult } from "./followUpTypes";
+import type { AutonomousCustomerContext } from "./context/autonomousCustomerContext";
+import type { AutonomousCustomerContextLoadState } from "./context/loadAutonomousCustomerContext";
 
 export type SerializableId = string | number | null;
 export type SalesAgentRequestedMode = "minimal" | "standard" | "recovery";
@@ -134,6 +136,9 @@ export type SalesAgentInput = {
   structuralSignals: SalesAgentStructuralSignal[];
   availableCapabilities: readonly SalesAgentToolName[];
   policyContext?: SalesAgentPolicyContext;
+  /** ACS-R1-04-T05: reduced, allowlisted Customer 360 history - never the full snapshot. Loaded once, upstream of this input. */
+  customer360?: AutonomousCustomerContext | null;
+  customer360State?: AutonomousCustomerContextLoadState;
   metadata: Record<string, unknown>;
   runId?: string;
   lead?: Record<string, unknown> | null;

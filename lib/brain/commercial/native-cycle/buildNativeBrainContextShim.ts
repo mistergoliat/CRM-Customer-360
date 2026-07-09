@@ -145,6 +145,12 @@ export function buildNativeBrainContextShim(
           wa_id: waId,
           customer_ids: snapshot.identityConflict.candidateCustomerIds
         }
-      : null
+      : null,
+
+    // ACS-R1-04-T05: reduced, allowlisted Customer 360 history - already
+    // loaded once by runNativeAutonomousCycle before this shim was built.
+    // Never re-loaded here, never the full snapshot.
+    customer360: snapshot.customer360,
+    customer360State: snapshot.customer360State
   };
 }

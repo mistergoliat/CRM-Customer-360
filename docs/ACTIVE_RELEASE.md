@@ -3,8 +3,8 @@ release: ACS-R1-04
 title: Customer Identity Resolution + Onboarding
 status: active
 updated_at: 2026-07-09
-current_task: ACS-R1-04-T05
-next_task: ACS-R1-04-T06
+current_task: ACS-R1-04-T06
+next_task: ACS-R1-04-T07
 blocked: false
 doc_id: release-active
 source_of_truth_for:
@@ -60,15 +60,15 @@ Permitir que un mensaje entrante de WhatsApp resuelva identidad existente, mante
 | ACS-R1-04-T03.1 | Validar migracion canonica y preservar invariantes de persistencia | done | ACS-R1-04-T03 | [migrations/023_crm_customer_onboarding_state.sql](../migrations/023_crm_customer_onboarding_state.sql), [tests/domains/customerOnboarding.test.ts](../tests/domains/customerOnboarding.test.ts) (tests 10-11) |
 | ACS-R1-04-T04 | Definir reglas de creacion y vinculacion canonica | done | ACS-R1-04-T03.1 | [customer-creation-linking-authority-contract](data/customer-creation-linking-authority-contract.md) |
 | ACS-R1-04-T04.1 | Implementar Customer Service Port y politicas de creacion/vinculacion | done | ACS-R1-04-T04 | [lib/domains/customer-service](../lib/domains/customer-service), [lib/integrations/customer-service/http-adapter.ts](../lib/integrations/customer-service/http-adapter.ts), [tests/domains/customerService.test.ts](../tests/domains/customerService.test.ts), [tests/integrations/customerServiceHttpAdapter.test.ts](../tests/integrations/customerServiceHttpAdapter.test.ts) |
-| ACS-R1-04-T05 | Incorporar Customer 360 al contexto autonomo | in_progress | ACS-R1-04-T04.1 | pending |
-| ACS-R1-04-T06 | Conectar identidad y onboarding al inbound nativo | ready | ACS-R1-04-T05 | pending |
+| ACS-R1-04-T05 | Incorporar Customer 360 al contexto autonomo | done | ACS-R1-04-T04.1 | [lib/brain/commercial/context/autonomousCustomerContext.ts](../lib/brain/commercial/context/autonomousCustomerContext.ts), [lib/brain/commercial/context/loadAutonomousCustomerContext.ts](../lib/brain/commercial/context/loadAutonomousCustomerContext.ts), [lib/domains/customer-360/service.ts](../lib/domains/customer-360/service.ts) (`loadByCustomerId`), [tests/commercial/autonomousCustomerContext.test.ts](../tests/commercial/autonomousCustomerContext.test.ts), [tests/commercial/loadAutonomousCustomerContext.test.ts](../tests/commercial/loadAutonomousCustomerContext.test.ts), [tests/commercial/runNativeAutonomousCycleCustomer360.test.ts](../tests/commercial/runNativeAutonomousCycleCustomer360.test.ts), [tests/commercial/multiRequestCustomer360.test.ts](../tests/commercial/multiRequestCustomer360.test.ts), [tests/commercial/customer360AutonomousBoundary.test.ts](../tests/commercial/customer360AutonomousBoundary.test.ts) |
+| ACS-R1-04-T06 | Conectar identidad y onboarding al inbound nativo | in_progress | ACS-R1-04-T05 | pending |
 | ACS-R1-04-T07 | Persistir executions, outcomes y advertencias | ready | ACS-R1-04-T06 | pending |
 | ACS-R1-04-T08 | Ejecutar pruebas end-to-end: nuevo, antiguo y conflicto | ready | ACS-R1-04-T07 | pending |
 | ACS-R1-04-T09 | Auditoria de aceptacion y cierre | ready | ACS-R1-04-T08 | pending |
 
 ## Tarea actual
 
-`ACS-R1-04-T05`
+`ACS-R1-04-T06`
 
 ## Definition of Done de la tarea actual
 
@@ -76,7 +76,7 @@ Ver [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-cust
 
 ## Siguiente tarea
 
-`ACS-R1-04-T06`
+`ACS-R1-04-T07`
 
 ## Bloqueos
 
@@ -93,6 +93,7 @@ Ver [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-cust
 - `ACS-R1-04-T03.1` valido la cadena canonica `001→023` desde una base MariaDB 11.4 genuinamente vacia. El comando documentado `npm run db:migrate` falla ahi por un bug de precedencia de alias en `lib/database-config.ts` (`resolveWithAlias` revisa el alias generico `DB_USER` antes que la clave especifica `MIGRATION_DATABASE_USER`, asi que usa `crm_app`, solo DML, en vez de `crm_dev_admin`) — no es un defecto de ninguna migracion. Con las credenciales correctas la cadena completa aplica limpia, en orden, con checksums correctos, y la suite completa paso 799/800 (el unico fallo es un test preexistente no relacionado, con IDs de fixture hardcodeados). Fix de una linea sugerido y no aplicado (fuera de alcance de T03.1); el contenedor de desarrollo compartido se dejo intacto, todavia con `schema_migrations` detenido en `011_commercial_event.sql`. Detalle completo, causa raiz y evidencia en [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-customer-identity-onboarding.md).
 - `ACS-R1-04-T04` (documental, sin codigo) define [customer-creation-linking-authority-contract](data/customer-creation-linking-authority-contract.md): autoridad de `create_customer`, `link_external_identity` y `record_customer_interest` (inputs/outcomes, datos minimos, idempotencia, deduplicacion, consentimiento, conflictos, fallos del Customer Service). No reduce la autonomia estrategica de la IA — solo separa que decide la IA de que autoridad ejecuta. Implementacion real queda en `ACS-R1-04-T04.1`.
 - `ACS-R1-04-T04.1` implemento el `CustomerServicePort` (`lib/domains/customer-service`: `types.ts`, `ports.ts`, `authority-policy.ts`, `service.ts`), el adapter HTTP fail-closed (`lib/integrations/customer-service/http-adapter.ts`, contrato en [customer-service-http-contract](integrations/customer-service-http-contract.md)) y las tres policies puras de autoridad (`evaluateCreateCustomerAuthority`, `evaluateLinkExternalIdentityAuthority`, `evaluateCustomerInterestAuthority`), con 49 tests (31 de policy/service, 18 del adapter HTTP contra un servidor local). El contrato de datos se bump a `1.0.2`: `CreateCustomerResult`/`LinkExternalIdentityResult` ahora declaran `invalid_input`/`failed` explicitamente (antes solo descritos en la seccion de fallos); `resolve_customer` mantiene sus cinco outcomes originales sin `failed`. `CustomerIdentityResolutionService` (T02/T02.1) no se toco, no hay dual-read ni fallback entre ambos. No se conecto el inbound, el LLM, el Capability Gateway, Customer 360 ni se persistio ningun interes (`record_customer_interest` es solo policy + tipos, sin persistencia) — eso sigue en `ACS-R1-04-T05`/`T06`. Ver [docs/capabilities/customer-service-capability.md](capabilities/customer-service-capability.md).
+- `ACS-R1-04-T05` incorporo Customer 360 al ciclo autonomo como historia, nunca como resolucion de identidad. `lib/domains/customer-360/service.ts` gano `loadByCustomerId()` (extension aditiva: `Customer360LoadResult` con `found`/`not_found`/`unavailable` — antes `getByCustomerId()` colapsaba ambas fallas en `null`; `getByCustomerId()` sigue igual, delegando al metodo nuevo). `lib/brain/commercial/context/autonomousCustomerContext.ts` proyecta el snapshot completo a `AutonomousCustomerContext` (allowlist campo por campo: perfil minimo, resumen de relacion, hasta 3 oportunidades/perfiles de necesidad/cotizaciones recientes en orden newest-first deterministico, calidad de dato) — nunca email completo, telefono, wa_id, identidades vinculadas, direcciones, referencias de pedido, invoice number, cuerpos de mensaje, draft/final messages, provider ids ni el snapshot completo. `lib/brain/commercial/context/loadAutonomousCustomerContext.ts` es el unico punto de carga: `customerId` nulo son cero llamadas; una excepcion o fuente caida nunca detiene el ciclo (mapea a `unavailable`, nunca expone el mensaje crudo). `runNativeAutonomousCycle` carga Customer 360 una sola vez, antes de bifurcar entre runtimes (multi-request sigue siendo exclusivo del pipeline legacy, nunca ambos en el mismo turno), usando exclusivamente `input.customerMasterId` ya resuelto — sin resolver por `wa_id`, telefono o email. `MultiRequestCycleInput`/`PlanTurnInput`/`TurnPlannerProviderInput` y `CommercialContextSnapshot`/`buildNativeBrainContextShim`/`NormalizedCommercialBrainContext`/`SalesAgentInput` se extendieron de forma tipada y explicita (nunca dentro de `metadata: Record<string, unknown>`) para llevar la proyeccion reducida a ambos runtimes; el contexto entra al `inputHash` del turn plan (sin `lastRefreshedAt` ni timestamps de lectura), preservando que un retry del mismo inbound reutiliza el plan persistido sin invocar el planner de nuevo. 49 tests nuevos (proyector, loader, `Customer360QueryService.loadByCustomerId`, ciclo nativo con DI, multi-request, y boundary estatico/git contra `lib/domains/customer-service` en el SHA `128303c8`). No se conecto el inbound de identidad/onboarding ni el Capability Gateway (eso es `T06`); no se modifico `T04.1`.
 
 ## Regla de actualizacion
 
