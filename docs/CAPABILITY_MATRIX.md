@@ -2,7 +2,7 @@
 title: CAPABILITY_MATRIX
 doc_id: product-capability-matrix
 status: active
-version: "1.2.0"
+version: "1.3.0"
 owner: architecture
 last_reviewed: 2026-07-08
 source_of_truth_for:
@@ -40,7 +40,7 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 
 ## Leyenda
 
-- `Type`: `tool`, `read_model`, `service`, `command`, `policy`, `channel`
+- `Type`: `tool`, `read_model`, `service`, `command`, `policy`, `channel`, `domain_state`
 - `Domain`: `implemented`, `implemented_partial`, `active_development`, `planned`
 - `Port`: `implemented`, `partial`, `planned`, `not_applicable`
 - `Adapter`: `implemented`, `partial`, `planned`, `not_applicable`
@@ -65,6 +65,12 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 | `create_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | no automatic customer creation per inbound |
 | `update_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | canonical update rules not yet approved |
 | `link_external_identity` | `command` | `implemented_partial` | `partial` | `partial` | `not_registered` | `not_connected` | `not_verified` | `implemented_partial` | external identity relations exist, canonical rules still pending |
+
+## Customer Onboarding
+
+| Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |
+| ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |
+| `customer_onboarding_state` | `domain_state` | `implemented` | `implemented` | `implemented` | `not_applicable` | `not_connected` | `not_verified` | `implemented_partial` | canonical multi-turn persistence for `CustomerOnboardingState` (`lib/domains/customer-onboarding`, ACS-R1-04-T03): state machine over `crm_customer_onboarding_state` (migration 023) with optimistic locking (`version`) and normalization per the contract. Not a callable tool - it is domain state, not a capability an agent invokes. Legacy `crm_customer_onboarding` (P1M) reviewed and intentionally not reused (incompatible key, status enum and privacy columns) and left untouched. Not connected to the native inbound runtime, the LLM, the Gateway, Customer 360 or customer creation/linking (ACS-R1-04-T04 through T06); no operational smoke test yet |
 
 ## Customer 360
 
@@ -91,6 +97,7 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 - `Customer 360` is represented as a read model, capability contract and evidence, not as an agent tool.
 - `get_customer_context` and `get_customer_addresses` are read models, not gateway tools.
 - `resolve_customer` is the active identity workstream.
+- `domain_state` rows (e.g. `customer_onboarding_state`) are persisted state machines, not agent-callable tools; they have no `gateway` registration by design (`not_applicable`).
 - `ACS-R1-04` is the only active release increment.
 - `multi_request_only` means the capability exists only in a non-canonical helper path.
 - `accepted_with_debt` means usable and documented, but still carrying explicit debt.
