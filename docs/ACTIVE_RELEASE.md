@@ -3,7 +3,7 @@ release: ACS-R1-04
 title: Customer Identity Resolution + Onboarding
 status: active
 updated_at: 2026-07-08
-current_task: ACS-R1-04-T04
+current_task: ACS-R1-04-T04.1
 next_task: ACS-R1-04-T05
 blocked: false
 doc_id: release-active
@@ -58,8 +58,9 @@ Permitir que un mensaje entrante de WhatsApp resuelva identidad existente, mante
 | ACS-R1-04-T02.1 | Corregir clasificacion de input y resolucion telefonica canonica | done | ACS-R1-04-T02 | [lib/domains/customer-identity](../lib/domains/customer-identity), [lib/integrations/customer-external-identity/repository.ts](../lib/integrations/customer-external-identity/repository.ts), [tests/domains/customerIdentity.test.ts](../tests/domains/customerIdentity.test.ts) |
 | ACS-R1-04-T03 | Persistir onboarding multi-turno | done | ACS-R1-04-T02.1 | [lib/domains/customer-onboarding](../lib/domains/customer-onboarding), [migrations/023_crm_customer_onboarding_state.sql](../migrations/023_crm_customer_onboarding_state.sql), [tests/domains/customerOnboarding.test.ts](../tests/domains/customerOnboarding.test.ts) |
 | ACS-R1-04-T03.1 | Validar migracion canonica y preservar invariantes de persistencia | done | ACS-R1-04-T03 | [migrations/023_crm_customer_onboarding_state.sql](../migrations/023_crm_customer_onboarding_state.sql), [tests/domains/customerOnboarding.test.ts](../tests/domains/customerOnboarding.test.ts) (tests 10-11) |
-| ACS-R1-04-T04 | Definir reglas de creacion y vinculacion canonica | in_progress | ACS-R1-04-T03.1 | pending |
-| ACS-R1-04-T05 | Incorporar Customer 360 al contexto autonomo | ready | ACS-R1-04-T04 | pending |
+| ACS-R1-04-T04 | Definir reglas de creacion y vinculacion canonica | done | ACS-R1-04-T03.1 | [customer-creation-linking-authority-contract](data/customer-creation-linking-authority-contract.md) |
+| ACS-R1-04-T04.1 | Implementar Customer Service Port y politicas de creacion/vinculacion | in_progress | ACS-R1-04-T04 | pending |
+| ACS-R1-04-T05 | Incorporar Customer 360 al contexto autonomo | ready | ACS-R1-04-T04.1 | pending |
 | ACS-R1-04-T06 | Conectar identidad y onboarding al inbound nativo | ready | ACS-R1-04-T05 | pending |
 | ACS-R1-04-T07 | Persistir executions, outcomes y advertencias | ready | ACS-R1-04-T06 | pending |
 | ACS-R1-04-T08 | Ejecutar pruebas end-to-end: nuevo, antiguo y conflicto | ready | ACS-R1-04-T07 | pending |
@@ -67,11 +68,11 @@ Permitir que un mensaje entrante de WhatsApp resuelva identidad existente, mante
 
 ## Tarea actual
 
-`ACS-R1-04-T04`
+`ACS-R1-04-T04.1`
 
 ## Definition of Done de la tarea actual
 
-Ver [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-customer-identity-onboarding.md#definition-of-done-de-la-tarea-actual), que apunta al contrato canonico (`customer-onboarding-identity-contract.md`, seccion 6) para las reglas de `create_customer` y `link_external_identity`.
+Ver [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-customer-identity-onboarding.md#definition-of-done-de-la-tarea-actual), que apunta al contrato canonico ([customer-creation-linking-authority-contract.md](data/customer-creation-linking-authority-contract.md)) que `ACS-R1-04-T04.1` debe implementar sin inventar reglas nuevas.
 
 ## Siguiente tarea
 
@@ -90,6 +91,7 @@ Ver [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-cust
 - `ACS-R1-04-T03` agrego `crm_customer_onboarding_state` (migration 023) y `lib/domains/customer-onboarding` como persistencia canonica de `CustomerOnboardingState`. El contrato si permite `firstName`/`lastName`/`email`/`orderReference` dentro de `collected_json` (seccion 11); la tabla legacy `crm_customer_onboarding` (P1M) se descarto como fuente canonica por clave, enum de estado y `purpose`/`version` incompatibles, y por exponer esos mismos campos como columnas planas ademas de `last_response_text`/`context_json`/`warnings_json` (si prohibidos, seccion 12). Quedo intacta, sin dual-write. No conecta inbound, LLM, Gateway, Customer 360 ni escritura de customers (T04-T06). Detalle completo en [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-customer-identity-onboarding.md).
 - `ACS-R1-04-T03.1` corrigio la FK `customer_id` de `crm_customer_onboarding_state` a `ON DELETE RESTRICT` (antes `SET NULL`), para que borrar un `master_customer` no pueda dejar un onboarding completado con `customer_id = NULL`; probado con un test DB-backed. Un `CHECK` equivalente se intento pero MariaDB 11.4 lo rechaza (error 1901) cuando la columna ya tiene FK propia — confirmado por reproduccion directa, no se agrego. Detalle completo en [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-customer-identity-onboarding.md).
 - `ACS-R1-04-T03.1` valido la cadena canonica `001→023` desde una base MariaDB 11.4 genuinamente vacia. El comando documentado `npm run db:migrate` falla ahi por un bug de precedencia de alias en `lib/database-config.ts` (`resolveWithAlias` revisa el alias generico `DB_USER` antes que la clave especifica `MIGRATION_DATABASE_USER`, asi que usa `crm_app`, solo DML, en vez de `crm_dev_admin`) — no es un defecto de ninguna migracion. Con las credenciales correctas la cadena completa aplica limpia, en orden, con checksums correctos, y la suite completa paso 799/800 (el unico fallo es un test preexistente no relacionado, con IDs de fixture hardcodeados). Fix de una linea sugerido y no aplicado (fuera de alcance de T03.1); el contenedor de desarrollo compartido se dejo intacto, todavia con `schema_migrations` detenido en `011_commercial_event.sql`. Detalle completo, causa raiz y evidencia en [releases/ACS-R1-04-customer-identity-onboarding.md](releases/ACS-R1-04-customer-identity-onboarding.md).
+- `ACS-R1-04-T04` (documental, sin codigo) define [customer-creation-linking-authority-contract](data/customer-creation-linking-authority-contract.md): autoridad de `create_customer`, `link_external_identity` y `record_customer_interest` (inputs/outcomes, datos minimos, idempotencia, deduplicacion, consentimiento, conflictos, fallos del Customer Service). No reduce la autonomia estrategica de la IA — solo separa que decide la IA de que autoridad ejecuta. Implementacion real queda en `ACS-R1-04-T04.1`.
 
 ## Regla de actualizacion
 
