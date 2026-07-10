@@ -1,26 +1,48 @@
 ---
 title: Autonomous Commerce Roadmap
 doc_id: product-autonomous-commerce-roadmap
-status: active
-version: "1.0.0"
+status: historical
+version: "2.0.0"
 owner: product
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-09
 source_of_truth_for:
-  - roadmap
-  - capability sequence
+  - historical capability sequence snapshot
 depends_on:
-  - product/autonomous-commerce-prd
+  - ../ROADMAP.md
+  - ./MVP_EXECUTION_MAP.md
+superseded_by: docs/ROADMAP.md
 supersedes: []
 tags:
   - product
-  - release
+  - historical
 ---
 
 # Autonomous Commerce Roadmap
 
+Esta pagina conserva la secuencia historica previa a ACS. No es un roadmap activo.
+
+## Canonicos actuales
+
+- [ROADMAP](../ROADMAP.md)
+- [MVP execution map](MVP_EXECUTION_MAP.md)
+
+## Estado
+
+- `P1K`, `P1L`, `P1M`, `P2` y `P3` son etiquetas historicas.
+- La secuencia ACS activa vive en `docs/ROADMAP.md`.
+- La paralelizacion y ownership viven en `docs/product/MVP_EXECUTION_MAP.md`.
+
+## Nota
+
+El contenido detallado a continuacion se conserva integro como referencia historica. No debe usarse para planificacion activa: describe la secuencia de capacidades previa a la adopcion de ACS y de `docs/ROADMAP.md`.
+
+---
+
+## Contenido historico completo
+
 This roadmap is organized by complete capabilities, not by historical phase labels.
 
-## 1. Observe and persist events
+### 1. Observe and persist events
 
 Outcome:
 
@@ -49,7 +71,7 @@ Tests:
 - status duplicate suppression
 - provider idempotency
 
-## 2. Understand customer and opportunity
+### 2. Understand customer and opportunity
 
 Outcome:
 
@@ -66,7 +88,7 @@ Changes needed:
 
 - define a final authority boundary between AI technical tables and CRM commercial tables.
 
-## 3. Decide next best action
+### 3. Decide next best action
 
 Outcome:
 
@@ -83,7 +105,7 @@ Changes needed:
 - align stage/status vocabulary with the PRD;
 - reduce leftover historical abstractions.
 
-## 4. Consult catalog and knowledge
+### 4. Consult catalog and knowledge
 
 Outcome:
 
@@ -99,7 +121,7 @@ Changes needed:
 - introduce a formal `CatalogService` boundary;
 - make source of truth explicit for price, stock, dimensions, compatibility and related items.
 
-## 5. Execute commercial actions
+### 5. Execute commercial actions
 
 Outcome:
 
@@ -116,7 +138,7 @@ Changes needed:
 - finalize action lifecycle;
 - ensure all sends go through one outbound pipeline.
 
-## 6. Measure results
+### 6. Measure results
 
 Outcome:
 
@@ -132,7 +154,7 @@ Changes needed:
 
 - define stable metrics and event names for autonomous commerce.
 
-## 7. Manage follow-ups
+### 7. Manage follow-ups
 
 Outcome:
 
@@ -149,7 +171,7 @@ Changes needed:
 - cancellation on new inbound;
 - policy checks before dispatch.
 
-## 8. Close and reactivate opportunities
+### 8. Close and reactivate opportunities
 
 Outcome:
 
@@ -165,7 +187,7 @@ Changes needed:
 - final policy for terminal states;
 - controlled reopening rules.
 
-## 9. Operate by WhatsApp
+### 9. Operate by WhatsApp
 
 Outcome:
 
@@ -183,7 +205,7 @@ Changes needed:
 - keep allowlist explicit;
 - keep UI separate from transport.
 
-## 10. Expand to voice and other channels
+### 10. Expand to voice and other channels
 
 Outcome:
 
@@ -200,7 +222,7 @@ Changes needed:
 - call/voice tool contract;
 - channel-specific policy.
 
-## Recommended order
+### Recommended order
 
 1. Observe and persist events
 2. Understand customer and opportunity
@@ -213,11 +235,10 @@ Changes needed:
 9. Operate by WhatsApp
 10. Expand to voice and other channels
 
-## Main risks
+### Main risks
 
 - rebuilding a chatbot instead of a commercial loop;
 - allowing duplicate runtimes;
 - keeping legacy and native truth sources in parallel;
 - exposing tools without real implementation;
 - using UI surfaces as product proof.
-
