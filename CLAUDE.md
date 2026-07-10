@@ -2,26 +2,37 @@
 
 Instrucciones operativas para Claude Code en este repositorio.
 
+## Autoridad
+
+`AGENTS.md` es la autoridad canonica. Este archivo solo agrega instrucciones especificas para Claude Code y no duplica reglas generales.
+
 ## Rol esperado
 
 Eres un agente de desarrollo persistente. Tu trabajo es avanzar el repositorio sin perder contexto, sin sobrepasar alcance y sin romper la preview existente.
 
-## Prioridades
+## Orden de lectura
+
+1. `AGENTS.md`.
+2. `docs/00-START-HERE.md`.
+3. `docs/product/autonomous-commerce-prd.md`.
+4. `docs/ROADMAP.md`.
+5. `docs/ACTIVE_RELEASE.md`.
+6. La especificacion de la release activa.
+7. `docs/product/MVP_EXECUTION_MAP.md`.
+8. Los ADR citados por la release o tarea.
+9. Los contratos citados por la tarea.
+10. `docs/CAPABILITY_MATRIX.md`.
+
+## Reglas especificas
 
 1. Mantener estable la preview actual del HUB.
 2. Respetar la Fase 0 antes de cualquier feature nueva.
-3. Preservar trazabilidad y auditable behavior.
+3. Preservar trazabilidad y comportamiento auditable.
 4. Reducir dependencia del cerebro operativo en n8n de forma progresiva.
 5. No construir Customer 360 definitivo hasta que exista `customer_master`.
-
-## Reglas de edicion
-
-1. Usa `apply_patch` para ediciones manuales.
-2. No sobrescribas cambios que no hayas hecho.
-3. No uses comandos destructivos.
-4. No toques auth, cases, chats, dashboard, APIs o schema salvo que la tarea lo pida explicitamente.
-5. Mantener cambios pequenos y revisables.
-6. Prefiere ASCII en archivos nuevos salvo que el repositorio ya exija otra cosa.
+6. No tocar auth, cases, chats, dashboard, APIs o schema salvo que la tarea lo pida explicitamente.
+7. Mantener cambios pequenos y revisables.
+8. Prefiere ASCII en archivos nuevos salvo que el repositorio ya exija otra cosa.
 
 ## Navegacion del repo
 
@@ -33,18 +44,15 @@ Eres un agente de desarrollo persistente. Tu trabajo es avanzar el repositorio s
 
 ## Flujo obligatorio de trabajo
 
-Antes de modificar el repositorio:
-
-1. Leer `docs/00-START-HERE.md`.
-2. Leer `docs/ACTIVE_RELEASE.md`.
-3. Trabajar unicamente en `current_task`.
-4. No iniciar `next_task` hasta cerrar la tarea actual.
-5. No abrir otra release mientras exista una release activa.
-6. Actualizar `docs/ACTIVE_RELEASE.md` en el mismo cambio que completa una tarea.
-7. Actualizar `docs/CAPABILITY_MATRIX.md` cuando cambie el estado tecnico real.
-8. No modificar auditorias historicas.
-9. Registrar desvios como deuda o bloqueo.
-10. No implementar trabajo fuera de alcance sin autorizacion explicita.
+1. Leer la jerarquia canonica en el orden establecido por `AGENTS.md`.
+2. Trabajar unicamente en la tarea activa, salvo autorizacion explicita para una tarea documental transversal.
+3. No iniciar la siguiente tarea de producto hasta cerrar la tarea actual.
+4. No abrir otra release mientras exista una release activa.
+5. Actualizar `docs/ACTIVE_RELEASE.md` en el mismo cambio que completa una tarea.
+6. Actualizar `docs/CAPABILITY_MATRIX.md` cuando cambie el estado tecnico real.
+7. No modificar auditorias historicas.
+8. Registrar desvios como deuda o bloqueo.
+9. No implementar trabajo fuera de alcance sin autorizacion explicita.
 
 ## Modo de trabajo
 
@@ -69,9 +77,9 @@ Antes de modificar el repositorio:
 3. No inventar un `customer_key` final.
 4. Preparar los cambios para una futura migracion.
 
-## Comandos obligatorios
+## Comandos de validacion
 
-Para validacion basica, ejecutar segun el tipo de cambio:
+Ejecutar segun el tipo de cambio:
 
 ```powershell
 npm run build

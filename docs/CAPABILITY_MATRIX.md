@@ -2,9 +2,9 @@
 title: CAPABILITY_MATRIX
 doc_id: product-capability-matrix
 status: active
-version: "1.3.0"
+version: "1.7.0"
 owner: architecture
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-09
 source_of_truth_for:
   - capability inventory
   - domain implementation status
@@ -27,6 +27,9 @@ depends_on:
   - ./data/customer-address-contract.md
   - ./data/customer-lifecycle-event-contract.md
   - ./data/customer-onboarding-identity-contract.md
+  - ./data/customer-creation-linking-authority-contract.md
+  - ./integrations/customer-service-http-contract.md
+  - ./capabilities/customer-service-capability.md
 supersedes: []
 tags:
   - capability
@@ -60,25 +63,27 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 
 | Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |
 | ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |
-| `resolve_customer` | `service` | `implemented` | `implemented` | `implemented` | `not_registered` | `not_connected` | `not_verified` | `implemented_partial` | domain-ready read-only resolver (`lib/domains/customer-identity`, ACS-R1-04-T02 + T02.1): resolves by exact `wa_id` (provider-scoped) and canonical/historical normalized phone (provider-agnostic, across `customer_external_identity`), returns `identified/identification_required/conflict/temporarily_unavailable/invalid_input`, never creates or links. `customer_addresses.recipient_phone` and `ps_customer` reviewed and intentionally not connected (delivery contact and unbridged external id-space, respectively). Not yet registered in the Gateway, not connected to the native inbound runtime, no operational smoke test |
+| `resolve_customer` | `service` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `not_verified` | `accepted_with_debt` | ACS-R1-04-T06: registered in the Capability Gateway (`lib/brain/commercial/capability-gateway/customerIdentityCapabilities.ts`, `read_only/autonomous/low`, `maxRetries: 0`), invoked exclusively by `resolveNativeCustomerSession` - never a sales-agent tool alias. Fires at most once per inbound, only when local resolution (T02/T02.1) found no match and an active onboarding requires identity; never for a public query, never after a local conflict, never as a fallback from a local technical failure. Tested against a local HTTP server (same pattern as T04.1) - no real Customer Service deployment exercised yet |
 | `get_customer` | `service` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | depends on Customer Service boundary and onboarding state |
-| `create_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | no automatic customer creation per inbound |
+| `create_customer` | `command` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `not_verified` | `accepted_with_debt` | ACS-R1-04-T06: registered (`mutating/autonomous/medium` - the Gateway's binary `authority` field is about operator pre-approval, not the real policy gate inside `execute()`; `maxRetries: 0`). Input is assembled entirely server-side from the trusted session (`NativeCustomerSessionExecutionContext`) - no LLM-supplied input is ever read. Applies the onboarding outcome table (created/matched_existing -> `completeOnboarding`; missing_information -> `collectFields`; conflict -> `markConflict`, never Customer 360, never link). A consent-bypass bug (`consent.createCustomer` was hardcoded `true` regardless of actual evidence) was found and fixed while writing T06's tests. ACS-R1-04-T06.1 removed its sales-agent tool alias and made `runCustomerOnboardingPostPlanStage` (legacy runtime only) the sole, deterministic caller - never LLM-tool-proposed anymore, avoiding a possible duplicate execution in the same turn |
 | `update_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | canonical update rules not yet approved |
-| `link_external_identity` | `command` | `implemented_partial` | `partial` | `partial` | `not_registered` | `not_connected` | `not_verified` | `implemented_partial` | external identity relations exist, canonical rules still pending |
+| `link_external_identity` | `command` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `not_verified` | `accepted_with_debt` | ACS-R1-04-T06: registered (`mutating/autonomous/medium`, `maxRetries: 0`). Always a separate, later execution from `create_customer`, never an automatic side effect. Policy requires the linked wa_id to match the one the current inbound channel verified (never model-controlled) and explicit consent; the same consent-bypass bug found in `create_customer` was fixed here too. ACS-R1-04-T06.1 removed its sales-agent tool alias too - `runCustomerOnboardingPostPlanStage` is the sole caller now, firing only for an already-identified customer whose wa_id isn't the confirmed match yet, with explicit link consent from the current turn |
+| `record_customer_interest` | `command` | `implemented_partial` | `not_applicable` | `not_applicable` | `not_registered` | `not_connected` | `planned` | `designed_partial` | ACS-R1-04-T04.1: contract types (`RecordCustomerInterestInput`) and pure policy (`evaluateCustomerInterestAuthority`) implemented - distinguishes `operational_context` (always allowed, no customer needed), `persistent_customer_interest` (requires `customerId` + `consent.storeInterest`) and `proactive_followup` (requires a separate `consent.allowFollowUp`). No persistence, no follow-up scheduling, no customer creation as a side effect - policy/types only |
 
 ## Customer Onboarding
 
 | Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |
 | ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |
-| `customer_onboarding_state` | `domain_state` | `implemented` | `implemented` | `implemented` | `not_applicable` | `not_connected` | `not_verified` | `implemented_partial` | canonical multi-turn persistence for `CustomerOnboardingState` (`lib/domains/customer-onboarding`, ACS-R1-04-T03): state machine over `crm_customer_onboarding_state` (migration 023) with optimistic locking (`version`) and normalization per the contract. Not a callable tool - it is domain state, not a capability an agent invokes. Legacy `crm_customer_onboarding` (P1M) reviewed and intentionally not reused (incompatible key, status enum and privacy columns) and left untouched. Not connected to the native inbound runtime, the LLM, the Gateway, Customer 360 or customer creation/linking (ACS-R1-04-T04 through T06); no operational smoke test yet |
+| `customer_onboarding_state` | `domain_state` | `implemented` | `implemented` | `implemented` | `not_applicable` | `connected` | `not_verified` | `accepted_with_debt` | canonical multi-turn persistence for `CustomerOnboardingState` (`lib/domains/customer-onboarding`, ACS-R1-04-T03): state machine over `crm_customer_onboarding_state` (migration 023) with optimistic locking (`version`) and normalization per the contract. Not a callable tool - it is domain state, not a capability an agent invokes. Legacy `crm_customer_onboarding` (P1M) reviewed and intentionally not reused (incompatible key, status enum and privacy columns) and left untouched. ACS-R1-04-T06 connected it to the native inbound via `resolveNativeCustomerSession` and the `create_customer`/`link_external_identity` capabilities, using only its existing public transitions - no direct writes. ACS-R1-04-T06.1 added activation from the canonical planner's own structured next-action (`runCustomerOnboardingPostPlanStage`, legacy runtime only) and conservative multi-turn field extraction from the current message (name/email/order reference) - still through `collectFields` only, never a direct write |
 
 ## Customer 360
 
 | Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |
 | ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |
-| `get_customer_context` | `read_model` | `implemented` | `implemented` | `implemented` | `not_applicable` | `internal_context_only` | `connected` | `accepted_with_debt` | Customer 360 exists, but no autonomous runtime connection is assumed |
+| `get_customer_context` | `read_model` | `implemented` | `implemented` | `implemented` | `not_applicable` | `internal_context_only` | `connected` | `accepted_with_debt` | Customer 360 exists, full-snapshot Hub API; the autonomous cycle now consumes a separate reduced projection instead (see `autonomous_customer_context` below) |
 | `get_customer_addresses` | `read_model` | `implemented` | `implemented` | `implemented` | `not_applicable` | `internal_context_only` | `connected` | `accepted_with_debt` | read model exists; operational write/confirmation flow still planned |
 | `create_customer_address` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | Address Book operational capability not active yet |
+| `autonomous_customer_context` | `read_model` | `implemented` | `implemented` | `not_applicable` | `not_applicable` | `connected` | `not_verified` | `accepted_with_debt` | ACS-R1-04-T05: `AutonomousCustomerContext` (`lib/brain/commercial/context/autonomousCustomerContext.ts`), an allowlisted (never denylisted), history-only projection of `Customer360Snapshot` - max 3 recent opportunities/need profiles/quotes, newest-first, no PII (no email/phone/wa_id/linked identities/addresses/order refs/invoice numbers/message bodies/provider ids/full snapshot). `loadAutonomousCustomerContext` (`loadAutonomousCustomerContext.ts`) is the single load point: `customerId` null makes zero calls, a thrown/failed load degrades to `unavailable` and never stops the cycle. Wired into both `runNativeAutonomousCycle` runtimes (multi-request and legacy, mutually exclusive as before) via typed fields on `MultiRequestCycleInput`/`PlanTurnInput`/`TurnPlannerProviderInput` and `CommercialContextSnapshot`/`SalesAgentInput` - never inside a generic `metadata` bag. Customer 360 never resolves identity, creates customers, links identities or confirms addresses. ACS-R1-04-T06 connected `customerMasterId` to the real identity resolver (`resolveNativeCustomerSession`, T02/T02.1/T04.1) and put the load itself behind an explicit access gate (`contextAccess: none/commercial_history/validated_entity`) - an identified customer alone no longer authorizes a load; it also requires an active `quote`/`purchase` onboarding with no conflict. `validated_entity` is never granted yet (no historical-entity-ownership validation). No operational smoke test yet |
 
 ## Commercial Execution
 

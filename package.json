@@ -21,6 +21,7 @@
     "db:legacy:reset": "npx --yes tsx@4.20.5 scripts/db-reset.ts --database=legacy",
     "db:permissions": "npx --yes tsx@4.20.5 scripts/db-permissions.ts",
     "db:bootstrap:smoke": "npx --yes tsx@4.20.5 scripts/db-bootstrap-smoke.ts",
+    "docs:validate": "npx --yes tsx@4.20.5 scripts/docs-validate.ts",
     "autonomy:live": "npx --yes tsx@4.20.5 scripts/commercial-live-autonomy-run.ts",
     "e2e:autonomous": "npx --yes tsx@4.20.5 scripts/e2e-autonomous-harness.ts",
     "test": "npx --yes tsx@4.20.5 --test \"tests/**/*.test.ts\"",

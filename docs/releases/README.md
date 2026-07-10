@@ -2,9 +2,9 @@
 title: releases
 doc_id: release-index
 status: active
-version: "1.0.0"
+version: "2.0.0"
 owner: product
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-09
 source_of_truth_for:
   - release index
   - increment registry
@@ -19,20 +19,20 @@ tags:
 
 # Releases
 
-Indice de releases y su estado real. No duplica el contenido de las specs.
+Indice operativo de releases ACS. No duplica la planificacion ni las tareas.
 
-| Release | Especificacion | Evidencia | Auditoria de aceptacion | Estado | Notas |
+| Release | Estado | Especificacion | Auditoria de aceptacion | SHA de cierre | Notas |
 |---|---|---|---|---|---|
-| `ACS-R1-01` | `docs/product/autonomous-commerce-prd.md` + `docs/audits/acs-r1-01-capability-gateway-evidence.md` | `docs/audits/acs-r1-01-capability-gateway-evidence.md` | pending dedicated acceptance audit | `accepted_with_debt` | Runtime canonico + Catalog Capability |
-| `ACS-R1-02` | none independent | none independent | none | `superseded` | Customer Service planificado, absorbido por `ACS-R1-04` |
-| `ACS-R1-03` | `docs/releases/ACS-R1-03-customer-360.md` | `docs/audits/autonomous-commerce-current-state-audit.md`, `docs/audits/autonomous-commerce-transactional-closure-audit.md` | `docs/audits/acs-r1-03-customer-360-acceptance.md` | `accepted_with_debt` | Customer 360 read model |
-| `ACS-R1-04` | `docs/releases/ACS-R1-04-customer-identity-onboarding.md` | pending | pending | `active` | Customer Identity Resolution + Onboarding |
-| `ACS-R1-05` | planned | planned | pending | `planned` | Address Book + Address Confirmation |
-| `ACS-R1-06` | planned | planned | pending | `planned` | Business Policy |
-| `ACS-R1-07` | planned | planned | pending | `planned` | Quote |
-| `ACS-R1-08` | planned | planned | pending | `planned` | Operator Readiness |
-| `ACS-R1-09` | planned | planned | pending | `planned` | Voice |
-| `ACS-R2` | planned | planned | pending | `planned` | Capabilities transaccionales |
+| `ACS-R1-01` | `accepted_with_debt` | [ACS-R1-01 evidence](../audits/acs-r1-01-capability-gateway-evidence.md) | pending dedicated acceptance audit | pending | Runtime canonico + Catalog Capability |
+| `ACS-R1-02` | `superseded` | none independent | none | n/a | Customer Service planificado, absorbido por `ACS-R1-04` |
+| `ACS-R1-03` | `accepted_with_debt` | [ACS-R1-03 spec](ACS-R1-03-customer-360.md) | [ACS-R1-03 acceptance](../audits/acs-r1-03-customer-360-acceptance.md) | pending | Customer 360 read model |
+| `ACS-R1-04` | `active` | [ACS-R1-04 spec](ACS-R1-04-customer-identity-onboarding.md) | pending | `0c51419` for T06.1 only | Customer Identity Resolution + Onboarding |
+| `ACS-R1-05` | `planned` | planned | pending | n/a | Address Book + Address Confirmation |
+| `ACS-R1-06` | `planned` | planned | pending | n/a | Business Policy |
+| `ACS-R1-07` | `planned` | planned | pending | n/a | Quote |
+| `ACS-R1-08` | `planned` | planned | pending | n/a | Operator Readiness |
+| `ACS-R1-09` | `planned` | planned | pending | n/a | Voice |
+| `ACS-R2` | `planned` | planned | pending | n/a | Capabilities transaccionales |
 
 ## Notas
 
