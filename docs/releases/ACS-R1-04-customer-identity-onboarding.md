@@ -14,10 +14,15 @@ source_of_truth_for:
   - ACS-R1-04 definition of done
 depends_on:
   - ../ACTIVE_RELEASE.md
+  - ../ROADMAP.md
+  - ../product/MVP_EXECUTION_MAP.md
   - ../CAPABILITY_MATRIX.md
   - ../product/autonomous-commerce-prd.md
+  - ../architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md
   - ../architecture/adr/ADR-008-customer-360-boundary.md
   - ../capabilities/customer-360-read-model.md
+  - ../capabilities/customer-service-capability.md
+  - ../integrations/customer-service-http-contract.md
   - ../data/customer-360-contract.md
   - ../data/customer-lifecycle-event-contract.md
   - ../data/customer-onboarding-identity-contract.md
@@ -53,6 +58,32 @@ Permitir que un mensaje entrante de WhatsApp resuelva una identidad existente, c
 - Nuevas pantallas.
 - Merge automatico de customers.
 - Redisenio de Customer 360.
+
+## Required reading
+
+- [Autonomous Commerce PRD](../product/autonomous-commerce-prd.md)
+- [ROADMAP](../ROADMAP.md)
+- [MVP execution map](../product/MVP_EXECUTION_MAP.md)
+- [ACTIVE_RELEASE](../ACTIVE_RELEASE.md)
+- [Customer onboarding and identity contract](../data/customer-onboarding-identity-contract.md)
+- [Customer creation, linking and interest authority contract](../data/customer-creation-linking-authority-contract.md)
+- [Customer Service capability](../capabilities/customer-service-capability.md)
+- [Customer Service HTTP contract](../integrations/customer-service-http-contract.md)
+- [CAPABILITY_MATRIX](../CAPABILITY_MATRIX.md)
+
+## ADRs aplicables
+
+- [ADR-006 - Autonomous planning and capability governance](../architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md)
+- [ADR-008 - Customer 360 boundary](../architecture/adr/ADR-008-customer-360-boundary.md)
+
+## Contratos aplicables
+
+- [customer-onboarding-identity-contract](../data/customer-onboarding-identity-contract.md)
+- [customer-creation-linking-authority-contract](../data/customer-creation-linking-authority-contract.md)
+- [customer-360-contract](../data/customer-360-contract.md)
+- [customer-lifecycle-event-contract](../data/customer-lifecycle-event-contract.md)
+- [customer-service-capability](../capabilities/customer-service-capability.md)
+- [customer-service-http-contract](../integrations/customer-service-http-contract.md)
 
 ## Tareas
 

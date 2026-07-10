@@ -1,8 +1,50 @@
+---
+title: MVP Roadmap
+doc_id: product-mvp-roadmap
+status: historical
+version: "2.0.0"
+owner: product
+last_reviewed: 2026-07-09
+source_of_truth_for:
+  - historical P1/P2/P3 phase snapshot
+depends_on:
+  - ../ROADMAP.md
+  - ./MVP_EXECUTION_MAP.md
+superseded_by: docs/ROADMAP.md
+supersedes: []
+tags:
+  - product
+  - historical
+---
+
 # MVP Roadmap
 
-Este roadmap refleja la direccion actual del producto despues del cierre de P1K.
+Este documento es historico. P1, P1K, P1L, P1M, P2 y P3 ya no son fases activas.
 
-## Secuencia actual
+## Canonicos actuales
+
+- [ROADMAP](../ROADMAP.md)
+- [MVP execution map](MVP_EXECUTION_MAP.md)
+
+## Historial
+
+- P1K: Brain MVP and Demonstration.
+- P1L: Production Foundation.
+- P1M: CRM Product Experience.
+- P2: AI Marketing.
+- P3: Voice/Call Tool.
+
+## Nota
+
+La secuencia activa de releases ACS y el ownership paralelo viven en los documentos canonicos indicados arriba. El contenido detallado a continuacion se conserva integro como referencia historica y no debe usarse para planificacion activa.
+
+---
+
+## Contenido historico completo
+
+Este roadmap reflejaba la direccion del producto despues del cierre de P1K.
+
+### Secuencia actual (historica)
 
 1. `P1K` quedo `ACCEPTED AND CLOSED`.
 2. `P1L` se enfoca en `Production Foundation`.
@@ -10,7 +52,7 @@ Este roadmap refleja la direccion actual del producto despues del cierre de P1K.
 4. `P2` sigue como `AI Marketing`.
 5. `P3` sigue como `Voice/Call Tool`.
 
-## Definicion de fase
+### Definicion de fase
 
 | Phase | Focus | Result |
 |---|---|---|
@@ -20,7 +62,7 @@ Este roadmap refleja la direccion actual del producto despues del cierre de P1K.
 | `P2` | AI Marketing | Propuestas y drafts de marketing con approval. |
 | `P3` | Voice/Call Tool | Capacidad de voz aislada por riesgo y gobernanza. |
 
-## P1L
+### P1L
 
 P1L concentra la base de produccion:
 
@@ -34,7 +76,7 @@ P1L concentra la base de produccion:
 
 P1L no debe convertirse en una nueva capa de discovery visual. Su foco es operacion y durabilidad.
 
-## P1M
+### P1M
 
 P1M es la fase activa de experiencia de producto.
 
@@ -62,7 +104,7 @@ P1M debe usar la UI para descubrir:
 - necesidades de integracion;
 - gaps de logica comercial y operacional.
 
-## Navigation target for P1M
+### Navigation target for P1M
 
 La navegacion inicial que P1M debe validar es:
 
@@ -78,7 +120,7 @@ La navegacion inicial que P1M debe validar es:
 
 Campanas y Analitica productiva siguen fuera de alcance inmediato. La navegacion es una hipotesis de arquitectura de informacion que debe ser validada por la experiencia visual.
 
-## Why this split
+### Why this split
 
 - P1K ya provee el brain demostrable.
 - P1L asegura la foundation de produccion.

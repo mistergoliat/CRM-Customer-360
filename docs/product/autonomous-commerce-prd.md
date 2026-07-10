@@ -1,15 +1,14 @@
 ---
 title: PRD - Sistema Autonomo de Gestion Comercial para E-commerce
 doc_id: product-autonomous-commerce-prd
-status: draft
-version: "0.1"
+status: approved
+version: "1.0.0"
 owner: product
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-09
 source_of_truth_for:
   - product vision
   - scope
   - commercial principles
-  - roadmap framing
 depends_on: []
 supersedes: []
 tags:
@@ -1608,7 +1607,9 @@ El primer vertical se considera funcional cuando:
 
 ---
 
-# 28. Roadmap inicial
+# 28. Roadmap historico
+
+La secuencia P1/P2/P3 de esta seccion es historica. La roadmap normativa actual vive en [docs/ROADMAP.md](../ROADMAP.md) y la paralelizacion de trabajo vive en [MVP_EXECUTION_MAP.md](MVP_EXECUTION_MAP.md).
 
 ## Fase 1 — Núcleo nativo
 

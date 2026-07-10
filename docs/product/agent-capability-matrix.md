@@ -1,23 +1,25 @@
 ---
 title: Agent Capability Matrix
 doc_id: product-agent-capability-matrix
-status: approved
+status: historical
 version: "1.0.0"
 owner: product
 last_reviewed: 2026-07-08
 source_of_truth_for:
-  - agent capability allocation
+  - historical agent capability allocation snapshot
 depends_on:
   - product/autonomous-commerce-prd
+superseded_by: docs/product/MVP_EXECUTION_MAP.md
 supersedes: []
 tags:
   - product
   - capability
+  - historical
 ---
 
 # Agent Capability Matrix
 
-Esta matriz define el reparto funcional inicial del sistema agentic. La implementacion puede ser gradual, pero la semantica de capacidades debe mantenerse estable.
+Esta matriz conserva el reparto funcional historico del sistema agentic. Las etiquetas de fase que contiene son historicas y no gobiernan la planificacion actual.
 
 ## Matrix
 

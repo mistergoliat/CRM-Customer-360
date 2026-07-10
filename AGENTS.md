@@ -12,64 +12,47 @@ La meta estrategica es:
 2. Reemplazar progresivamente Brevo como motor de marketing automation.
 3. Mover la logica core desde n8n hacia un backend propio versionado, auditable y testeable.
 
+## Jerarquia canonica
+
+Orden obligatorio de lectura antes de modificar el repositorio:
+
+1. `AGENTS.md`.
+2. `docs/00-START-HERE.md`.
+3. `docs/product/autonomous-commerce-prd.md`.
+4. `docs/ROADMAP.md`.
+5. `docs/ACTIVE_RELEASE.md`.
+6. La especificacion de la release activa.
+7. `docs/product/MVP_EXECUTION_MAP.md`.
+8. Los ADR citados por la release o tarea.
+9. Los contratos citados por la tarea.
+10. `docs/CAPABILITY_MATRIX.md`.
+
+No hace falta leer todo el vault documental. Lee solo lo que gobierna la tarea actual.
+
 ## Estado actual
 
-1. `P1K` esta `ACCEPTED AND CLOSED`.
-2. `P1L` es la fase de `Production Foundation`.
-3. `P1M` es la fase activa de `CRM Product Experience`.
-4. MariaDB/n8n siguen coexistiendo como legado operativo.
-5. El Brain productivo aun no esta completo.
-6. La experiencia visual del CRM es ahora el foco activo de discovery y validacion.
+1. `P1`, `P1K`, `P1L`, `P1M`, `P2` y `P3` son nomenclatura historica.
+2. `ACS` es la unica unidad activa de planificacion e integracion.
+3. Las releases ACS son la unica secuencia activa de trabajo.
+4. Los workstreams gobiernan ownership y paralelizacion, no roadmaps alternativos.
+5. MariaDB/n8n siguen coexistiendo como legado operativo.
+6. El Brain productivo aun no esta completo.
 7. La identidad continua siendo provisional mientras no exista `customer_master`.
 
 ## Flujo obligatorio de trabajo
 
 Antes de modificar el repositorio:
 
-1. Leer `docs/00-START-HERE.md`.
-2. Leer `docs/ACTIVE_RELEASE.md`.
-3. Trabajar unicamente en `current_task`.
-4. No iniciar `next_task` hasta cerrar la tarea actual.
+1. Confirmar el estado real con `git status --short`, `git branch -vv` y `git log --oneline --decorate -15` cuando la tarea lo requiera.
+2. Leer los documentos de la jerarquia canonica en el orden indicado.
+3. Trabajar unicamente en la tarea activa del release, salvo que el usuario autorice explicitamente una intervencion documental transversal.
+4. No iniciar la siguiente tarea de producto hasta cerrar la actual.
 5. No abrir otra release mientras exista una release activa.
 6. Actualizar `docs/ACTIVE_RELEASE.md` en el mismo cambio que completa una tarea.
 7. Actualizar `docs/CAPABILITY_MATRIX.md` cuando cambie el estado tecnico real.
 8. No modificar auditorias historicas.
-9. Registrar desvios como deuda o bloqueo.
+9. Registrar desvíos como deuda o bloqueo.
 10. No implementar trabajo fuera de alcance sin autorizacion explicita.
-
-## Fases activas
-
-### P1K - Brain MVP y demostracion
-
-P1K ya quedo cerrado. Incluye razonamiento comercial, governance, simulacion de ejecucion, follow-up, outbox, transporte simulado, auditoria y scenario simulator.
-
-No debe reabrirse salvo correccion critica demostrada.
-
-### P1L - Production Foundation
-
-P1L concentra la base de produccion:
-
-1. adapters PostgreSQL/Supabase;
-2. persistencia real del Brain;
-3. scheduler;
-4. outbox worker productivo;
-5. transporte HTTP real;
-6. reconciliacion de delivery;
-7. piloto controlado.
-
-### P1M - CRM Product Experience
-
-P1M concentra la experiencia visual y operativa del CRM:
-
-1. CRM shell y navegacion;
-2. Cases inbox y chat-first workspace;
-3. Customer 360 provisional;
-4. Opportunity workspace;
-5. AI SDR Copilot;
-6. Action Queue;
-7. analitica visual;
-8. settings visual;
-9. operator controls y estados visuales.
 
 ## Reglas no negociables
 
@@ -83,10 +66,12 @@ P1M concentra la experiencia visual y operativa del CRM:
 8. No refactors masivos sin auditoria previa.
 9. No convertir Case o Work Queue en el centro del dominio.
 10. No presentar Customer Candidate como Customer Master definitivo.
+11. Un workstream no puede crear un roadmap paralelo.
+12. Un documento historico no recupera autoridad activa.
 
 ## Estrategia UI-first
 
-P1M puede construir superficies visuales antes de que toda la logica productiva, persistencia o integracion este terminada.
+P1M y la experiencia visual del CRM pueden construir superficies antes de que toda la logica productiva, persistencia o integracion este terminada.
 
 Esto esta permitido cuando:
 
@@ -99,9 +84,7 @@ Esto esta permitido cuando:
 7. revela gaps de producto y genera tareas posteriores;
 8. mantiene estable la frontera entre visualizacion y ejecucion.
 
-La UI en P1M es una herramienta de modelamiento y validacion del producto, no solo una capa final.
-
-## Que esta permitido en esta fase
+## Que esta permitido
 
 1. Crear o actualizar documentacion rectora.
 2. Crear contratos conceptuales para entidades futuras.
@@ -111,7 +94,7 @@ La UI en P1M es una herramienta de modelamiento y validacion del producto, no so
 6. Aclarar limites entre identidad provisional y Customer Master futuro.
 7. Diseñar superficies read-only que usen read models, fixtures o mocks identificados.
 
-## Que esta prohibido en esta fase
+## Que esta prohibido
 
 1. Implementar Customer Master definitivo.
 2. Crear tablas nuevas de produccion sin tarea explicita.
@@ -138,38 +121,6 @@ La UI en P1M es una herramienta de modelamiento y validacion del producto, no so
 4. No convertir esa identidad provisional en un Customer 360 definitivo.
 5. Preparar todo para migrar luego a `customer_key` y `customer_master`.
 
-## Roadmap por fases
-
-### P0 - Stabilization
-
-1. Blindar auth y variables criticas.
-2. Alinear documentacion y contratos.
-3. Validar preview, build y typecheck.
-4. Reducir ambiguedad sobre fuentes de verdad.
-
-### P1 - CRM foundation
-
-1. Cerrar el brain MVP demostrable.
-2. Separar la foundation de produccion de la experiencia visual.
-3. Usar la UI como herramienta para descubrir gaps y fijar contratos de lectura.
-
-### P1L - Production Foundation
-
-1. Persistencia real.
-2. Scheduler real.
-3. Outbox worker real.
-4. Transporte real.
-5. Reconciliacion real.
-
-### P1M - CRM Product Experience
-
-1. Shell de CRM.
-2. Navegacion y superficies visuales.
-3. Read models y fixtures identificados.
-4. Customer 360 provisional.
-5. Opportunity workspace.
-6. Action Queue y Copilot visuales.
-
 ## Comandos de validacion
 
 Ejecutar segun el alcance de la tarea:
@@ -186,8 +137,8 @@ Si una tarea toca front o API, validar adicionalmente que la preview sigue funci
 ## Criterios de aceptacion
 
 1. No hay cambios funcionales accidentales cuando la tarea es documental.
-2. P1K queda tratado como cerrado y no reabierto salvo correccion critica.
-3. P1L y P1M quedan separados con responsabilidades claras.
+2. ACS mantiene una unica secuencia activa de releases.
+3. Workstreams y roadmap no compiten como autoridades.
 4. La estrategia UI-first queda autorizada y limitada.
 5. La identidad provisional queda claramente separada del Customer Master futuro.
 6. Las dependencias y riesgos quedan documentados sin inventar features.
