@@ -1,6 +1,7 @@
 import { queryRows, safeQueryRows } from "@/lib/db";
 import { isDbWriteEnabled } from "@/lib/write-access";
 import { normalizeMasterCustomerEmail, parseMasterCustomerPlatformOrigin } from "./mappers";
+import { isArtificialCustomerEmail, isRealCustomerEmail } from "@/lib/domains/customers/email";
 import type { MasterCustomerCreateInput, MasterCustomerListQuery, MasterCustomerRow } from "./types";
 
 export type CustomerMasterRepositoryResult<T> = {
@@ -63,6 +64,9 @@ export async function getMasterCustomerById(id: string): Promise<CustomerMasterR
 
 export async function findMasterCustomerByEmail(email: string): Promise<CustomerMasterRepositoryResult<MasterCustomerRow | null>> {
   const normalized = normalizeMasterCustomerEmail(email);
+  if (!isRealCustomerEmail(normalized) || isArtificialCustomerEmail(normalized)) {
+    return { ok: false, error: "customer_email_invalid", warnings: [] };
+  }
   const rows = await safeQueryRows<MasterCustomerRow>(
     "SELECT id, firstname, lastname, email, platform_origin FROM master_customer WHERE LOWER(TRIM(email)) = ? LIMIT 1",
     [normalized]
@@ -83,6 +87,9 @@ export async function createMasterCustomer(input: MasterCustomerCreateInput): Pr
   }
 
   const email = normalizeMasterCustomerEmail(input.email);
+  if (!isRealCustomerEmail(email) || isArtificialCustomerEmail(email)) {
+    return { ok: false, error: "customer_email_invalid", warnings: [] };
+  }
 
   try {
     await queryRows(

@@ -3,8 +3,7 @@ import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { auditLog } from "@/lib/audit";
 import { queryRows, safeQueryRows, withTransaction } from "@/lib/db";
-import { createMasterCustomer } from "@/lib/integrations/customer-master/customer-repository";
-import { normalizeMasterCustomerEmail } from "@/lib/integrations/customer-master/mappers";
+import { persistCustomerOnboardingState } from "@/lib/brain/commercial/customer-onboarding/state";
 import { findDistinctCustomersByNormalizedValue, findExternalIdentityByNormalizedValue, findExternalIdentityByProviderExternalId, upsertExternalIdentity } from "@/lib/integrations/customer-external-identity";
 import {
   loadCommercialEventByDedupeKey,
@@ -25,7 +24,6 @@ import type {
 } from "@/lib/brain/commercial/sales-consultative/types";
 import type { SalesConsultativeResult } from "@/lib/brain/commercial/sales-consultative/types";
 import { isDbWriteEnabled } from "@/lib/write-access";
-import { normalizePlatformOrigin } from "@/lib/domains/customers/platform-origin";
 
 type NativeConversationRow = {
   id: number;
@@ -260,19 +258,6 @@ function stableId(parts: string[]) {
   return createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 24);
 }
 
-function buildProvisionalCustomerNames(senderName: string | null, externalId: string) {
-  const cleaned = senderName?.trim() ?? "";
-  if (cleaned) {
-    const tokens = cleaned.split(/\s+/).filter(Boolean);
-    if (tokens.length >= 2) {
-      return { firstname: tokens[0].slice(0, 191), lastname: tokens.slice(1).join(" ").slice(0, 191) };
-    }
-    return { firstname: cleaned.slice(0, 191), lastname: "WhatsApp" };
-  }
-  const suffix = externalId.slice(-6) || "nuevo";
-  return { firstname: "Cliente", lastname: `WhatsApp ${suffix}`.slice(0, 191) };
-}
-
 async function loadCustomerById(customerId: number | null): Promise<NativeCustomerRow | null> {
   if (!customerId) return null;
   const result = await safeQueryRows<NativeCustomerRow>("SELECT id, firstname, lastname, email, platform_origin FROM master_customer WHERE id = ? LIMIT 1", [customerId]);
@@ -293,18 +278,20 @@ async function resolveOrCreateNativeCustomer(input: {
   identityType: string;
   externalId: string;
   normalizedValue: string;
-  senderName: string | null;
 }) {
   const existingIdentity = await findExternalIdentityByProviderExternalId(input.provider, input.externalId);
   if (existingIdentity.ok && existingIdentity.row) {
-    const customer = await loadCustomerById(existingIdentity.row.customer_id);
-    return {
-      customer,
-      externalIdentityId: existingIdentity.row.id,
-      warnings: [] as string[],
-      created: false,
-      identityConflict: null as NativeIdentityConflict | null
-    };
+    const customerId = existingIdentity.row.customer_id;
+    if (customerId) {
+      const customer = await loadCustomerById(customerId);
+      return {
+        customer,
+        externalIdentityId: existingIdentity.row.id,
+        warnings: [] as string[],
+        created: false,
+        identityConflict: null as NativeIdentityConflict | null
+      };
+    }
   }
 
   const distinctCustomers = await findDistinctCustomersByNormalizedValue(input.provider, input.normalizedValue);
@@ -348,20 +335,8 @@ async function resolveOrCreateNativeCustomer(input: {
     }
   }
 
-  const { firstname, lastname } = buildProvisionalCustomerNames(input.senderName, input.externalId);
-  const email = normalizeMasterCustomerEmail(`wa-${input.normalizedValue}@local.invalid`);
-  const customerResult = await createMasterCustomer({
-    firstname,
-    lastname,
-    email,
-    platformOrigin: normalizePlatformOrigin("whatsapp")
-  });
-  if (!customerResult.ok) {
-    throw new Error(customerResult.error);
-  }
-
   const identity = await upsertExternalIdentity({
-    customerId: Number(customerResult.data.id),
+    customerId: null,
     provider: input.provider,
     identityType: input.identityType,
     externalId: input.externalId,
@@ -370,16 +345,10 @@ async function resolveOrCreateNativeCustomer(input: {
   });
 
   return {
-    customer: {
-      id: Number(customerResult.data.id),
-      firstname: customerResult.data.firstname,
-      lastname: customerResult.data.lastname,
-      email: customerResult.data.email,
-      platform_origin: customerResult.data.platform_origin
-    },
+    customer: null,
     externalIdentityId: identity.ok && identity.row ? identity.row.id : null,
     warnings: identity.ok ? [] : [identity.error ?? "external_identity_upsert_failed"],
-    created: true,
+    created: false,
     identityConflict: null as NativeIdentityConflict | null
   };
 }
@@ -909,8 +878,7 @@ export async function processNativeWhatsAppInbound(input: {
     provider: "whatsapp",
     identityType: "phone_number",
     externalId: normalizedExternalId,
-    normalizedValue: normalizedSenderPhone,
-    senderName: input.senderName
+    normalizedValue: normalizedSenderPhone
   });
 
   // PR-03A: if this conversation already has a confirmed customer link, never
@@ -952,6 +920,25 @@ export async function processNativeWhatsAppInbound(input: {
       connection
     );
 
+    await persistCustomerOnboardingState({
+      conversationCaseId: conversation.public_id,
+      waId: normalizedExternalId,
+      state: identityConflict ? "handoff" : resolvedCustomer ? "customer_found" : "unresolved",
+      identityResolutionStatus: identityConflict ? "conflict" : resolvedCustomer ? "matched" : "unresolved",
+      identityProvider: "whatsapp",
+      identityType: "phone_number",
+      identityExternalId: normalizedExternalId,
+      identityNormalizedValue: normalizedSenderPhone,
+      email: resolvedCustomer?.email ?? null,
+      firstname: resolvedCustomer?.firstname ?? null,
+      lastname: resolvedCustomer?.lastname ?? null,
+      customerId: resolvedCustomer ? String(resolvedCustomer.id) : null,
+      customerPlatformOrigin: resolvedCustomer?.platform_origin ?? null,
+      customerCreationConsentGranted: null,
+      currentTime: input.occurredAt,
+      connection
+    });
+
     const appendResult = await appendConversationMessage(
       {
         conversationPublicId: conversation.public_id,
@@ -988,7 +975,7 @@ export async function processNativeWhatsAppInbound(input: {
       causationId: null,
       metadata: {
         conversationPublicId: conversation.public_id,
-        customerCreated: identity.created,
+        customerLinked: Boolean(resolvedCustomer),
         externalIdentityId: identity.externalIdentityId,
         senderName: input.senderName,
         senderPhone: normalizedSenderPhone,
@@ -1025,8 +1012,9 @@ export async function processNativeWhatsAppInbound(input: {
     };
   });
 
+  const auditAction = identityConflict ? "customer.identity_conflict" : result.customerId ? "customer.linked" : "customer.identity_unresolved";
   await auditLog({
-    action: identityConflict ? "customer.identity_conflict" : identity.created ? "customer.created" : "customer.linked",
+    action: auditAction,
     entityType: "conversation",
     entityId: result.conversationId,
     after: {

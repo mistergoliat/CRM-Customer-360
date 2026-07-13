@@ -1,3 +1,4 @@
+import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { queryRows, safeQueryRows } from "@/lib/db";
 import type { CustomerExternalIdentityInput, CustomerExternalIdentityRow } from "./types";
 
@@ -25,7 +26,7 @@ function asNumber(value: unknown) {
 function toRow(row: Record<string, unknown>): CustomerExternalIdentityRow {
   return {
     id: asNumber(row.id) ?? 0,
-    customer_id: asNumber(row.customer_id) ?? 0,
+    customer_id: asNumber(row.customer_id),
     provider: asText(row.provider) ?? "",
     identity_type: asText(row.identity_type) ?? "",
     external_id: asText(row.external_id) ?? "",
@@ -84,7 +85,45 @@ export async function findExternalIdentityByNormalizedValue(provider: string, no
   return { ok: true as const, error: null, row: rows.rows[0] ? toRow(rows.rows[0]) : null };
 }
 
-export async function upsertExternalIdentity(input: CustomerExternalIdentityInput) {
+export async function upsertExternalIdentity(input: CustomerExternalIdentityInput, connection?: PoolConnection) {
+  const params = [
+    input.customerId,
+    input.provider,
+    input.identityType,
+    input.externalId,
+    input.normalizedValue,
+    input.isVerified ? 1 : 0
+  ];
+
+  if (connection) {
+    await connection.execute(
+      `
+        INSERT INTO \`${TABLE}\` (
+          customer_id,
+          provider,
+          identity_type,
+          external_id,
+          normalized_value,
+          is_verified,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+        ON DUPLICATE KEY UPDATE
+          customer_id = VALUES(customer_id),
+          identity_type = VALUES(identity_type),
+          normalized_value = VALUES(normalized_value),
+          is_verified = VALUES(is_verified),
+          updated_at = VALUES(updated_at)
+      `,
+      params
+    );
+    const [rows] = await connection.execute<RowDataPacket[]>(
+      `SELECT * FROM \`${TABLE}\` WHERE provider = ? AND external_id = ? LIMIT 1`,
+      [input.provider, input.externalId]
+    );
+    return { ok: true as const, error: null, row: rows[0] ? toRow(rows[0]) : null };
+  }
+
   await queryRows(
     `
       INSERT INTO \`${TABLE}\` (
@@ -104,14 +143,7 @@ export async function upsertExternalIdentity(input: CustomerExternalIdentityInpu
         is_verified = VALUES(is_verified),
         updated_at = VALUES(updated_at)
     `,
-    [
-      input.customerId,
-      input.provider,
-      input.identityType,
-      input.externalId,
-      input.normalizedValue,
-      input.isVerified ? 1 : 0
-    ]
+    params
   );
 
   const loaded = await findExternalIdentityByProviderExternalId(input.provider, input.externalId);
