@@ -6,8 +6,9 @@ updated_at: 2026-07-13
 current_task: ACS-R1-04-T07
 next_task: ACS-R1-04-T08
 blocked: false
-last_accepted_commit: 0c51419
+last_accepted_commit: 72cb9c3
 t06_1_sha: 0c51419
+t06_2_sha: 72cb9c3
 doc_id: release-active
 source_of_truth_for:
   - active release
@@ -48,8 +49,9 @@ Este documento es un puntero operativo breve. El alcance, la tabla de tareas, la
 
 ## Commit aceptado
 
-- `last_accepted_commit`: `0c51419`
+- `last_accepted_commit`: `72cb9c3`
 - `t06_1_sha`: `0c51419`
+- `t06_2_sha`: `72cb9c3`
 
 ## Release spec
 
