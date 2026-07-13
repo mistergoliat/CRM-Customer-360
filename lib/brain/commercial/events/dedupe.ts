@@ -29,6 +29,41 @@ export function buildInternalCommandCommercialEventDedupeKey(commandId: string, 
   return `internal:command:${commandId.trim()}:${result.trim()}`;
 }
 
+// ACS-R1-04-T07 dedupe keys (release spec section 8). No timestamps, no PII -
+// only stable identifiers already available in the caller's scope.
+
+export function buildCustomerIdentityResolutionDedupeKey(
+  messageId: string,
+  phase: string,
+  resolver: string,
+  outcome: string
+) {
+  return `identity:${messageId.trim()}:${phase.trim()}:${resolver.trim()}:${outcome.trim()}`;
+}
+
+export function buildCustomerOnboardingTransitionDedupeKey(
+  conversationId: string,
+  nextVersion: number,
+  operation: string
+) {
+  return `onboarding:${conversationId.trim()}:${nextVersion}:${operation.trim()}`;
+}
+
+export function buildCustomerIdentityCapabilityOutcomeDedupeKey(
+  executionPublicId: string,
+  businessOutcome: string
+) {
+  return `identity-capability:${executionPublicId.trim()}:${businessOutcome.trim()}`;
+}
+
+export function buildCustomerSessionWarningDedupeKey(
+  messageId: string,
+  phase: string,
+  warningCode: string
+) {
+  return `identity-warning:${messageId.trim()}:${phase.trim()}:${warningCode.trim()}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

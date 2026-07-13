@@ -1,6 +1,10 @@
 import type { PoolConnection } from "mysql2/promise";
 import type { CommercialEventPersistResult } from "./types";
 import {
+  normalizeCustomerIdentityCapabilityOutcomeCommercialEvent,
+  normalizeCustomerIdentityResolutionCommercialEvent,
+  normalizeCustomerOnboardingTransitionCommercialEvent,
+  normalizeCustomerSessionWarningCommercialEvent,
   normalizeFollowUpDueCommercialEvent,
   normalizeInternalCommandCommercialEvent,
   normalizeMetaWhatsAppInboundCommercialEvent,
@@ -34,4 +38,34 @@ export async function recordInternalCommandCommercialEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeInternalCommandCommercialEvent(input), connection);
+}
+
+// ACS-R1-04-T07.
+
+export async function recordCustomerIdentityResolutionCommercialEvent(
+  input: Parameters<typeof normalizeCustomerIdentityResolutionCommercialEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCustomerIdentityResolutionCommercialEvent(input), connection);
+}
+
+export async function recordCustomerOnboardingTransitionCommercialEvent(
+  input: Parameters<typeof normalizeCustomerOnboardingTransitionCommercialEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCustomerOnboardingTransitionCommercialEvent(input), connection);
+}
+
+export async function recordCustomerIdentityCapabilityOutcomeCommercialEvent(
+  input: Parameters<typeof normalizeCustomerIdentityCapabilityOutcomeCommercialEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCustomerIdentityCapabilityOutcomeCommercialEvent(input), connection);
+}
+
+export async function recordCustomerSessionWarningCommercialEvent(
+  input: Parameters<typeof normalizeCustomerSessionWarningCommercialEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCustomerSessionWarningCommercialEvent(input), connection);
 }

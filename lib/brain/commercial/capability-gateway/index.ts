@@ -18,3 +18,5 @@ export {
   resolveSalesAgentToolForCapabilityName,
   listAliasedSalesAgentToolNames
 } from "./toolAliases";
+export { deriveIdentityCapabilityBusinessOutcome } from "./identityCapabilityOutcome";
+export type { IdentityCapabilityName } from "./identityCapabilityOutcome";

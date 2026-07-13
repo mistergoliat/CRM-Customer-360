@@ -5,6 +5,7 @@ import type { CustomerOnboardingService, CustomerOnboardingState } from "@/lib/d
 import type { CustomerResolutionEvidence, ResolveCustomerInput } from "@/lib/domains/customer-service";
 import { executeGovernedCapability } from "../../capability-gateway/executeCapability";
 import { parseAllConsentEvidence } from "./consentEvidence";
+import { recordExternalIdentityResolution, recordIdentityCapabilityOutcome, recordLocalIdentityResolution, recordSessionWarnings } from "./identityAuditEvents";
 import { completeOnboardingWithCustomer, landOnboardingInTerminalState } from "./onboardingTransitions";
 import { mergeWarnings } from "./warnings";
 import type {
@@ -49,6 +50,7 @@ export type ResolveNativeCustomerSessionInput = {
 /** Calls resolve_customer through the same Capability Gateway boundary every other capability uses - never the HTTP adapter directly. Exported for reuse by runCustomerOnboardingPostPlanStage (ACS-R1-04-T06.1), which needs the identical default when pre-plan didn't already attempt resolution this turn. */
 export async function defaultResolveCustomerExternal(input: ResolveCustomerInput, context: { correlationId: string }): Promise<CustomerResolutionEvidence> {
   const result = await executeGovernedCapability("resolve_customer", input as unknown as Record<string, unknown>, { correlationId: context.correlationId });
+  await recordIdentityCapabilityOutcome({ capability: "resolve_customer", correlationId: context.correlationId, gatewayResult: result });
   if (result.status === "completed" && result.data) {
     return result.data as unknown as CustomerResolutionEvidence;
   }
@@ -149,6 +151,13 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
   if (localResult.status === "temporarily_unavailable") warnings.push("customer_identity_unavailable");
   if (localResult.status === "conflict") warnings.push("customer_identity_conflict");
 
+  await recordLocalIdentityResolution({
+    messageId: input.trustedInbound.messageId,
+    correlationId: input.correlationId,
+    conversationId: input.conversationId,
+    result: localResult
+  });
+
   let identity = mapLocalResolution(localResult, onboarding !== null && onboarding.status !== "completed");
 
   // 4. Reconcile identity + onboarding - never silently pick a side.
@@ -165,7 +174,7 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
     warnings.push("customer_identity_conflict");
   }
   if (identity.status === "conflict" && onboarding && onboarding.status !== "conflict") {
-    const landed = await landOnboardingInTerminalState(onboardingService, onboarding, "conflict");
+    const landed = await landOnboardingInTerminalState(onboardingService, onboarding, "conflict", input.correlationId);
     onboarding = landed.state;
     if (landed.warning) warnings.push(landed.warning);
   }
@@ -173,7 +182,7 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
   // section 18: "local/external resolved -> completed with customerId") -
   // not only the external resolve_customer branch below.
   if (identity.status === "identified" && identity.customerId && onboarding && (onboarding.status === "required" || onboarding.status === "collecting")) {
-    const landed = await completeOnboardingWithCustomer(onboardingService, onboarding, identity.customerId);
+    const landed = await completeOnboardingWithCustomer(onboardingService, onboarding, identity.customerId, input.correlationId);
     onboarding = landed.state;
     if (landed.warning) warnings.push(landed.warning);
   }
@@ -200,21 +209,30 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
     externalOutcome = evidence.result.status;
     freshEvidence = evidence;
 
+    await recordExternalIdentityResolution({
+      phase: "pre_plan",
+      messageId: input.trustedInbound.messageId,
+      correlationId: input.correlationId,
+      conversationId: input.conversationId,
+      opportunityId: input.opportunityId,
+      evidence
+    });
+
     if (evidence.result.status === "resolved") {
       identity = { status: "identified", customerId: evidence.result.customerId, source: "customer_service" };
-      const landed = await completeOnboardingWithCustomer(onboardingService, onboarding, evidence.result.customerId);
+      const landed = await completeOnboardingWithCustomer(onboardingService, onboarding, evidence.result.customerId, input.correlationId);
       onboarding = landed.state;
       if (landed.warning) warnings.push(landed.warning);
     } else if (evidence.result.status === "conflict") {
       identity = { status: "conflict", customerId: null, source: "none" };
       warnings.push("customer_identity_conflict");
-      const landed = await landOnboardingInTerminalState(onboardingService, onboarding, "conflict");
+      const landed = await landOnboardingInTerminalState(onboardingService, onboarding, "conflict", input.correlationId);
       onboarding = landed.state;
       if (landed.warning) warnings.push(landed.warning);
     } else if (evidence.result.status === "temporarily_unavailable") {
       identity = { status: "temporarily_unavailable", customerId: null, source: "none" };
       warnings.push("customer_service_unavailable");
-      const landed = await landOnboardingInTerminalState(onboardingService, onboarding, "temporarily_unavailable");
+      const landed = await landOnboardingInTerminalState(onboardingService, onboarding, "temporarily_unavailable", input.correlationId);
       onboarding = landed.state;
       if (landed.warning) warnings.push(landed.warning);
     } else if (evidence.result.status === "invalid_input") {
@@ -251,5 +269,16 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
     freshExternalResolutionEvidence: freshEvidence
   };
 
-  return { execution, decision: buildDecisionContext(execution), warnings: mergeWarnings(warnings) };
+  const dedupedWarnings = mergeWarnings(warnings);
+  await recordSessionWarnings({
+    phase: "pre_plan",
+    messageId: input.trustedInbound.messageId,
+    correlationId: input.correlationId,
+    conversationId: input.conversationId,
+    opportunityId: input.opportunityId,
+    customerId: identity.customerId,
+    warnings: dedupedWarnings
+  });
+
+  return { execution, decision: buildDecisionContext(execution), warnings: dedupedWarnings };
 }
