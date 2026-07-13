@@ -5,7 +5,7 @@ import { createCustomerOnboardingService } from "@/lib/domains/customer-onboardi
 import type { CustomerOnboardingPendingField, CustomerOnboardingService } from "@/lib/domains/customer-onboarding";
 import { recordOnboardingTransitionIfChanged } from "../native-cycle/customer-session/identityAuditEvents";
 import { mapOnboardingPurposeToCommercialPurpose } from "../native-cycle/customer-session/onboardingPurposeMapping";
-import { completeOnboardingWithCustomer, landOnboardingInTerminalState } from "../native-cycle/customer-session/onboardingTransitions";
+import { completeOnboardingWithVerifiedCustomer, landOnboardingInTerminalState, verifyCustomerMasterProjection } from "../native-cycle/customer-session/onboardingTransitions";
 import { deriveIdentityCapabilityBusinessOutcome } from "./identityCapabilityOutcome";
 import type { CapabilityExecutionOutcome, CapabilityGatewayContext, CapabilityGatewayDefinition } from "./types";
 
@@ -220,8 +220,23 @@ function createCustomerCapability(): CapabilityGatewayDefinition {
       const result = outcome.result;
 
       if (result.status === "created" || result.status === "matched_existing") {
-        if (onboarding) await completeOnboardingWithCustomer(onboardingService, onboarding, result.customerId, context.correlationId);
-        return { status: "completed", data: result as unknown as Record<string, unknown>, errorCode: null, retryable: false, evidence: evidenceOf("customer_service", `create_customer ${result.status}.`) };
+        // ACS-R1-04-T08.1: Customer Service really did succeed (the business
+        // outcome created/matched_existing below is never changed by this) -
+        // but the local master_customer projection is verified before
+        // completing onboarding with its customerMasterId.
+        const projectionWarnings: string[] = [];
+        if (onboarding) {
+          const gated = await completeOnboardingWithVerifiedCustomer(onboardingService, onboarding, result.customerMasterId, context.correlationId);
+          if (gated.warning) projectionWarnings.push(gated.warning);
+        }
+        return {
+          status: "completed",
+          data: result as unknown as Record<string, unknown>,
+          errorCode: null,
+          retryable: false,
+          evidence: evidenceOf("customer_service", `create_customer ${result.status}.`),
+          warnings: projectionWarnings
+        };
       }
       if (result.status === "missing_information") {
         if (onboarding && onboarding.status !== "resolving") {
@@ -326,10 +341,29 @@ function linkExternalIdentityCapability(): CapabilityGatewayDefinition {
       const result = outcome.result;
 
       if (result.status === "completed" || result.status === "already_linked") {
+        // ACS-R1-04-T08.1: verify Customer Service's echoed-back
+        // customerMasterId agrees with the customer already known locally
+        // this turn (session.identity.customerId, guaranteed non-null above)
+        // and has a real master_customer row before trusting it further.
+        const projectionWarnings: string[] = [];
         if (onboarding && onboarding.status !== "completed") {
-          await completeOnboardingWithCustomer(onboardingService, onboarding, session.identity.customerId, context.correlationId);
+          const gated = await completeOnboardingWithVerifiedCustomer(onboardingService, onboarding, result.customerMasterId, context.correlationId, {
+            knownLocalCustomerId: session.identity.customerId
+          });
+          if (gated.warning) projectionWarnings.push(gated.warning);
+        } else {
+          const check = await verifyCustomerMasterProjection(result.customerMasterId, { knownLocalCustomerId: session.identity.customerId });
+          if (check.status === "check_failed") projectionWarnings.push("customer_master_projection_check_failed");
+          else if (check.status !== "verified") projectionWarnings.push("customer_master_projection_unavailable");
         }
-        return { status: "completed", data: result as unknown as Record<string, unknown>, errorCode: null, retryable: false, evidence: evidenceOf("customer_service", `link_external_identity ${result.status}.`) };
+        return {
+          status: "completed",
+          data: result as unknown as Record<string, unknown>,
+          errorCode: null,
+          retryable: false,
+          evidence: evidenceOf("customer_service", `link_external_identity ${result.status}.`),
+          warnings: projectionWarnings
+        };
       }
       if (result.status === "conflict") {
         if (onboarding && onboarding.status !== "conflict") await landOnboardingInTerminalState(onboardingService, onboarding, "conflict", context.correlationId);

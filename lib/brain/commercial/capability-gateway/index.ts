@@ -14,6 +14,12 @@ export {
   setOnboardingServiceForTests
 } from "./customerIdentityCapabilities";
 export {
+  completeOnboardingWithVerifiedCustomer,
+  resetCustomerMasterProjectionReaderForTests,
+  setCustomerMasterProjectionReaderForTests,
+  verifyCustomerMasterProjection
+} from "../native-cycle/customer-session/onboardingTransitions";
+export {
   resolveCapabilityNameForSalesAgentTool,
   resolveSalesAgentToolForCapabilityName,
   listAliasedSalesAgentToolNames

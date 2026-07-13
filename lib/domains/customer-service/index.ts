@@ -8,3 +8,4 @@ export * from "./types";
 export * from "./ports";
 export * from "./authority-policy";
 export * from "./service";
+export * from "./customerMasterProjection";

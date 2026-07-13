@@ -61,6 +61,20 @@ function errorEnvelope(body: unknown): Record<string, unknown> | null {
   return null;
 }
 
+// ACS-R1-04-T08.1. customerMasterId must be the canonical identifier
+// compatible with master_customer.id (BIGINT UNSIGNED AUTO_INCREMENT) - a
+// positive integer string. Anything else (missing, empty, non-numeric,
+// leading zero/sign) is rejected here, fail-closed, before it ever reaches
+// the onboarding/session layer - never converted to no_match.
+const CUSTOMER_MASTER_ID_PATTERN = /^[1-9]\d*$/;
+
+function asCustomerMasterId(value: unknown): string | null {
+  const text = asString(value);
+  if (!text) return null;
+  const trimmed = text.trim();
+  return CUSTOMER_MASTER_ID_PATTERN.test(trimmed) ? trimmed : null;
+}
+
 function fieldsFrom(errorBody: Record<string, unknown> | null): string[] {
   return asStringArray(errorBody?.fields);
 }
@@ -112,12 +126,23 @@ function mapResolveHttpError(status: number, errorBody: Record<string, unknown> 
   return { status: "temporarily_unavailable", retryable: failureClass === "temporarily_unavailable" };
 }
 
+// ACS-R1-04-T08.1. A 2xx body is rejected (returns null, which every caller
+// below already folds into a safe failure - never no_match) when: the
+// declared success status has no customerMasterId at all, the id is present
+// but malformed (see CUSTOMER_MASTER_ID_PATTERN), or the body simultaneously
+// carries an error envelope alongside a success status (incompatible
+// fields - a genuinely successful response never does this).
+function hasConflictingErrorEnvelope(body: Record<string, unknown>): boolean {
+  return isRecord(body.error);
+}
+
 function parseResolveSuccess(body: unknown): ResolveCustomerResult | null {
   if (!isRecord(body)) return null;
+  if (hasConflictingErrorEnvelope(body)) return null;
   const status = asString(body.status);
   if (status === "resolved") {
-    const customerId = asString(body.customerId);
-    return customerId ? { status: "resolved", customerId } : null;
+    const customerMasterId = asCustomerMasterId(body.customerMasterId);
+    return customerMasterId ? { status: "resolved", customerMasterId } : null;
   }
   if (status === "no_match") return { status: "no_match" };
   if (status === "conflict") return { status: "conflict", conflictCode: asString(body.conflictCode) ?? "conflict" };
@@ -126,10 +151,11 @@ function parseResolveSuccess(body: unknown): ResolveCustomerResult | null {
 
 function parseCreateSuccess(body: unknown): CreateCustomerResult | null {
   if (!isRecord(body)) return null;
+  if (hasConflictingErrorEnvelope(body)) return null;
   const status = asString(body.status);
   if (status === "created" || status === "matched_existing") {
-    const customerId = asString(body.customerId);
-    return customerId ? { status, customerId } : null;
+    const customerMasterId = asCustomerMasterId(body.customerMasterId);
+    return customerMasterId ? { status, customerMasterId } : null;
   }
   if (status === "missing_information") return { status: "missing_information", requiredFields: asStringArray(body.requiredFields) };
   if (status === "denied") return { status: "denied", reason: sanitize(asString(body.reason) ?? "denied") };
@@ -138,11 +164,12 @@ function parseCreateSuccess(body: unknown): CreateCustomerResult | null {
 
 function parseLinkSuccess(body: unknown): LinkExternalIdentityResult | null {
   if (!isRecord(body)) return null;
+  if (hasConflictingErrorEnvelope(body)) return null;
   const status = asString(body.status);
   if (status === "completed" || status === "already_linked") {
-    const customerId = asString(body.customerId);
+    const customerMasterId = asCustomerMasterId(body.customerMasterId);
     const externalIdentityId = asString(body.externalIdentityId);
-    return customerId && externalIdentityId ? { status, customerId, externalIdentityId } : null;
+    return customerMasterId && externalIdentityId ? { status, customerMasterId, externalIdentityId } : null;
   }
   if (status === "denied") return { status: "denied", reason: sanitize(asString(body.reason) ?? "denied") };
   return null;

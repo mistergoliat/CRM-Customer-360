@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before, beforeEach } from "node:test";
-import { resolveCapabilityGatewayDefinition, resetCustomerServicePortForTests, setOnboardingServiceForTests, resetOnboardingServiceForTests } from "@/lib/brain/commercial/capability-gateway";
+import { resolveCapabilityGatewayDefinition, resetCustomerServicePortForTests, setOnboardingServiceForTests, resetOnboardingServiceForTests, setCustomerMasterProjectionReaderForTests } from "@/lib/brain/commercial/capability-gateway";
 import type { CapabilityGatewayContext } from "@/lib/brain/commercial/capability-gateway";
 import type { NativeCustomerSessionExecutionContext } from "@/lib/brain/commercial/native-cycle/customer-session";
 import type { CustomerOnboardingMutationResult, CustomerOnboardingService, CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
@@ -61,6 +61,13 @@ beforeEach(() => {
   process.env.CUSTOMER_SERVICE_API_KEY = "test-key";
   resetCustomerServicePortForTests();
   resetOnboardingServiceForTests();
+  // ACS-R1-04-T08.1: this file exercises create_customer's own execution
+  // logic (policy gating, input assembly, outcome table), not the
+  // customer_master projection gate itself (see
+  // customerMasterProjection.e2e-equivalent coverage in
+  // tests/e2e/customerIdentityOnboarding.e2e.test.ts) - always report the
+  // fake Customer Service's ids as locally projected.
+  setCustomerMasterProjectionReaderForTests({ async exists() { return true; } });
 });
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown) {
@@ -195,7 +202,7 @@ test("60: fresh evidence that is not no_match (e.g. resolved) is denied - create
   setOnboardingServiceForTests(onboarding.service);
   const outcome = await definition().execute(
     {},
-    context(session({ onboarding: onboarding.getState(), freshExternalResolutionEvidence: { source: "customer_service", requestId: "r", checkedAt: "2026-07-09T12:00:00.000Z", result: { status: "resolved", customerId: "999" } } }))
+    context(session({ onboarding: onboarding.getState(), freshExternalResolutionEvidence: { source: "customer_service", requestId: "r", checkedAt: "2026-07-09T12:00:00.000Z", result: { status: "resolved", customerMasterId: "999" } } }))
   );
   assert.equal(outcome.status, "denied");
   assert.equal(outcome.errorCode, "resolution_status_resolved");
@@ -222,7 +229,7 @@ test("62: missing explicit consent denies with a structured consent_required err
 });
 
 test("63: a valid request that Customer Service creates completes and persists onboarding as completed with the new customerId", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "555" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "555" });
   const onboarding = makeOnboardingFake(onboardingRow());
   setOnboardingServiceForTests(onboarding.service);
   const outcome = await definition().execute({}, context(session({ onboarding: onboarding.getState() })));
@@ -233,7 +240,7 @@ test("63: a valid request that Customer Service creates completes and persists o
 });
 
 test("64: matched_existing is treated the same as created - onboarding completes with the matched customerId", async () => {
-  handler = (_req, res) => sendJson(res, 200, { status: "matched_existing", customerId: "42" });
+  handler = (_req, res) => sendJson(res, 200, { status: "matched_existing", customerMasterId: "42" });
   const onboarding = makeOnboardingFake(onboardingRow());
   setOnboardingServiceForTests(onboarding.service);
   const outcome = await definition().execute({}, context(session({ onboarding: onboarding.getState() })));
@@ -280,7 +287,7 @@ test("68: an invalid_input (422) response maps to invalid_arguments with the rep
 });
 
 test("69: the idempotency key sent to Customer Service is derived from the Gateway's correlationId, never chosen by the model", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "1" });
   const onboarding = makeOnboardingFake(onboardingRow());
   setOnboardingServiceForTests(onboarding.service);
   await definition().execute({}, context(session({ onboarding: onboarding.getState() })));
@@ -288,7 +295,7 @@ test("69: the idempotency key sent to Customer Service is derived from the Gatew
 });
 
 test("70: the request body is assembled entirely from the trusted session - LLM-supplied tool-request input is never read", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "1" });
   const onboarding = makeOnboardingFake(onboardingRow({ collected: { firstName: "RealName", email: "real@example.com" } }));
   setOnboardingServiceForTests(onboarding.service);
   await definition().execute(
@@ -299,4 +306,23 @@ test("70: the request body is assembled entirely from the trusted session - LLM-
   assert.equal(lastBody?.email, "real@example.com");
   assert.equal(lastBody?.phoneNumber, "56911112222");
   assert.doesNotMatch(JSON.stringify(lastBody), /FakeInjectedName|fake@evil\.example|999|10000000/);
+});
+
+// ACS-R1-04-T08.1 (task section 12, item 6): Customer Service reports
+// success but the local master_customer projection is not available yet -
+// the capability's own business outcome (created) is unchanged, but
+// completion is gated and a structured warning is surfaced through the
+// outcome's own warnings array (never a second recording channel).
+test("81: Customer Service reports created but the local projection is unavailable - onboarding never completes, warning surfaces on the outcome, businessOutcome stays created", async () => {
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "555" });
+  setCustomerMasterProjectionReaderForTests({ async exists() { return false; } });
+  const onboarding = makeOnboardingFake(onboardingRow({ status: "resolving" }));
+  setOnboardingServiceForTests(onboarding.service);
+  const outcome = await definition().execute({}, context(session({ onboarding: onboarding.getState() })));
+  assert.equal(outcome.status, "completed", "Gateway status: the HTTP call itself succeeded");
+  assert.equal((outcome.data as { status: string }).status, "created", "business outcome is unchanged by the projection gate");
+  assert.ok(outcome.warnings?.includes("customer_master_projection_unavailable"));
+  assert.notEqual(onboarding.getState()?.status, "completed");
+  assert.equal(onboarding.getState()?.status, "temporarily_unavailable");
+  assert.equal(onboarding.getState()?.customerId, null);
 });

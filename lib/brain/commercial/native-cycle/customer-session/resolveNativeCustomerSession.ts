@@ -2,11 +2,11 @@ import { createCustomerIdentityResolutionService } from "@/lib/domains/customer-
 import type { CustomerIdentityResolutionService, ResolveCustomerIdentityResult } from "@/lib/domains/customer-identity";
 import { createCustomerOnboardingService } from "@/lib/domains/customer-onboarding";
 import type { CustomerOnboardingService, CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
-import type { CustomerResolutionEvidence, ResolveCustomerInput } from "@/lib/domains/customer-service";
+import type { CustomerMasterProjectionReader, CustomerResolutionEvidence, ResolveCustomerInput } from "@/lib/domains/customer-service";
 import { executeGovernedCapability } from "../../capability-gateway/executeCapability";
 import { parseAllConsentEvidence } from "./consentEvidence";
 import { recordExternalIdentityResolution, recordIdentityCapabilityOutcome, recordLocalIdentityResolution, recordSessionWarnings } from "./identityAuditEvents";
-import { completeOnboardingWithCustomer, landOnboardingInTerminalState } from "./onboardingTransitions";
+import { completeOnboardingWithCustomer, completeOnboardingWithVerifiedCustomer, landOnboardingInTerminalState } from "./onboardingTransitions";
 import { mergeWarnings } from "./warnings";
 import type {
   CustomerIdentitySource,
@@ -28,6 +28,8 @@ export type ResolveNativeCustomerSessionDependencies = {
   identityService?: CustomerIdentityResolutionService;
   onboardingService?: CustomerOnboardingService;
   resolveCustomerExternal?: ResolveCustomerExternalFn;
+  /** ACS-R1-04-T08.1. Test-only injection seam for the customer_master projection gate - defaults to the real, DB-backed reader (see completeOnboardingWithVerifiedCustomer). */
+  projectionReader?: CustomerMasterProjectionReader;
   now?: () => Date;
 };
 
@@ -134,6 +136,7 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
   const identityService = input.dependencies?.identityService ?? createCustomerIdentityResolutionService();
   const onboardingService = input.dependencies?.onboardingService ?? createCustomerOnboardingService();
   const resolveCustomerExternal = input.dependencies?.resolveCustomerExternal ?? defaultResolveCustomerExternal;
+  const projectionReader = input.dependencies?.projectionReader;
   const now = input.dependencies?.now ?? (() => new Date());
 
   const warnings: string[] = [];
@@ -188,9 +191,16 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
   }
 
   // 3. External resolution - only local no_match + active onboarding requiring identity (section 7).
+  // ACS-R1-04-T08.1 (runtime recovery): a customer_master projection that
+  // was not ready when create_customer/resolve_customer originally
+  // succeeded lands onboarding in temporarily_unavailable (onboardingTransitions.ts,
+  // completeOnboardingWithVerifiedCustomer) - never a permanent dead end.
+  // A later inbound, still without a local identity match, gets exactly one
+  // fresh resolve_customer attempt per turn, same as required/collecting.
   let externalOutcome: string | null = null;
   let freshEvidence: CustomerResolutionEvidence | null = null;
-  const onboardingNeedsIdentity = onboarding !== null && (onboarding.status === "required" || onboarding.status === "collecting");
+  const onboardingNeedsIdentity =
+    onboarding !== null && (onboarding.status === "required" || onboarding.status === "collecting" || onboarding.status === "temporarily_unavailable");
   if (identity.status === "identification_required" && onboardingNeedsIdentity && onboarding) {
     let evidence: CustomerResolutionEvidence;
     try {
@@ -219,10 +229,15 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
     });
 
     if (evidence.result.status === "resolved") {
-      identity = { status: "identified", customerId: evidence.result.customerId, source: "customer_service" };
-      const landed = await completeOnboardingWithCustomer(onboardingService, onboarding, evidence.result.customerId, input.correlationId);
-      onboarding = landed.state;
-      if (landed.warning) warnings.push(landed.warning);
+      // ACS-R1-04-T08.1: never trust Customer Service's customerMasterId
+      // until the local master_customer projection confirms it - see
+      // completeOnboardingWithVerifiedCustomer.
+      const gated = await completeOnboardingWithVerifiedCustomer(onboardingService, onboarding, evidence.result.customerMasterId, input.correlationId, { projectionReader });
+      onboarding = gated.state;
+      identity = gated.verifiedCustomerId
+        ? { status: "identified", customerId: gated.verifiedCustomerId, source: "customer_service" }
+        : { status: "temporarily_unavailable", customerId: null, source: "none" };
+      if (gated.warning) warnings.push(gated.warning);
     } else if (evidence.result.status === "conflict") {
       identity = { status: "conflict", customerId: null, source: "none" };
       warnings.push("customer_identity_conflict");

@@ -57,9 +57,9 @@ test.beforeEach(() => {
 });
 
 test("resolveCustomer maps a resolved response", async () => {
-  handler = (_req, res) => sendJson(res, 200, { status: "resolved", customerId: "123" });
+  handler = (_req, res) => sendJson(res, 200, { status: "resolved", customerMasterId: "123" });
   const result = await makeAdapter().resolveCustomer({ channel: "whatsapp", externalId: "56912345678" });
-  assert.deepEqual(result, { status: "resolved", customerId: "123" });
+  assert.deepEqual(result, { status: "resolved", customerMasterId: "123" });
   assert.equal(requestCount, 1);
 });
 
@@ -78,16 +78,16 @@ test("resolveCustomer maps a conflict response", async () => {
 test("createCustomer maps a created response", async () => {
   handler = (req, res) => {
     assert.equal(req.headers["x-api-key"], "test-key");
-    sendJson(res, 201, { status: "created", customerId: "999" });
+    sendJson(res, 201, { status: "created", customerMasterId: "999" });
   };
   const result = await makeAdapter().createCustomer(baseCreateInput());
-  assert.deepEqual(result, { status: "created", customerId: "999" });
+  assert.deepEqual(result, { status: "created", customerMasterId: "999" });
 });
 
 test("createCustomer maps a matched_existing response", async () => {
-  handler = (_req, res) => sendJson(res, 200, { status: "matched_existing", customerId: "42" });
+  handler = (_req, res) => sendJson(res, 200, { status: "matched_existing", customerMasterId: "42" });
   const result = await makeAdapter().createCustomer(baseCreateInput());
-  assert.deepEqual(result, { status: "matched_existing", customerId: "42" });
+  assert.deepEqual(result, { status: "matched_existing", customerMasterId: "42" });
 });
 
 test("createCustomer maps a 409 conflict", async () => {
@@ -97,15 +97,15 @@ test("createCustomer maps a 409 conflict", async () => {
 });
 
 test("linkExternalIdentity maps a completed response", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerId: "cust-1", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerMasterId: "1", externalIdentityId: "ext-1" });
   const result = await makeAdapter().linkExternalIdentity(baseLinkInput());
-  assert.deepEqual(result, { status: "completed", customerId: "cust-1", externalIdentityId: "ext-1" });
+  assert.deepEqual(result, { status: "completed", customerMasterId: "1", externalIdentityId: "ext-1" });
 });
 
 test("linkExternalIdentity maps an already_linked response", async () => {
-  handler = (_req, res) => sendJson(res, 200, { status: "already_linked", customerId: "cust-1", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 200, { status: "already_linked", customerMasterId: "1", externalIdentityId: "ext-1" });
   const result = await makeAdapter().linkExternalIdentity(baseLinkInput());
-  assert.deepEqual(result, { status: "already_linked", customerId: "cust-1", externalIdentityId: "ext-1" });
+  assert.deepEqual(result, { status: "already_linked", customerMasterId: "1", externalIdentityId: "ext-1" });
 });
 
 test("a 422 maps to invalid_input with the reported fields", async () => {
@@ -135,7 +135,7 @@ test("resolveCustomer on an unclassified HTTP 500 maps to temporarily_unavailabl
   assert.equal(result.status, "temporarily_unavailable");
   if (result.status === "temporarily_unavailable") assert.equal(result.retryable, false);
   assert.equal(requestCount, 1, "no adapter-level retry");
-  assert.ok(!("customerId" in result), "no local fallback ever fabricates a customerId");
+  assert.ok(!("customerMasterId" in result), "no local fallback ever fabricates a customerMasterId");
 });
 
 test("a timeout maps to temporarily_unavailable and never throws", async () => {
@@ -158,8 +158,46 @@ test("invalid JSON on a 200 response never crashes and maps to a safe failure", 
   assert.deepEqual(createResult, { status: "failed", code: "invalid_response", retryable: false });
 });
 
+// ACS-R1-04-T08.1 (task section 5/12, items 4-5): a 2xx body that declares
+// success but carries no customerMasterId, or one with an invalid format,
+// must never be trusted - never converted to no_match, always the safe
+// failure the adapter already uses for a malformed/incomplete 2xx body.
+test("a success status with no customerMasterId at all is rejected, never no_match", async () => {
+  handler = (_req, res) => sendJson(res, 200, { status: "resolved" });
+  const resolveResult = await makeAdapter().resolveCustomer({ channel: "whatsapp", externalId: "56912345678" });
+  assert.deepEqual(resolveResult, { status: "temporarily_unavailable", retryable: false });
+
+  handler = (_req, res) => sendJson(res, 201, { status: "created" });
+  const createResult = await makeAdapter().createCustomer(baseCreateInput());
+  assert.deepEqual(createResult, { status: "failed", code: "invalid_response", retryable: false });
+
+  handler = (_req, res) => sendJson(res, 200, { status: "completed", externalIdentityId: "ext-1" });
+  const linkResult = await makeAdapter().linkExternalIdentity(baseLinkInput());
+  assert.deepEqual(linkResult, { status: "failed", code: "invalid_response", retryable: false });
+});
+
+test("a success status with a malformed (non-numeric) customerMasterId is rejected, never trusted as-is", async () => {
+  handler = (_req, res) => sendJson(res, 200, { status: "resolved", customerMasterId: "'; DROP TABLE master_customer; --" });
+  const resolveResult = await makeAdapter().resolveCustomer({ channel: "whatsapp", externalId: "56912345678" });
+  assert.deepEqual(resolveResult, { status: "temporarily_unavailable", retryable: false });
+
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "not-a-real-id" });
+  const createResult = await makeAdapter().createCustomer(baseCreateInput());
+  assert.deepEqual(createResult, { status: "failed", code: "invalid_response", retryable: false });
+
+  handler = (_req, res) => sendJson(res, 200, { status: "already_linked", customerMasterId: "-1", externalIdentityId: "ext-1" });
+  const linkResult = await makeAdapter().linkExternalIdentity(baseLinkInput());
+  assert.deepEqual(linkResult, { status: "failed", code: "invalid_response", retryable: false });
+});
+
+test("a success status body that also carries an error envelope (incompatible fields) is rejected, never a false success", async () => {
+  handler = (_req, res) => sendJson(res, 200, { status: "created", customerMasterId: "1", error: { code: "unexpected" } });
+  const createResult = await makeAdapter().createCustomer(baseCreateInput());
+  assert.deepEqual(createResult, { status: "failed", code: "invalid_response", retryable: false });
+});
+
 test("mutating requests carry the caller-provided Idempotency-Key header", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "1" });
   await makeAdapter().createCustomer(baseCreateInput({ idempotencyKey: "customer-service:create:exec-77" }));
   assert.equal(lastHeaders["idempotency-key"], "customer-service:create:exec-77");
 });

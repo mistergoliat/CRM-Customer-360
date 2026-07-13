@@ -45,7 +45,7 @@ test("create policy: rejects when no resolution evidence was provided", () => {
 });
 
 test("create policy: rejects resolved evidence", () => {
-  const decision = evaluateCreateCustomerAuthority(baseCreateInput({ resolutionEvidence: evidenceFor({ status: "resolved", customerId: "cust-9" }) }));
+  const decision = evaluateCreateCustomerAuthority(baseCreateInput({ resolutionEvidence: evidenceFor({ status: "resolved", customerMasterId: "cust-9" }) }));
   assert.deepEqual(decision, { status: "denied", reasonCode: "resolution_status_resolved" });
 });
 
@@ -221,11 +221,11 @@ function makeFakePort(config: FakePortConfig = {}) {
     },
     async createCustomer(input) {
       calls.create.push(input);
-      return config.createCustomer ? config.createCustomer(input) : ({ status: "created", customerId: "new-1" } as CreateCustomerResult);
+      return config.createCustomer ? config.createCustomer(input) : ({ status: "created", customerMasterId: "new-1" } as CreateCustomerResult);
     },
     async linkExternalIdentity(input) {
       calls.link.push(input);
-      return config.linkExternalIdentity ? config.linkExternalIdentity(input) : ({ status: "completed", customerId: "cust-1", externalIdentityId: "ext-1" } as LinkExternalIdentityResult);
+      return config.linkExternalIdentity ? config.linkExternalIdentity(input) : ({ status: "completed", customerMasterId: "cust-1", externalIdentityId: "ext-1" } as LinkExternalIdentityResult);
     }
   };
   return { port, calls };

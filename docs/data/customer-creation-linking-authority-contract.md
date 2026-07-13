@@ -2,9 +2,9 @@
 title: Customer creation, linking and interest authority contract
 doc_id: data-customer-creation-linking-authority-contract
 status: approved
-version: "1.0.2"
+version: "2.0.0"
 owner: product
-last_reviewed: 2026-07-09
+last_reviewed: 2026-07-13
 source_of_truth_for:
   - CreateCustomerInput / CreateCustomerResult
   - LinkExternalIdentityInput / LinkExternalIdentityResult
@@ -110,6 +110,27 @@ resolve_customer
 - no escribe el interes dentro de `master_customer`;
 - puede asociarse a un `customerId` o a una identidad/oportunidad provisional;
 - registrar interes no equivale automaticamente a autorizar follow-up.
+
+## 1.1. `customerMasterId` (v2.0.0, ACS-R1-04-T08.1)
+
+Todo resultado exitoso de `resolve_customer`/`create_customer`/`link_external_identity` retorna `customerMasterId`, nunca el `customerId` ambiguo de versiones anteriores del contrato.
+
+```text
+customerMasterId
+=
+identificador canonico compatible con master_customer.id
+```
+
+Customer Service sigue siendo la unica autoridad de creacion y vinculacion (seccion 2). ACS no inserta ni actualiza `master_customer`. Antes de completar onboarding con un `customerMasterId` que provino de Customer Service, ACS verifica que exista una fila local `master_customer.id = customerMasterId` (`CustomerMasterProjectionReader`, solo lectura - [customer-service-http-contract](../integrations/customer-service-http-contract.md)). Si Customer Service reporta exito pero la proyeccion local aun no existe, ACS:
+
+- no completa onboarding con ese id;
+- no fabrica una fila `master_customer`;
+- no provoca una violacion de foreign key;
+- lleva el onboarding a `temporarily_unavailable`;
+- registra el warning estructurado `customer_master_projection_unavailable`;
+- conserva el `businessOutcome` original de la capability (`created`/`resolved`/`linked`) - la capability si tuvo exito en Customer Service, solo la proyeccion local esta pendiente.
+
+Una resolucion local que ya proviene de `master_customer` (via `customer_external_identity`, T02/T02.1) no requiere esta verificacion - ya esta garantizada por la FK existente de esa tabla.
 
 ## 2. Customer Service externo
 
@@ -263,11 +284,11 @@ interface CreateCustomerInput {
 type CreateCustomerResult =
   | {
       status: "created";
-      customerId: string;
+      customerMasterId: string;
     }
   | {
       status: "matched_existing";
-      customerId: string;
+      customerMasterId: string;
     }
   | {
       status: "missing_information";
@@ -348,12 +369,12 @@ interface LinkExternalIdentityInput {
 type LinkExternalIdentityResult =
   | {
       status: "completed";
-      customerId: string;
+      customerMasterId: string;
       externalIdentityId: string;
     }
   | {
       status: "already_linked";
-      customerId: string;
+      customerMasterId: string;
       externalIdentityId: string;
     }
   | {
@@ -577,4 +598,5 @@ T04 queda terminada cuando:
 - `ACS-R1-04-T04.1` implemento el `CustomerServicePort` (`lib/domains/customer-service`), las tres policies puras (`authority-policy.ts`) y el adapter HTTP fail-closed (`lib/integrations/customer-service/http-adapter.ts`, contrato en [customer-service-http-contract](../integrations/customer-service-http-contract.md)). Bump a `1.0.2` con `invalid_input`/`failed` explicitos en `CreateCustomerResult`/`LinkExternalIdentityResult` (seccion 3 de la tarea, secciones 4-5-8 de este documento). No se conecto al inbound, al LLM, al Capability Gateway, a Customer 360 ni se persistio ningun interes - eso sigue en `ACS-R1-04-T05`/`T06`.
 - No reemplaza ni modifica [customer-onboarding-identity-contract](./customer-onboarding-identity-contract.md); lo extiende en el punto donde ese contrato declara la separacion `resolve_customer != create_customer != link_external_identity` (seccion 6) y agrega `record_customer_interest` como una cuarta operacion distinta.
 - `master_customer` sigue sin ser escrito directamente por ACS; toda creacion y vinculacion pasa por Customer Service (ver seccion 2), consistente con [persistence-architecture-decision](./persistence-architecture-decision.md) y ADR-008.
+- `ACS-R1-04-T08.1` (v2.0.0, breaking): renombro `customerId` a `customerMasterId` en los tres resultados exitosos (seccion 1.1) y agrego el gate de proyeccion local obligatorio antes de `completeOnboarding`. No cambia la autoridad de `create_customer`/`link_external_identity`, el consentimiento, ni la separacion `resolve_customer != create_customer != link_external_identity`. Ver [customer-service-http-contract](../integrations/customer-service-http-contract.md) v2.0.0 y `docs/releases/ACS-R1-04-customer-identity-onboarding.md` para la evidencia de cierre.
 - Este contrato no agrega reglas deterministicas sobre como debe conversar la IA: la seccion 3 documenta la separacion entre autonomia estrategica (que explorar, preguntar o proponer) y autoridad operacional (que capability puede ejecutarse y bajo que precondiciones), no un guion de conversacion.

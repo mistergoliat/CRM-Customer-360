@@ -23,7 +23,13 @@ export function createLocalCustomerIdentityAdapter(): LocalCustomerIdentityAdapt
       if (!result.ok) {
         return { ok: false, error: result.error ?? "customer_external_identity_query_failed" };
       }
-      return { ok: true, candidateCustomerIds: result.row ? [String(result.row.customer_id)] : [] };
+      // A row can exist with customer_id = NULL (an unresolved external
+      // identity persisted by resolveOrPersistNativeExternalIdentity,
+      // T06.2, for a first-contact sender with no match yet). That is not a
+      // candidate match - without this guard, String(null) === "null" was
+      // counted as one candidate, making resolveIdentity report a brand new
+      // contact as "identified" with a bogus literal customerId "null".
+      return { ok: true, candidateCustomerIds: result.row && result.row.customer_id !== null ? [String(result.row.customer_id)] : [] };
     },
 
     async findCustomersByNormalizedPhone({ normalizedPhone }): Promise<CustomerIdentityLookupResult> {

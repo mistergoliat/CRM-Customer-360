@@ -2,9 +2,9 @@
 title: Capability - Customer Service (create_customer, link_external_identity, record_customer_interest)
 doc_id: capability-customer-service
 status: approved
-version: "1.2.0"
+version: "1.3.0"
 owner: product
-last_reviewed: 2026-07-09
+last_reviewed: 2026-07-13
 source_of_truth_for:
   - Customer Service port capability contract
   - create_customer / link_external_identity / record_customer_interest authority
@@ -60,6 +60,12 @@ status: designed_partial
 ```
 
 `record_customer_interest` sigue sin registrar en el Gateway y sin efecto operacional - T06 no le agrego un no-op ni le dio persistencia. Customer 360 sigue sin recibir escritura de ninguna de estas operaciones; su lectura ahora esta detras de una compuerta de acceso explicita (`contextAccess`, ver [ACS-R1-04-T05/T06](../releases/ACS-R1-04-customer-identity-onboarding.md)) que no depende de estas capabilities.
+
+## Proyeccion local (ACS-R1-04-T08.1)
+
+`resolve_customer`/`create_customer`/`link_external_identity` retornan `customerMasterId` en sus resultados exitosos (`resolved`/`created`/`matched_existing`/`completed`/`already_linked`) - el identificador canonico compatible con `master_customer.id`, nunca el `customerId` ambiguo de versiones anteriores. Antes de que cualquiera de las tres capabilities complete onboarding con ese `customerMasterId`, ACS verifica que exista la fila local correspondiente (`CustomerMasterProjectionReader`, solo lectura, `lib/domains/customer-service/customerMasterProjection.ts`; gate centralizado en `lib/brain/commercial/native-cycle/customer-session/onboardingTransitions.ts#completeOnboardingWithVerifiedCustomer`). Customer Service sigue siendo la unica autoridad de creacion/vinculacion; ACS no inserta ni actualiza `master_customer`.
+
+Si Customer Service reporta exito (`businessOutcome`: `created`/`resolved`/`completed`) pero la proyeccion local aun no existe: el `gatewayStatus`/`businessOutcome` de la capability no cambian (la llamada si tuvo exito), pero ACS no completa onboarding con ese id, no vincula la conversacion, no carga Customer 360, y registra el warning estructurado `customer_master_projection_unavailable` (via los eventos T07 ya existentes). Un fallo al consultar la proyeccion local es fail-closed y usa el warning `customer_master_projection_check_failed`, distinto y sin reintentar Customer Service en el mismo turno. Ver [customer-creation-linking-authority-contract](../data/customer-creation-linking-authority-contract.md) seccion 1.1 y [customer-service-http-contract](../integrations/customer-service-http-contract.md) v2.0.0.
 
 ## Entrada / Salida
 

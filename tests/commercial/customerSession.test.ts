@@ -162,8 +162,8 @@ function onboardingRow(overrides: Partial<CustomerOnboardingState> = {}): Custom
   };
 }
 
-function resolvedEvidence(customerId: string): CustomerResolutionEvidence {
-  return { source: "customer_service", requestId: "req-1", checkedAt: "2026-07-09T12:00:01.000Z", result: { status: "resolved", customerId } };
+function resolvedEvidence(customerMasterId: string): CustomerResolutionEvidence {
+  return { source: "customer_service", requestId: "req-1", checkedAt: "2026-07-09T12:00:01.000Z", result: { status: "resolved", customerMasterId } };
 }
 function noMatchEvidence(): CustomerResolutionEvidence {
   return { source: "customer_service", requestId: "req-2", checkedAt: "2026-07-09T12:00:01.000Z", result: { status: "no_match" } };
@@ -174,6 +174,13 @@ function conflictEvidence(): CustomerResolutionEvidence {
 function unavailableEvidence(): CustomerResolutionEvidence {
   return { source: "customer_service", requestId: "req-4", checkedAt: "2026-07-09T12:00:01.000Z", result: { status: "temporarily_unavailable", retryable: true } };
 }
+
+// ACS-R1-04-T08.1: no DB in this file (see header comment) - default every
+// call to a projection reader that reports every customerMasterId as
+// locally projected, since this file's own concern is resolveNativeCustomerSession's
+// resolution/reconciliation logic, not the projection gate itself. Individual
+// tests may still override dependencies.projectionReader explicitly.
+const ALWAYS_VERIFIED_PROJECTION_READER = { async exists() { return true; } };
 
 function baseInput(overrides: {
   conversationId?: string;
@@ -188,7 +195,7 @@ function baseInput(overrides: {
     messageText: overrides.messageText ?? "Hola, tengo una consulta",
     correlationId: "corr-1",
     priorConversationCustomerId: overrides.priorConversationCustomerId ?? null,
-    dependencies: overrides.dependencies
+    dependencies: { projectionReader: ALWAYS_VERIFIED_PROJECTION_READER, ...overrides.dependencies }
   };
 }
 

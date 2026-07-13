@@ -49,6 +49,7 @@ export const CUSTOMER_ONBOARDING_TRANSITION_OPERATIONS = [
   "complete",
   "mark_conflict",
   "mark_temporarily_unavailable",
+  "retry_resolution",
   "record_verification_failure"
 ] as const;
 export type CustomerOnboardingTransitionOperation = (typeof CUSTOMER_ONBOARDING_TRANSITION_OPERATIONS)[number];
