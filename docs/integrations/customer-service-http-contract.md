@@ -2,9 +2,9 @@
 title: Customer Service HTTP contract
 doc_id: integration-customer-service-http-contract
 status: approved
-version: "1.0.0"
+version: "2.0.0"
 owner: architecture
-last_reviewed: 2026-07-09
+last_reviewed: 2026-07-13
 source_of_truth_for:
   - Customer Service HTTP wire contract
   - Customer Service error envelope
@@ -75,12 +75,14 @@ Request:
 Respuesta `200`, cuerpo `status`:
 
 ```json
-{ "status": "resolved", "customerId": "123" }
+{ "status": "resolved", "customerMasterId": "123" }
 { "status": "no_match" }
 { "status": "conflict", "conflictCode": "multiple_candidates" }
 ```
 
 No hay variante `failed` para esta operacion (contrato de datos, seccion 1): un `5xx` no clasificado se mapea a `temporarily_unavailable`, nunca se inventa un sexto status.
+
+**v2.0.0 (breaking, ACS-R1-04-T08.1):** el campo se llama `customerMasterId`, no el `customerId` ambiguo de v1.0.0 - semantica obligatoria: identificador canonico compatible con `master_customer.id`. Ver [customer-creation-linking-authority-contract](../data/customer-creation-linking-authority-contract.md) seccion 1.1.
 
 ### `POST /v1/customers`
 
@@ -105,8 +107,8 @@ Request:
 Respuesta `2xx`, cuerpo `status`:
 
 ```json
-{ "status": "created", "customerId": "999" }
-{ "status": "matched_existing", "customerId": "42" }
+{ "status": "created", "customerMasterId": "999" }
+{ "status": "matched_existing", "customerMasterId": "42" }
 { "status": "missing_information", "requiredFields": ["email"] }
 { "status": "denied", "reason": "..." }
 ```
@@ -127,8 +129,8 @@ Request:
 Respuesta `2xx`, cuerpo `status`:
 
 ```json
-{ "status": "completed", "customerId": "cust-1", "externalIdentityId": "ext-1" }
-{ "status": "already_linked", "customerId": "cust-1", "externalIdentityId": "ext-1" }
+{ "status": "completed", "customerMasterId": "42", "externalIdentityId": "ext-1" }
+{ "status": "already_linked", "customerMasterId": "42", "externalIdentityId": "ext-1" }
 { "status": "denied", "reason": "..." }
 ```
 
@@ -162,6 +164,16 @@ Cualquier respuesta no `2xx` usa:
 | respuesta invalida (JSON invalido o forma inesperada en `2xx`) | `failed` (`create_customer` / `link_external_identity`); `temporarily_unavailable` `retryable:false` para `resolve_customer` |
 
 Configuracion ausente (`CUSTOMER_SERVICE_BASE_URL` o `CUSTOMER_SERVICE_API_KEY` sin definir) nunca intenta una llamada HTTP: `createCustomerServicePort()` devuelve un port fail-closed que responde `temporarily_unavailable` en las tres operaciones. Nunca se interpreta como `no_match`.
+
+## Validacion de `customerMasterId` (v2.0.0, ACS-R1-04-T08.1)
+
+Una respuesta `2xx` que declara un status exitoso (`resolved`/`created`/`matched_existing`/`completed`/`already_linked`) pero:
+
+- no incluye `customerMasterId`;
+- incluye un `customerMasterId` vacio o de formato invalido (debe ser un entero positivo en string, compatible con `master_customer.id`);
+- incluye simultaneamente un envelope `error` (campos incompatibles);
+
+se rechaza en el adapter, fail-closed. Nunca se reinterpreta como `no_match`: se mapea a `temporarily_unavailable`/`failed` segun la operacion, igual que un payload malformado (ver "Codigos HTTP -> outcome"). El adapter valida forma; ACS ademas verifica, antes de completar onboarding, que ese `customerMasterId` corresponda a una fila real en `master_customer` local (`CustomerMasterProjectionReader`, `lib/domains/customer-service/customerMasterProjection.ts`) - ver [customer-creation-linking-authority-contract](../data/customer-creation-linking-authority-contract.md) seccion 1.1.
 
 ## Redaccion de PII
 
