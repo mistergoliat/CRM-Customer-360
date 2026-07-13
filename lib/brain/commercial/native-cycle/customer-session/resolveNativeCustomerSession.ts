@@ -191,9 +191,16 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
   }
 
   // 3. External resolution - only local no_match + active onboarding requiring identity (section 7).
+  // ACS-R1-04-T08.1 (runtime recovery): a customer_master projection that
+  // was not ready when create_customer/resolve_customer originally
+  // succeeded lands onboarding in temporarily_unavailable (onboardingTransitions.ts,
+  // completeOnboardingWithVerifiedCustomer) - never a permanent dead end.
+  // A later inbound, still without a local identity match, gets exactly one
+  // fresh resolve_customer attempt per turn, same as required/collecting.
   let externalOutcome: string | null = null;
   let freshEvidence: CustomerResolutionEvidence | null = null;
-  const onboardingNeedsIdentity = onboarding !== null && (onboarding.status === "required" || onboarding.status === "collecting");
+  const onboardingNeedsIdentity =
+    onboarding !== null && (onboarding.status === "required" || onboarding.status === "collecting" || onboarding.status === "temporarily_unavailable");
   if (identity.status === "identification_required" && onboardingNeedsIdentity && onboarding) {
     let evidence: CustomerResolutionEvidence;
     try {

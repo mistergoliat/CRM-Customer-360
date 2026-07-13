@@ -6,7 +6,7 @@ import { getPool, queryRows, safeQueryRows } from "@/lib/db";
 import { createMasterCustomer } from "@/lib/integrations/customer-master/customer-repository";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle/runNativeAutonomousCycle";
-import { resetCustomerServicePortForTests, resetOnboardingServiceForTests, completeOnboardingWithVerifiedCustomer, verifyCustomerMasterProjection } from "@/lib/brain/commercial/capability-gateway";
+import { resetCustomerServicePortForTests, resetOnboardingServiceForTests } from "@/lib/brain/commercial/capability-gateway";
 import { createCustomerOnboardingService } from "@/lib/domains/customer-onboarding";
 import { createCustomer360QueryService } from "@/lib/domains/customer-360";
 import type { Customer360LoadResult } from "@/lib/domains/customer-360";
@@ -811,8 +811,8 @@ test("T08-A6: create_customer con proyeccion local no disponible (ACS-R1-04-T08.
   fakeState = createFakeCustomerServiceState();
   fakeState.simulateProjectionLag = true;
   const waId = uniqueWaId();
-  const phoneNumberId = `phone-${uniqueSuffix("a7")}`;
-  const email = `${uniqueSuffix("a7-lag")}@example.com`;
+  const phoneNumberId = `phone-${uniqueSuffix("a6")}`;
+  const email = `${uniqueSuffix("a6-lag")}@example.com`;
 
   await turn({ waId, phoneNumberId, text: "Hola, quiero cotizar", env: POST_PLAN_ENV, provider: createQuoteIntentProvider(), piiTerms: [waId] });
   await turn({ waId, phoneNumberId, text: "Me llamo Carla Diaz", env: POST_PLAN_ENV, provider: createQuoteIntentProvider(), piiTerms: [waId, "Carla Diaz"] });
@@ -866,50 +866,121 @@ test("T08-A6: create_customer con proyeccion local no disponible (ACS-R1-04-T08.
   assert.equal(customersBefore, 0);
   assert.equal(await countMasterCustomers(email), 0);
 
-  // ---- Reintento posterior (task section 10): once the local projection
-  // appears, the gate itself resolves it correctly and completes onboarding
-  // without creating a second customer. landOnboardingInTerminalState's
-  // temporarily_unavailable is a real terminal status (task section 8's own
-  // wording) - like the pre-existing customer_service_unavailable path this
-  // mirrors, nothing in the current runtime auto-retries a turn stuck there
-  // (CustomerOnboardingService.retryResolution has no productive caller,
-  // documented debt since T06.2/T06.1 - wiring it is out of T08.1's scope:
-  // "reconciliar customerMasterId", not "add onboarding auto-retry"). This
-  // demonstrates the gate's own idempotent, retry-safe behavior directly
-  // against the real DB-backed service and real master_customer table,
-  // which is what actually changes between the two calls.
-  const stillStuck = await onboardingService.getState(String(createTurn.inbound.conversationId));
-  assert.equal(stillStuck?.status, "temporarily_unavailable");
+  // ---- Turno N+1 (ACS-R1-04-T08.1, recuperacion runtime real): la
+  // proyeccion aparece entre turnos - fuera del runtime de ACS, exactamente
+  // como Customer Service terminando su propia sincronizacion - y un
+  // inbound real, via el mismo entrypoint productivo (turn(), nunca
+  // verifyCustomerMasterProjection/completeOnboardingWithVerifiedCustomer
+  // invocados directamente como sustituto del runtime), debe resolver y
+  // completar sin un segundo create_customer.
+  // Matched by phoneNumber (from trustedInbound.normalizedPhone, exact) rather
+  // than by email: extractCustomerOnboardingFields's free-text email capture
+  // keeps trailing punctuation from a combined "email + consent" message
+  // (pre-existing, unrelated to T08.1), so an exact email string match here
+  // would be fragile - the phone is never derived from free text.
+  const assignedCustomerMasterId = fakeState.customers.find((customer) => customer.phoneNumber === waId)?.id;
+  assert.ok(assignedCustomerMasterId, "the fake Customer Service must have recorded the customer it created in turn N");
 
-  // A second, independent onboarding (fresh conversation) reaches "resolving"
-  // for the same Customer Service response - the state completeOnboarding
-  // actually requires (CompleteOnboardingInput/COMPLETE_FROM).
-  const secondConversation = await sendInbound({ waId: uniqueWaId(), phoneNumberId: `phone-${uniqueSuffix("a7-retry")}`, text: "Hola" });
-  const started = await onboardingService.startOnboarding({ conversationId: String(secondConversation.conversationId), purpose: "quote", pendingFields: [] });
-  assert.ok(started.ok);
-  const resolving = await onboardingService.markResolving({ conversationId: String(secondConversation.conversationId), expectedVersion: (started as { state: { version: number } }).state.version });
-  assert.ok(resolving.ok);
-  const resolvingState = (resolving as { state: typeof stillStuck }).state as NonNullable<typeof stillStuck>;
+  await queryRows("INSERT INTO master_customer (id, firstname, lastname, email, platform_origin) VALUES (?, 'Carla', 'Diaz', ?, 'whatsapp')", [assignedCustomerMasterId, email]);
 
-  // First check (before the projection exists) - the PURE verification only
-  // (never completeOnboardingWithVerifiedCustomer here, which would itself
-  // land this row in temporarily_unavailable and consume it, just like the
-  // original turn above - this check must never mutate the row so the same
-  // "resolving" state can be reused for the real completion below).
-  const beforeProjection = await verifyCustomerMasterProjection("900099999");
-  assert.equal(beforeProjection.status, "not_found");
+  const requestsBeforeRecovery = fakeState.requests.length;
+  const recoveryTurn = await turn({
+    waId,
+    phoneNumberId,
+    text: "Hola, sigo esperando la cotizacion",
+    env: POST_PLAN_ENV,
+    provider: createQuoteIntentProvider(),
+    piiTerms: [waId, email, "Carla Diaz"]
+  });
 
-  // The projection now appears locally (Customer Service finishing its own sync) - never inserted by ACS in this assertion either.
-  const provisioned = await createMasterCustomer({ firstname: "Carla", lastname: "Diaz", email, platformOrigin: "whatsapp" });
-  assert.ok(provisioned.ok, provisioned.ok ? "" : provisioned.error);
-  const realCustomerId = String(provisioned.data.id);
+  const resolveCallsRecovery = fakeState.requests.slice(requestsBeforeRecovery).filter((request) => request.url === "/v1/customers/resolve");
+  const createCallsRecovery = fakeState.requests.slice(requestsBeforeRecovery).filter((request) => request.url === "/v1/customers");
+  assert.equal(resolveCallsRecovery.length, 1, "resolve_customer must run exactly once during the recovery turn");
+  assert.equal(createCallsRecovery.length, 0, "create_customer must never run again during recovery");
 
-  // Gate check against the still-"resolving" row - now verified, completes for real, never a second customer.
-  const afterProjection = await completeOnboardingWithVerifiedCustomer(onboardingService, resolvingState, realCustomerId, "corr-a7-gate-after");
-  assert.equal(afterProjection.verifiedCustomerId, realCustomerId);
-  assert.equal(afterProjection.state.status, "completed");
-  assert.equal(afterProjection.state.customerId, realCustomerId);
-  assert.equal(await countMasterCustomers(email), 1, "no second customer was created");
+  const stateAfterRecovery = await onboardingService.getState(String(createTurn.inbound.conversationId));
+  assert.equal(stateAfterRecovery?.status, "completed");
+  assert.equal(stateAfterRecovery?.customerId, assignedCustomerMasterId);
+
+  // no second customer created, no second create_customer execution ever
+  // recorded for the original turn's correlationId either.
+  assert.equal(await countMasterCustomers(email), 1);
+  assert.equal((await loadCapabilityExecutions(createTurn.inbound.correlationId, "create_customer")).length, 1);
+
+  const retryTransition = (await loadEventsByType("customer_onboarding_transition_recorded", recoveryTurn.inbound.correlationId)).find(
+    (event) => event.payload.operation === "retry_resolution"
+  );
+  assert.ok(retryTransition, "the temporarily_unavailable -> resolving retry must be recorded as T07 evidence");
+  const completeTransition = (await loadEventsByType("customer_onboarding_transition_recorded", recoveryTurn.inbound.correlationId)).find(
+    (event) => event.payload.operation === "complete"
+  );
+  assert.ok(completeTransition);
+  assert.equal(completeTransition?.payload.hasResolvedCustomer, true);
+
+  // fresh evidence this turn drove the recovery - never the earlier warning by itself.
+  const resolutionEventsRecovery = await loadEventsByType("customer_identity_resolution_recorded", recoveryTurn.inbound.correlationId);
+  const externalResolution = resolutionEventsRecovery.find((event) => event.payload.resolver === "customer_service");
+  assert.ok(externalResolution);
+  assert.equal(externalResolution?.payload.outcome, "identified");
+
+  // Customer 360 access follows the existing contextAccess rules exactly as
+  // for any other turn that completes onboarding mid-turn (see T08-B3) - no
+  // special-cased loading tied to the recovery path itself.
+  const conversationRowAfterRecovery = await safeQueryRows<{ customer_id: number | null }>(
+    "SELECT customer_id FROM conversation WHERE id = ? LIMIT 1",
+    [createTurn.inbound.conversationId as number]
+  );
+  assert.ok(conversationRowAfterRecovery.ok);
+});
+
+test("T08-A7: recuperacion runtime - la proyeccion sigue ausente en el turno de reintento (regresion) - resolve_customer una vez, cero create_customer, onboarding sigue temporarily_unavailable, cero excepcion, warning no duplicado", async () => {
+  fakeState = createFakeCustomerServiceState();
+  fakeState.simulateProjectionLag = true;
+  const waId = uniqueWaId();
+  const phoneNumberId = `phone-${uniqueSuffix("a7")}`;
+  const email = `${uniqueSuffix("a7-lag")}@example.com`;
+
+  await turn({ waId, phoneNumberId, text: "Hola, quiero cotizar", env: POST_PLAN_ENV, provider: createQuoteIntentProvider(), piiTerms: [waId] });
+  await turn({ waId, phoneNumberId, text: "Me llamo Diego Soto", env: POST_PLAN_ENV, provider: createQuoteIntentProvider(), piiTerms: [waId, "Diego Soto"] });
+  const createTurn = await turn({
+    waId,
+    phoneNumberId,
+    text: `Mi correo es ${email}, autorizo crear mi ficha de cliente`,
+    env: POST_PLAN_ENV,
+    provider: createQuoteIntentProvider(),
+    piiTerms: [waId, email, "Diego Soto"]
+  });
+
+  const onboardingService = createCustomerOnboardingService();
+  const stateAfterTurnN = await onboardingService.getState(String(createTurn.inbound.conversationId));
+  assert.equal(stateAfterTurnN?.status, "temporarily_unavailable");
+
+  // Entre turnos: la proyeccion local NO aparece (a diferencia de T08-A6) - el retry debe fallar de la misma forma segura, sin excepcion.
+  const requestsBeforeRetryTurn = fakeState.requests.length;
+  const retryTurn = await turn({
+    waId,
+    phoneNumberId,
+    text: "Hola, alguna novedad con mi cotizacion",
+    env: POST_PLAN_ENV,
+    provider: createQuoteIntentProvider(),
+    piiTerms: [waId, email, "Diego Soto"]
+  });
+  assert.ok(retryTurn.cycle, "the cycle must complete without throwing even when the projection is still missing");
+
+  const resolveCallsRetry = fakeState.requests.slice(requestsBeforeRetryTurn).filter((request) => request.url === "/v1/customers/resolve");
+  const createCallsRetry = fakeState.requests.slice(requestsBeforeRetryTurn).filter((request) => request.url === "/v1/customers");
+  assert.equal(resolveCallsRetry.length, 1, "resolve_customer must run exactly once during the retry turn");
+  assert.equal(createCallsRetry.length, 0, "create_customer must never run automatically as recovery");
+
+  const stateAfterRetry = await onboardingService.getState(String(createTurn.inbound.conversationId));
+  assert.equal(stateAfterRetry?.status, "temporarily_unavailable", "onboarding stays temporarily_unavailable - never completed with an unverified id");
+  assert.equal(stateAfterRetry?.customerId, null);
+
+  const warningEventsRetry = await loadEventsByType("customer_session_warning_recorded", retryTurn.inbound.correlationId);
+  const projectionWarnings = warningEventsRetry.filter((event) => event.payload.warningCode === "customer_master_projection_unavailable");
+  assert.equal(projectionWarnings.length, 1, "the warning must never be duplicated within the same turn (existing dedupe rules)");
+
+  assert.equal(await countMasterCustomers(email), 0, "ACS never writes master_customer even on a failed retry");
 });
 
 // ===========================================================================

@@ -11,20 +11,47 @@ import { recordOnboardingTransitionIfChanged } from "./identityAuditEvents";
 // -> Capability Gateway -> registry -> the identity capabilities would
 // otherwise cycle back here).
 
-/** Moves onboarding into a terminal state (conflict/temporarily_unavailable), landing through "resolving" first if needed. Never reinitiates an already-terminal state. */
+/**
+ * Moves onboarding into "resolving" from any state that may legitimately
+ * resume resolution: required/collecting (via markResolving, pre-existing)
+ * or temporarily_unavailable (via retryResolution - ACS-R1-04-T08.1 runtime
+ * recovery). A customer Customer Service already resolved/created, but
+ * whose local master_customer projection was not ready yet, must not be a
+ * permanent dead end: a later turn's fresh resolve_customer attempt, or a
+ * newly-detected conflict, may resume from here. Any other status
+ * (conflict/completed/temporarily_blocked) passes through unchanged - never
+ * reinitiated.
+ */
+async function ensureResolving(
+  onboardingService: CustomerOnboardingService,
+  onboarding: CustomerOnboardingState,
+  correlationId?: string | null
+): Promise<{ state: CustomerOnboardingState; warning: string | null }> {
+  if (onboarding.status === "required" || onboarding.status === "collecting") {
+    const moved = await onboardingService.markResolving({ conversationId: onboarding.conversationId, expectedVersion: onboarding.version });
+    if (!moved.ok) return { state: onboarding, warning: moved.status === "onboarding_state_version_conflict" ? "customer_onboarding_version_conflict" : null };
+    await recordOnboardingTransitionIfChanged({ operation: "mark_resolving", previous: onboarding, result: moved, correlationId });
+    return { state: moved.state, warning: null };
+  }
+  if (onboarding.status === "temporarily_unavailable") {
+    const moved = await onboardingService.retryResolution({ conversationId: onboarding.conversationId, expectedVersion: onboarding.version });
+    if (!moved.ok) return { state: onboarding, warning: moved.status === "onboarding_state_version_conflict" ? "customer_onboarding_version_conflict" : null };
+    await recordOnboardingTransitionIfChanged({ operation: "retry_resolution", previous: onboarding, result: moved, correlationId });
+    return { state: moved.state, warning: null };
+  }
+  return { state: onboarding, warning: null };
+}
+
+/** Moves onboarding into a terminal state (conflict/temporarily_unavailable), landing through "resolving" first if needed (including recovery from a prior temporarily_unavailable - see ensureResolving). Never reinitiates an already-terminal state. */
 export async function landOnboardingInTerminalState(
   onboardingService: CustomerOnboardingService,
   onboarding: CustomerOnboardingState,
   target: "conflict" | "temporarily_unavailable",
   correlationId?: string | null
 ): Promise<{ state: CustomerOnboardingState; warning: string | null }> {
-  let current = onboarding;
-  if (current.status === "required" || current.status === "collecting") {
-    const moved = await onboardingService.markResolving({ conversationId: current.conversationId, expectedVersion: current.version });
-    if (!moved.ok) return { state: current, warning: moved.status === "onboarding_state_version_conflict" ? "customer_onboarding_version_conflict" : null };
-    await recordOnboardingTransitionIfChanged({ operation: "mark_resolving", previous: current, result: moved, correlationId });
-    current = moved.state;
-  }
+  const ensured = await ensureResolving(onboardingService, onboarding, correlationId);
+  if (ensured.warning) return ensured;
+  const current = ensured.state;
   // Never reinitiate an already-terminal state (conflict/temporarily_blocked/completed) - section 18.
   if (current.status !== "resolving") return { state: current, warning: null };
 
@@ -42,20 +69,16 @@ export async function landOnboardingInTerminalState(
   return { state: transition.state, warning: null };
 }
 
-/** Completes onboarding with a resolved customerId, landing through "resolving" first if needed. */
+/** Completes onboarding with a resolved customerId, landing through "resolving" first if needed (including recovery from a prior temporarily_unavailable - see ensureResolving). */
 export async function completeOnboardingWithCustomer(
   onboardingService: CustomerOnboardingService,
   onboarding: CustomerOnboardingState,
   customerId: string,
   correlationId?: string | null
 ): Promise<{ state: CustomerOnboardingState; warning: string | null }> {
-  let current = onboarding;
-  if (current.status === "required" || current.status === "collecting") {
-    const moved = await onboardingService.markResolving({ conversationId: current.conversationId, expectedVersion: current.version });
-    if (!moved.ok) return { state: current, warning: moved.status === "onboarding_state_version_conflict" ? "customer_onboarding_version_conflict" : null };
-    await recordOnboardingTransitionIfChanged({ operation: "mark_resolving", previous: current, result: moved, correlationId });
-    current = moved.state;
-  }
+  const ensured = await ensureResolving(onboardingService, onboarding, correlationId);
+  if (ensured.warning) return ensured;
+  const current = ensured.state;
   if (current.status !== "resolving") return { state: current, warning: null };
 
   const completed = await onboardingService.completeOnboarding({ conversationId: current.conversationId, expectedVersion: current.version, customerId });
