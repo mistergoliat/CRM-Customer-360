@@ -1,6 +1,6 @@
 import { createCustomerOnboardingService } from "@/lib/domains/customer-onboarding";
 import type { CustomerOnboardingCollectedData, CustomerOnboardingService, CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
-import type { ResolveCustomerInput } from "@/lib/domains/customer-service";
+import type { CustomerMasterProjectionReader, ResolveCustomerInput } from "@/lib/domains/customer-service";
 import { executeGovernedCapability } from "../../capability-gateway/executeCapability";
 import type { CapabilityGatewayResult } from "../../capability-gateway/types";
 import { extractCustomerOnboardingFields } from "./extractCustomerOnboardingFields";
@@ -12,7 +12,7 @@ import {
   mapOperationToOnboardingPurpose,
   requiredOnboardingFieldsForPurpose
 } from "./onboardingPurposeMapping";
-import { completeOnboardingWithCustomer, landOnboardingInTerminalState } from "./onboardingTransitions";
+import { completeOnboardingWithVerifiedCustomer, landOnboardingInTerminalState } from "./onboardingTransitions";
 import { defaultResolveCustomerExternal, type ResolveCustomerExternalFn } from "./resolveNativeCustomerSession";
 import { mergeWarnings } from "./warnings";
 import type { NativeCustomerSessionExecutionContext } from "./types";
@@ -33,6 +33,8 @@ export type CustomerOnboardingPlannedOperation = {
 export type CustomerOnboardingPostPlanDependencies = {
   onboardingService?: CustomerOnboardingService;
   resolveCustomerExternal?: ResolveCustomerExternalFn;
+  /** ACS-R1-04-T08.1. Test-only injection seam for the customer_master projection gate - defaults to the real, DB-backed reader (see completeOnboardingWithVerifiedCustomer). */
+  projectionReader?: CustomerMasterProjectionReader;
   now?: () => Date;
 };
 
@@ -91,6 +93,7 @@ function buildCollectedPatch(candidates: ReturnType<typeof extractCustomerOnboar
 export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardingPostPlanInput): Promise<CustomerOnboardingPostPlanResult> {
   const onboardingService = input.dependencies?.onboardingService ?? createCustomerOnboardingService();
   const resolveCustomerExternal = input.dependencies?.resolveCustomerExternal ?? defaultResolveCustomerExternal;
+  const projectionReader = input.dependencies?.projectionReader;
   const now = input.dependencies?.now ?? (() => new Date());
 
   const session = input.customerSessionExecution;
@@ -200,9 +203,10 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
       }
 
       if (evidence.result.status === "resolved") {
-        const landed = await completeOnboardingWithCustomer(onboardingService, onboarding, evidence.result.customerId, input.correlationId);
-        onboarding = landed.state;
-        if (landed.warning) warnings.push(landed.warning);
+        // ACS-R1-04-T08.1: gate before trusting Customer Service's customerMasterId.
+        const gated = await completeOnboardingWithVerifiedCustomer(onboardingService, onboarding, evidence.result.customerMasterId, input.correlationId, { projectionReader });
+        onboarding = gated.state;
+        if (gated.warning) warnings.push(gated.warning);
       } else if (evidence.result.status === "conflict") {
         warnings.push("customer_identity_conflict");
         const landed = await landOnboardingInTerminalState(onboardingService, onboarding, "conflict", input.correlationId);
@@ -228,6 +232,12 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
         });
         const refreshed = await onboardingService.getState(onboarding.conversationId);
         if (refreshed) onboarding = refreshed;
+        // ACS-R1-04-T08.1: surface the customer_master_projection_* warning
+        // the capability may have recorded (see createCustomerCapability's
+        // execute() in customerIdentityCapabilities.ts) into this phase's
+        // aggregated, deduped warning list - never a second, separate
+        // recording call.
+        warnings.push(...(outcome.warnings ?? []));
         const finalWarnings = mergeWarnings(warnings);
         await recordSessionWarnings({
           phase: "post_plan",
@@ -267,6 +277,7 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
       });
       const refreshed = await onboardingService.getState(session.conversationId);
       if (refreshed) onboarding = refreshed;
+      warnings.push(...(outcome.warnings ?? []));
       const finalWarnings = mergeWarnings(warnings);
       await recordSessionWarnings({
         phase: "post_plan",

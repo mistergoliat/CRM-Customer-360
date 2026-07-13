@@ -155,7 +155,7 @@ test("resolve_customer's persisted request summary is allowlisted - never the ra
 });
 
 test("resolve_customer's persisted response summary separates gatewayStatus from businessOutcome and never carries a raw customerId", async () => {
-  handler = (_req, res) => sendJson(res, 200, { status: "resolved", customerId: "700" });
+  handler = (_req, res) => sendJson(res, 200, { status: "resolved", customerMasterId: "700" });
   const correlationId = `identity-summary-resolve-response-${Date.now()}`;
   await executeGovernedCapability("resolve_customer", { externalId: "56911112222", phoneNumber: null, email: null }, { correlationId });
   const row = await loadExecutionRow(correlationId);
@@ -168,7 +168,7 @@ test("resolve_customer's persisted response summary separates gatewayStatus from
 });
 
 test("create_customer's persisted request summary reflects the trusted session only - never onboarding.collected values", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "700" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "700" });
   const correlationId = `identity-summary-create-${Date.now()}`;
   await executeGovernedCapability("create_customer", {}, context(session(), correlationId));
   const row = await loadExecutionRow(correlationId);
@@ -191,7 +191,7 @@ test("create_customer's persisted response summary reports business outcome conf
 });
 
 test("link_external_identity's persisted request/response summaries are also allowlisted and PII-free", async () => {
-  handler = (_req, res) => sendJson(res, 200, { status: "completed", customerId: "700", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 200, { status: "completed", customerMasterId: "700", externalIdentityId: "ext-1" });
   const correlationId = `identity-summary-link-${Date.now()}`;
   const linkedSession = session({ identity: { status: "identified", customerId: "700", source: "normalized_phone", localResolutionOutcome: "identified", externalResolutionOutcome: null } });
   await executeGovernedCapability("link_external_identity", {}, context(linkedSession, correlationId));

@@ -6,7 +6,7 @@ import { getPool, queryRows, safeQueryRows } from "@/lib/db";
 import { createMasterCustomer } from "@/lib/integrations/customer-master/customer-repository";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle/runNativeAutonomousCycle";
-import { resetCustomerServicePortForTests, resetOnboardingServiceForTests } from "@/lib/brain/commercial/capability-gateway";
+import { resetCustomerServicePortForTests, resetOnboardingServiceForTests, completeOnboardingWithVerifiedCustomer, verifyCustomerMasterProjection } from "@/lib/brain/commercial/capability-gateway";
 import { createCustomerOnboardingService } from "@/lib/domains/customer-onboarding";
 import { createCustomer360QueryService } from "@/lib/domains/customer-360";
 import type { Customer360LoadResult } from "@/lib/domains/customer-360";
@@ -62,76 +62,75 @@ type FakeCustomerServiceState = {
   externalIdentities: FakeServiceExternalIdentity[];
   idempotencyResponses: Map<string, { status: number; body: unknown }>;
   requests: FakeServiceRequest[];
-  nextCustomerId: number;
   nextExternalIdentityId: number;
   /**
-   * DISCOVERED GAP (T08): CustomerOnboardingService.completeOnboarding writes
-   * whatever customerId Customer Service returns straight into
-   * crm_customer_onboarding_state.customer_id, which carries a real FK to
-   * master_customer(id) (migration 023). Nothing in the current
-   * implementation reconciles Customer Service's own id space with the
-   * local master_customer table - create_customer never writes
-   * master_customer itself ("ACS nunca escribe directamente en las fuentes
-   * maestras" per the authority contract), so a genuinely independent
-   * Customer Service would make every completed onboarding fail this FK.
-   * Every prior T06/T06.1 test that exercises this path uses a fully
-   * in-memory fake CustomerOnboardingService (no SQL, no FK) - this is the
-   * first suite to combine a real HTTP Customer Service double with the
-   * real, DB-backed onboarding service, which is what surfaced it. Fixing
-   * this for real (dropping the FK, or projecting a local customer record)
-   * is an architecture decision out of T08's scope (see section 12
-   * boundaries and the closure report). As a test-only accommodation, when
-   * set, handleCreate returns this pre-provisioned, real local
-   * master_customer id instead of an independent counter value, so the rest
-   * of the contract (consent, idempotency, Gateway summaries, T07 events)
-   * can still be exercised meaningfully.
+   * ACS-R1-04-T08.1 negative scenario: when true, handleCreate simulates
+   * Customer Service reporting a real business success (customerMasterId
+   * assigned, event log entry created below) WITHOUT the local
+   * master_customer projection existing yet (no createMasterCustomer call) -
+   * exactly the race T08 discovered and T08.1's gate protects against.
    */
-  nextCreateCustomerId: string | null;
+  simulateProjectionLag: boolean;
 };
 
 function createFakeCustomerServiceState(): FakeCustomerServiceState {
-  return { customers: [], externalIdentities: [], idempotencyResponses: new Map(), requests: [], nextCustomerId: 1, nextExternalIdentityId: 1, nextCreateCustomerId: null };
+  return { customers: [], externalIdentities: [], idempotencyResponses: new Map(), requests: [], nextExternalIdentityId: 1, simulateProjectionLag: false };
 }
 
 let fakeState = createFakeCustomerServiceState();
+let projectionLagCounter = 0;
 
 function handleResolve(body: unknown): { status: number; body: unknown } {
   const input = body as { externalId?: string; phoneNumber?: string | null; email?: string | null };
   const byExternal = fakeState.externalIdentities.find((entry) => entry.externalId === input.externalId);
-  if (byExternal) return { status: 200, body: { status: "resolved", customerId: byExternal.customerId } };
+  if (byExternal) return { status: 200, body: { status: "resolved", customerMasterId: byExternal.customerId } };
   if (input.phoneNumber) {
     const matches = fakeState.customers.filter((customer) => customer.phoneNumber === input.phoneNumber);
-    if (matches.length === 1) return { status: 200, body: { status: "resolved", customerId: matches[0].id } };
+    if (matches.length === 1) return { status: 200, body: { status: "resolved", customerMasterId: matches[0].id } };
     if (matches.length > 1) return { status: 200, body: { status: "conflict", conflictCode: "multiple_candidates" } };
   }
   return { status: 200, body: { status: "no_match" } };
 }
 
-function handleCreate(body: unknown, idempotencyKey: string | null): { status: number; body: unknown } {
+/**
+ * ACS-R1-04-T08.1 (task section 11): this fixture represents the controlled
+ * Customer Service, never ACS. When it reports "created", it is Customer
+ * Service's own responsibility to ensure the local master_customer
+ * projection - so this function (not the test body, not any turn/scenario
+ * setup code) is the one that calls createMasterCustomer. The E2E test
+ * itself never pre-inserts a customer before driving a turn.
+ */
+async function handleCreate(body: unknown, idempotencyKey: string | null): Promise<{ status: number; body: unknown }> {
   if (idempotencyKey && fakeState.idempotencyResponses.has(idempotencyKey)) {
     return fakeState.idempotencyResponses.get(idempotencyKey) as { status: number; body: unknown };
   }
   const input = body as { firstName?: string; lastName?: string | null; email?: string; phoneNumber?: string };
   if (!input.firstName || !input.email || !input.phoneNumber) {
-    const response = { status: 422, body: { error: { code: "invalid_request", fields: ["firstName", "email", "phoneNumber"].filter((field) => !(input as Record<string, unknown>)[field]) } } };
-    return response;
+    return { status: 422, body: { error: { code: "invalid_request", fields: ["firstName", "email", "phoneNumber"].filter((field) => !(input as Record<string, unknown>)[field]) } } };
   }
-  const assignedId = fakeState.nextCreateCustomerId ?? String(fakeState.nextCustomerId++);
-  fakeState.nextCreateCustomerId = null;
-  const customer: FakeServiceCustomer = {
-    id: assignedId,
-    firstName: input.firstName,
-    lastName: input.lastName ?? null,
-    email: input.email,
-    phoneNumber: input.phoneNumber
-  };
+
+  let customerMasterId: string;
+  if (fakeState.simulateProjectionLag) {
+    // Customer Service really did accept and record this customer on its own
+    // side - it just has not synced/projected it into the local
+    // master_customer table yet (a real, plausible-looking id that
+    // deliberately has no local row).
+    projectionLagCounter += 1;
+    customerMasterId = `900000${projectionLagCounter}`;
+  } else {
+    const provisioned = await createMasterCustomer({ firstname: input.firstName, lastname: input.lastName ?? "", email: input.email, platformOrigin: "whatsapp" });
+    assert.ok(provisioned.ok, provisioned.ok ? "" : provisioned.error);
+    customerMasterId = String(provisioned.data.id);
+  }
+
+  const customer: FakeServiceCustomer = { id: customerMasterId, firstName: input.firstName, lastName: input.lastName ?? null, email: input.email, phoneNumber: input.phoneNumber };
   fakeState.customers.push(customer);
-  const response = { status: 201, body: { status: "created", customerId: customer.id } };
+  const response = { status: 201, body: { status: "created", customerMasterId } };
   if (idempotencyKey) fakeState.idempotencyResponses.set(idempotencyKey, response);
   return response;
 }
 
-function handleLink(customerId: string, body: unknown, idempotencyKey: string | null): { status: number; body: unknown } {
+function handleLink(customerMasterId: string, body: unknown, idempotencyKey: string | null): { status: number; body: unknown } {
   if (idempotencyKey && fakeState.idempotencyResponses.has(idempotencyKey)) {
     return fakeState.idempotencyResponses.get(idempotencyKey) as { status: number; body: unknown };
   }
@@ -142,19 +141,19 @@ function handleLink(customerId: string, body: unknown, idempotencyKey: string | 
   }
   const existing = fakeState.externalIdentities.find((entry) => entry.externalId === externalIdentity.externalId);
   let response: { status: number; body: unknown };
-  if (existing && existing.customerId === customerId) {
-    response = { status: 200, body: { status: "already_linked", customerId, externalIdentityId: `ext-${existing.customerId}` } };
+  if (existing && existing.customerId === customerMasterId) {
+    response = { status: 200, body: { status: "already_linked", customerMasterId, externalIdentityId: `ext-${existing.customerId}` } };
   } else if (existing) {
     // Per docs/integrations/customer-service-http-contract.md ("Codigos HTTP
     // -> outcome"): a link conflict is a 409 with an error envelope, never a
     // 2xx body with status:"conflict" (parseLinkSuccess only recognizes
     // completed/already_linked/denied in a 2xx body).
     response = { status: 409, body: { error: { code: "conflict", conflictCode: "already_linked_to_other_customer" } } };
-  } else if (!fakeState.customers.some((customer) => customer.id === customerId)) {
+  } else if (!fakeState.customers.some((customer) => customer.id === customerMasterId)) {
     response = { status: 404, body: { error: { code: "customer_not_found" } } };
   } else {
-    fakeState.externalIdentities.push({ customerId, provider: externalIdentity.provider, externalId: externalIdentity.externalId });
-    response = { status: 200, body: { status: "completed", customerId, externalIdentityId: `ext-${fakeState.nextExternalIdentityId++}` } };
+    fakeState.externalIdentities.push({ customerId: customerMasterId, provider: externalIdentity.provider, externalId: externalIdentity.externalId });
+    response = { status: 200, body: { status: "completed", customerMasterId, externalIdentityId: `ext-${fakeState.nextExternalIdentityId++}` } };
   }
   if (idempotencyKey) fakeState.idempotencyResponses.set(idempotencyKey, response);
   return response;
@@ -168,34 +167,36 @@ before(async () => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
-      let body: unknown = null;
-      const text = Buffer.concat(chunks).toString("utf8");
-      if (text) {
-        try {
-          body = JSON.parse(text);
-        } catch {
-          body = null;
+      void (async () => {
+        let body: unknown = null;
+        const text = Buffer.concat(chunks).toString("utf8");
+        if (text) {
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = null;
+          }
         }
-      }
-      const idempotencyKey = (req.headers["idempotency-key"] as string | undefined) ?? null;
-      const url = req.url ?? "";
-      fakeState.requests.push({ method: req.method ?? "POST", url, idempotencyKey, body });
+        const idempotencyKey = (req.headers["idempotency-key"] as string | undefined) ?? null;
+        const url = req.url ?? "";
+        fakeState.requests.push({ method: req.method ?? "POST", url, idempotencyKey, body });
 
-      let outcome: { status: number; body: unknown };
-      if (url === "/v1/customers/resolve") {
-        outcome = handleResolve(body);
-      } else if (url === "/v1/customers") {
-        outcome = handleCreate(body, idempotencyKey);
-      } else {
-        const linkMatch = url.match(/^\/v1\/customers\/([^/]+)\/external-identities$/);
-        if (linkMatch) {
-          outcome = handleLink(decodeURIComponent(linkMatch[1]), body, idempotencyKey);
+        let outcome: { status: number; body: unknown };
+        if (url === "/v1/customers/resolve") {
+          outcome = handleResolve(body);
+        } else if (url === "/v1/customers") {
+          outcome = await handleCreate(body, idempotencyKey);
         } else {
-          outcome = { status: 404, body: { error: { code: "not_found" } } };
+          const linkMatch = url.match(/^\/v1\/customers\/([^/]+)\/external-identities$/);
+          if (linkMatch) {
+            outcome = handleLink(decodeURIComponent(linkMatch[1]), body, idempotencyKey);
+          } else {
+            outcome = { status: 404, body: { error: { code: "not_found" } } };
+          }
         }
-      }
-      res.writeHead(outcome.status, { "content-type": "application/json" });
-      res.end(JSON.stringify(outcome.body));
+        res.writeHead(outcome.status, { "content-type": "application/json" });
+        res.end(JSON.stringify(outcome.body));
+      })();
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -616,15 +617,7 @@ test("T08-A3: cliente nuevo - creacion idempotente (resolve_customer no_match fr
   assert.ok(scenarioA, "requires T08-A1/A2 to have run first");
   const { waId, phoneNumberId, email } = scenarioA!;
   const requestsBefore = fakeState.requests.length;
-
-  // Test-only accommodation for the FK gap documented on FakeCustomerServiceState
-  // (nextCreateCustomerId): pre-provision the real local master_customer row
-  // Customer Service's "created" response will reference, so
-  // completeOnboarding's FK write succeeds and the rest of the contract
-  // (consent, idempotency, summaries, T07 events) can be exercised for real.
-  const provisioned = await createMasterCustomer({ firstname: "Ana", lastname: "Torres", email, platformOrigin: "whatsapp" });
-  assert.ok(provisioned.ok, provisioned.ok ? "" : provisioned.error);
-  fakeState.nextCreateCustomerId = String(provisioned.data.id);
+  const customersBeforeCreate = await countMasterCustomers(email);
 
   const consentText = "Autorizo crear mi ficha de cliente";
   const createTurn = await turn({
@@ -643,6 +636,11 @@ test("T08-A3: cliente nuevo - creacion idempotente (resolve_customer no_match fr
 
   const createCallsThisTurn = fakeState.requests.slice(requestsBefore).filter((request) => request.url === "/v1/customers");
   assert.equal(createCallsThisTurn.length, 1, "create_customer must execute exactly once");
+
+  // The controlled Customer Service double created the local projection as
+  // part of its own "created" response (see handleCreate) - never ACS.
+  assert.equal(customersBeforeCreate, 0);
+  assert.equal(await countMasterCustomers(email), 1);
 
   const onboardingService = createCustomerOnboardingService();
   const finalState = await onboardingService.getState(String(scenarioA!.conversationId));
@@ -762,11 +760,6 @@ test("T08-A5: link_external_identity conflict - Gateway status completed y busin
   await turn({ waId, phoneNumberId, text: "Me llamo Beto Rios", env: POST_PLAN_ENV, provider: createQuoteIntentProvider(), piiTerms: [waId, "Beto Rios"] });
   await turn({ waId, phoneNumberId, text: `Mi correo es ${email}`, env: POST_PLAN_ENV, provider: createQuoteIntentProvider(), piiTerms: [waId, email] });
 
-  // See the FK gap documented on FakeCustomerServiceState.nextCreateCustomerId.
-  const provisioned = await createMasterCustomer({ firstname: "Beto", lastname: "Rios", email, platformOrigin: "whatsapp" });
-  assert.ok(provisioned.ok, provisioned.ok ? "" : provisioned.error);
-  fakeState.nextCreateCustomerId = String(provisioned.data.id);
-
   const createTurn = await turn({
     waId,
     phoneNumberId,
@@ -812,6 +805,111 @@ test("T08-A5: link_external_identity conflict - Gateway status completed y busin
 
   // The real customer created earlier is never overwritten/reassigned by this conflict.
   assert.equal(customerId, created!.customerId);
+});
+
+test("T08-A6: create_customer con proyeccion local no disponible (ACS-R1-04-T08.1) - sin FK, sin completar onboarding, warning persistido, Customer 360 no cargado, cero escritura ACS en master_customer", async () => {
+  fakeState = createFakeCustomerServiceState();
+  fakeState.simulateProjectionLag = true;
+  const waId = uniqueWaId();
+  const phoneNumberId = `phone-${uniqueSuffix("a7")}`;
+  const email = `${uniqueSuffix("a7-lag")}@example.com`;
+
+  await turn({ waId, phoneNumberId, text: "Hola, quiero cotizar", env: POST_PLAN_ENV, provider: createQuoteIntentProvider(), piiTerms: [waId] });
+  await turn({ waId, phoneNumberId, text: "Me llamo Carla Diaz", env: POST_PLAN_ENV, provider: createQuoteIntentProvider(), piiTerms: [waId, "Carla Diaz"] });
+
+  const customersBefore = await countMasterCustomers(email);
+  const createTurn = await turn({
+    waId,
+    phoneNumberId,
+    text: `Mi correo es ${email}, autorizo crear mi ficha de cliente`,
+    env: POST_PLAN_ENV,
+    provider: createQuoteIntentProvider(),
+    piiTerms: [waId, email, "Carla Diaz"]
+  });
+
+  // Customer Service really did succeed (business outcome created, Gateway
+  // status completed) - the capability's own outcome is never changed by
+  // the projection gate (task section 8).
+  const createExecutions = await loadCapabilityExecutions(createTurn.inbound.correlationId, "create_customer");
+  assert.equal(createExecutions.length, 1);
+  assert.equal(createExecutions[0].execution_status, "completed");
+  const responseSummary = safeJsonParse(createExecutions[0].response_summary_json) as Record<string, unknown>;
+  assert.equal(responseSummary.gatewayStatus, "completed");
+  assert.equal(responseSummary.businessOutcome, "created");
+
+  const outcomeEvents = await loadEventsByType("customer_identity_capability_outcome_recorded", createTurn.inbound.correlationId);
+  const createOutcome = outcomeEvents.find((event) => event.payload.capability === "create_customer");
+  assert.ok(createOutcome);
+  assert.equal(createOutcome?.payload.gatewayStatus, "completed");
+  assert.equal(createOutcome?.payload.businessOutcome, "created");
+
+  // ACS never throws a raw FK violation - the turn completes normally.
+  assert.ok(createTurn.cycle, "the cycle must complete without throwing");
+
+  // onboarding is never completed with an unverified id - lands temporarily_unavailable instead.
+  const onboardingService = createCustomerOnboardingService();
+  const state = await onboardingService.getState(String(createTurn.inbound.conversationId));
+  assert.equal(state?.status, "temporarily_unavailable");
+  assert.equal(state?.customerId, null);
+
+  // structured warning persisted via the existing T07 event, never a raw error.
+  const warningEvents = await loadEventsByType("customer_session_warning_recorded", createTurn.inbound.correlationId);
+  assert.ok(warningEvents.some((event) => event.payload.warningCode === "customer_master_projection_unavailable"));
+
+  // Customer 360 never loaded, conversation never linked to the unverified id.
+  assert.equal(createTurn.customer360Calls.length, 0);
+  const conversationRow = await safeQueryRows<{ customer_id: number | null }>("SELECT customer_id FROM conversation WHERE id = ? LIMIT 1", [createTurn.inbound.conversationId as number]);
+  assert.ok(conversationRow.ok);
+  assert.equal(conversationRow.rows[0]?.customer_id, null);
+
+  // ACS never writes master_customer - zero rows for this email, before and after.
+  assert.equal(customersBefore, 0);
+  assert.equal(await countMasterCustomers(email), 0);
+
+  // ---- Reintento posterior (task section 10): once the local projection
+  // appears, the gate itself resolves it correctly and completes onboarding
+  // without creating a second customer. landOnboardingInTerminalState's
+  // temporarily_unavailable is a real terminal status (task section 8's own
+  // wording) - like the pre-existing customer_service_unavailable path this
+  // mirrors, nothing in the current runtime auto-retries a turn stuck there
+  // (CustomerOnboardingService.retryResolution has no productive caller,
+  // documented debt since T06.2/T06.1 - wiring it is out of T08.1's scope:
+  // "reconciliar customerMasterId", not "add onboarding auto-retry"). This
+  // demonstrates the gate's own idempotent, retry-safe behavior directly
+  // against the real DB-backed service and real master_customer table,
+  // which is what actually changes between the two calls.
+  const stillStuck = await onboardingService.getState(String(createTurn.inbound.conversationId));
+  assert.equal(stillStuck?.status, "temporarily_unavailable");
+
+  // A second, independent onboarding (fresh conversation) reaches "resolving"
+  // for the same Customer Service response - the state completeOnboarding
+  // actually requires (CompleteOnboardingInput/COMPLETE_FROM).
+  const secondConversation = await sendInbound({ waId: uniqueWaId(), phoneNumberId: `phone-${uniqueSuffix("a7-retry")}`, text: "Hola" });
+  const started = await onboardingService.startOnboarding({ conversationId: String(secondConversation.conversationId), purpose: "quote", pendingFields: [] });
+  assert.ok(started.ok);
+  const resolving = await onboardingService.markResolving({ conversationId: String(secondConversation.conversationId), expectedVersion: (started as { state: { version: number } }).state.version });
+  assert.ok(resolving.ok);
+  const resolvingState = (resolving as { state: typeof stillStuck }).state as NonNullable<typeof stillStuck>;
+
+  // First check (before the projection exists) - the PURE verification only
+  // (never completeOnboardingWithVerifiedCustomer here, which would itself
+  // land this row in temporarily_unavailable and consume it, just like the
+  // original turn above - this check must never mutate the row so the same
+  // "resolving" state can be reused for the real completion below).
+  const beforeProjection = await verifyCustomerMasterProjection("900099999");
+  assert.equal(beforeProjection.status, "not_found");
+
+  // The projection now appears locally (Customer Service finishing its own sync) - never inserted by ACS in this assertion either.
+  const provisioned = await createMasterCustomer({ firstname: "Carla", lastname: "Diaz", email, platformOrigin: "whatsapp" });
+  assert.ok(provisioned.ok, provisioned.ok ? "" : provisioned.error);
+  const realCustomerId = String(provisioned.data.id);
+
+  // Gate check against the still-"resolving" row - now verified, completes for real, never a second customer.
+  const afterProjection = await completeOnboardingWithVerifiedCustomer(onboardingService, resolvingState, realCustomerId, "corr-a7-gate-after");
+  assert.equal(afterProjection.verifiedCustomerId, realCustomerId);
+  assert.equal(afterProjection.state.status, "completed");
+  assert.equal(afterProjection.state.customerId, realCustomerId);
+  assert.equal(await countMasterCustomers(email), 1, "no second customer was created");
 });
 
 // ===========================================================================

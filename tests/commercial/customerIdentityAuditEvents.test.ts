@@ -70,7 +70,7 @@ function localResult(overrides: Partial<ResolveCustomerIdentityResult> = {}): Re
 }
 
 function evidence(overrides: Partial<CustomerResolutionEvidence["result"]> = {}): CustomerResolutionEvidence {
-  return { source: "customer_service", requestId: "req-1", checkedAt: "2026-07-13T00:00:00.000Z", result: { status: "resolved", customerId: "700", ...overrides } as CustomerResolutionEvidence["result"] };
+  return { source: "customer_service", requestId: "req-1", checkedAt: "2026-07-13T00:00:00.000Z", result: { status: "resolved", customerMasterId: "700", ...overrides } as CustomerResolutionEvidence["result"] };
 }
 
 function onboardingState(overrides: Partial<CustomerOnboardingState> = {}): CustomerOnboardingState {
@@ -98,10 +98,11 @@ function gatewayResult(overrides: Partial<CapabilityGatewayResult> = {}): Capabi
     version: "capability-gateway.v1",
     availability: "available",
     status: "completed",
-    data: { status: "created", customerId: "700" },
+    data: { status: "created", customerMasterId: "700" },
     errorCode: null,
     retryable: false,
     evidence: [],
+    warnings: [],
     retryCount: 0,
     startedAt: "2026-07-13T00:00:00.000Z",
     completedAt: "2026-07-13T00:00:01.000Z",
@@ -178,7 +179,7 @@ test("4: local unavailable/invalid_input are persisted without any raw error tex
 
 test("5: external resolved is persisted with resolver customer_service", async () => {
   const correlationId = uniqueId("corr-ext-resolved");
-  await recordExternalIdentityResolution({ phase: "pre_plan", messageId: uniqueId("msg"), correlationId, conversationId: "conv-1", evidence: evidence({ status: "resolved", customerId: "700" }) });
+  await recordExternalIdentityResolution({ phase: "pre_plan", messageId: uniqueId("msg"), correlationId, conversationId: "conv-1", evidence: evidence({ status: "resolved", customerMasterId: "700" }) });
   const rows = await loadEventsByType("customer_identity_resolution_recorded", correlationId);
   assert.deepEqual(rows[0].payload, { phase: "pre_plan", resolver: "customer_service", outcome: "identified", matchedBy: "customer_service", hasResolvedCustomer: true });
 });
@@ -301,7 +302,7 @@ test("15: no event when there is no effective transition (unchanged or !ok)", as
 
 test("16: create_customer -> created", async () => {
   const correlationId = uniqueId("corr-create-created");
-  const result = gatewayResult({ capability: "create_customer", status: "completed", data: { status: "created", customerId: "700" } });
+  const result = gatewayResult({ capability: "create_customer", status: "completed", data: { status: "created", customerMasterId: "700" } });
   await recordIdentityCapabilityOutcome({ capability: "create_customer", correlationId, gatewayResult: result });
   const rows = await loadEventsByType("customer_identity_capability_outcome_recorded", correlationId);
   assert.equal(rows[0].payload.businessOutcome, "created");
@@ -310,7 +311,7 @@ test("16: create_customer -> created", async () => {
 
 test("17: create_customer -> matched_existing", async () => {
   const correlationId = uniqueId("corr-create-matched");
-  const result = gatewayResult({ capability: "create_customer", status: "completed", data: { status: "matched_existing", customerId: "700" } });
+  const result = gatewayResult({ capability: "create_customer", status: "completed", data: { status: "matched_existing", customerMasterId: "700" } });
   await recordIdentityCapabilityOutcome({ capability: "create_customer", correlationId, gatewayResult: result });
   const rows = await loadEventsByType("customer_identity_capability_outcome_recorded", correlationId);
   assert.equal(rows[0].payload.businessOutcome, "matched_existing");
@@ -336,7 +337,7 @@ test("19: create_customer -> missing_information", async () => {
 
 test("20: link_external_identity -> completed", async () => {
   const correlationId = uniqueId("corr-link-completed");
-  const result = gatewayResult({ capability: "link_external_identity", status: "completed", data: { status: "completed", customerId: "700", externalIdentityId: "ext-1" } });
+  const result = gatewayResult({ capability: "link_external_identity", status: "completed", data: { status: "completed", customerMasterId: "700", externalIdentityId: "ext-1" } });
   await recordIdentityCapabilityOutcome({ capability: "link_external_identity", correlationId, gatewayResult: result });
   const rows = await loadEventsByType("customer_identity_capability_outcome_recorded", correlationId);
   assert.equal(rows[0].payload.businessOutcome, "completed");
@@ -344,7 +345,7 @@ test("20: link_external_identity -> completed", async () => {
 
 test("21: link_external_identity -> already_linked", async () => {
   const correlationId = uniqueId("corr-link-already");
-  const result = gatewayResult({ capability: "link_external_identity", status: "completed", data: { status: "already_linked", customerId: "700", externalIdentityId: "ext-1" } });
+  const result = gatewayResult({ capability: "link_external_identity", status: "completed", data: { status: "already_linked", customerMasterId: "700", externalIdentityId: "ext-1" } });
   await recordIdentityCapabilityOutcome({ capability: "link_external_identity", correlationId, gatewayResult: result });
   const rows = await loadEventsByType("customer_identity_capability_outcome_recorded", correlationId);
   assert.equal(rows[0].payload.businessOutcome, "already_linked");
@@ -360,7 +361,7 @@ test("22: link_external_identity -> conflict (Gateway completed, business confli
 });
 
 test("23: deriveIdentityCapabilityBusinessOutcome is exhaustive and preserves the completed/conflict distinction for all three capabilities", () => {
-  assert.equal(deriveIdentityCapabilityBusinessOutcome("resolve_customer", "completed", { result: { status: "resolved", customerId: "1" } }), "resolved");
+  assert.equal(deriveIdentityCapabilityBusinessOutcome("resolve_customer", "completed", { result: { status: "resolved", customerMasterId: "1" } }), "resolved");
   assert.equal(deriveIdentityCapabilityBusinessOutcome("resolve_customer", "completed", { result: { status: "no_match" } }), "no_match");
   assert.equal(deriveIdentityCapabilityBusinessOutcome("resolve_customer", "temporarily_blocked", null), "temporarily_unavailable");
   assert.equal(deriveIdentityCapabilityBusinessOutcome("create_customer", "completed", { status: "conflict", conflictCode: "x" }), "conflict");
@@ -469,7 +470,7 @@ test("40: same inbound (messageId+phase+resolver+outcome) never duplicates a res
 
 test("41: same capability execution (executionPublicId+businessOutcome) never duplicates an outcome event", async () => {
   const correlationId = uniqueId("corr-idem-capability");
-  const result = gatewayResult({ capability: "create_customer", status: "completed", data: { status: "created", customerId: "700" } });
+  const result = gatewayResult({ capability: "create_customer", status: "completed", data: { status: "created", customerMasterId: "700" } });
   await recordIdentityCapabilityOutcome({ capability: "create_customer", correlationId, gatewayResult: result });
   await recordIdentityCapabilityOutcome({ capability: "create_customer", correlationId, gatewayResult: result });
   const rows = await loadEventsByType("customer_identity_capability_outcome_recorded", correlationId);

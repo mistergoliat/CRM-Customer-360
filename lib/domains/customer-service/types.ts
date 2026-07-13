@@ -26,8 +26,16 @@ export type ResolveCustomerInput = {
   email?: string | null;
 };
 
+// ACS-R1-04-T08.1 (schema v2.0.0, breaking): every successful result that
+// introduces a customer from Customer Service returns customerMasterId, not
+// the ambiguous customerId - customerMasterId is explicitly the canonical
+// identifier compatible with master_customer.id (docs/data/customer-creation-linking-authority-contract.md).
+// Customer Service stays the sole creation/linking authority; ACS verifies
+// the local projection exists before trusting this id (see
+// lib/brain/commercial/native-cycle/customer-session/onboardingTransitions.ts,
+// verifyCustomerMasterProjection / completeOnboardingWithVerifiedCustomer).
 export type ResolveCustomerResult =
-  | { status: "resolved"; customerId: string }
+  | { status: "resolved"; customerMasterId: string }
   | { status: "no_match" }
   | { status: "conflict"; conflictCode: string }
   | { status: "invalid_input"; fields: string[] }
@@ -72,12 +80,13 @@ export type CreateCustomerInput = {
   idempotencyKey: string;
 };
 
-// Schema v1.0.2 adds invalid_input/failed (contract section 3) so Customer
+// Schema v1.0.2 added invalid_input/failed (contract section 3) so Customer
 // Service failures never get silently reinterpreted as one of the other
-// outcomes.
+// outcomes. Schema v2.0.0 (ACS-R1-04-T08.1, breaking) renames customerId to
+// customerMasterId - see the note above ResolveCustomerResult.
 export type CreateCustomerResult =
-  | { status: "created"; customerId: string }
-  | { status: "matched_existing"; customerId: string }
+  | { status: "created"; customerMasterId: string }
+  | { status: "matched_existing"; customerMasterId: string }
   | { status: "missing_information"; requiredFields: string[] }
   | { status: "conflict"; conflictCode: string }
   | { status: "denied"; reason: string }
@@ -107,10 +116,14 @@ export type LinkExternalIdentityInput = {
   idempotencyKey: string;
 };
 
-// Schema v1.0.2 adds invalid_input/failed (contract section 3).
+// Schema v1.0.2 added invalid_input/failed (contract section 3). Schema
+// v2.0.0 (ACS-R1-04-T08.1, breaking) renames customerId to customerMasterId
+// - see the note above ResolveCustomerResult. LinkExternalIdentityInput.customerId
+// (the request field - the local customer ACS asks to link to) is unchanged;
+// only this result's echoed-back identifier is renamed.
 export type LinkExternalIdentityResult =
-  | { status: "completed"; customerId: string; externalIdentityId: string }
-  | { status: "already_linked"; customerId: string; externalIdentityId: string }
+  | { status: "completed"; customerMasterId: string; externalIdentityId: string }
+  | { status: "already_linked"; customerMasterId: string; externalIdentityId: string }
   | { status: "conflict"; conflictCode: string }
   | { status: "denied"; reason: string }
   | { status: "invalid_input"; fields: string[] }

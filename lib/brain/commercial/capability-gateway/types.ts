@@ -64,6 +64,15 @@ export type CapabilityExecutionOutcome<TOutput = Record<string, unknown>> = {
   errorCode: string | null;
   retryable: boolean;
   evidence: CapabilityEvidence[];
+  /**
+   * ACS-R1-04-T08.1. Optional structured warning codes (e.g.
+   * customer_master_projection_unavailable) the capability's own execute()
+   * wants its caller to fold into that turn's aggregated, deduped warning
+   * list and persist once via the existing T07 recorder - never a second,
+   * independent recording path. Absent/empty for every capability that has
+   * nothing to report (the default for all capabilities predating T08.1).
+   */
+  warnings?: string[];
 };
 
 export type CapabilityGatewayContext = {
@@ -115,6 +124,8 @@ export type CapabilityGatewayResult<TOutput = Record<string, unknown>> = {
   errorCode: string | null;
   retryable: boolean;
   evidence: CapabilityEvidence[];
+  /** ACS-R1-04-T08.1. See CapabilityExecutionOutcome.warnings - always an array (empty when the capability reported none). */
+  warnings: string[];
   retryCount: number;
   startedAt: string;
   completedAt: string;

@@ -116,7 +116,7 @@ export async function recordExternalIdentityResolution(params: {
       correlationId: params.correlationId ?? null,
       conversationId: params.conversationId,
       opportunityId: params.opportunityId ?? null,
-      customerId: params.customerId ?? (params.evidence.result.status === "resolved" ? params.evidence.result.customerId : null)
+      customerId: params.customerId ?? (params.evidence.result.status === "resolved" ? params.evidence.result.customerMasterId : null)
     });
   } catch {
     // Fail-safe - see recordLocalIdentityResolution.

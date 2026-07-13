@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { after, before, beforeEach } from "node:test";
-import { resetCustomerServicePortForTests, resetOnboardingServiceForTests, setOnboardingServiceForTests } from "@/lib/brain/commercial/capability-gateway";
+import { resetCustomerServicePortForTests, resetOnboardingServiceForTests, setOnboardingServiceForTests, setCustomerMasterProjectionReaderForTests } from "@/lib/brain/commercial/capability-gateway";
 import { runCustomerOnboardingPostPlanStage } from "@/lib/brain/commercial/native-cycle/customer-session";
 import type { CustomerOnboardingPostPlanDependencies } from "@/lib/brain/commercial/native-cycle/customer-session";
 import type { NativeCustomerSessionExecutionContext } from "@/lib/brain/commercial/native-cycle/customer-session";
@@ -70,6 +70,9 @@ beforeEach(() => {
   process.env.CUSTOMER_SERVICE_API_KEY = "test-key";
   resetCustomerServicePortForTests();
   resetOnboardingServiceForTests();
+  // ACS-R1-04-T08.1: this file exercises the post-plan stage's own logic,
+  // not the customer_master projection gate itself.
+  setCustomerMasterProjectionReaderForTests({ async exists() { return true; } });
 });
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown) {
@@ -214,8 +217,8 @@ const LINK_CONSENT = { scope: "link_external_identity" as const, messageId: "wam
 function noMatchEvidence(): CustomerResolutionEvidence {
   return { source: "customer_service", requestId: "r", checkedAt: "2026-07-09T12:00:00.000Z", result: { status: "no_match" } };
 }
-function resolvedEvidence(customerId: string): CustomerResolutionEvidence {
-  return { source: "customer_service", requestId: "r", checkedAt: "2026-07-09T12:00:00.000Z", result: { status: "resolved", customerId } };
+function resolvedEvidence(customerMasterId: string): CustomerResolutionEvidence {
+  return { source: "customer_service", requestId: "r", checkedAt: "2026-07-09T12:00:00.000Z", result: { status: "resolved", customerMasterId } };
 }
 function conflictEvidence(): CustomerResolutionEvidence {
   return { source: "customer_service", requestId: "r", checkedAt: "2026-07-09T12:00:00.000Z", result: { status: "conflict", conflictCode: "multiple_candidates" } };
@@ -323,7 +326,7 @@ test("17: the full raw message is never persisted into onboarding.collected", as
 
 test("18: consent text is never persisted into onboarding", async () => {
   const onboarding = makeOnboardingFake(onboardingRow({ status: "collecting", collected: { firstName: "Pedro", email: "pedro@example.com" } }));
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "1" });
   const result = await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
@@ -440,7 +443,7 @@ test("25: turn 3 requires create consent from THIS turn - missing consent still 
 test("26: turn 3 executes exactly one resolve_customer call before create", async () => {
   const onboarding = makeOnboardingFake(onboardingRow({ status: "collecting", collected: { firstName: "Pedro", email: "pedro@example.com" } }));
   let resolveCalls = 0;
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "500" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "500" });
   await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
@@ -456,7 +459,7 @@ test("26: turn 3 executes exactly one resolve_customer call before create", asyn
 
 test("27: a fresh no_match allows create to proceed", async () => {
   const onboarding = makeOnboardingFake(onboardingRow({ status: "collecting", collected: { firstName: "Pedro", email: "pedro@example.com" } }));
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "500" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "500" });
   const result = await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
@@ -471,7 +474,7 @@ test("27: a fresh no_match allows create to proceed", async () => {
 test("28: with no evidence carried over from pre-plan, post-plan resolves fresh itself before creating - never treats absence as authorization", async () => {
   const onboarding = makeOnboardingFake(onboardingRow({ status: "collecting", collected: { firstName: "Pedro", email: "pedro@example.com" } }));
   let resolveCalls = 0;
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "500" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "500" });
   const result = await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
@@ -529,7 +532,7 @@ test("31: a temporarily_unavailable evidence blocks create without changing onbo
 
 test("32: create completes onboarding with the new customerId", async () => {
   const onboarding = makeOnboardingFake(onboardingRow({ status: "collecting", collected: { firstName: "Pedro", email: "pedro@example.com" } }));
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "777" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "777" });
   const result = await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
@@ -543,7 +546,7 @@ test("32: create completes onboarding with the new customerId", async () => {
 
 test("33: a successful create never also triggers link_external_identity in the same turn", async () => {
   const onboarding = makeOnboardingFake(onboardingRow({ status: "collecting", collected: { firstName: "Pedro", email: "pedro@example.com" } }));
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "777" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "777" });
   const result = await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
@@ -603,7 +606,7 @@ test("36: create consent never authorizes link - the scopes are never interchang
 
 test("37: link sends the trusted inbound externalId, never a model-supplied one", async () => {
   const onboarding = makeOnboardingFake(null);
-  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerId: "700", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerMasterId: "700", externalIdentityId: "ext-1" });
   await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: null },
     messageText: "autorizo vincular este whatsapp a mi cuenta",
@@ -620,7 +623,7 @@ test("37: link sends the trusted inbound externalId, never a model-supplied one"
 
 test("38: link only fires when identity was already identified BEFORE this turn's post-plan ran - never in the same turn create runs", async () => {
   const onboarding = makeOnboardingFake(onboardingRow({ status: "collecting", collected: { firstName: "Pedro", email: "pedro@example.com" } }));
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "777" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "777" });
   const result = await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente y vincular whatsapp",
@@ -639,7 +642,7 @@ test("38: link only fires when identity was already identified BEFORE this turn'
 
 test("39: a successful create result never causes link to also execute", async () => {
   const onboarding = makeOnboardingFake(onboardingRow({ status: "collecting", collected: { firstName: "Pedro", email: "pedro@example.com" } }));
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "777" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "777" });
   const result = await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
@@ -652,7 +655,7 @@ test("39: a successful create result never causes link to also execute", async (
 
 test("40: already_linked is treated as an idempotent success, never an error", async () => {
   const onboarding = makeOnboardingFake(null);
-  handler = (_req, res) => sendJson(res, 200, { status: "already_linked", customerId: "700", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 200, { status: "already_linked", customerMasterId: "700", externalIdentityId: "ext-1" });
   const result = await runCustomerOnboardingPostPlanStage({
     plannedOperation: { operation: null },
     messageText: "autorizo vincular este whatsapp a mi cuenta",

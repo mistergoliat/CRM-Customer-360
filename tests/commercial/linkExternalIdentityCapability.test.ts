@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before, beforeEach } from "node:test";
-import { resolveCapabilityGatewayDefinition, resetCustomerServicePortForTests, setOnboardingServiceForTests, resetOnboardingServiceForTests } from "@/lib/brain/commercial/capability-gateway";
+import { resolveCapabilityGatewayDefinition, resetCustomerServicePortForTests, setOnboardingServiceForTests, resetOnboardingServiceForTests, setCustomerMasterProjectionReaderForTests } from "@/lib/brain/commercial/capability-gateway";
 import type { CapabilityGatewayContext } from "@/lib/brain/commercial/capability-gateway";
 import type { NativeCustomerSessionExecutionContext } from "@/lib/brain/commercial/native-cycle/customer-session";
 import type { CustomerOnboardingMutationResult, CustomerOnboardingService, CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
@@ -59,6 +59,9 @@ beforeEach(() => {
   process.env.CUSTOMER_SERVICE_API_KEY = "test-key";
   resetCustomerServicePortForTests();
   resetOnboardingServiceForTests();
+  // ACS-R1-04-T08.1: this file exercises link_external_identity's own
+  // execution logic, not the customer_master projection gate itself.
+  setCustomerMasterProjectionReaderForTests({ async exists() { return true; } });
 });
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown) {
@@ -96,7 +99,8 @@ function makeOnboardingFake(initial: CustomerOnboardingState | null) {
       return bump({ status: "conflict" });
     },
     async markTemporarilyUnavailable() {
-      throw new Error("unused");
+      calls.push("markTemporarilyUnavailable");
+      return bump({ status: "temporarily_unavailable", customerId: null });
     },
     async retryResolution() {
       throw new Error("unused");
@@ -173,14 +177,14 @@ test("72: missing explicit link consent denies with a structured errorCode, Cust
 });
 
 test("73: the linked externalId and the inbound waId sent to Customer Service are always the same value - never model-controlled, never mismatched", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerId: "700", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerMasterId: "700", externalIdentityId: "ext-1" });
   await definition().execute({}, context(session()));
   const externalIdentity = lastBody?.externalIdentity as { externalId?: string } | undefined;
   assert.equal(externalIdentity?.externalId, "56911112222");
 });
 
 test("74: a completed link keeps the identified customer and completes onboarding if it wasn't already", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerId: "700", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerMasterId: "700", externalIdentityId: "ext-1" });
   const onboarding = makeOnboardingFake(onboardingRow({ status: "resolving", customerId: null, completedAt: null }));
   setOnboardingServiceForTests(onboarding.service);
   const outcome = await definition().execute({}, context(session({ onboarding: onboarding.getState() })));
@@ -190,7 +194,7 @@ test("74: a completed link keeps the identified customer and completes onboardin
 });
 
 test("75: already_linked is treated the same as completed - keeps the identified customer, completes onboarding", async () => {
-  handler = (_req, res) => sendJson(res, 200, { status: "already_linked", customerId: "700", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 200, { status: "already_linked", customerMasterId: "700", externalIdentityId: "ext-1" });
   const onboarding = makeOnboardingFake(onboardingRow({ status: "resolving", customerId: null, completedAt: null }));
   setOnboardingServiceForTests(onboarding.service);
   const outcome = await definition().execute({}, context(session({ onboarding: onboarding.getState() })));
@@ -234,10 +238,26 @@ test("79: an invalid_input (422) response maps to invalid_arguments with the rep
 });
 
 test("80: idempotency key and every sensitive field are server-assembled from the session - the model's tool-request input is never read", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerId: "700", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerMasterId: "700", externalIdentityId: "ext-1" });
   await definition().execute({ customerId: "999", externalId: "0000000", granted: true, idempotencyKey: "attacker-chosen" }, context(session()));
   assert.equal(lastHeaders["idempotency-key"], "customer-service:link:corr-1:link_external_identity");
   assert.match(lastUrl, /\/customers\/700\//, "the URL path carries the session's own customerId, not the model's");
   assert.doesNotMatch(JSON.stringify(lastBody), /999|0000000|attacker-chosen/);
   assert.doesNotMatch(lastUrl, /999/);
+});
+
+// ACS-R1-04-T08.1 (task section 12, item 6): Customer Service reports a
+// completed link, but the echoed-back customerMasterId has no local
+// master_customer projection yet - onboarding never completes, warning
+// surfaces on the outcome, businessOutcome stays completed.
+test("81: Customer Service reports completed but the local projection is unavailable - onboarding never completes, warning surfaces on the outcome", async () => {
+  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerMasterId: "700", externalIdentityId: "ext-1" });
+  setCustomerMasterProjectionReaderForTests({ async exists() { return false; } });
+  const onboarding = makeOnboardingFake(onboardingRow({ status: "resolving", customerId: null, completedAt: null }));
+  setOnboardingServiceForTests(onboarding.service);
+  const outcome = await definition().execute({}, context(session({ onboarding: onboarding.getState() })));
+  assert.equal(outcome.status, "completed", "Gateway status: the HTTP call itself succeeded");
+  assert.equal((outcome.data as { status: string }).status, "completed", "business outcome is unchanged by the projection gate");
+  assert.ok(outcome.warnings?.includes("customer_master_projection_unavailable"));
+  assert.notEqual(onboarding.getState()?.status, "completed");
 });

@@ -6,7 +6,7 @@ import { getPool, queryRows } from "@/lib/db";
 import { createMasterCustomer } from "@/lib/integrations/customer-master/customer-repository";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle/runNativeAutonomousCycle";
-import { resetCustomerServicePortForTests, resetOnboardingServiceForTests, setOnboardingServiceForTests } from "@/lib/brain/commercial/capability-gateway";
+import { resetCustomerServicePortForTests, resetOnboardingServiceForTests, setOnboardingServiceForTests, setCustomerMasterProjectionReaderForTests } from "@/lib/brain/commercial/capability-gateway";
 import type { ResolveNativeCustomerSessionDependencies } from "@/lib/brain/commercial/native-cycle/customer-session";
 import type { CustomerOnboardingMutationResult, CustomerOnboardingService, CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
 import type { ResolveCustomerIdentityResult } from "@/lib/domains/customer-identity";
@@ -80,6 +80,9 @@ beforeEach(() => {
   process.env.CUSTOMER_SERVICE_API_KEY = "test-key";
   resetCustomerServicePortForTests();
   resetOnboardingServiceForTests();
+  // ACS-R1-04-T08.1: this file exercises Customer 360 gate/runtime timing,
+  // not the customer_master projection gate itself.
+  setCustomerMasterProjectionReaderForTests({ async exists() { return true; } });
 });
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown) {
@@ -389,7 +392,7 @@ test("43: a customer created by the post-plan stage this same turn never trigger
   const seeded = await seedConversation();
   handler = (req, res, _body) => {
     if (req.url?.includes("/resolve")) return sendJson(res, 200, { status: "no_match" });
-    return sendJson(res, 201, { status: "created", customerId: "999" });
+    return sendJson(res, 201, { status: "created", customerMasterId: "999" });
   };
   const onboarding = mutableOnboardingService(onboardingRow(String(seeded.conversationId), null, { status: "collecting", customerId: null, completedAt: null, collected: { firstName: "Pedro", email: "pedro@example.com" } }));
   setOnboardingServiceForTests(onboarding.service);
@@ -496,7 +499,7 @@ test("49: multi-request still invokes the turn planner exactly once per inbound 
 
 test("50: the default (unmodified) runtime configuration keeps identity side effects out of multi-request - only the legacy pipeline executes them", async () => {
   const seeded = await seedConversation();
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "1" });
   await withEnv(MULTI_REQUEST_ENV, () =>
     runNativeAutonomousCycle({
       conversationId: seeded.conversationId,

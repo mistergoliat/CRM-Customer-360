@@ -8,7 +8,7 @@ import { getPool, queryRows } from "@/lib/db";
 import { createMasterCustomer } from "@/lib/integrations/customer-master/customer-repository";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle/runNativeAutonomousCycle";
-import { resetCustomerServicePortForTests, resetOnboardingServiceForTests, setOnboardingServiceForTests } from "@/lib/brain/commercial/capability-gateway";
+import { resetCustomerServicePortForTests, resetOnboardingServiceForTests, setOnboardingServiceForTests, setCustomerMasterProjectionReaderForTests } from "@/lib/brain/commercial/capability-gateway";
 import { buildOnboardingGroundedMessage } from "@/lib/brain/commercial/native-cycle/buildOnboardingGroundedMessage";
 import { runCustomerOnboardingPostPlanStage } from "@/lib/brain/commercial/native-cycle/customer-session";
 import type { NativeCustomerSessionExecutionContext } from "@/lib/brain/commercial/native-cycle/customer-session";
@@ -88,6 +88,9 @@ beforeEach(() => {
   process.env.CUSTOMER_SERVICE_API_KEY = "test-key";
   resetCustomerServicePortForTests();
   resetOnboardingServiceForTests();
+  // ACS-R1-04-T08.1: this file exercises post-plan privacy/idempotency, not
+  // the customer_master projection gate itself.
+  setCustomerMasterProjectionReaderForTests({ async exists() { return true; } });
 });
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown) {
@@ -293,7 +296,7 @@ function createCapturingSalesAgentProvider(onInvoke: (request: SalesAgentProvide
 
 test("51: the decision context returned by the full cycle never carries PII, even after post-plan creates a customer", async () => {
   const seeded = await seedConversation();
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "555" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "555" });
   const onboardingService = mutableOnboardingService(null);
   setOnboardingServiceForTests(onboardingService);
   const result = await withEnv(LEGACY_ENV, () =>
@@ -346,7 +349,7 @@ test("52: the sales-agent provider never receives the server-side execution cont
 });
 
 test("53: a retry (same correlationId) never duplicates create_customer - the idempotency key sent is identical both times", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "created", customerId: "1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "created", customerMasterId: "1" });
   const onboarding = session({ onboarding: { id: 1, conversationId: "conv-1", opportunityId: null, status: "collecting", purpose: "quote", collected: { firstName: "Pedro", email: "pedro@example.com" }, pendingFields: [], customerId: null, failedVerificationAttempts: 0, version: 1, createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z", completedAt: null } });
   const service = mutableOnboardingService(onboarding.onboarding);
   setOnboardingServiceForTests(service);
@@ -358,7 +361,7 @@ test("53: a retry (same correlationId) never duplicates create_customer - the id
 });
 
 test("54: a retry (same correlationId) never duplicates link_external_identity - the idempotency key sent is identical both times", async () => {
-  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerId: "700", externalIdentityId: "ext-1" });
+  handler = (_req, res) => sendJson(res, 201, { status: "completed", customerMasterId: "700", externalIdentityId: "ext-1" });
   const linkSession = session({ identity: { status: "identified", customerId: "700", source: "normalized_phone", localResolutionOutcome: "identified", externalResolutionOutcome: null } });
   await runCustomerOnboardingPostPlanStage({ plannedOperation: { operation: null }, messageText: "autorizo vincular", correlationId: "same-corr-2", customerSessionExecution: linkSession, dependencies: {} });
   await runCustomerOnboardingPostPlanStage({ plannedOperation: { operation: null }, messageText: "autorizo vincular", correlationId: "same-corr-2", customerSessionExecution: linkSession, dependencies: {} });
@@ -372,7 +375,7 @@ test("55: a raw/leaky Customer Service error never reaches the grounded customer
     attemptedOperation: "create_customer",
     onboarding: null,
     warnings: [],
-    capabilityOutcome: { capability: "create_customer", version: "v1", availability: "available", status: "denied", data: null, errorCode: "SELECT * FROM master_customer WHERE email='pedro@example.com' -- leaked", retryable: false, evidence: [], retryCount: 0, startedAt: "t", completedAt: "t", executionPublicId: "id" }
+    capabilityOutcome: { capability: "create_customer", version: "v1", availability: "available", status: "denied", data: null, errorCode: "SELECT * FROM master_customer WHERE email='pedro@example.com' -- leaked", retryable: false, evidence: [], warnings: [], retryCount: 0, startedAt: "t", completedAt: "t", executionPublicId: "id" }
   });
   assert.doesNotMatch(message ?? "", /SELECT/i);
   assert.doesNotMatch(message ?? "", /pedro@example\.com/);
@@ -383,7 +386,7 @@ test("56: the customerId is never present in the decision context or the grounde
     attemptedOperation: "create_customer",
     onboarding: null,
     warnings: [],
-    capabilityOutcome: { capability: "create_customer", version: "v1", availability: "available", status: "completed", data: { status: "created", customerId: "918273" }, errorCode: null, retryable: false, evidence: [], retryCount: 0, startedAt: "t", completedAt: "t", executionPublicId: "id" }
+    capabilityOutcome: { capability: "create_customer", version: "v1", availability: "available", status: "completed", data: { status: "created", customerMasterId: "918273" }, errorCode: null, retryable: false, evidence: [], warnings: [], retryCount: 0, startedAt: "t", completedAt: "t", executionPublicId: "id" }
   });
   assert.doesNotMatch(outcomeCompleted ?? "", /918273/);
 });
@@ -393,7 +396,7 @@ test("57: consent evidence (messageId/text) never reaches the grounded message",
     attemptedOperation: "create_customer",
     onboarding: null,
     warnings: [],
-    capabilityOutcome: { capability: "create_customer", version: "v1", availability: "available", status: "denied", data: null, errorCode: "consent_required:create_customer", retryable: false, evidence: [], retryCount: 0, startedAt: "t", completedAt: "t", executionPublicId: "id" }
+    capabilityOutcome: { capability: "create_customer", version: "v1", availability: "available", status: "denied", data: null, errorCode: "consent_required:create_customer", retryable: false, evidence: [], warnings: [], retryCount: 0, startedAt: "t", completedAt: "t", executionPublicId: "id" }
   });
   assert.doesNotMatch(message ?? "", /wamid\./);
   assert.doesNotMatch(message ?? "", /messageId/i);
@@ -403,7 +406,7 @@ test("58: create_customer's request body reflects only server-side onboarding/tr
   const captured: { body: Record<string, unknown> | null } = { body: null };
   handler = (_req, res, body) => {
     captured.body = body as Record<string, unknown> | null;
-    sendJson(res, 201, { status: "created", customerId: "1" });
+    sendJson(res, 201, { status: "created", customerMasterId: "1" });
   };
   const withData = session({ onboarding: { id: 1, conversationId: "conv-1", opportunityId: null, status: "collecting", purpose: "quote", collected: { firstName: "RealName", email: "real@example.com" }, pendingFields: [], customerId: null, failedVerificationAttempts: 0, version: 1, createdAt: "t", updatedAt: "t", completedAt: null } });
   await runCustomerOnboardingPostPlanStage({ plannedOperation: { operation: "prepare_quote" }, messageText: "autorizo crear mi ficha de cliente", correlationId: "corr-58", customerSessionExecution: withData, dependencies: {} });
