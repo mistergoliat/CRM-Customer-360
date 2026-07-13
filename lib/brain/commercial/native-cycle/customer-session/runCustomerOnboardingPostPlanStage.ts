@@ -4,6 +4,7 @@ import type { ResolveCustomerInput } from "@/lib/domains/customer-service";
 import { executeGovernedCapability } from "../../capability-gateway/executeCapability";
 import type { CapabilityGatewayResult } from "../../capability-gateway/types";
 import { extractCustomerOnboardingFields } from "./extractCustomerOnboardingFields";
+import { recordExternalIdentityResolution, recordIdentityCapabilityOutcome, recordOnboardingTransitionIfChanged, recordSessionWarnings } from "./identityAuditEvents";
 import {
   computePendingOnboardingFields,
   isAllowedCreateCustomerPurpose,
@@ -41,6 +42,14 @@ export type CustomerOnboardingPostPlanInput = {
   correlationId: string;
   /** Built once in the pre-plan phase (resolveNativeCustomerSession) - never reloaded, never re-resolved here. */
   customerSessionExecution: NativeCustomerSessionExecutionContext;
+  /**
+   * ACS-R1-04-T07 correlation only (release spec section 9). The canonical
+   * loop's own opportunity/decision, already computed by the caller before
+   * this stage runs - never re-derived here, never used to gate any
+   * create_customer/link_external_identity authority.
+   */
+  opportunityId?: string | null;
+  decisionId?: string | null;
   dependencies?: CustomerOnboardingPostPlanDependencies;
 };
 
@@ -112,6 +121,7 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
       pendingFields: requiredOnboardingFieldsForPurpose(purpose)
     });
     if (started.ok) {
+      await recordOnboardingTransitionIfChanged({ operation: "start", previous: null, result: started, correlationId: input.correlationId });
       onboarding = started.state;
       attemptedOperation = "start_onboarding";
     } else if (started.status === "purpose_conflict") {
@@ -133,6 +143,7 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
     if (Object.keys(patch).length > 0) {
       const merged = { ...onboarding.collected, ...patch };
       const pendingFields = computePendingOnboardingFields(onboarding.purpose, merged);
+      const previous = onboarding;
       const result = await onboardingService.collectFields({
         conversationId: onboarding.conversationId,
         expectedVersion: onboarding.version,
@@ -140,6 +151,7 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
         pendingFields
       });
       if (result.ok) {
+        await recordOnboardingTransitionIfChanged({ operation: "collect_fields", previous, result, correlationId: input.correlationId });
         onboarding = result.state;
         attemptedOperation = "collect_fields";
       } else if (result.status === "onboarding_state_version_conflict") {
@@ -177,15 +189,23 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
         } catch {
           evidence = { source: "customer_service", requestId: "unavailable", checkedAt: now().toISOString(), result: { status: "temporarily_unavailable", retryable: true } };
         }
+        await recordExternalIdentityResolution({
+          phase: "post_plan",
+          messageId: session.trustedInbound.messageId,
+          correlationId: input.correlationId,
+          conversationId: session.conversationId,
+          opportunityId: input.opportunityId ?? session.opportunityId,
+          evidence
+        });
       }
 
       if (evidence.result.status === "resolved") {
-        const landed = await completeOnboardingWithCustomer(onboardingService, onboarding, evidence.result.customerId);
+        const landed = await completeOnboardingWithCustomer(onboardingService, onboarding, evidence.result.customerId, input.correlationId);
         onboarding = landed.state;
         if (landed.warning) warnings.push(landed.warning);
       } else if (evidence.result.status === "conflict") {
         warnings.push("customer_identity_conflict");
-        const landed = await landOnboardingInTerminalState(onboardingService, onboarding, "conflict");
+        const landed = await landOnboardingInTerminalState(onboardingService, onboarding, "conflict", input.correlationId);
         onboarding = landed.state;
         if (landed.warning) warnings.push(landed.warning);
       } else if (evidence.result.status === "temporarily_unavailable") {
@@ -197,9 +217,30 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
         attemptedOperation = "create_customer";
         const trustedCustomerSession: NativeCustomerSessionExecutionContext = { ...session, onboarding, freshExternalResolutionEvidence: evidence };
         const outcome = await executeGovernedCapability("create_customer", {}, { correlationId: input.correlationId, trustedCustomerSession });
+        await recordIdentityCapabilityOutcome({
+          capability: "create_customer",
+          correlationId: input.correlationId,
+          conversationId: session.conversationId,
+          opportunityId: input.opportunityId ?? session.opportunityId,
+          customerId: session.identity.customerId,
+          decisionId: input.decisionId,
+          gatewayResult: outcome
+        });
         const refreshed = await onboardingService.getState(onboarding.conversationId);
         if (refreshed) onboarding = refreshed;
-        return { attemptedOperation, onboarding, capabilityOutcome: outcome, warnings: mergeWarnings(warnings) };
+        const finalWarnings = mergeWarnings(warnings);
+        await recordSessionWarnings({
+          phase: "post_plan",
+          messageId: session.trustedInbound.messageId,
+          correlationId: input.correlationId,
+          conversationId: session.conversationId,
+          opportunityId: input.opportunityId ?? session.opportunityId,
+          customerId: session.identity.customerId,
+          decisionId: input.decisionId,
+          executionPublicId: outcome.executionPublicId,
+          warnings: finalWarnings
+        });
+        return { attemptedOperation, onboarding, capabilityOutcome: outcome, warnings: finalWarnings };
       }
     }
   }
@@ -215,11 +256,43 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
       attemptedOperation = "link_external_identity";
       const trustedCustomerSession: NativeCustomerSessionExecutionContext = { ...session, onboarding };
       const outcome = await executeGovernedCapability("link_external_identity", {}, { correlationId: input.correlationId, trustedCustomerSession });
+      await recordIdentityCapabilityOutcome({
+        capability: "link_external_identity",
+        correlationId: input.correlationId,
+        conversationId: session.conversationId,
+        opportunityId: input.opportunityId ?? session.opportunityId,
+        customerId: session.identity.customerId,
+        decisionId: input.decisionId,
+        gatewayResult: outcome
+      });
       const refreshed = await onboardingService.getState(session.conversationId);
       if (refreshed) onboarding = refreshed;
-      return { attemptedOperation, onboarding, capabilityOutcome: outcome, warnings: mergeWarnings(warnings) };
+      const finalWarnings = mergeWarnings(warnings);
+      await recordSessionWarnings({
+        phase: "post_plan",
+        messageId: session.trustedInbound.messageId,
+        correlationId: input.correlationId,
+        conversationId: session.conversationId,
+        opportunityId: input.opportunityId ?? session.opportunityId,
+        customerId: session.identity.customerId,
+        decisionId: input.decisionId,
+        executionPublicId: outcome.executionPublicId,
+        warnings: finalWarnings
+      });
+      return { attemptedOperation, onboarding, capabilityOutcome: outcome, warnings: finalWarnings };
     }
   }
 
-  return { attemptedOperation, onboarding, capabilityOutcome: null, warnings: mergeWarnings(warnings) };
+  const finalWarnings = mergeWarnings(warnings);
+  await recordSessionWarnings({
+    phase: "post_plan",
+    messageId: session.trustedInbound.messageId,
+    correlationId: input.correlationId,
+    conversationId: session.conversationId,
+    opportunityId: input.opportunityId ?? session.opportunityId,
+    customerId: session.identity.customerId,
+    decisionId: input.decisionId,
+    warnings: finalWarnings
+  });
+  return { attemptedOperation, onboarding, capabilityOutcome: null, warnings: finalWarnings };
 }

@@ -6,3 +6,4 @@ export * from "./consentEvidence";
 export * from "./resolveNativeCustomerSession";
 export * from "./extractCustomerOnboardingFields";
 export * from "./runCustomerOnboardingPostPlanStage";
+export * from "./identityAuditEvents";

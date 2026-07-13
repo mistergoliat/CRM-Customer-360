@@ -1,7 +1,16 @@
 import type {
   CommercialEventSource,
   CommercialEventType,
-  CommercialEventV1
+  CommercialEventV1,
+  CustomerIdentityCapabilityOutcomeRecordedPayload,
+  CustomerIdentityResolutionMatchedBy,
+  CustomerIdentityResolutionOutcome,
+  CustomerIdentityResolutionPhase,
+  CustomerIdentityResolutionRecordedPayload,
+  CustomerIdentityResolver,
+  CustomerOnboardingTransitionOperation,
+  CustomerOnboardingTransitionRecordedPayload,
+  CustomerSessionWarningRecordedPayload
 } from "./types";
 import {
   COMMERCIAL_EVENT_CONTRACT_NAME,
@@ -11,6 +20,10 @@ import {
   buildCommercialEventCorrelationId,
   buildCommercialEventId,
   buildCommercialStatusEventDedupeKey,
+  buildCustomerIdentityCapabilityOutcomeDedupeKey,
+  buildCustomerIdentityResolutionDedupeKey,
+  buildCustomerOnboardingTransitionDedupeKey,
+  buildCustomerSessionWarningDedupeKey,
   buildFollowUpDueCommercialEventDedupeKey,
   buildInboundCommercialEventDedupeKey,
   buildInternalCommandCommercialEventDedupeKey
@@ -292,5 +305,179 @@ export function normalizeInternalCommandCommercialEvent(input: {
       eventKind: "internal_command",
       ...normalizeCommercialEventMetadata(input.metadata ?? {})
     }
+  });
+}
+
+// ACS-R1-04-T07. Identity/onboarding audit trail - descriptive evidence
+// (release spec section on T07), never authoritative. source is always
+// "internal_command": these events are produced by native-cycle server-side
+// orchestration, never directly by the Meta webhook or a timer.
+
+export function normalizeCustomerIdentityResolutionCommercialEvent(input: {
+  messageId: string;
+  phase: CustomerIdentityResolutionPhase;
+  resolver: CustomerIdentityResolver;
+  outcome: CustomerIdentityResolutionOutcome;
+  matchedBy: CustomerIdentityResolutionMatchedBy;
+  hasResolvedCustomer: boolean;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+}) {
+  const messageId = input.messageId.trim();
+  const payload: CustomerIdentityResolutionRecordedPayload = {
+    phase: input.phase,
+    resolver: input.resolver,
+    outcome: input.outcome,
+    matchedBy: input.matchedBy,
+    hasResolvedCustomer: input.hasResolvedCustomer
+  };
+  return buildBaseEvent({
+    eventType: "customer_identity_resolution_recorded",
+    source: "internal_command",
+    sourceEventId: messageId,
+    dedupeKey: buildCustomerIdentityResolutionDedupeKey(messageId, input.phase, input.resolver, input.outcome),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "customer_identity_resolution" }
+  });
+}
+
+export function normalizeCustomerOnboardingTransitionCommercialEvent(input: {
+  conversationId: string;
+  operation: CustomerOnboardingTransitionOperation;
+  purpose: string;
+  previousStatus: string | null;
+  nextStatus: string;
+  previousVersion: number | null;
+  nextVersion: number;
+  pendingFields: string[];
+  collectedAvailability: CustomerOnboardingTransitionRecordedPayload["collectedAvailability"];
+  hasResolvedCustomer: boolean;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  opportunityId?: string | number | null;
+}) {
+  const conversationId = input.conversationId.trim();
+  const payload: CustomerOnboardingTransitionRecordedPayload = {
+    operation: input.operation,
+    purpose: input.purpose,
+    previousStatus: input.previousStatus,
+    nextStatus: input.nextStatus,
+    previousVersion: input.previousVersion,
+    nextVersion: input.nextVersion,
+    pendingFields: [...input.pendingFields],
+    collectedAvailability: input.collectedAvailability,
+    hasResolvedCustomer: input.hasResolvedCustomer
+  };
+  return buildBaseEvent({
+    eventType: "customer_onboarding_transition_recorded",
+    source: "internal_command",
+    sourceEventId: null,
+    dedupeKey: buildCustomerOnboardingTransitionDedupeKey(conversationId, input.nextVersion, input.operation),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "customer_onboarding_transition" }
+  });
+}
+
+export function normalizeCustomerIdentityCapabilityOutcomeCommercialEvent(input: {
+  capability: CustomerIdentityCapabilityOutcomeRecordedPayload["capability"];
+  executionPublicId: string;
+  gatewayStatus: string;
+  businessOutcome: string;
+  retryable: boolean;
+  stableErrorCode: string | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  /** ACS-R1-04-T07 correlation only (release spec section 9) - the canonical loop's decisionId, when this turn already has one. Not part of the envelope schema (no dedicated column); carried in metadata only. */
+  decisionId?: string | null;
+}) {
+  const executionPublicId = input.executionPublicId.trim();
+  const payload: CustomerIdentityCapabilityOutcomeRecordedPayload = {
+    capability: input.capability,
+    executionPublicId,
+    gatewayStatus: input.gatewayStatus,
+    businessOutcome: input.businessOutcome,
+    retryable: input.retryable,
+    stableErrorCode: input.stableErrorCode
+  };
+  return buildBaseEvent({
+    eventType: "customer_identity_capability_outcome_recorded",
+    source: "internal_command",
+    sourceEventId: executionPublicId,
+    dedupeKey: buildCustomerIdentityCapabilityOutcomeDedupeKey(executionPublicId, input.businessOutcome),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: input.decisionId ? { eventKind: "customer_identity_capability_outcome", decisionId: input.decisionId } : { eventKind: "customer_identity_capability_outcome" }
+  });
+}
+
+export function normalizeCustomerSessionWarningCommercialEvent(input: {
+  messageId: string;
+  phase: CustomerIdentityResolutionPhase;
+  warningCode: string;
+  executionPublicId?: string | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  /** ACS-R1-04-T07 correlation only - see the identical note on the capability-outcome normalizer above. */
+  decisionId?: string | null;
+}) {
+  const messageId = input.messageId.trim();
+  const executionPublicId = input.executionPublicId?.trim() || null;
+  const payload: CustomerSessionWarningRecordedPayload = {
+    warningCode: input.warningCode,
+    phase: input.phase,
+    executionPublicId
+  };
+  return buildBaseEvent({
+    eventType: "customer_session_warning_recorded",
+    source: "internal_command",
+    sourceEventId: messageId,
+    dedupeKey: buildCustomerSessionWarningDedupeKey(messageId, input.phase, input.warningCode),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: input.decisionId ? { eventKind: "customer_session_warning", decisionId: input.decisionId } : { eventKind: "customer_session_warning" }
   });
 }

@@ -93,6 +93,17 @@ export type CapabilityGatewayDefinition<TInput = Record<string, unknown>, TOutpu
   maxRetries: number;
   checkAvailability(context: CapabilityGatewayContext): Promise<CapabilityAvailabilityResult>;
   execute(input: TInput, context: CapabilityGatewayContext): Promise<CapabilityExecutionOutcome<TOutput>>;
+  /**
+   * ACS-R1-04-T07. Optional allowlisted redaction for what gets persisted as
+   * request_summary_json/response_summary_json in crm_capability_executions.
+   * When absent, executeCapability falls back to today's behavior (the raw
+   * input / outcome.data) - this keeps every other capability (search_products,
+   * etc.) byte-for-byte unchanged. Only the identity capabilities
+   * (customerIdentityCapabilities.ts) supply these, since their raw input/
+   * output can carry phone/email/wa_id.
+   */
+  buildRequestSummary?(input: TInput, context: CapabilityGatewayContext): Record<string, unknown>;
+  buildResponseSummary?(outcome: CapabilityExecutionOutcome<TOutput>, context: CapabilityGatewayContext): Record<string, unknown> | null;
 };
 
 export type CapabilityGatewayResult<TOutput = Record<string, unknown>> = {

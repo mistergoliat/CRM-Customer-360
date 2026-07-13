@@ -111,6 +111,10 @@ export async function executeGovernedCapability(
   }
 
   const completedAt = nowIso();
+  const requestSummary = definition.buildRequestSummary ? definition.buildRequestSummary(input, context) : input;
+  const responseSummary = definition.buildResponseSummary
+    ? definition.buildResponseSummary(outcome, context)
+    : (outcome.data as Record<string, unknown> | null);
   const persisted = await insertCapabilityExecution({
     correlationId: context.correlationId,
     capabilityName: definition.capability,
@@ -120,8 +124,8 @@ export async function executeGovernedCapability(
     retryCount,
     retryable: outcome.retryable,
     errorCode: outcome.errorCode,
-    requestSummary: input,
-    responseSummary: outcome.data as Record<string, unknown> | null,
+    requestSummary,
+    responseSummary,
     evidence: outcome.evidence,
     opportunityId: context.opportunityId ?? null,
     conversationId: context.conversationId ?? null,

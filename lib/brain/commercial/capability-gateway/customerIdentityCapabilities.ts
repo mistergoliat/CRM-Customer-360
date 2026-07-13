@@ -3,8 +3,10 @@ import { createCustomerServiceClient } from "@/lib/domains/customer-service";
 import type { CustomerServicePort } from "@/lib/domains/customer-service";
 import { createCustomerOnboardingService } from "@/lib/domains/customer-onboarding";
 import type { CustomerOnboardingPendingField, CustomerOnboardingService } from "@/lib/domains/customer-onboarding";
+import { recordOnboardingTransitionIfChanged } from "../native-cycle/customer-session/identityAuditEvents";
 import { mapOnboardingPurposeToCommercialPurpose } from "../native-cycle/customer-session/onboardingPurposeMapping";
 import { completeOnboardingWithCustomer, landOnboardingInTerminalState } from "../native-cycle/customer-session/onboardingTransitions";
+import { deriveIdentityCapabilityBusinessOutcome } from "./identityCapabilityOutcome";
 import type { CapabilityExecutionOutcome, CapabilityGatewayContext, CapabilityGatewayDefinition } from "./types";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
@@ -40,6 +42,27 @@ function evidenceOf(source: string, summary: string): CapabilityExecutionOutcome
   return [{ source, summary, capturedAt: new Date().toISOString() }];
 }
 
+// ACS-R1-04-T07. Allowlisted, PII-free summaries for what the Gateway
+// persists as request_summary_json/response_summary_json for these three
+// capabilities specifically (release spec section 7 "Privacidad y
+// minimizacion obligatoria"). Every other capability keeps the generic
+// raw-input/raw-output behavior in executeCapability.ts unchanged.
+
+function identityResponseSummary(
+  capability: "resolve_customer" | "create_customer" | "link_external_identity",
+  outcome: CapabilityExecutionOutcome,
+  hasResolvedCustomer: boolean
+): Record<string, unknown> {
+  return {
+    businessOutcome: deriveIdentityCapabilityBusinessOutcome(capability, outcome.status, outcome.data as Record<string, unknown> | null),
+    gatewayStatus: outcome.status,
+    retryable: outcome.retryable,
+    stableErrorCode: outcome.errorCode,
+    hasResolvedCustomer,
+    hasExternalIdentity: capability !== "create_customer"
+  };
+}
+
 /**
  * resolve_customer: read-only, autonomous (contract section 9). Invoked
  * directly by resolveNativeCustomerSession - never by an LLM tool request -
@@ -52,6 +75,20 @@ function resolveCustomerCapability(): CapabilityGatewayDefinition {
     description: "Read-only identity resolution via the external Customer Service boundary.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     maxRetries: 0,
+    buildRequestSummary(input) {
+      return {
+        channel: "whatsapp",
+        phoneAvailable: Boolean(input.phoneNumber),
+        emailAvailable: Boolean(input.email),
+        consentPresent: false,
+        purpose: null,
+        hasResolvedCustomer: false,
+        hasExternalIdentity: Boolean(input.externalId)
+      };
+    },
+    buildResponseSummary(outcome) {
+      return identityResponseSummary("resolve_customer", outcome, false);
+    },
     async checkAvailability() {
       return { status: "available", reason: null };
     },
@@ -104,6 +141,21 @@ function createCustomerCapability(): CapabilityGatewayDefinition {
     // value for this field specifically.
     governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "medium" },
     maxRetries: 0,
+    buildRequestSummary(_input, context) {
+      const session = context.trustedCustomerSession;
+      return {
+        channel: "whatsapp",
+        phoneAvailable: Boolean(session?.trustedInbound.normalizedPhone),
+        emailAvailable: Boolean(session?.onboarding?.collected.email),
+        consentPresent: session?.currentTurnConsent.createCustomer !== null && session?.currentTurnConsent.createCustomer !== undefined,
+        purpose: session?.onboarding?.purpose ?? null,
+        hasResolvedCustomer: Boolean(session?.identity.customerId),
+        hasExternalIdentity: Boolean(session?.trustedInbound)
+      };
+    },
+    buildResponseSummary(outcome, context) {
+      return identityResponseSummary("create_customer", outcome, Boolean(context.trustedCustomerSession?.identity.customerId));
+    },
     async checkAvailability() {
       return { status: "available", reason: null };
     },
@@ -143,12 +195,13 @@ function createCustomerCapability(): CapabilityGatewayDefinition {
         const decision = outcome.decision;
         if (decision.status === "missing_information") {
           if (onboarding && onboarding.status !== "resolving") {
-            await onboardingService.collectFields({
+            const result = await onboardingService.collectFields({
               conversationId: onboarding.conversationId,
               expectedVersion: onboarding.version,
               collectedPatch: {},
               pendingFields: decision.requiredFields as CustomerOnboardingPendingField[]
             });
+            await recordOnboardingTransitionIfChanged({ operation: "collect_fields", previous: onboarding, result, correlationId: context.correlationId });
           }
           return { status: "missing_information", data: { requiredFields: decision.requiredFields }, errorCode: null, retryable: false, evidence: [] };
         }
@@ -167,22 +220,23 @@ function createCustomerCapability(): CapabilityGatewayDefinition {
       const result = outcome.result;
 
       if (result.status === "created" || result.status === "matched_existing") {
-        if (onboarding) await completeOnboardingWithCustomer(onboardingService, onboarding, result.customerId);
+        if (onboarding) await completeOnboardingWithCustomer(onboardingService, onboarding, result.customerId, context.correlationId);
         return { status: "completed", data: result as unknown as Record<string, unknown>, errorCode: null, retryable: false, evidence: evidenceOf("customer_service", `create_customer ${result.status}.`) };
       }
       if (result.status === "missing_information") {
         if (onboarding && onboarding.status !== "resolving") {
-          await onboardingService.collectFields({
+          const collectResult = await onboardingService.collectFields({
             conversationId: onboarding.conversationId,
             expectedVersion: onboarding.version,
             collectedPatch: {},
             pendingFields: result.requiredFields as CustomerOnboardingPendingField[]
           });
+          await recordOnboardingTransitionIfChanged({ operation: "collect_fields", previous: onboarding, result: collectResult, correlationId: context.correlationId });
         }
         return { status: "missing_information", data: { requiredFields: result.requiredFields }, errorCode: null, retryable: false, evidence: [] };
       }
       if (result.status === "conflict") {
-        if (onboarding) await landOnboardingInTerminalState(onboardingService, onboarding, "conflict");
+        if (onboarding) await landOnboardingInTerminalState(onboardingService, onboarding, "conflict", context.correlationId);
         return { status: "completed", data: result as unknown as Record<string, unknown>, errorCode: "customer_creation_conflict", retryable: false, evidence: evidenceOf("customer_service", "create_customer conflict.") };
       }
       if (result.status === "denied") {
@@ -210,6 +264,21 @@ function linkExternalIdentityCapability(): CapabilityGatewayDefinition {
     // "autonomous" here too (see create_customer for the same reasoning).
     governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "medium" },
     maxRetries: 0,
+    buildRequestSummary(_input, context) {
+      const session = context.trustedCustomerSession;
+      return {
+        channel: "whatsapp",
+        phoneAvailable: Boolean(session?.trustedInbound.normalizedPhone),
+        emailAvailable: Boolean(session?.onboarding?.collected.email),
+        consentPresent: session?.currentTurnConsent.linkExternalIdentity !== null && session?.currentTurnConsent.linkExternalIdentity !== undefined,
+        purpose: session?.onboarding?.purpose ?? null,
+        hasResolvedCustomer: Boolean(session?.identity.customerId),
+        hasExternalIdentity: Boolean(session?.trustedInbound)
+      };
+    },
+    buildResponseSummary(outcome, context) {
+      return identityResponseSummary("link_external_identity", outcome, Boolean(context.trustedCustomerSession?.identity.customerId));
+    },
     async checkAvailability() {
       return { status: "available", reason: null };
     },
@@ -258,12 +327,12 @@ function linkExternalIdentityCapability(): CapabilityGatewayDefinition {
 
       if (result.status === "completed" || result.status === "already_linked") {
         if (onboarding && onboarding.status !== "completed") {
-          await completeOnboardingWithCustomer(onboardingService, onboarding, session.identity.customerId);
+          await completeOnboardingWithCustomer(onboardingService, onboarding, session.identity.customerId, context.correlationId);
         }
         return { status: "completed", data: result as unknown as Record<string, unknown>, errorCode: null, retryable: false, evidence: evidenceOf("customer_service", `link_external_identity ${result.status}.`) };
       }
       if (result.status === "conflict") {
-        if (onboarding && onboarding.status !== "conflict") await landOnboardingInTerminalState(onboardingService, onboarding, "conflict");
+        if (onboarding && onboarding.status !== "conflict") await landOnboardingInTerminalState(onboardingService, onboarding, "conflict", context.correlationId);
         return { status: "completed", data: result as unknown as Record<string, unknown>, errorCode: "customer_link_conflict", retryable: false, evidence: evidenceOf("customer_service", "link_external_identity conflict.") };
       }
       if (result.status === "denied") {

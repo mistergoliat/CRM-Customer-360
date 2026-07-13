@@ -382,6 +382,11 @@ export async function runNativeAutonomousCycle(
         messageText: input.messageText,
         correlationId: input.correlationId,
         customerSessionExecution: session.execution,
+        // ACS-R1-04-T07 correlation only - already computed above for the
+        // catalog capability stage; never re-derived, never used to gate
+        // create_customer/link_external_identity authority.
+        opportunityId: groundedLoop.resultingState?.opportunityId != null ? String(groundedLoop.resultingState.opportunityId) : null,
+        decisionId: groundedLoop.decisionRecord?.decisionId ?? null,
         dependencies: input.customerSessionDependencies ?? undefined
       });
       warnings.push(...postPlanResult.warnings);
