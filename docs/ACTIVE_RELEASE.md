@@ -3,12 +3,13 @@ release: ACS-R1-04
 title: Customer Identity Resolution + Onboarding
 status: active
 updated_at: 2026-07-13
-current_task: ACS-R1-04-T07
-next_task: ACS-R1-04-T08
+current_task: ACS-R1-04-T08
+next_task: ACS-R1-04-T09
 blocked: false
-last_accepted_commit: 72cb9c3
+last_accepted_commit: cd9317e
 t06_1_sha: 0c51419
 t06_2_sha: 72cb9c3
+t07_sha: cd9317e
 doc_id: release-active
 source_of_truth_for:
   - active release
@@ -37,21 +38,22 @@ Este documento es un puntero operativo breve. El alcance, la tabla de tareas, la
 
 ## Tarea actual
 
-- `ACS-R1-04-T07`
+- `ACS-R1-04-T08`
 
 ## Siguiente tarea
 
-- `ACS-R1-04-T08`
+- `ACS-R1-04-T09`
 
 ## Bloqueos
 
-- Ninguno documentado en este momento. `ACS-R1-04-T06.2` reconcilio el inbound de identidad nativo tras `PR #43`/commit `3222003` (regresion de `resolveOrCreateNativeCustomer`, colision de migracion `022`, dominio paralelo y dual-write a la tabla legacy) - ver la release spec, seccion "Deudas fuera del incremento", entrada `ACS-R1-04-T06.2`.
+- Ninguno documentado en este momento. `ACS-R1-04-T06.2` reconcilio el inbound de identidad nativo tras `PR #43`/commit `3222003` (regresion de `resolveOrCreateNativeCustomer`, colision de migracion `022`, dominio paralelo y dual-write a la tabla legacy) - ver la release spec, seccion "Deudas fuera del incremento", entrada `ACS-R1-04-T06.2`. `ACS-R1-04-T07` persistio executions/outcomes/warnings de identidad sobre `commercial_event` existente, sin nueva tabla ni cambio de autoridad - ver evidencia de cierre en la release spec.
 
 ## Commit aceptado
 
-- `last_accepted_commit`: `72cb9c3`
+- `last_accepted_commit`: `cd9317e`
 - `t06_1_sha`: `0c51419`
 - `t06_2_sha`: `72cb9c3`
+- `t07_sha`: `cd9317e`
 
 ## Release spec
 
@@ -71,9 +73,11 @@ Este documento es un puntero operativo breve. El alcance, la tabla de tareas, la
 
 ## Nota operativa
 
-`ACS-R1-04-T07` persiste executions, outcomes y advertencias especificas de identity/onboarding mas alla de lo que el Capability Gateway ya audita via `insertCapabilityExecution`. No reabre las reglas de autoridad ni la frontera de Customer 360 fijada por `T06` y `T06.1`. Ver la Definition of Done completa en la release spec.
+`ACS-R1-04-T08` ejecuta pruebas end-to-end (cliente nuevo, cliente antiguo, conflicto) contra el flujo de identidad/onboarding ya conectado (`T06`/`T06.1`) y ahora instrumentado (`T07`). No reabre autoridad ni la frontera de Customer 360.
 
-`ACS-R1-04-T06.2` (previa a T07, ya cerrada) reconcilio `resolveOrCreateNativeCustomer` (renombrada `resolveOrPersistNativeExternalIdentity`) y elimino el dominio paralelo `lib/domains/customer-identity-onboarding` introducido fuera de secuencia por `PR #43`. T07 puede instrumentar esta ruta con confianza: la suite dirigida de T02-T06.2 vuelve a estar en verde.
+`ACS-R1-04-T07` (cerrada, commit `cd9317e`) persistio evidencia durable de resolucion de identidad (local/externa), transiciones efectivas de onboarding, business outcomes de `resolve_customer`/`create_customer`/`link_external_identity` (separados del status tecnico del Gateway) y warnings estructurados, todo sobre `commercial_event` existente - sin tabla nueva, sin duplicar `crm_capability_executions`, sin cambiar autoridad ni el orden pre-plan/post-plan. Tambien redacto `request_summary_json`/`response_summary_json` de las tres capabilities de identidad en `crm_capability_executions` (antes texto crudo con telefono/email/wa_id). Ver evidencia completa en la release spec.
+
+`ACS-R1-04-T06.2` (previa a T07, ya cerrada) reconcilio `resolveOrCreateNativeCustomer` (renombrada `resolveOrPersistNativeExternalIdentity`) y elimino el dominio paralelo `lib/domains/customer-identity-onboarding` introducido fuera de secuencia por `PR #43`.
 
 ## Regla de actualizacion
 
