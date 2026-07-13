@@ -2,9 +2,9 @@
 title: Customer lifecycle event contract
 doc_id: data-customer-lifecycle-event-contract
 status: approved
-version: "1.0.0"
+version: "2.0.0"
 owner: product
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-13
 source_of_truth_for:
   - CustomerLifecycleEvent
 depends_on:
@@ -38,7 +38,7 @@ type CustomerLifecycleEvent = {
   source: string;
   entityType: string;
   entityId: string;
-  customerId: string;
+  customerId: string | null;
   occurredAt: string;
   summary: string;
   severity: "low" | "medium" | "high";
@@ -65,6 +65,7 @@ type CustomerLifecycleEvent = {
 3. Events may be synthesized from native rows, but never invented without source evidence.
 4. `commercial_event` is a valid source of lifecycle entries.
 5. Address selection and confirmation are separate events.
+6. `customerId = null` is valid: identity/onboarding audit events (ACS-R1-04-T07) can exist before a customer is resolved - anchored instead to a conversation or an unresolved external identity. A consumer must never assume `customerId` is present.
 
 ## Examples
 
