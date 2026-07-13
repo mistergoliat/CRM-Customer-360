@@ -1,4 +1,4 @@
-import { normalizeEmail } from "@/lib/customer-identity/normalize";
+import { normalizeCustomerEmail, isRealCustomerEmail } from "./email";
 import { isPlatformOrigin, type PlatformOrigin } from "./platform-origin";
 
 type PlainObject = Record<string, unknown>;
@@ -42,12 +42,12 @@ export function validateCreateCustomerPayload(payload: unknown):
 
   const firstname = pickString(payload.firstname);
   const lastname = pickString(payload.lastname);
-  const email = normalizeEmail(pickString(payload.email));
+  const email = normalizeCustomerEmail(pickString(payload.email));
   const platformOriginRaw = pickString(payload.platformOrigin).toLowerCase();
 
   if (!firstname) return { ok: false, failure: { error: "firstname_required", status: 400 } };
   if (!lastname) return { ok: false, failure: { error: "lastname_required", status: 400 } };
-  if (!email || !isValidEmail(email)) return { ok: false, failure: { error: "invalid_email", status: 400 } };
+  if (!email || !isValidEmail(email) || !isRealCustomerEmail(email)) return { ok: false, failure: { error: "invalid_email", status: 400 } };
   if (!platformOriginRaw) return { ok: false, failure: { error: "platform_origin_required", status: 400 } };
   if (!isPlatformOrigin(platformOriginRaw)) return { ok: false, failure: { error: "invalid_platform_origin", status: 400 } };
 

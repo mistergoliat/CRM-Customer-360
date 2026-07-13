@@ -98,9 +98,13 @@ function makeFact(factKey: string): RequestFact {
   };
 }
 
-test("all nine initial request types have definitions; unknown intents fall back to general_question", () => {
+test("all request types have definitions; unknown intents fall back to general_question", () => {
   const expected = [
     "product_information",
+    "customer_identification",
+    "customer_registration",
+    "delivery_address_selection",
+    "delivery_address_confirmation",
     "product_quote",
     "maintenance_information",
     "maintenance_quote",

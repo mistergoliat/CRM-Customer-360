@@ -4,6 +4,8 @@ This backlog converts the PRD and the current repository state into a sequence o
 
 > **Integration status (architecture-owner review):** `INFRA-01`, `PR-02A`, `PR-02B`, `PR-03A` are **accepted** and integrated. Evidence: `docs/product/autonomous-commerce-qa-report-infra01-pr02a-02b-03a.md` (first pass) and `docs/product/autonomous-commerce-integration-handoff.md` (independent re-verification, gap closure, and decision record). `PR-04` is unblocked.
 
+> **Identity workstream update:** the repo now has a durable identity onboarding boundary (`customer_external_identity` + `crm_customer_onboarding`) and no longer needs provisional `master_customer` creation from unknown WhatsApp inbound. Remaining backlog work is legacy remediation, address lifecycle polish and cleanup of consumers that still assume a linked customer is always present.
+
 ## 1. Consistency check
 
 ### Contradictions found

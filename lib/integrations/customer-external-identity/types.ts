@@ -1,6 +1,6 @@
 export type CustomerExternalIdentityRow = {
   id: number;
-  customer_id: number;
+  customer_id: number | null;
   provider: string;
   identity_type: string;
   external_id: string;
@@ -11,7 +11,7 @@ export type CustomerExternalIdentityRow = {
 };
 
 export type CustomerExternalIdentityInput = {
-  customerId: number;
+  customerId: number | null;
   provider: string;
   identityType: string;
   externalId: string;

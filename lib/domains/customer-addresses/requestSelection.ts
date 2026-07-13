@@ -31,9 +31,9 @@ export async function selectAddressForRequest(input: {
   }
 
   await appendRequestEvent({
-    dedupeKey: `request:${input.requestId}:address:${input.addressId}:address_selected`,
+    dedupeKey: `request:${input.requestId}:address:${input.addressId}:delivery_address_selected`,
     requestId: input.requestId,
-    eventType: "address_selected",
+    eventType: "delivery_address_selected",
     sourceType: "system",
     sourceId: input.addressId,
     payload: { addressId: input.addressId },
@@ -73,9 +73,9 @@ export async function confirmAddressForRequest(input: {
   }
 
   await appendRequestEvent({
-    dedupeKey: `request:${input.requestId}:address:${input.addressId}:address_confirmed`,
+    dedupeKey: `request:${input.requestId}:address:${input.addressId}:delivery_address_confirmed`,
     requestId: input.requestId,
-    eventType: "address_confirmed",
+    eventType: "delivery_address_confirmed",
     sourceType: input.sourceMessageId ? "customer_message" : "system",
     sourceId: input.sourceMessageId ?? input.addressId,
     payload: { addressId: input.addressId },

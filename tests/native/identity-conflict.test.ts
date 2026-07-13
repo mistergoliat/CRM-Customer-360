@@ -43,7 +43,7 @@ async function makeCustomer(label: string) {
   const result = await createMasterCustomer({
     firstname: "Identity",
     lastname: label,
-    email: `identity-${uniqueSuffix(label)}@local.invalid`,
+    email: `identity-${uniqueSuffix(label)}@example.com`,
     platformOrigin: "whatsapp"
   });
   assert.ok(result.ok, result.ok ? "" : result.error);
@@ -76,23 +76,71 @@ async function sendInbound(waId: string, text: string, phoneNumberId = "phone-id
 
 test("unambiguous identity: a single linked customer resolves cleanly, no conflict", async () => {
   const waId = uniqueWaId();
+  const customerId = await makeCustomer("Linked");
+  await linkExternalIdentity({ customerId, externalId: `linked-${waId}`, normalizedValue: waId });
+
   const result = await sendInbound(waId, "primer contacto inequivoco");
   assert.equal(result.duplicate, false);
   assert.equal((result as { identityConflict: unknown }).identityConflict, null);
   assert.deepEqual((result as { identityWarnings: string[] }).identityWarnings, []);
-  assert.ok(result.customerId);
+  assert.equal(result.customerId, customerId);
 
   const second = await sendInbound(waId, "segundo mensaje, misma identidad");
   assert.equal((second as { identityConflict: unknown }).identityConflict, null);
-  assert.equal(second.customerId, result.customerId);
+  assert.equal(second.customerId, customerId);
+
+  const identityCount = await safeQueryRows<{ total: number }>(
+    "SELECT COUNT(*) AS total FROM customer_external_identity WHERE provider = 'whatsapp' AND external_id = ?",
+    [waId]
+  );
+  assert.ok(identityCount.ok, identityCount.ok ? "" : identityCount.error);
+  assert.equal(Number(identityCount.rows[0]?.total ?? 0), 1);
+
+  const conversationCount = await safeQueryRows<{ total: number }>(
+    "SELECT COUNT(*) AS total FROM conversation WHERE public_id = ?",
+    [result.conversationPublicId as string]
+  );
+  assert.ok(conversationCount.ok, conversationCount.ok ? "" : conversationCount.error);
+  assert.equal(Number(conversationCount.rows[0]?.total ?? 0), 1);
 });
 
-test("nonexistent identity: first contact creates a provisional customer without conflict", async () => {
+test("nonexistent identity: first contact keeps the conversation uncoupled and stores an unresolved external identity", async () => {
   const waId = uniqueWaId();
   const result = await sendInbound(waId, "soy nuevo");
   assert.equal((result as { identityConflict: unknown }).identityConflict, null);
-  assert.ok(result.customerId);
-  assert.ok((result as { customer: unknown }).customer);
+  assert.equal(result.customerId, null);
+  assert.equal((result as { customer: unknown }).customer, null);
+  assert.equal((result as { externalIdentityId: number | null }).externalIdentityId !== null, true);
+
+  const identityRow = await safeQueryRows<{ customer_id: number | null }>(
+    "SELECT customer_id FROM customer_external_identity WHERE provider = 'whatsapp' AND external_id = ? LIMIT 1",
+    [waId]
+  );
+  assert.ok(identityRow.ok, identityRow.ok ? "" : identityRow.error);
+  assert.equal(identityRow.rows[0]?.customer_id, null);
+
+  const conversationRow = await safeQueryRows<{ customer_id: number | null }>(
+    "SELECT customer_id FROM conversation WHERE id = ? LIMIT 1",
+    [result.conversationId as number]
+  );
+  assert.ok(conversationRow.ok, conversationRow.ok ? "" : conversationRow.error);
+  assert.equal(conversationRow.rows[0]?.customer_id, null);
+
+  const identityCount = await safeQueryRows<{ total: number }>(
+    "SELECT COUNT(*) AS total FROM customer_external_identity WHERE provider = 'whatsapp' AND external_id = ?",
+    [waId]
+  );
+  assert.ok(identityCount.ok, identityCount.ok ? "" : identityCount.error);
+  assert.equal(Number(identityCount.rows[0]?.total ?? 0), 1);
+
+  const conversationCount = await safeQueryRows<{ total: number }>(
+    "SELECT COUNT(*) AS total FROM conversation WHERE public_id = ?",
+    [result.conversationPublicId as string]
+  );
+  assert.ok(conversationCount.ok, conversationCount.ok ? "" : conversationCount.error);
+  assert.equal(Number(conversationCount.rows[0]?.total ?? 0), 1);
+
+  assert.doesNotMatch(JSON.stringify(result), /local\.invalid/i);
 });
 
 test("duplicate but equivalent identities: two links to the same customer do not conflict", async () => {
@@ -129,8 +177,10 @@ test("divergent identities: the same normalized value linked to two different cu
 test("conflict between an existing conversation's customer and a freshly resolved customer is detected and does not overwrite the existing link", async () => {
   const waId = uniqueWaId();
   const first = await sendInbound(waId, "primer mensaje establece el vinculo");
-  const originalCustomerId = first.customerId;
-  assert.ok(originalCustomerId);
+  assert.equal(first.customerId, null);
+
+  const originalCustomerId = await makeCustomer("ConversationLinked");
+  await queryRows("UPDATE conversation SET customer_id = ? WHERE id = ?", [originalCustomerId, first.conversationId as number]);
 
   const otherCustomerId = await makeCustomer("Repointed");
   await queryRows(

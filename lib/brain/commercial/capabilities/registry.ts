@@ -2,6 +2,7 @@ import { hasTable, safeQueryRows } from "@/lib/db";
 import { createPrestashopProductRepository } from "../sales-consultative/catalogRepository";
 import type { SalesConsultativeProduct, SalesNeedProfile } from "../sales-consultative/types";
 import { getCustomerAddress, listCustomerAddresses } from "@/lib/domains/customer-addresses";
+import { findMasterCustomerByEmail, getIdentityStatus } from "@/lib/domains/customer-identity-onboarding";
 import type { CapabilityDefinition, CapabilityExecutionResult } from "./types";
 
 function succeeded(capability: string, data: Record<string, unknown>, warning: string | null = null): CapabilityExecutionResult {
@@ -236,6 +237,33 @@ export const READ_CAPABILITY_REGISTRY: readonly CapabilityDefinition[] = [
         return invalidInput("get_customer_address", "address_not_owned_by_customer");
       }
       return succeeded("get_customer_address", { address });
+    }
+  },
+  {
+    capability: "find_customer_by_email",
+    description: "Read the exact customer match result for one email.",
+    riskLevel: "read",
+    implemented: true,
+    async execute(input) {
+      const email = asInputText(input.email ?? input.query);
+      if (!email) return invalidInput("find_customer_by_email", "email_required");
+      const result = await findMasterCustomerByEmail(email);
+      if (result.status === "error") return unavailable("find_customer_by_email", "customer_lookup_failed");
+      return succeeded("find_customer_by_email", { match: result }, result.status === "not_found" ? "customer_not_found" : null);
+    }
+  },
+  {
+    capability: "get_identity_status",
+    description: "Read the durable identity onboarding status for one conversation or case.",
+    riskLevel: "read",
+    implemented: true,
+    async execute(input) {
+      const rawConversationCaseId = input.conversationCaseId ?? input.conversationId ?? input.requestId ?? null;
+      const conversationCaseId = typeof rawConversationCaseId === "string" || typeof rawConversationCaseId === "number"
+        ? rawConversationCaseId
+        : null;
+      const status = await getIdentityStatus(conversationCaseId);
+      return succeeded("get_identity_status", { status }, null);
     }
   }
 ];

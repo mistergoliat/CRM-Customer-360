@@ -23,6 +23,7 @@ Current strengths:
 - consultative sales engine persists opportunities, need profiles, decisions, actions and outbox rows;
 - canonical outbound projection to `conversation_message` exists;
 - UI reads native conversation data;
+- customer identity onboarding now has a durable domain boundary for external identities, exact email lookup and consent-gated customer creation;
 - tests cover the native slice.
 
 Current gaps:
@@ -55,14 +56,19 @@ Current gaps:
 - Implemented:
   - `master_customer`
   - `customer_external_identity`
-  - provisional identity creation from WhatsApp sender
+  - durable identity onboarding state in `crm_customer_onboarding`
+  - unresolved WhatsApp contacts with nullable `conversation.customer_id`
+  - exact email match and consent-gated customer creation
 - Evidence:
   - `migrations/010_native_whatsapp_identity_and_conversation_controls.sql`
+  - `migrations/022_customer_identity_onboarding.sql`
   - `lib/integrations/customer-external-identity/repository.ts`
   - `lib/integrations/customer-master/customer-repository.ts`
+  - `lib/domains/customer-identity-onboarding/`
   - `lib/brain/native-whatsapp/service.ts`
 - Status:
-  - implemented but still provisional, not a final Customer Master architecture
+  - implemented as a durable onboarding boundary
+  - still requires legacy remediation for existing provisional `wa-*@local.invalid` rows
 
 ### 3. Conversations and messages
 
