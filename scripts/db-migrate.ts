@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RowDataPacket } from "mysql2/promise";
 import { connectAsRoot, connectToTargetDatabase, getTargetDatabaseName, listSqlFiles, loadLocalEnv } from "./db-utils";
+import { validateMigrationManifest } from "./migration-manifest";
 
 type Target = "dev" | "test";
 
@@ -37,6 +38,12 @@ export async function runMigrations(argv: string[] = process.argv.slice(2)) {
   await loadLocalEnv();
   const target = parseTarget(argv);
   const database = getTargetDatabaseName(target);
+
+  // Validate the manifest before touching any database - a duplicate version
+  // must never partially apply DDL before failing (ACS-R1-04-T06.2).
+  const migrations = await listSqlFiles("migrations");
+  validateMigrationManifest(migrations);
+
   const rootConnection = await connectAsRoot();
   try {
     await rootConnection.query(`CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
@@ -47,7 +54,6 @@ export async function runMigrations(argv: string[] = process.argv.slice(2)) {
   const connection = await connectToTargetDatabase(target);
   try {
     await ensureSchemaMigrationsTable(connection);
-    const migrations = await listSqlFiles("migrations");
     const [appliedRows] = await connection.query<RowDataPacket[]>(
       "SELECT version, filename, checksum FROM schema_migrations ORDER BY filename ASC"
     );

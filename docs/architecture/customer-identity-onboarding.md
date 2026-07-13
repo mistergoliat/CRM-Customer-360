@@ -1,5 +1,7 @@
 # Customer Identity Onboarding Architecture
 
+> **superseded_by**: [customer-onboarding-identity-contract](../data/customer-onboarding-identity-contract.md), [customer-creation-linking-authority-contract](../data/customer-creation-linking-authority-contract.md) and the [ACS-R1-04 release spec](../releases/ACS-R1-04-customer-identity-onboarding.md) (`ACS-R1-04-T06.2`). This doc predates T06.2's reconciliation: it describes `crm_customer_onboarding` as durable truth for onboarding lifecycle, which is wrong - that table is legacy (P1M/local-ai-sdr) and not canonical. The canonical model is `customer_external_identity` (may be unresolved) + `crm_customer_onboarding_state`/`CustomerOnboardingService` for onboarding + Customer Service Port/Capability Gateway for creation and linking. Kept only as a historical record of PR #43's original (unreconciled) intent.
+
 ## Boundary
 
 The identity boundary separates:

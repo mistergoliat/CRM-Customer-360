@@ -3,7 +3,6 @@ import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { auditLog } from "@/lib/audit";
 import { queryRows, safeQueryRows, withTransaction } from "@/lib/db";
-import { persistCustomerOnboardingState } from "@/lib/brain/commercial/customer-onboarding/state";
 import { findDistinctCustomersByNormalizedValue, findExternalIdentityByNormalizedValue, findExternalIdentityByProviderExternalId, upsertExternalIdentity } from "@/lib/integrations/customer-external-identity";
 import {
   loadCommercialEventByDedupeKey,
@@ -273,12 +272,27 @@ type NativeIdentityConflict = {
   detectedAt: string;
 };
 
-async function resolveOrCreateNativeCustomer(input: {
+type NativeExternalIdentityResolution = {
+  customer: NativeCustomerRow | null;
+  externalIdentityId: number | null;
+  externalIdentityCreated: boolean;
+  status: "identified" | "unresolved" | "conflict" | "temporarily_unavailable";
+  warnings: string[];
+  identityConflict: NativeIdentityConflict | null;
+};
+
+// ACS-R1-04-T06.2. Resolves an existing customer link for a WhatsApp contact,
+// or persists an unresolved external identity row (customer_id = NULL) when
+// no match exists. Never creates master_customer and never starts/persists
+// onboarding - customer creation and linking authority stay with the
+// Customer Service Port + Capability Gateway (customer-creation-linking-
+// authority-contract, docs/data/customer-onboarding-identity-contract.md).
+async function resolveOrPersistNativeExternalIdentity(input: {
   provider: string;
   identityType: string;
   externalId: string;
   normalizedValue: string;
-}) {
+}): Promise<NativeExternalIdentityResolution> {
   const existingIdentity = await findExternalIdentityByProviderExternalId(input.provider, input.externalId);
   if (existingIdentity.ok && existingIdentity.row) {
     const customerId = existingIdentity.row.customer_id;
@@ -287,9 +301,10 @@ async function resolveOrCreateNativeCustomer(input: {
       return {
         customer,
         externalIdentityId: existingIdentity.row.id,
-        warnings: [] as string[],
-        created: false,
-        identityConflict: null as NativeIdentityConflict | null
+        externalIdentityCreated: false,
+        status: "identified",
+        warnings: [],
+        identityConflict: null
       };
     }
   }
@@ -301,15 +316,16 @@ async function resolveOrCreateNativeCustomer(input: {
     return {
       customer: null,
       externalIdentityId: null,
-      warnings: ["identity_conflict_divergent_customers"] as string[],
-      created: false,
+      externalIdentityCreated: false,
+      status: "conflict",
+      warnings: ["identity_conflict_divergent_customers"],
       identityConflict: {
         type: "divergent_identity_links",
         provider: input.provider,
         normalizedValue: input.normalizedValue,
         candidateCustomerIds: distinctCustomers.customerIds,
         detectedAt: nowIso()
-      } as NativeIdentityConflict | null
+      }
     };
   }
 
@@ -328,9 +344,10 @@ async function resolveOrCreateNativeCustomer(input: {
       return {
         customer,
         externalIdentityId: identity.ok && identity.row ? identity.row.id : normalizedLookup.row.id,
+        externalIdentityCreated: false,
+        status: identity.ok ? "identified" : "temporarily_unavailable",
         warnings: identity.ok ? [] : [identity.error ?? "external_identity_upsert_failed"],
-        created: false,
-        identityConflict: null as NativeIdentityConflict | null
+        identityConflict: null
       };
     }
   }
@@ -347,9 +364,10 @@ async function resolveOrCreateNativeCustomer(input: {
   return {
     customer: null,
     externalIdentityId: identity.ok && identity.row ? identity.row.id : null,
+    externalIdentityCreated: identity.ok,
+    status: identity.ok ? "unresolved" : "temporarily_unavailable",
     warnings: identity.ok ? [] : [identity.error ?? "external_identity_upsert_failed"],
-    created: false,
-    identityConflict: null as NativeIdentityConflict | null
+    identityConflict: null
   };
 }
 
@@ -874,7 +892,7 @@ export async function processNativeWhatsAppInbound(input: {
     };
   }
 
-  const identity = await resolveOrCreateNativeCustomer({
+  const identity = await resolveOrPersistNativeExternalIdentity({
     provider: "whatsapp",
     identityType: "phone_number",
     externalId: normalizedExternalId,
@@ -920,25 +938,9 @@ export async function processNativeWhatsAppInbound(input: {
       connection
     );
 
-    await persistCustomerOnboardingState({
-      conversationCaseId: conversation.public_id,
-      waId: normalizedExternalId,
-      state: identityConflict ? "handoff" : resolvedCustomer ? "customer_found" : "unresolved",
-      identityResolutionStatus: identityConflict ? "conflict" : resolvedCustomer ? "matched" : "unresolved",
-      identityProvider: "whatsapp",
-      identityType: "phone_number",
-      identityExternalId: normalizedExternalId,
-      identityNormalizedValue: normalizedSenderPhone,
-      email: resolvedCustomer?.email ?? null,
-      firstname: resolvedCustomer?.firstname ?? null,
-      lastname: resolvedCustomer?.lastname ?? null,
-      customerId: resolvedCustomer ? String(resolvedCustomer.id) : null,
-      customerPlatformOrigin: resolvedCustomer?.platform_origin ?? null,
-      customerCreationConsentGranted: null,
-      currentTime: input.occurredAt,
-      connection
-    });
-
+    // ACS-R1-04-T06.2. processNativeWhatsAppInbound never starts, persists or
+    // completes onboarding - that is CustomerOnboardingService's job, driven
+    // from resolveNativeCustomerSession inside runNativeAutonomousCycle below.
     const appendResult = await appendConversationMessage(
       {
         conversationPublicId: conversation.public_id,
