@@ -6,7 +6,7 @@ status: active
 updated_at: 2026-07-13
 current_task: ACS-R1-04-T07
 next_task: ACS-R1-04-T08
-blocked: true
+blocked: false
 owner: product
 source_of_truth_for:
   - ACS-R1-04 release scope

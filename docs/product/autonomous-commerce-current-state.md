@@ -4,7 +4,7 @@ doc_id: product-autonomous-commerce-current-state
 status: historical
 version: "1.0.0"
 owner: product
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-13
 source_of_truth_for:
   - historical current state snapshot
 depends_on:
@@ -207,7 +207,7 @@ Current gaps:
 ## What is real now
 
 - WhatsApp inbound can reach native persistence.
-- A message can create or reuse a customer, conversation, opportunity and need profile.
+- A message can persist or reuse an unresolved external identity. An existing customer can be resolved and reused. A new customer can only be created through the consent-gated Customer Service capability. A message can create or reuse a conversation, opportunity and need profile.
 - Consultative output can create a next best action and outbox row.
 - Outbound can be projected into native conversation timeline.
 - Delivery status can project back to the outbox and timeline.

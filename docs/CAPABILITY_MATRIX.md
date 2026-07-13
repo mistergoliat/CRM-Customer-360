@@ -2,9 +2,9 @@
 title: CAPABILITY_MATRIX
 doc_id: product-capability-matrix
 status: active
-version: "1.7.0"
+version: "1.8.0"
 owner: architecture
-last_reviewed: 2026-07-09
+last_reviewed: 2026-07-13
 source_of_truth_for:
   - capability inventory
   - domain implementation status
@@ -63,7 +63,7 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 
 | Capability | Type | Domain | Port | Adapter | Gateway | Runtime | Operational | State | Debt |
 | ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |
-| `resolve_customer` | `service` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `not_verified` | `accepted_with_debt` | ACS-R1-04-T06: registered in the Capability Gateway (`lib/brain/commercial/capability-gateway/customerIdentityCapabilities.ts`, `read_only/autonomous/low`, `maxRetries: 0`), invoked exclusively by `resolveNativeCustomerSession` - never a sales-agent tool alias. Fires at most once per inbound, only when local resolution (T02/T02.1) found no match and an active onboarding requires identity; never for a public query, never after a local conflict, never as a fallback from a local technical failure. Tested against a local HTTP server (same pattern as T04.1) - no real Customer Service deployment exercised yet |
+| `resolve_customer` | `service` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `not_verified` | `accepted_with_debt` | ACS-R1-04-T06/T06.1: registered in the Capability Gateway (`lib/brain/commercial/capability-gateway/customerIdentityCapabilities.ts`, `read_only/autonomous/low`, `maxRetries: 0`). Invoked only by trusted server-side orchestration - never a sales-agent tool alias, never model-selectable: pre-plan via `resolveNativeCustomerSession`, or post-plan via `runCustomerOnboardingPostPlanStage` when `create_customer` needs fresh `no_match` evidence and pre-plan didn't already attempt resolution this turn. Fires at most once per inbound (the post-plan path reuses pre-plan's result instead of calling twice), only when local resolution (T02/T02.1) found no match and an active onboarding requires identity; never for a public query, never after a local conflict, never as a fallback from a local technical failure. Tested against a local HTTP server (same pattern as T04.1) - no real Customer Service deployment exercised yet |
 | `get_customer` | `service` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | depends on Customer Service boundary and onboarding state |
 | `create_customer` | `command` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `not_verified` | `accepted_with_debt` | ACS-R1-04-T06: registered (`mutating/autonomous/medium` - the Gateway's binary `authority` field is about operator pre-approval, not the real policy gate inside `execute()`; `maxRetries: 0`). Input is assembled entirely server-side from the trusted session (`NativeCustomerSessionExecutionContext`) - no LLM-supplied input is ever read. Applies the onboarding outcome table (created/matched_existing -> `completeOnboarding`; missing_information -> `collectFields`; conflict -> `markConflict`, never Customer 360, never link). A consent-bypass bug (`consent.createCustomer` was hardcoded `true` regardless of actual evidence) was found and fixed while writing T06's tests. ACS-R1-04-T06.1 removed its sales-agent tool alias and made `runCustomerOnboardingPostPlanStage` (legacy runtime only) the sole, deterministic caller - never LLM-tool-proposed anymore, avoiding a possible duplicate execution in the same turn. Tested against a local HTTP server, not a real Customer Service deployment - no operational smoke test yet |
 | `update_customer` | `command` | `planned` | `planned` | `planned` | `not_registered` | `not_connected` | `planned` | `planned` | canonical update rules not yet approved |
