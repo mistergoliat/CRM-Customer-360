@@ -251,6 +251,37 @@ async function makeCustomer(label: string) {
   return Number(result.data.id);
 }
 
+test("integration (regression, ACS-R1-04-T08): a not-yet-resolved external identity row (customer_id NULL) must never count as a match", async () => {
+  // resolveOrPersistNativeExternalIdentity (T06.2) persists an unresolved
+  // row (customer_id NULL) for a first-contact sender with no match yet.
+  // findCustomerByExternalIdentity used to return [String(null)] ("null" as
+  // a literal candidate id) for that row, making resolveIdentity report the
+  // sender as "identified" with a bogus customerId instead of
+  // "identification_required" - discovered while building the T08 E2E
+  // suite (new customer scenario), which is the first place this exact
+  // sequence (persist unresolved row, then resolve through the real port)
+  // is exercised end to end.
+  const waId = `56900${uniqueDigits(6)}`;
+  await upsertExternalIdentity({
+    customerId: null,
+    provider: "whatsapp",
+    identityType: "phone_number",
+    externalId: waId,
+    normalizedValue: waId,
+    isVerified: false
+  });
+
+  const adapter = createLocalCustomerIdentityAdapter();
+  const lookup = await adapter.findCustomerByExternalIdentity({ provider: "whatsapp", externalId: waId });
+  assert.ok(lookup.ok, lookup.ok ? "" : lookup.error);
+  assert.deepEqual(lookup.candidateCustomerIds, []);
+
+  const service = createCustomerIdentityResolutionService();
+  const result = await service.resolveIdentity({ channel: "whatsapp", externalId: waId, phoneNumber: waId });
+  assert.equal(result.status, "identification_required");
+  assert.equal(result.customerId, null);
+});
+
 test("integration: telefono encontrado unicamente en fuente historica (otro provider) resuelve el customer", async () => {
   const customerId = await makeCustomer("HistoricalOnly");
   const phone = uniqueNormalizedPhone();
