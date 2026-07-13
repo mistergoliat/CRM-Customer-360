@@ -412,17 +412,6 @@ export async function runCustomerOnboardingLoop(input: CustomerOnboardingRunInpu
       responseText = buildResponseText("offer_customer_creation", null, email);
       decisionReason = "No exact customer match was found.";
       auditEvents.push("customer.creation.offered");
-    } else if (lookupResult.status === "error") {
-      decisionAction = "handoff";
-      decisionTool = null;
-      decisionIntent = "lookup_error";
-      state = "blocked";
-      pendingAction = null;
-      pendingCustomerConfirmation = false;
-      responseText = "No pude validar el correo en este momento. Voy a derivarlo para revision.";
-      decisionReason = lookupResult.warning;
-      warnings.push(lookupResult.warning);
-      auditEvents.push("ai_sdr.handoff.requested");
     } else {
       decisionAction = "handoff";
       decisionTool = null;
@@ -514,9 +503,7 @@ export async function runCustomerOnboardingLoop(input: CustomerOnboardingRunInpu
               platformOrigin: "whatsapp",
               customerConfirmed: true,
               conversationCaseId: input.conversationCaseId,
-              correlationId: input.correlationId,
-              sourceMessageId: input.messageId,
-              occurredAt: currentTime
+              correlationId: input.correlationId
             });
             toolRuns.push(buildToolRun("create_customer", "executed", {
               firstname: suggestedName.firstname,

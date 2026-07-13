@@ -143,6 +143,28 @@ test("nonexistent identity: first contact keeps the conversation uncoupled and s
   assert.doesNotMatch(JSON.stringify(result), /local\.invalid/i);
 });
 
+test("unresolved identity persists: a second message from the same still-unmatched contact stays unresolved, never fabricates a customer, never duplicates the identity row", async () => {
+  const waId = uniqueWaId();
+  const first = await sendInbound(waId, "primer mensaje, todavia sin match");
+  assert.equal(first.customerId, null);
+  assert.equal((first as { customer: unknown }).customer, null);
+  const firstExternalIdentityId = (first as { externalIdentityId: number | null }).externalIdentityId;
+  assert.ok(firstExternalIdentityId);
+
+  const second = await sendInbound(waId, "segundo mensaje, sigue sin identificacion");
+  assert.equal(second.customerId, null);
+  assert.equal((second as { customer: unknown }).customer, null);
+  assert.equal((second as { identityConflict: unknown }).identityConflict, null);
+  assert.equal((second as { externalIdentityId: number | null }).externalIdentityId, firstExternalIdentityId);
+
+  const identityCount = await safeQueryRows<{ total: number }>(
+    "SELECT COUNT(*) AS total FROM customer_external_identity WHERE provider = 'whatsapp' AND external_id = ?",
+    [waId]
+  );
+  assert.ok(identityCount.ok, identityCount.ok ? "" : identityCount.error);
+  assert.equal(Number(identityCount.rows[0]?.total ?? 0), 1);
+});
+
 test("duplicate but equivalent identities: two links to the same customer do not conflict", async () => {
   const waId = uniqueWaId();
   const customerId = await makeCustomer("Equivalent");

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { getPool } from "@/lib/db";
+import { getPool, queryRows } from "@/lib/db";
+import { createMasterCustomer } from "@/lib/integrations/customer-master/customer-repository";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle/runNativeAutonomousCycle";
 import type { ResolveNativeCustomerSessionDependencies } from "@/lib/brain/commercial/native-cycle/customer-session";
@@ -42,9 +43,31 @@ function uniqueSuffix(label: string) {
   return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
+// ACS-R1-04-T06.2. The native WhatsApp inbound no longer resolves a
+// provisional customer for an unknown sender (that authority moved to
+// Customer Service). These tests need an already-identified customer, so
+// seeding links a real master_customer to the waId directly before sending
+// the inbound - mirroring tests/native/identity-conflict.test.ts.
 async function seedConversation() {
   const waId = `5699${String(Date.now()).slice(-8)}${Math.floor(Math.random() * 90 + 10)}`;
   const phoneNumberId = `phone-${uniqueSuffix("pnid")}`;
+
+  const customer = await createMasterCustomer({
+    firstname: "Cliente",
+    lastname: "Gate",
+    email: `gate-${uniqueSuffix("seed")}@example.com`,
+    platformOrigin: "whatsapp"
+  });
+  assert.ok(customer.ok, customer.ok ? "" : customer.error);
+  const customerId = Number(customer.data.id);
+  await queryRows(
+    `
+      INSERT INTO customer_external_identity (customer_id, provider, identity_type, external_id, normalized_value, is_verified, created_at, updated_at)
+      VALUES (?, 'whatsapp', 'phone_number', ?, ?, 0, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+    `,
+    [customerId, waId, waId]
+  );
+
   const result = await processNativeWhatsAppInbound({
     providerMessageId: `wamid.${uniqueSuffix("gate")}`,
     phoneNumberId,
@@ -57,7 +80,7 @@ async function seedConversation() {
     rawPayload: {}
   });
   assert.ok(result.conversationId);
-  assert.ok(result.customerId, "seeding must resolve a real customerId");
+  assert.equal(result.customerId, customerId, "seeding must resolve the linked customerId");
   return { ...result, waId, phoneNumberId, customerId: result.customerId as number };
 }
 

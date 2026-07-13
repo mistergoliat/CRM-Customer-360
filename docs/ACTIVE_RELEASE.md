@@ -2,7 +2,7 @@
 release: ACS-R1-04
 title: Customer Identity Resolution + Onboarding
 status: active
-updated_at: 2026-07-10
+updated_at: 2026-07-13
 current_task: ACS-R1-04-T07
 next_task: ACS-R1-04-T08
 blocked: false
@@ -44,7 +44,7 @@ Este documento es un puntero operativo breve. El alcance, la tabla de tareas, la
 
 ## Bloqueos
 
-- Ninguno documentado en este momento.
+- Ninguno documentado en este momento. `ACS-R1-04-T06.2` reconcilio el inbound de identidad nativo tras `PR #43`/commit `3222003` (regresion de `resolveOrCreateNativeCustomer`, colision de migracion `022`, dominio paralelo y dual-write a la tabla legacy) - ver la release spec, seccion "Deudas fuera del incremento", entrada `ACS-R1-04-T06.2`.
 
 ## Commit aceptado
 
@@ -70,6 +70,8 @@ Este documento es un puntero operativo breve. El alcance, la tabla de tareas, la
 ## Nota operativa
 
 `ACS-R1-04-T07` persiste executions, outcomes y advertencias especificas de identity/onboarding mas alla de lo que el Capability Gateway ya audita via `insertCapabilityExecution`. No reabre las reglas de autoridad ni la frontera de Customer 360 fijada por `T06` y `T06.1`. Ver la Definition of Done completa en la release spec.
+
+`ACS-R1-04-T06.2` (previa a T07, ya cerrada) reconcilio `resolveOrCreateNativeCustomer` (renombrada `resolveOrPersistNativeExternalIdentity`) y elimino el dominio paralelo `lib/domains/customer-identity-onboarding` introducido fuera de secuencia por `PR #43`. T07 puede instrumentar esta ruta con confianza: la suite dirigida de T02-T06.2 vuelve a estar en verde.
 
 ## Regla de actualizacion
 

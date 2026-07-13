@@ -56,57 +56,6 @@ export const REQUEST_DEFINITIONS: readonly RequestDefinition[] = [
     primaryCapability: { capability: "identify_equipment", factKey: "equipment_code", inputField: "query", fallbackToMessageText: true }
   },
   {
-    intentType: "customer_identification",
-    domain: "sales",
-    requiredFacts: ["customer_email"],
-    optionalFacts: ["customer_creation_consent", "customer_firstname", "customer_lastname"],
-    allowedCapabilities: ["find_customer_by_email", "get_identity_status"],
-    resolutionConditions: [
-      { eventType: "identity_matched", resolutionType: "identity_matched" },
-      { eventType: "customer_created", resolutionType: "customer_created" }
-    ],
-    escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null,
-    autoEscalate: null,
-    primaryCapability: { capability: "find_customer_by_email", factKey: "customer_email", inputField: "query", fallbackToMessageText: false }
-  },
-  {
-    intentType: "customer_registration",
-    domain: "sales",
-    requiredFacts: ["customer_email", "customer_firstname", "customer_lastname", "customer_creation_consent"],
-    optionalFacts: ["customer_id"],
-    allowedCapabilities: ["get_identity_status", "find_customer_by_email"],
-    resolutionConditions: [{ eventType: "customer_created", resolutionType: "customer_created" }],
-    escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null,
-    autoEscalate: null,
-    primaryCapability: null
-  },
-  {
-    intentType: "delivery_address_selection",
-    domain: "sales",
-    requiredFacts: ["customer_id"],
-    optionalFacts: ["selected_delivery_address_id"],
-    allowedCapabilities: ["list_customer_addresses", "get_customer_address"],
-    resolutionConditions: [{ eventType: "delivery_address_selected", resolutionType: "delivery_address_selected" }],
-    escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null,
-    autoEscalate: null,
-    primaryCapability: null
-  },
-  {
-    intentType: "delivery_address_confirmation",
-    domain: "sales",
-    requiredFacts: ["customer_id", "selected_delivery_address_id"],
-    optionalFacts: ["confirmed_delivery_address_id"],
-    allowedCapabilities: ["list_customer_addresses", "get_customer_address"],
-    resolutionConditions: [{ eventType: "delivery_address_confirmed", resolutionType: "delivery_address_confirmed" }],
-    escalationConditions: HUMAN_ESCALATION,
-    followupPolicy: null,
-    autoEscalate: null,
-    primaryCapability: null
-  },
-  {
     intentType: "maintenance_quote",
     domain: "maintenance",
     requiredFacts: ["equipment_code"],

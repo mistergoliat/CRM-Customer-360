@@ -1,7 +1,5 @@
-import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { hasTable, queryRows, safeQueryRows, withConnection, type DbRow } from "@/lib/db";
 import { isDbWriteEnabled } from "@/lib/write-access";
-import type { CustomerIdentityResolutionStatus } from "@/lib/domains/customer-identity-onboarding";
 import type {
   CustomerConversationLinkRecord,
   CustomerOnboardingStateRecord,
@@ -43,11 +41,6 @@ function toRecord(row: DbRow): CustomerOnboardingStateRecord {
     conversationCaseId: asText(row.conversation_case_id) ?? "",
     waId: asText(row.wa_id),
     state: (asText(row.state) ?? "unresolved") as CustomerOnboardingState,
-    identityResolutionStatus: (asText(row.identity_resolution_status) as CustomerIdentityResolutionStatus) ?? null,
-    identityProvider: asText(row.identity_provider),
-    identityType: asText(row.identity_type),
-    identityExternalId: asText(row.identity_external_id),
-    identityNormalizedValue: asText(row.identity_normalized_value),
     pendingAction: (asText(row.pending_action) as CustomerOnboardingStateRecord["pendingAction"]) ?? null,
     pendingCustomerConfirmation: asBoolean(row.pending_customer_confirmation),
     email: asText(row.email),
@@ -56,11 +49,6 @@ function toRecord(row: DbRow): CustomerOnboardingStateRecord {
     customerId: asText(row.customer_id),
     customerPlatformOrigin: (asText(row.customer_platform_origin) as CustomerOnboardingStateRecord["customerPlatformOrigin"]) ?? null,
     linkStatus: asText(row.link_status),
-    customerCreationConsentEmail: asText(row.customer_creation_consent_email),
-    customerCreationConsentSourceMessageId: asText(row.customer_creation_consent_source_message_id),
-    customerCreationConsentChannel: asText(row.customer_creation_consent_channel),
-    customerCreationConsentGrantedAt: asText(row.customer_creation_consent_granted_at),
-    customerCreationConsentGranted: row.customer_creation_consent_granted === null || row.customer_creation_consent_granted === undefined ? null : asBoolean(row.customer_creation_consent_granted),
     lastDecisionId: asText(row.last_decision_id),
     lastToolName: (asText(row.last_tool_name) as CustomerOnboardingToolName) ?? null,
     lastToolStatus: asText(row.last_tool_status),
@@ -203,11 +191,6 @@ export async function persistCustomerOnboardingState(input: {
   conversationCaseId: string | number;
   waId?: string | null;
   state: CustomerOnboardingState;
-  identityResolutionStatus?: CustomerIdentityResolutionStatus | null;
-  identityProvider?: string | null;
-  identityType?: string | null;
-  identityExternalId?: string | null;
-  identityNormalizedValue?: string | null;
   pendingAction?: string | null;
   pendingCustomerConfirmation?: boolean;
   email?: string | null;
@@ -216,11 +199,6 @@ export async function persistCustomerOnboardingState(input: {
   customerId?: string | null;
   customerPlatformOrigin?: string | null;
   linkStatus?: string | null;
-  customerCreationConsentEmail?: string | null;
-  customerCreationConsentSourceMessageId?: string | null;
-  customerCreationConsentChannel?: string | null;
-  customerCreationConsentGrantedAt?: string | null;
-  customerCreationConsentGranted?: boolean | null;
   lastDecisionId?: string | null;
   lastToolName?: string | null;
   lastToolStatus?: string | null;
@@ -231,7 +209,6 @@ export async function persistCustomerOnboardingState(input: {
   warnings?: string[];
   context?: Record<string, unknown>;
   currentTime: string;
-  connection?: PoolConnection;
 }) {
   if (!isDbWriteEnabled()) {
     return { ok: false as const, status: "disabled" as const, warnings: ["db_write_disabled"], state: null as CustomerOnboardingStateRecord | null };
@@ -245,91 +222,13 @@ export async function persistCustomerOnboardingState(input: {
   const warningsJson = JSON.stringify(input.warnings ?? []);
   const contextJson = JSON.stringify(input.context ?? {});
   try {
-    const params = [
-      String(input.conversationCaseId),
-      input.waId ?? null,
-      input.state,
-      input.identityResolutionStatus ?? null,
-      input.identityProvider ?? null,
-      input.identityType ?? null,
-      input.identityExternalId ?? null,
-      input.identityNormalizedValue ?? null,
-      input.pendingAction ?? null,
-      input.pendingCustomerConfirmation ? 1 : 0,
-      input.email ?? null,
-      input.firstname ?? null,
-      input.lastname ?? null,
-      input.customerId ?? null,
-      input.customerPlatformOrigin ?? null,
-      input.linkStatus ?? null,
-      input.customerCreationConsentEmail ?? null,
-      input.customerCreationConsentSourceMessageId ?? null,
-      input.customerCreationConsentChannel ?? null,
-      input.customerCreationConsentGrantedAt ?? null,
-      input.customerCreationConsentGranted === null || input.customerCreationConsentGranted === undefined ? null : input.customerCreationConsentGranted ? 1 : 0,
-      input.lastDecisionId ?? null,
-      input.lastToolName ?? null,
-      input.lastToolStatus ?? null,
-      input.lastToolResult ? JSON.stringify(input.lastToolResult) : null,
-      input.lastResponseText ?? null,
-      input.reason ?? null,
-      input.confidence ?? null,
-      warningsJson,
-      contextJson,
-      now,
-      now
-    ];
-    if (input.connection) {
-      await input.connection.execute(
-        `INSERT INTO \`${STATE_TABLE}\`
-          (conversation_case_id, wa_id, state, identity_resolution_status, identity_provider, identity_type, identity_external_id, identity_normalized_value, pending_action, pending_customer_confirmation, email, firstname, lastname, customer_id, customer_platform_origin, link_status, customer_creation_consent_email, customer_creation_consent_source_message_id, customer_creation_consent_channel, customer_creation_consent_granted_at, customer_creation_consent_granted, last_decision_id, last_tool_name, last_tool_status, last_tool_result_json, last_response_text, reason, confidence, warnings_json, context_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           wa_id = VALUES(wa_id),
-           state = VALUES(state),
-           identity_resolution_status = VALUES(identity_resolution_status),
-           identity_provider = VALUES(identity_provider),
-           identity_type = VALUES(identity_type),
-           identity_external_id = VALUES(identity_external_id),
-           identity_normalized_value = VALUES(identity_normalized_value),
-           pending_action = VALUES(pending_action),
-           pending_customer_confirmation = VALUES(pending_customer_confirmation),
-           email = VALUES(email),
-           firstname = VALUES(firstname),
-           lastname = VALUES(lastname),
-           customer_id = VALUES(customer_id),
-           customer_platform_origin = VALUES(customer_platform_origin),
-           link_status = VALUES(link_status),
-           customer_creation_consent_email = VALUES(customer_creation_consent_email),
-           customer_creation_consent_source_message_id = VALUES(customer_creation_consent_source_message_id),
-           customer_creation_consent_channel = VALUES(customer_creation_consent_channel),
-           customer_creation_consent_granted_at = VALUES(customer_creation_consent_granted_at),
-           customer_creation_consent_granted = VALUES(customer_creation_consent_granted),
-           last_decision_id = VALUES(last_decision_id),
-           last_tool_name = VALUES(last_tool_name),
-           last_tool_status = VALUES(last_tool_status),
-           last_tool_result_json = VALUES(last_tool_result_json),
-           last_response_text = VALUES(last_response_text),
-           reason = VALUES(reason),
-           confidence = VALUES(confidence),
-           warnings_json = VALUES(warnings_json),
-           context_json = VALUES(context_json),
-           updated_at = VALUES(updated_at)`,
-        params
-      );
-    } else {
-      await queryRows(
-        `INSERT INTO \`${STATE_TABLE}\`
-          (conversation_case_id, wa_id, state, identity_resolution_status, identity_provider, identity_type, identity_external_id, identity_normalized_value, pending_action, pending_customer_confirmation, email, firstname, lastname, customer_id, customer_platform_origin, link_status, customer_creation_consent_email, customer_creation_consent_source_message_id, customer_creation_consent_channel, customer_creation_consent_granted_at, customer_creation_consent_granted, last_decision_id, last_tool_name, last_tool_status, last_tool_result_json, last_response_text, reason, confidence, warnings_json, context_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    await queryRows(
+      `INSERT INTO \`${STATE_TABLE}\`
+        (conversation_case_id, wa_id, state, pending_action, pending_customer_confirmation, email, firstname, lastname, customer_id, customer_platform_origin, link_status, last_decision_id, last_tool_name, last_tool_status, last_tool_result_json, last_response_text, reason, confidence, warnings_json, context_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          wa_id = VALUES(wa_id),
          state = VALUES(state),
-         identity_resolution_status = VALUES(identity_resolution_status),
-         identity_provider = VALUES(identity_provider),
-         identity_type = VALUES(identity_type),
-         identity_external_id = VALUES(identity_external_id),
-         identity_normalized_value = VALUES(identity_normalized_value),
          pending_action = VALUES(pending_action),
          pending_customer_confirmation = VALUES(pending_customer_confirmation),
          email = VALUES(email),
@@ -338,11 +237,6 @@ export async function persistCustomerOnboardingState(input: {
          customer_id = VALUES(customer_id),
          customer_platform_origin = VALUES(customer_platform_origin),
          link_status = VALUES(link_status),
-         customer_creation_consent_email = VALUES(customer_creation_consent_email),
-         customer_creation_consent_source_message_id = VALUES(customer_creation_consent_source_message_id),
-         customer_creation_consent_channel = VALUES(customer_creation_consent_channel),
-         customer_creation_consent_granted_at = VALUES(customer_creation_consent_granted_at),
-         customer_creation_consent_granted = VALUES(customer_creation_consent_granted),
          last_decision_id = VALUES(last_decision_id),
          last_tool_name = VALUES(last_tool_name),
          last_tool_status = VALUES(last_tool_status),
@@ -353,22 +247,31 @@ export async function persistCustomerOnboardingState(input: {
          warnings_json = VALUES(warnings_json),
          context_json = VALUES(context_json),
          updated_at = VALUES(updated_at)`,
-        params
-      );
-    }
-
-    if (input.connection) {
-      const [rows] = await input.connection.execute<RowDataPacket[]>(
-        `SELECT * FROM \`${STATE_TABLE}\` WHERE conversation_case_id = ? LIMIT 1`,
-        [String(input.conversationCaseId)]
-      );
-      return {
-        ok: true as const,
-        status: "persisted" as const,
-        warnings: [],
-        state: rows[0] ? toRecord(rows[0] as DbRow) : null
-      };
-    }
+      [
+        String(input.conversationCaseId),
+        input.waId ?? null,
+        input.state,
+        input.pendingAction ?? null,
+        input.pendingCustomerConfirmation ? 1 : 0,
+        input.email ?? null,
+        input.firstname ?? null,
+        input.lastname ?? null,
+        input.customerId ?? null,
+        input.customerPlatformOrigin ?? null,
+        input.linkStatus ?? null,
+        input.lastDecisionId ?? null,
+        input.lastToolName ?? null,
+        input.lastToolStatus ?? null,
+        input.lastToolResult ? JSON.stringify(input.lastToolResult) : null,
+        input.lastResponseText ?? null,
+        input.reason ?? null,
+        input.confidence ?? null,
+        warningsJson,
+        contextJson,
+        now,
+        now
+      ]
+    );
 
     const loaded = await loadCustomerOnboardingState(input.conversationCaseId);
     return {

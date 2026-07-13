@@ -61,13 +61,11 @@ async function makeRequest(intentType: string, intentDomain: "sales" | "order" |
   return created.request!;
 }
 
-test("the registry declares the read capabilities; unimplemented ones are explicit, none is a mutation", () => {
+test("the registry declares the nine read capabilities; unimplemented ones are explicit, none is a mutation", () => {
   const names = READ_CAPABILITY_REGISTRY.map((definition) => definition.capability).sort();
   assert.deepEqual(names, [
     "find_order",
-    "find_customer_by_email",
     "get_customer_address",
-    "get_identity_status",
     "get_order_status",
     "get_product_information",
     "get_product_price",
@@ -78,8 +76,6 @@ test("the registry declares the read capabilities; unimplemented ones are explic
   assert.equal(READ_CAPABILITY_REGISTRY.every((definition) => definition.riskLevel === "read"), true);
   assert.equal(resolveReadCapability("identify_equipment")?.implemented, false);
   assert.equal(resolveReadCapability("get_service_price")?.implemented, false);
-  assert.equal(resolveReadCapability("find_customer_by_email")?.implemented, true);
-  assert.equal(resolveReadCapability("get_identity_status")?.implemented, true);
   assert.equal(resolveReadCapability("send_quote"), null);
 });
 

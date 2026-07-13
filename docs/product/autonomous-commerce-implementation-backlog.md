@@ -4,7 +4,7 @@ This backlog converts the PRD and the current repository state into a sequence o
 
 > **Integration status (architecture-owner review):** `INFRA-01`, `PR-02A`, `PR-02B`, `PR-03A` are **accepted** and integrated. Evidence: `docs/product/autonomous-commerce-qa-report-infra01-pr02a-02b-03a.md` (first pass) and `docs/product/autonomous-commerce-integration-handoff.md` (independent re-verification, gap closure, and decision record). `PR-04` is unblocked.
 
-> **Identity workstream update:** the repo now has a durable identity onboarding boundary (`customer_external_identity` + `crm_customer_onboarding`) and no longer needs provisional `master_customer` creation from unknown WhatsApp inbound. Remaining backlog work is legacy remediation, address lifecycle polish and cleanup of consumers that still assume a linked customer is always present.
+> **Identity workstream update:** the native WhatsApp inbound no longer creates a provisional `master_customer` for an unknown sender (`ACS-R1-04-T06.2`); unmatched contacts persist as an unresolved `customer_external_identity` row (`customer_id = NULL`) instead. Identity resolution, onboarding and creation/linking authority stay canonical per `docs/data/customer-onboarding-identity-contract.md` and `docs/data/customer-creation-linking-authority-contract.md` - `crm_customer_onboarding` is legacy (P1M/local-ai-sdr), not part of this boundary. Remaining backlog work is legacy remediation, address lifecycle polish and cleanup of consumers that still assume a linked customer is always present.
 
 ## 1. Consistency check
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { getPool } from "@/lib/db";
+import { getPool, queryRows } from "@/lib/db";
+import { createMasterCustomer } from "@/lib/integrations/customer-master/customer-repository";
 import { buildNativeCommercialContext } from "@/lib/brain/commercial/context/buildNativeCommercialContext";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 
@@ -163,6 +164,24 @@ test("integration: builds a complete-enough snapshot from a real native inbound 
   const providerMessageId = `wamid.${uniqueSuffix("context")}`;
   const waId = `5697${String(Date.now()).slice(-8)}`;
   const phoneNumberId = `phone-${uniqueSuffix("pnid")}`;
+
+  // ACS-R1-04-T06.2. The native inbound no longer resolves a provisional
+  // customer for an unknown sender, so a "complete" snapshot (hasCustomer:
+  // true) needs a real customer linked before sending the inbound.
+  const customer = await createMasterCustomer({
+    firstname: "Cliente",
+    lastname: "Contexto",
+    email: `context-${uniqueSuffix("seed")}@example.com`,
+    platformOrigin: "whatsapp"
+  });
+  assert.ok(customer.ok, customer.ok ? "" : customer.error);
+  await queryRows(
+    `
+      INSERT INTO customer_external_identity (customer_id, provider, identity_type, external_id, normalized_value, is_verified, created_at, updated_at)
+      VALUES (?, 'whatsapp', 'phone_number', ?, ?, 0, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+    `,
+    [Number(customer.data.id), waId, waId]
+  );
 
   const inbound = await processNativeWhatsAppInbound({
     providerMessageId,

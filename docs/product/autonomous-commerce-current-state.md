@@ -40,7 +40,7 @@ Current strengths:
 - consultative sales engine persists opportunities, need profiles, decisions, actions and outbox rows;
 - canonical outbound projection to `conversation_message` exists;
 - UI reads native conversation data;
-- customer identity onboarding now has a durable domain boundary for external identities, exact email lookup and consent-gated customer creation;
+- the native WhatsApp inbound no longer fabricates a provisional `master_customer` for an unmatched sender (`ACS-R1-04-T06.2`);
 - tests cover the native slice.
 
 Current gaps:
@@ -72,20 +72,21 @@ Current gaps:
 
 - Implemented:
   - `master_customer`
-  - `customer_external_identity`
-  - durable identity onboarding state in `crm_customer_onboarding`
+  - `customer_external_identity`, `customer_id` nullable (unresolved external identity)
   - unresolved WhatsApp contacts with nullable `conversation.customer_id`
-  - exact email match and consent-gated customer creation
+  - durable onboarding state in `crm_customer_onboarding_state`, via `CustomerOnboardingService` (canonical, ACS-R1-04-T03)
+  - customer creation/linking authority via Customer Service Port + Capability Gateway (ACS-R1-04-T04.1/T06)
 - Evidence:
   - `migrations/010_native_whatsapp_identity_and_conversation_controls.sql`
-  - `migrations/022_customer_identity_onboarding.sql`
+  - `migrations/023_crm_customer_onboarding_state.sql`
+  - `migrations/024_reconcile_unresolved_customer_external_identity.sql`
   - `lib/integrations/customer-external-identity/repository.ts`
   - `lib/integrations/customer-master/customer-repository.ts`
-  - `lib/domains/customer-identity-onboarding/`
-  - `lib/brain/native-whatsapp/service.ts`
+  - `lib/domains/customer-onboarding/`
+  - `lib/brain/native-whatsapp/service.ts` (`resolveOrPersistNativeExternalIdentity`)
 - Status:
-  - implemented as a durable onboarding boundary
-  - still requires legacy remediation for existing provisional `wa-*@local.invalid` rows
+  - identity resolution and unresolved-contact handling productively implemented (`ACS-R1-04-T06.2`)
+  - still requires legacy remediation for existing provisional `wa-*@local.invalid` rows (see [provisional-customer-remediation](provisional-customer-remediation.md))
 
 ### 3. Conversations and messages
 

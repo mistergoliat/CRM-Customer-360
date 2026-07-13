@@ -1,6 +1,5 @@
 import type { PlatformOrigin } from "@/lib/domains/customers/platform-origin";
 import type { CustomerDetailReadModel } from "@/lib/domains/customers/types";
-import type { CustomerIdentityResolutionStatus } from "@/lib/domains/customer-identity-onboarding";
 
 export type CustomerOnboardingState =
   | "unresolved"
@@ -61,11 +60,6 @@ export type CustomerLookupResult =
   | {
       status: "conflict";
       candidates: CustomerDetailReadModel["customer"][];
-      warnings: string[];
-    }
-  | {
-      status: "error";
-      warning: string;
       warnings: string[];
     };
 
@@ -136,11 +130,6 @@ export type CustomerOnboardingStateRecord = {
   conversationCaseId: string;
   waId: string | null;
   state: CustomerOnboardingState;
-  identityResolutionStatus: CustomerIdentityResolutionStatus | null;
-  identityProvider: string | null;
-  identityType: string | null;
-  identityExternalId: string | null;
-  identityNormalizedValue: string | null;
   pendingAction: CustomerOnboardingAction | null;
   pendingCustomerConfirmation: boolean;
   email: string | null;
@@ -149,11 +138,6 @@ export type CustomerOnboardingStateRecord = {
   customerId: string | null;
   customerPlatformOrigin: PlatformOrigin | null;
   linkStatus: string | null;
-  customerCreationConsentEmail: string | null;
-  customerCreationConsentSourceMessageId: string | null;
-  customerCreationConsentChannel: string | null;
-  customerCreationConsentGrantedAt: string | null;
-  customerCreationConsentGranted: boolean | null;
   lastDecisionId: string | null;
   lastToolName: CustomerOnboardingToolName | null;
   lastToolStatus: string | null;
