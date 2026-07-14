@@ -8,7 +8,6 @@ source_of_truth_for:
   - existing follow-up runtime assessment
   - follow-up reuse decisions
   - follow-up implementation gaps
-  - PAUSED_EXTERNAL and DEFERRED external-dependency status vocabulary
 depends_on:
   - ../ROADMAP.md
   - ../product/MVP_EXECUTION_MAP.md
@@ -27,40 +26,15 @@ Auditoria documental y tecnica (solo lectura) del runtime de follow-up autonomo 
 
 Ninguna capability queda marcada `operational: verified` por este documento. "Conectado" aqui significa "hay un caller productivo real, no solo un tipo o un test" - nunca "verificado end to end contra produccion real". El follow-up autonomo **existe y esta parcialmente conectado**, no es aspiracional, pero tampoco esta listo para operar sin los gaps P0 de la seccion 6.
 
-## 1. Estado de dependencias externas (fuente canonica)
+## 1. Estado de dependencias externas (resumen; fuente normativa en ROADMAP.md)
 
-Este documento es la fuente unica para los estados `PAUSED_EXTERNAL` y `DEFERRED`. `docs/ACTIVE_RELEASE.md`, `docs/ROADMAP.md` y `docs/product/MVP_EXECUTION_MAP.md` deben enlazar o resumir esta seccion, no repetirla.
+`docs/ROADMAP.md` es la fuente normativa para los estados `PAUSED_EXTERNAL` y `DEFERRED` (seccion "Dependencias externas y capacidades en pausa"). Este documento ya no declara esos vocabularios como propios en su `source_of_truth_for` - lo que sigue es un resumen de lectura rapida, no la definicion canonica.
 
-### Customer Service - `PAUSED_EXTERNAL`
+- **Customer Service**: `PAUSED_EXTERNAL`. Bloquea `ACS-R1-04-T08`/`T09`; no bloquea `ACS-R1-05` (este runtime de follow-up) ni otros workstreams independientes.
+- **Address Book**: `DEFERRED`, sin release ACS asignada (ver "Deferred capabilities" en `ROADMAP.md`); no bloquea el follow-up.
+- **Voice**: `DEFERRED` (`ACS-R1-09`); no pertenece al camino critico del MVP autonomo por WhatsApp.
 
-No estan disponibles todavia el endpoint, contrato real, credenciales, OpenAPI/Postman ni detalles operacionales del servicio unificador de clientes.
-
-Pendiente al reanudar:
-
-- validar `resolve_customer`;
-- validar `create_customer`;
-- validar `link_external_identity`;
-- confirmar que retorna `master_customer.id` como `customerMasterId`;
-- validar autenticacion;
-- validar idempotencia;
-- validar manejo de sincronizacion parcial entre plataformas;
-- ejecutar smoke operacional de `ACS-R1-04-T08`.
-
-Impacto: `ACS-R1-04-T08` continua bloqueada; `ACS-R1-04-T09` no puede cerrar la release; no bloquea workstreams independientes (incluido este, follow-up).
-
-No se declara que Customer Service deba construirse desde cero. Existe un posible endpoint unificador externo que debera auditarse cuando este disponible.
-
-### Address Book - `DEFERRED`
-
-No bloquea el SDR autonomo ni el follow-up. Administra multiples direcciones, destinatarios y confirmacion de direccion; no es el Customer Master.
-
-Reanudar antes de: shipping; checkout; creacion de pedidos; seleccion o confirmacion de direccion.
-
-### Voice - `DEFERRED`
-
-No pertenece al camino critico del MVP autonomo por WhatsApp.
-
-Reanudar despues de: conversacion autonoma estable; follow-up productivo; cancelacion por respuesta; outbox y delivery verificados; piloto real por WhatsApp.
+Detalle completo, motivos y pendientes de reanudacion: `docs/ROADMAP.md`.
 
 ## 2. Metodo
 
@@ -72,20 +46,20 @@ Clasificacion por reachability real (quien la invoca hoy), no por que tan recien
 
 | Componente | Implementacion | Runtime caller | Persistencia | Tests | Estado | Decision |
 |---|---|---|---|---|---|---|
-| Follow-up planner (`lib/brain/commercial/follow-up-planner/planFollowUp.ts`) | Real: computa `attemptNumber`/`maxAttempts` desde estado real (`planFollowUp.ts:259-272,867-892`), nunca hardcodea | Solo `buildActionQueueViewModel.ts:479` -> `lib/case-detail.ts:465` -> pagina de detalle de caso (UI de operador, solo lectura); `persisted:false`/`executable:false` forzado por `validateFollowUpPlan.ts:154-155` | Ninguna (por diseno) | `tests/commercial/followUpPlanner.test.ts`, 18/18 verde | `parallel` (real, vivo, pero es una preview de operador, no el scheduler autonomo) | Promover a fuente de calculo de attempt/cooldown/policy para el path que si persiste (ver FU-T01) |
-| Follow-up policy (`lib/brain/commercial/policy/evaluateCommercialPolicy.ts`) | Real: opt-out, quiet hours, identity conflict, cooldown (`evaluateCommercialPolicy.ts:57,280-294`) | Solo `runCommercialShadowEvaluation.ts` (shadow/dry-run), invocado dentro de `runNativeAutonomousCycle` pero como evaluacion no vinculante | Ninguna (resultado de evaluacion, no accion) | `tests/commercial/evaluateCommercialPolicy.test.ts` | `parallel` (corre de verdad en cada turno, pero no gatea el write real de follow-up) | Conectar como gate obligatorio antes de `upsertActionRow` (ver FU-T02) |
-| Sales-consultative scheduler (`lib/brain/commercial/sales-consultative/engine.ts` + `repository.ts`) | Real, pero `attempt_number:1`, `max_attempts:1`, `policy_status:"allowed"` hardcodeados (`repository.ts:275,276,280`); cooldown ausente; idempotency key sin scope temporal (`repository.ts:228-236`) | `lib/brain/native-whatsapp/service.ts:15,813` y `lib/brain/processInbound.ts:27,1280` (inbound real de WhatsApp) | `crm_agent_actions`, `action_type='schedule_followup'` | `tests/commercial/sales-consultative*.test.ts`, 17/17 verde (mocks, no ejercitan el SQL real) | `canonical` (es el path que efectivamente corre hoy) con deuda P0 | Corregir hardcodes y conectar policy (FU-T01/FU-T02) antes de confiar en cadencia multi-intento |
-| Multi-request follow-up (`lib/brain/commercial/multi-request/requestFollowups.ts`) | Completa, propia idempotencia, propia cancelacion lazy documentada | **Cero** callers productivos (solo tests) | `crm_agent_actions` (columna `request_id`, migracion 021, no 005) | `tests/commercial/requestFollowups.test.ts`, 6 tests, DB no disponible en este entorno | `dead` | Eliminar o justificar explicitamente por que se mantiene sin caller (FU-T05) |
+| Follow-up planner (`lib/brain/commercial/follow-up-planner/planFollowUp.ts`) | Real: computa `attemptNumber`/`maxAttempts` desde estado real (`planFollowUp.ts:259-272,867-892`), nunca hardcodea | Solo `buildActionQueueViewModel.ts:479` -> `lib/case-detail.ts:465` -> pagina de detalle de caso (UI de operador, solo lectura); `persisted:false`/`executable:false` forzado por `validateFollowUpPlan.ts:154-155` | Ninguna (por diseno) | `tests/commercial/followUpPlanner.test.ts`, 18/18 verde | `parallel` (real, vivo, pero es una preview de operador, no el scheduler autonomo) | Promover a fuente de calculo de attempt/cooldown/policy para el path que si persiste (ver ACS-R1-05-T01) |
+| Follow-up policy (`lib/brain/commercial/policy/evaluateCommercialPolicy.ts`) | Real: opt-out, quiet hours, identity conflict, cooldown (`evaluateCommercialPolicy.ts:57,280-294`) | Solo `runCommercialShadowEvaluation.ts` (shadow/dry-run), invocado dentro de `runNativeAutonomousCycle` pero como evaluacion no vinculante | Ninguna (resultado de evaluacion, no accion) | `tests/commercial/evaluateCommercialPolicy.test.ts` | `parallel` (corre de verdad en cada turno, pero no gatea el write real de follow-up) | Conectar como gate obligatorio antes de `upsertActionRow` (ver ACS-R1-05-T02) |
+| Sales-consultative scheduler (`lib/brain/commercial/sales-consultative/engine.ts` + `repository.ts`) | Real, pero `attempt_number:1`, `max_attempts:1`, `policy_status:"allowed"` hardcodeados (`repository.ts:275,276,280`); cooldown ausente; idempotency key sin scope temporal (`repository.ts:228-236`) | `lib/brain/native-whatsapp/service.ts:15,813` y `lib/brain/processInbound.ts:27,1280` (inbound real de WhatsApp) | `crm_agent_actions`, `action_type='schedule_followup'` | `tests/commercial/sales-consultative*.test.ts`, 17/17 verde (mocks, no ejercitan el SQL real) | `canonical` (es el path que efectivamente corre hoy) con deuda P0 | Corregir hardcodes y conectar policy (ACS-R1-05-T01/ACS-R1-05-T02) antes de confiar en cadencia multi-intento |
+| Multi-request follow-up (`lib/brain/commercial/multi-request/requestFollowups.ts`) | Completa, propia idempotencia, propia cancelacion lazy documentada | **Cero** callers productivos (solo tests) | `crm_agent_actions` (columna `request_id`, migracion 021, no 005) | `tests/commercial/requestFollowups.test.ts`, 6 tests, DB no disponible en este entorno | `dead` | Eliminar o justificar explicitamente por que se mantiene sin caller (ACS-R1-05-T05) |
 | Multi-request deferred actions (`lib/brain/commercial/multi-request/deferredActions.ts`) | Real, con CAS e idempotencia (`deferredActions.ts:91-120`) | `executeRequestTurn.ts:6,92` (real, runtime multi-request) | `crm_agent_actions` | `tests/commercial/deferredActions.test.ts`, 3 tests, DB no disponible | `parallel` (accion generica diferida del runtime multi-request, no especifico de follow-up, coexiste con sales-consultative) | Mantener, documentar limite de alcance frente a follow-up |
-| `crm_agent_actions` (tabla) | Migracion `005_crm_agent_actions.sql` + `021_agent_actions_request_link.sql` (agrega `request_id`) | 4 escritores independientes (ver seccion 6.2) | Es la persistencia | Cubierta indirectamente por todos los tests de arriba | `canonical` (la tabla si es la unica fuente durable) | Consolidar escritores, no la tabla (FU-T01) |
-| Follow-up worker (`scripts/autonomous-followup-worker.ts` + `lib/brain/commercial/followup/runFollowupTick.ts`) | Real: CAS atomico (`runFollowupTick.ts:68-76`), cancelacion lazy (`shouldCancelFollowUp`, `runFollowupTick.ts:78-125`); sin stale-lock recovery, sin retry de `failed`, sin lectura de `max_attempts` | `npm run worker:followup` -> `scripts/autonomous-followup-worker.ts:77` (proceso standalone, no orquestado por nada mas) | Transiciones sobre `crm_agent_actions` | `tests/commercial/runFollowupTick.test.ts`, 9 tests, DB no disponible en este entorno (ver seccion 7) | `canonical` con deuda P0/P1 | Endurecer (FU-T03) antes de operar sin supervision |
+| `crm_agent_actions` (tabla) | Migracion `005_crm_agent_actions.sql` + `021_agent_actions_request_link.sql` (agrega `request_id`) | 4 escritores independientes (ver seccion 6.2) | Es la persistencia | Cubierta indirectamente por todos los tests de arriba | `canonical` (la tabla si es la unica fuente durable) | Consolidar escritores, no la tabla (ACS-R1-05-T01) |
+| Follow-up worker (`scripts/autonomous-followup-worker.ts` + `lib/brain/commercial/followup/runFollowupTick.ts`) | Real: CAS atomico (`runFollowupTick.ts:68-76`), cancelacion lazy (`shouldCancelFollowUp`, `runFollowupTick.ts:78-125`); sin stale-lock recovery, sin retry de `failed`, sin lectura de `max_attempts` | `npm run worker:followup` -> `scripts/autonomous-followup-worker.ts:77` (proceso standalone, no orquestado por nada mas) | Transiciones sobre `crm_agent_actions` | `tests/commercial/runFollowupTick.test.ts`, 9 tests, DB no disponible en este entorno (ver seccion 7) | `canonical` con deuda P0/P1 | Endurecer (ACS-R1-05-T03) antes de operar sin supervision |
 | Re-entrada al ciclo autonomo (`runNativeAutonomousCycle`) | Real, no es un mensaje enlatado: reconstruye contexto, vuelve a evaluar shadow/operational-loop | Llamado por `runFollowupTick.ts:175` como `cycleRunner` por defecto | N/A (orquestador) | Ejercitado por `tests/commercial/runFollowupTick.test.ts` (via inyeccion) | `canonical` | Mantener |
-| Outbox bridge | **Dos** escritores independientes hacia `brain_message_outbox`: `createOutboxPlannedRecord` (`lib/brain/messaging/outbox.ts:191`, usado por processInbound legacy y por sales-consultative) y `SqlOutboxRepository.insertCommand` (`lib/brain/commercial/execution-gate/sqlExecutionUnitOfWork.ts:88-152`, usado por el execution-bridge del ciclo nativo, que es el que realmente usa el follow-up worker) | Ambos con callers reales | `brain_message_outbox` | `tests/commercial/outboxWorker.test.ts` (55/55, pero cubre un modulo paralelo no productivo, ver fila siguiente); `tests/native/outbox-ownership.test.ts` (DB no disponible) | `parallel` (dos implementaciones reales y activas sobre la misma tabla, logica de columnas y dedupe divergente) | Consolidar en un unico writer (FU-T04) |
+| Outbox bridge | **Dos** escritores independientes hacia `brain_message_outbox`: `createOutboxPlannedRecord` (`lib/brain/messaging/outbox.ts:191`, usado por processInbound legacy y por sales-consultative) y `SqlOutboxRepository.insertCommand` (`lib/brain/commercial/execution-gate/sqlExecutionUnitOfWork.ts:88-152`, usado por el execution-bridge del ciclo nativo, que es el que realmente usa el follow-up worker) | Ambos con callers reales | `brain_message_outbox` | `tests/commercial/outboxWorker.test.ts` (55/55, pero cubre un modulo paralelo no productivo, ver fila siguiente); `tests/native/outbox-ownership.test.ts` (DB no disponible) | `parallel` (dos implementaciones reales y activas sobre la misma tabla, logica de columnas y dedupe divergente) | Consolidar en un unico writer (ACS-R1-05-T04) |
 | Outbox worker "hyphenated" (`lib/brain/messaging/outbox-worker/**`, `FakeMessageTransport`) | Completo, con test propio que verifica que su codigo fuente **no** contiene `fetch`/`mysql2`/SQL/`graph.facebook` | Solo `lib/brain/commercial/autonomous-loop/**` -> `scenario-simulator` -> `app/(hub)/dev/ai-sdr-simulator/page.tsx` (pagina `/dev`, no produccion) | Ninguna (in-memory) | `tests/commercial/outboxWorker.test.ts`, 55/55 verde | `dead` (relativo a produccion; es simulador) | Aislar explicitamente como simulador, no contar como cobertura de outbox productivo |
 | Meta sender (`lib/brain/messaging/metaClient.ts`) | Real: `fetch` a `https://graph.facebook.com/{version}/{phoneNumberId}/messages` (`metaClient.ts:249`) | `scripts/autonomous-outbox-worker.ts` -> `autonomousOutboxTick.ts`; y `app/api/brain/outbox/worker/route.ts` -> `outboxWorker.ts` | N/A (transporte) | Ejercitado indirectamente; sin smoke contra Meta real en este entorno | `canonical` | Mantener; consolidar con `metaSendAdapter.ts` (P3, ver seccion 6.4) |
-| Delivery outcomes | Real: `applyMetaDeliveryStatus` (`lib/brain/native-whatsapp/service.ts:1067-1163`) actualiza `conversation_message`, `brain_message_outbox.provider_status`, `commercial_event`, `crm_action_outcomes` | Webhook `app/api/integrations/whatsapp/webhook/route.ts:199-214` | `crm_action_outcomes` | Cubierto por `tests/native/outbox-ownership.test.ts` (DB no disponible) | `reusable_with_changes` (funciona, pero nunca llega a `crm_opportunities`) | Extender hasta opportunity (FU-T04) |
+| Delivery outcomes | Real: `applyMetaDeliveryStatus` (`lib/brain/native-whatsapp/service.ts:1067-1163`) actualiza `conversation_message`, `brain_message_outbox.provider_status`, `commercial_event`, `crm_action_outcomes` | Webhook `app/api/integrations/whatsapp/webhook/route.ts:199-214` | `crm_action_outcomes` | Cubierto por `tests/native/outbox-ownership.test.ts` (DB no disponible) | `reusable_with_changes` (funciona, pero nunca llega a `crm_opportunities`) | Extender hasta opportunity (ACS-R1-05-T04) |
 | Cancelacion por inbound (inmediata) | `lib/domains/conversations/control.ts:75-95` cancela `send_whatsapp_reply`/`request_more_context` en la misma transaccion que take/pause/close - **excluye explicitamente `schedule_followup`** | `applyConversationControl` (operador humano) | `crm_agent_actions` | Cubierto por tests de control de conversacion | `reusable_with_changes` (existe pero no cubre follow-up) | Ver seccion 6.5, decision: mantener lazy para follow-up, documentar por que |
-| Opt-out / quiet hours / identity conflict a nivel de dispatch | Tipos y evaluacion reales en `policy/evaluateCommercialPolicy.ts`, nunca leidos por `sales-consultative/repository.ts` | Ninguno en el path que persiste | No aplica al write real | Tests solo del evaluador aislado | `missing` (en el sentido de enforcement en el path que importa) | FU-T02 |
+| Opt-out / quiet hours / identity conflict a nivel de dispatch | Tipos y evaluacion reales en `policy/evaluateCommercialPolicy.ts`, nunca leidos por `sales-consultative/repository.ts` | Ninguno en el path que persiste | No aplica al write real | Tests solo del evaluador aislado | `missing` (en el sentido de enforcement en el path que importa) | ACS-R1-05-T02 |
 
 ## 4. Ruta canonica reconstruida
 
@@ -118,7 +92,7 @@ Se encontraron **cinco** implementaciones de decision de follow-up, no dos:
 4. `multi-request/requestFollowups.ts` - `delayMinutes` por tipo de request, cero callers productivos (`dead`).
 5. `policy/evaluateCommercialPolicy.ts` - gobierna al sales-agent LLM, solo corre en shadow mode, nunca gatea el write de follow-up.
 
-**Planner recomendado como canonico**: `follow-up-planner/planFollowUp.ts` para el calculo de `attemptNumber`/`maxAttempts`/estado de politica (es el unico con logica correcta y testeada), pero manteniendo `sales-consultative/engine.ts` como el disparador real (es el que ya esta conectado al inbound con contexto de oportunidad real). La recomendacion no es reemplazar el trigger, es dejar de hardcodear su calculo. `autonomous-loop` y `requestFollowups.ts` deben aislarse o eliminarse (FU-T05); no tienen caller productivo y no deben confundirse con cobertura real.
+**Planner recomendado como canonico**: `follow-up-planner/planFollowUp.ts` para el calculo de `attemptNumber`/`maxAttempts`/estado de politica (es el unico con logica correcta y testeada), pero manteniendo `sales-consultative/engine.ts` como el disparador real (es el que ya esta conectado al inbound con contexto de oportunidad real). La recomendacion no es reemplazar el trigger, es dejar de hardcodear su calculo. `autonomous-loop` y `requestFollowups.ts` deben aislarse o eliminarse (ACS-R1-05-T05); no tienen caller productivo y no deben confundirse con cobertura real.
 
 No se encontro codigo legacy de AI SDR follow-up bajo `lib/brain/commercial/sales-agent/**`; ese directorio es solo prompt/validacion del proveedor LLM, sin logica de scheduling.
 
@@ -240,26 +214,39 @@ sales-consultative/engine.ts (trigger real, conectado a inbound)
 
 ## 10. Proximas tareas propuestas (no implementadas en este documento)
 
-- `FU-T01` - Consolidar planner y persistencia: hacer que `sales-consultative` derive `attemptNumber`/`maxAttempts`/`policy_status` desde `follow-up-planner/planFollowUp.ts` en vez de hardcodear 1/1/"allowed"; corregir la idempotency key para que sea temporal/status-aware.
-- `FU-T02` - Completar contact policy: conectar `evaluateCommercialPolicy` (opt-out, quiet hours, identity conflict) como gate obligatorio antes de `upsertActionRow`, no solo shadow-advisory.
-- `FU-T03` - Hardening del worker: recuperacion de stale-lock para `executing`, retry de `failed` con enforcement real de `max_attempts`, y precondicion de status en `cancelFollowUp`.
-- `FU-T04` - Conectar outbox y delivery outcomes: consolidar los dos escritores de `brain_message_outbox` en uno, y extender `applyMetaDeliveryStatus` hasta actualizar `crm_opportunities`.
-- `FU-T05` - Aislar o eliminar codigo muerto/paralelo: `multi-request/requestFollowups.ts`, la familia `autonomous-loop` relativa a produccion, el modulo `outbox-worker/` hyphenated; y reconciliar `ai-sdr-follow-up-planner.md`/`follow-up-decision-policy.md` con la implementacion real.
-- `FU-T06` - Redactar errores de forma consistente en todos los sitios de `failure_reason`, y reconciliar los flags auto-escalados de los dos workers contra los defaults documentados en `.env.example`.
-- `FU-T07` - E2E productivo y restart recovery, una vez cerrados `FU-T01`..`FU-T04` (mismo patron que el harness existente de identity onboarding).
+- `ACS-R1-05-T01` - Consolidar planner y persistencia: hacer que `sales-consultative` derive `attemptNumber`/`maxAttempts`/`policy_status` desde `follow-up-planner/planFollowUp.ts` en vez de hardcodear 1/1/"allowed"; corregir la idempotency key para que sea temporal/status-aware.
+- `ACS-R1-05-T02` - Completar contact policy: conectar `evaluateCommercialPolicy` (opt-out, quiet hours, identity conflict) como gate obligatorio antes de `upsertActionRow`, no solo shadow-advisory.
+- `ACS-R1-05-T03` - Hardening del worker: recuperacion de stale-lock para `executing`, retry de `failed` con enforcement real de `max_attempts`, y precondicion de status en `cancelFollowUp`.
+- `ACS-R1-05-T04` - Conectar outbox y delivery outcomes: consolidar los dos escritores de `brain_message_outbox` en uno, y extender `applyMetaDeliveryStatus` hasta actualizar `crm_opportunities`.
+- `ACS-R1-05-T05` - Aislar o eliminar codigo muerto/paralelo: `multi-request/requestFollowups.ts`, la familia `autonomous-loop` relativa a produccion, el modulo `outbox-worker/` hyphenated; y reconciliar `ai-sdr-follow-up-planner.md`/`follow-up-decision-policy.md` con la implementacion real.
+- `ACS-R1-05-T06` - Redactar errores de forma consistente en todos los sitios de `failure_reason`, y reconciliar los flags auto-escalados de los dos workers contra los defaults documentados en `.env.example`.
+- `ACS-R1-05-T07` - E2E productivo y restart recovery, una vez cerrados `ACS-R1-05-T01`..`ACS-R1-05-T04` (mismo patron que el harness existente de identity onboarding).
 
 Los IDs y el orden se derivan de los hallazgos reales de este documento, no de una plantilla generica.
 
 ## 11. Decision de reutilizacion
 
-Sobre los ~16 componentes de la matriz de la seccion 3:
+La matriz de la seccion 3 tiene exactamente **14 filas** (14 componentes). Conteo exacto por la columna `Estado` (mismo vocabulario de 6 valores definido al inicio de la seccion 3 - cada componente cuenta una sola vez, en su clasificacion primaria):
 
-- **Reutilizable sin cambios (~31%)**: tabla `crm_agent_actions`, el claim atomico del follow-up worker, la re-entrada a `runNativeAutonomousCycle`, el Meta sender (`metaClient.ts`), la escritura base de delivery outcomes.
-- **Reutilizable con cambios (~44%)**: `follow-up-planner` (necesita conectarse), `evaluateCommercialPolicy` (necesita ser gate, no shadow), `sales-consultative` (necesita corregir hardcodes), el outbox bridge (necesita consolidarse a un escritor), delivery outcomes (necesita llegar a opportunity), cancelacion por inbound (necesita cubrir `schedule_followup`), el worker (necesita stale-lock/retry).
-- **Eliminar o aislar (~19%)**: `multi-request/requestFollowups.ts`, la familia `autonomous-loop` relativa a produccion, el modulo `outbox-worker/` hyphenated con sus transportes fake, `metaSendAdapter.ts` como wrapper no usado.
-- **Faltante (~6%)**: frequency cap por customer (no existe en ningun lado), propagacion de delivery outcome hasta `crm_opportunities`.
+| Estado | Filas (de 14) | Componentes |
+|---|---|---|
+| `canonical` | 5 (35.7%) | Sales-consultative scheduler, `crm_agent_actions` (tabla), Follow-up worker, Re-entrada a `runNativeAutonomousCycle`, Meta sender |
+| `parallel` | 4 (28.6%) | Follow-up planner, Follow-up policy, Multi-request deferred actions, Outbox bridge |
+| `dead` | 2 (14.3%) | Multi-request follow-up (`requestFollowups.ts`), Outbox worker "hyphenated" |
+| `reusable_with_changes` | 2 (14.3%) | Delivery outcomes, Cancelacion por inbound (inmediata) |
+| `missing` | 1 (7.1%) | Opt-out / quiet hours / identity conflict a nivel de dispatch |
+| `legacy` | 0 (0%) | ninguno |
 
-Porcentajes derivados del conteo de componentes de la seccion 3, no arbitrarios; un componente que aparece en mas de una categoria (p.ej. delivery outcomes) se cuenta una sola vez segun su clasificacion primaria en la tabla.
+5 + 4 + 2 + 2 + 1 + 0 = 14. Ningun porcentaje es aproximado ni inventado; cada fila se puede ubicar por nombre en la tabla de la seccion 3.
+
+Mapeo a las cuatro categorias de decision pedidas por la reconciliacion original (agrupando los 6 estados de arriba, sin doble conteo):
+
+- **Reutilizable sin cambios** = `canonical` -> **5/14 (35.7%)**.
+- **Reutilizable con cambios** = `reusable_with_changes` + `parallel` (codigo real, necesita conectarse o consolidarse) -> **6/14 (42.9%)**.
+- **Eliminar o aislar** = `dead` -> **2/14 (14.3%)**.
+- **Faltante** = `missing` -> **1/14 (7.1%)**.
+
+5 + 6 + 2 + 1 = 14.
 
 ## 12. Estado documental final
 
@@ -267,7 +254,7 @@ Porcentajes derivados del conteo de componentes de la seccion 3, no arbitrarios;
 ACS-R1-04-T08 -> blocked_external
 Customer Service -> PAUSED_EXTERNAL
 Follow-up reconciliation -> completed
-Follow-up implementation -> not_started, pendiente de hallazgos (se refiere a FU-T01..FU-T07; el runtime
+Follow-up implementation -> not_started, pendiente de hallazgos (se refiere a ACS-R1-05-T01..ACS-R1-05-T07; el runtime
   existente ya descrito arriba no es "no implementado" - es parcial, con gaps P0/P1 documentados)
 Address Book -> DEFERRED
 Voice -> DEFERRED

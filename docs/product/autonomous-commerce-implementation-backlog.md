@@ -1504,6 +1504,7 @@ Evidence required:
 - Depends on: `PR-11`
 - Blocks: `PR-13` to `PR-16`
 - Reconciliation note (2026-07-14): a follow-up runtime exists today and is partially wired end to end (worker, `crm_agent_actions`, re-entry into `runNativeAutonomousCycle`, outbox), but built through `lib/brain/commercial/sales-consultative/**` rather than a dedicated PR-12 implementation, and it carries real P0 gaps (hardcoded attempt/policy fields, no stale-lock recovery, contact policy not enforced at write time). This PR entry is not marked accepted by this note. Full findings, gap list and next steps: `docs/audits/follow-up-runtime-reconciliation.md`.
+- Governance note (2026-07-14): this PR's remaining work (consolidation and hardening, not new scope) is now governed by `ACS-R1-05` - Autonomous Follow-up Runtime (`docs/releases/ACS-R1-05-autonomous-follow-up-runtime.md`), tasks `ACS-R1-05-T01` to `ACS-R1-05-T07`. `PR-12` itself stays a historical backlog entry, not an active task queue.
 
 Result:
 

@@ -1,8 +1,8 @@
 ---
 release: ACS-R1-04
 title: Customer Identity Resolution + Onboarding
-status: active
-updated_at: 2026-07-13
+status: active_blocked_external
+updated_at: 2026-07-14
 current_task: ACS-R1-04-T08
 next_task: ACS-R1-04-T09
 blocked: true
@@ -22,6 +22,7 @@ depends_on:
   - ./ROADMAP.md
   - ./releases/README.md
   - ./releases/ACS-R1-04-customer-identity-onboarding.md
+  - ./releases/ACS-R1-05-autonomous-follow-up-runtime.md
   - ./product/MVP_EXECUTION_MAP.md
   - ./CAPABILITY_MATRIX.md
 tags:
@@ -51,11 +52,22 @@ Este documento es un puntero operativo breve. El alcance, la tabla de tareas, la
 
 ## Dependencias externas en pausa
 
-Fuente canonica de estos estados: [Follow-up runtime reconciliation](audits/follow-up-runtime-reconciliation.md).
+Fuente normativa: [ROADMAP](ROADMAP.md#dependencias-externas-y-capacidades-en-pausa). Resumen: Customer Service `PAUSED_EXTERNAL` (motivo ya descrito en el bloqueo de arriba); Address Book y Voice `DEFERRED`.
 
-- Customer Service: `PAUSED_EXTERNAL` (motivo, pendientes e impacto ya descritos en el bloqueo de arriba).
-- Address Book: `DEFERRED` (no bloquea esta release ni el follow-up; reanudar antes de shipping/checkout/direcciones).
-- Voice: `DEFERRED` (no es parte del camino critico del MVP autonomo por WhatsApp; reanudar tras follow-up productivo y piloto real).
+## Workstream paralelo autorizado
+
+- `ACS-R1-05` - Autonomous Follow-up Runtime
+- current task: `ACS-R1-05-T01`
+- status: `parallel_in_progress`
+
+Este workstream:
+
+- no cierra `ACS-R1-04`;
+- no altera el bloqueo de `ACS-R1-04-T08`;
+- no activa `ACS-R1-04-T09`;
+- puede avanzar porque no depende del Customer Service externo (`PAUSED_EXTERNAL`).
+
+Detalle de alcance, tareas y Definition of Done: [ACS-R1-05 - Autonomous Follow-up Runtime](releases/ACS-R1-05-autonomous-follow-up-runtime.md). Estado tecnico real del runtime (que existe, que esta conectado, gaps): [Follow-up runtime reconciliation](audits/follow-up-runtime-reconciliation.md).
 
 ## Commit aceptado
 
