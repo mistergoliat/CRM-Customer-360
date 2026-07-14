@@ -5,8 +5,10 @@ import { createOutboxPlannedRecord } from "@/lib/brain/messaging";
 import { getColumns, queryRows, safeQueryRows, withConnection } from "@/lib/db";
 import { isDbWriteEnabled } from "@/lib/write-access";
 import { COMMERCIAL_ACTION_LIFECYCLE_VERSION } from "../action-lifecycle";
+import { readEnvFlag } from "../config/commercialCycleConfig";
 import { planCommercialFollowUp } from "../follow-up-planner";
 import { COMMERCIAL_POLICY_VERSION } from "../policy/policyConstants";
+import { evaluateFollowUpDispatchPolicy, loadFollowUpDispatchChannelSignals } from "./followUpDispatchPolicy";
 import {
   buildFollowUpPlanningInput,
   isFollowUpActiveStatus,
@@ -496,6 +498,44 @@ async function upsertFollowUpActionRow(input: {
     return { ok: true, rowId: existingByKey.rows[0].id, warning: "existing_action_reused" };
   }
 
+  // follow_up_dispatch_policy gate (ACS-R1-05-T02): the only point that may
+  // turn a plan-level "recommended"/"requires_operator_review" into an
+  // executable crm_agent_actions row. Runs after every early-return above
+  // (retry-reuse, active-conflict, non-executable plan status, existing key)
+  // so it never touches history or attemptNumber (T01.1 invariant, task
+  // section 10) - it only gates the INSERT that follows.
+  const policyEnabled = readEnvFlag("BRAIN_COMMERCIAL_POLICY_ENABLED", false);
+  const channelSignals = await loadFollowUpDispatchChannelSignals({
+    conversationId: conversationCaseId,
+    opportunitySignals: input.opportunity?.signals ?? [],
+    currentTime: input.currentTime
+  });
+  const dispatch = evaluateFollowUpDispatchPolicy({
+    currentTime: input.currentTime,
+    policyEnabled,
+    channelSignals: channelSignals.ok ? channelSignals.signals : null,
+    channelSignalsWarning: channelSignals.ok ? null : channelSignals.warning
+  });
+
+  if (dispatch.decision === "deny" || dispatch.decision === "failed_safe") {
+    return {
+      ok: true,
+      rowId: null,
+      warning: `follow_up_dispatch_${dispatch.decision}:${dispatch.reasonCodes[0] ?? "unknown"}`
+    };
+  }
+
+  // "require_review" never downgrades an already-computed "requires_review"
+  // plan back to "planned", and never lets a plan-level "recommended" reach
+  // action.status="planned" when the channel gate itself demands review
+  // (task section 8: quiet hours / human-owner-active never produce a
+  // planned row).
+  const finalActionStatus = dispatch.decision === "require_review" ? "requires_review" : status;
+  const finalPolicyStatus = dispatch.decision === "require_review" ? "requires_review" : policyStatus;
+  const finalApprovalRequirement =
+    dispatch.decision === "require_review" && plan.approvalRequirement === "none" ? "operator_review" : plan.approvalRequirement;
+  const finalPolicyNotes = uniqueStrings([...plan.policyNotes, ...dispatch.reasonCodes]);
+
   const rowActionId = `sales-followup-${stableHash(plan.idempotencyKey).slice(0, 28)}`;
 
   return insertAgentActionRow({
@@ -509,9 +549,9 @@ async function upsertFollowUpActionRow(input: {
     wa_id: input.waId,
     channel: "whatsapp",
     action_type: "schedule_followup",
-    status,
+    status: finalActionStatus,
     risk_level: plan.riskLevel,
-    approval_requirement: plan.approvalRequirement,
+    approval_requirement: finalApprovalRequirement,
     draft_payload_json: serializeJson({
       planId: plan.planId,
       intent: plan.intent,
@@ -532,8 +572,8 @@ async function upsertFollowUpActionRow(input: {
     block_reasons_json: serializeJson(plan.blockReasons),
     cancel_reason: plan.cancelReason,
     failure_reason: null,
-    policy_status: policyStatus,
-    policy_notes_json: serializeJson(plan.policyNotes),
+    policy_status: finalPolicyStatus,
+    policy_notes_json: serializeJson(finalPolicyNotes),
     source: "ai_sdr",
     created_by: "ai",
     approved_by: null,

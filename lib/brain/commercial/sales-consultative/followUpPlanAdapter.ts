@@ -8,7 +8,7 @@ import type { SalesConsultativeOpportunity } from "./types";
 // "recommended" -> action.status = "planned"; the planner already forces
 // operator_review/manager_review for quote/payment/post-handoff/high-risk
 // intents regardless of this flag (planFollowUp.ts#deriveApprovalRequirement).
-const FOLLOW_UP_TIMEZONE = "America/Santiago";
+export const FOLLOW_UP_TIMEZONE = "America/Santiago";
 const FOLLOW_UP_DEFAULT_DELAY_HOURS = 2;
 const FOLLOW_UP_DEFAULT_COOLDOWN_HOURS = 24;
 
