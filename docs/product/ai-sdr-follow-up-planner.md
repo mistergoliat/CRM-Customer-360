@@ -104,7 +104,9 @@ The follow-up planner consumes that context and can refine it into a planning re
 
 `crm_agent_actions` now provides the durable queue boundary for approved or reviewable follow-up actions.
 
-The planner still does not write to it directly, but the queue is the correct destination when the product must:
+Since ACS-R1-05-T01, `sales-consultative/repository.ts` is a real, connected caller of this planner: `followUpPlanAdapter.ts` translates the already-loaded sales-consultative context (opportunity, draft message, cadence hint) into `CommercialFollowUpPlanningInput` and calls `planCommercialFollowUp` before persisting a `schedule_followup` row. The planner itself still does not write to the DB (`executable`/`persisted` remain `false` on its output) - the repository reads `plan.status`/`attemptNumber`/`maxAttempts`/`scheduledFor`/`riskLevel`/`approvalRequirement`/`policyNotes`/`idempotencyKey` and maps them onto the row (`recommended -> planned`, `requires_operator_review -> requires_review`, every other status stays non-executable). This is in addition to the pre-existing read-only preview caller (`action-queue/buildActionQueueViewModel.ts`, case-detail UI).
+
+The queue is the correct destination when the product must:
 
 - persist operator review,
 - persist approvals or edits,

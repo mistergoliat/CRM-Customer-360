@@ -124,6 +124,8 @@ Same key means:
 - update the existing non-terminal row if needed,
 - leave terminal rows unchanged.
 
+Since ACS-R1-05-T01, `schedule_followup` rows use `plan.idempotencyKey` (a hash of the full `CommercialFollowUpPlan`, computed by `follow-up-planner/planFollowUp.ts` and including `attemptNumber`) instead of the permanent `sales-action:{opportunityKey}:{actionType}` key still used by every other action type. A permanent key cannot express "retry after a terminal outcome" - it would keep resolving to `existing_action_reused` forever after the first row. The primary duplicate guard for `schedule_followup` is therefore not key equality but an active-row lookup over `crm_agent_actions` scoped to `opportunity_id` (fallback `wa_id`) and `action_type = 'schedule_followup'` (`loadFollowUpActionHistory`, `sales-consultative/repository.ts`): a row in any non-terminal status (`COMMERCIAL_ACTION_TERMINAL_STATUSES` from `action-lifecycle/constants.ts`) is reused as-is; only when none exists does a new plan get computed, using the durable max `attempt_number` across prior rows as the next attempt's basis. The idempotency key remains a real DB-level uniqueness backstop against a narrow race window, not the primary dedup mechanism.
+
 ## Flags
 
 Defaults remain off:

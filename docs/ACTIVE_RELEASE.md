@@ -57,7 +57,7 @@ Fuente normativa: [ROADMAP](ROADMAP.md#dependencias-externas-y-capacidades-en-pa
 ## Workstream paralelo autorizado
 
 - `ACS-R1-05` - Autonomous Follow-up Runtime
-- current task: `ACS-R1-05-T01`
+- current task: `ACS-R1-05-T02`
 - status: `parallel_in_progress`
 
 Este workstream:
@@ -66,6 +66,8 @@ Este workstream:
 - no altera el bloqueo de `ACS-R1-04-T08`;
 - no activa `ACS-R1-04-T09`;
 - puede avanzar porque no depende del Customer Service externo (`PAUSED_EXTERNAL`).
+
+`ACS-R1-05-T01` (cerrada, commit `ef9c5ca`) consolido `sales-consultative/repository.ts` sobre `follow-up-planner/planFollowUp.ts` como unica fuente de calculo de `attemptNumber`/`maxAttempts`/`policy_status`/`scheduledFor` para filas `schedule_followup` (antes hardcodeadas `1`/`1`/`"allowed"`), y corrigio la idempotency key para que sea temporal/status-aware via `plan.idempotencyKey` mas una lectura acotada de historial durable en `crm_agent_actions` (`loadFollowUpActionHistory`) - un intento terminal ya no bloquea uno legitimo posterior, y una accion activa (`planned`/`requires_review`/`executing`) nunca se reemplaza silenciosamente. Otros tipos de accion (`send_whatsapp_reply`, `prepare_quote_draft`, `take_over_case`, `pause_ai`, `mark_lost_candidate`, `create_internal_task`) conservan exactamente su persistencia previa. Probado con MariaDB real contra `crm_test` (`tests/commercial/salesConsultativeFollowUpRepository.test.ts`, 7/7) mas tests puros de planner/adapter (`tests/commercial/followUpPlanAdapter.test.ts`, 7/7). Detalle completo, incluidos dos bugs pre-existentes de escritura real corregidos de paso, en la seccion "Evidencia de cierre" de la release spec.
 
 Detalle de alcance, tareas y Definition of Done: [ACS-R1-05 - Autonomous Follow-up Runtime](releases/ACS-R1-05-autonomous-follow-up-runtime.md). Estado tecnico real del runtime (que existe, que esta conectado, gaps): [Follow-up runtime reconciliation](audits/follow-up-runtime-reconciliation.md).
 

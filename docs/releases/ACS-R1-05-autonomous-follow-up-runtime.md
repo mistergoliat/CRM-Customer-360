@@ -3,9 +3,9 @@ release: ACS-R1-05
 title: Autonomous Follow-up Runtime
 doc_id: release-acs-r1-05-autonomous-follow-up-runtime
 status: parallel_in_progress
-updated_at: 2026-07-14
-current_task: ACS-R1-05-T01
-next_task: ACS-R1-05-T02
+updated_at: 2026-07-15
+current_task: ACS-R1-05-T02
+next_task: ACS-R1-05-T03
 blocked: false
 owner: product
 source_of_truth_for:
@@ -62,8 +62,8 @@ Esta release no redefine hallazgos: el alcance completo, la matriz de clasificac
 
 | ID | Tarea | Estado | Dependencias | Gap(s) de la auditoria que cierra |
 | -- | ----- | ------ | ------------ | ---------------------------------- |
-| ACS-R1-05-T01 | Consolidar planner y persistencia | in_progress | [Follow-up runtime reconciliation](../audits/follow-up-runtime-reconciliation.md) | P0-1 (hardcodes `attempt_number`/`max_attempts`/`policy_status`, idempotency key sin scope temporal); consolida `follow-up-planner/planFollowUp.ts` como fuente de calculo para `sales-consultative/repository.ts` |
-| ACS-R1-05-T02 | Aplicar follow-up dispatch policy | ready | ACS-R1-05-T01 | P0-4 (opt-out/quiet-hours/identity-conflict shadow-only, nunca gatean el write real); conecta `follow_up_dispatch_policy` (`evaluateCommercialPolicy`) como gate obligatorio antes de `upsertActionRow` |
+| ACS-R1-05-T01 | Consolidar planner y persistencia | done | [Follow-up runtime reconciliation](../audits/follow-up-runtime-reconciliation.md) | P0-1 (hardcodes `attempt_number`/`max_attempts`/`policy_status`, idempotency key sin scope temporal); consolida `follow-up-planner/planFollowUp.ts` como fuente de calculo para `sales-consultative/repository.ts` |
+| ACS-R1-05-T02 | Aplicar follow-up dispatch policy | in_progress | ACS-R1-05-T01 | P0-4 (opt-out/quiet-hours/identity-conflict shadow-only, nunca gatean el write real); conecta `follow_up_dispatch_policy` (`evaluateCommercialPolicy`) como gate obligatorio antes de `upsertActionRow` |
 | ACS-R1-05-T03 | Hardening del worker | ready | ACS-R1-05-T01 | P0-2 (sin stale-lock recovery), P0-3 (sin retry/enforcement de `max_attempts`), P1-1 (`cancelFollowUp` sin precondicion de status) |
 | ACS-R1-05-T04 | Consolidar outbox y delivery outcomes | ready | ACS-R1-05-T01 | P1-3 (delivery outcomes no llegan a `crm_opportunities`), P1-4 (dos escritores divergentes de `brain_message_outbox`) |
 | ACS-R1-05-T05 | Aislar runtimes paralelos o muertos | ready | ACS-R1-05-T01 | P2-1 (5 planners paralelos), P2-2 (`multi-request/requestFollowups.ts` muerto), P2-5 (modulo `outbox-worker/` hyphenated duplicado) |
@@ -72,15 +72,29 @@ Esta release no redefine hallazgos: el alcance completo, la matriz de clasificac
 
 ## Tarea actual
 
-`ACS-R1-05-T01`
+`ACS-R1-05-T02`
 
 ## Definition of Done de la tarea actual
 
-`ACS-R1-05-T01` debe hacer que `sales-consultative/repository.ts` derive `attemptNumber`/`maxAttempts`/`policy_status` desde `follow-up-planner/planFollowUp.ts` en vez de hardcodear `1`/`1`/`"allowed"`, y corregir la idempotency key (`sales-action:{opportunityKey}:{actionType}`) para que sea temporal/status-aware, de modo que una fila `schedule_followup` ya ejecutada/cancelada/expirada no bloquee un intento posterior legitimo. No reabre el disparador (`sales-consultative/engine.ts` sigue siendo quien detecta la senal de follow-up desde el inbound).
+`ACS-R1-05-T02` debe conectar `policy/evaluateCommercialPolicy.ts` (`follow_up_dispatch_policy`: opt-out, quiet hours, identity conflict) como gate obligatorio antes de que `upsertFollowUpActionRow` (`sales-consultative/repository.ts`) persista una fila `schedule_followup` ejecutable (`planned`/`requires_review`) - hoy esa evaluacion corre solo en shadow mode (`runCommercialShadowEvaluation`) y nunca gatea el write real (P0-4). Un cliente con opt-out activo o dentro de quiet hours no debe recibir una fila `schedule_followup` persistida como ejecutable.
 
 ## Siguiente tarea
 
-`ACS-R1-05-T02` (`ready`, no iniciada - depende de que T01 consolide primero el calculo de attempt/policy que T02 debe empezar a gatear)
+`ACS-R1-05-T03` (`ready`, no iniciada - depende de que T02 conecte primero el policy gate que T03 debe respetar al endurecer el worker)
+
+## Evidencia de cierre - ACS-R1-05-T01
+
+- Estado: `done`.
+- SHA funcional: `ef9c5ca` (rama `acs-r1-05-t01-followup-planner-persistence`).
+- Archivos funcionales: `lib/brain/commercial/sales-consultative/followUpPlanAdapter.ts` (nuevo, adapter puro de contexto), `lib/brain/commercial/sales-consultative/repository.ts` (conecta `upsertActionRow` al planner solo para `schedule_followup`; otros tipos de accion sin cambios de comportamiento), `lib/brain/commercial/sales-consultative/index.ts` (export del adapter).
+- Planner canonico: `follow-up-planner/planFollowUp.ts` (`planCommercialFollowUp`), sin modificar - es la unica fuente de calculo de `intent`/`scheduledFor`/`attemptNumber`/`maxAttempts`/`status`/`riskLevel`/`approvalRequirement`/`policyNotes`/`blockReasons`/`idempotencyKey`.
+- Disparador: `sales-consultative/engine.ts`, sin modificar - sigue siendo quien detecta la senal de follow-up desde el inbound real.
+- Historial durable: `loadFollowUpActionHistory` (`repository.ts`) lee `crm_agent_actions` por `opportunity_id` (fallback `wa_id`) y `action_type = 'schedule_followup'`; activo = estado fuera de `COMMERCIAL_ACTION_TERMINAL_STATUSES` (`action-lifecycle/constants.ts`: `rejected`/`blocked`/`cancelled`/`expired`/`executed`/`failed`); terminal = ese mismo set reutilizado, sin vocabulario nuevo; retryable = cualquier fila terminal habilita el siguiente intento.
+- Idempotencia: `plan.idempotencyKey` (hash del plan completo, incluye `attemptNumber`) reemplaza `sales-action:{opportunityKey}:schedule_followup` solo para este tipo de accion; el guard primario es la busqueda de fila activa (no la igualdad de key), porque `scheduledFor` cambia turno a turno y una comparacion de key nunca detectaria un retry logico entre llamadas en momentos distintos.
+- Mapeo de estado: `recommended -> planned`, `requires_operator_review -> requires_review`; `blocked`/`not_needed`/`cancelled`/`expired`/`invalid` no crean fila ejecutable (`mapFollowUpPlanStatusToActionStatus`, `followUpPlanAdapter.ts`).
+- Bugs pre-existentes corregidos de paso (confirmados en `develop` HEAD `bee047a` antes de este cambio, invisibles bajo la suite mockeada): `INSERT INTO crm_agent_actions` tenia 39 columnas mapeadas a solo 38 placeholders `?` (`ER_WRONG_VALUE_COUNT_ON_ROW` en cualquier write real); `scheduled_for` recibia un ISO string crudo contra una columna `DATETIME` en vez de pasar por `toMysqlDateTime()`.
+- Tests nuevos: `tests/commercial/followUpPlanAdapter.test.ts` (7 tests, puros, sin DB) y `tests/commercial/salesConsultativeFollowUpRepository.test.ts` (7 tests, MariaDB real contra `crm_test`) - ver la seccion de pruebas de la tarea para el detalle punto por punto.
+- No objetivo de T01 tocado: `evaluateCommercialPolicy` no se conecto como gate (queda para T02); `runFollowupTick.ts`, outbox, Meta sender, `autonomous-loop`, shadow flags y `failure_reason` sanitization no se modificaron.
 
 ## Bloqueos
 
