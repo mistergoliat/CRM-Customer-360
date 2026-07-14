@@ -4,6 +4,8 @@ import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { after, before, beforeEach } from "node:test";
+import { getPool } from "@/lib/db";
+import { closeTestHttpServer } from "../helpers/closeTestHttpServer";
 import { resetCustomerServicePortForTests, resetOnboardingServiceForTests, setOnboardingServiceForTests, setCustomerMasterProjectionReaderForTests } from "@/lib/brain/commercial/capability-gateway";
 import { runCustomerOnboardingPostPlanStage } from "@/lib/brain/commercial/native-cycle/customer-session";
 import type { CustomerOnboardingPostPlanDependencies } from "@/lib/brain/commercial/native-cycle/customer-session";
@@ -58,7 +60,8 @@ before(async () => {
 });
 
 after(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeTestHttpServer(server);
+  await getPool().end();
 });
 
 beforeEach(() => {

@@ -2,9 +2,9 @@
 title: CAPABILITY_MATRIX
 doc_id: product-capability-matrix
 status: active
-version: "1.12.1"
+version: "1.12.2"
 owner: architecture
-last_reviewed: 2026-07-15
+last_reviewed: 2026-07-14
 source_of_truth_for:
   - capability inventory
   - domain implementation status
@@ -103,7 +103,7 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 - `get_customer_context` and `get_customer_addresses` are read models, not gateway tools.
 - `resolve_customer` is the active identity workstream.
 - `domain_state` rows (e.g. `customer_onboarding_state`) are persisted state machines, not agent-callable tools; they have no `gateway` registration by design (`not_applicable`).
-- `ACS-R1-04` is the active sequential release; `ACS-R1-05` (Autonomous Follow-up Runtime) is an authorized parallel workstream (see `ACTIVE_RELEASE.md`) that adds no new Gateway-registered capability rows here - `schedule_followup` is an internal `crm_agent_actions` action type persisted by `sales-consultative`, not an agent-callable tool.
+- `ACS-R1-04` is the active sequential release; `ACS-R1-05` (Autonomous Follow-up Runtime) is an authorized parallel workstream (see `ACTIVE_RELEASE.md`) that adds no new Gateway-registered capability rows here - `schedule_followup` is an internal `crm_agent_actions` action type persisted by `sales-consultative`, not an agent-callable tool. `ACS-R1-05-T02` connected `policy/evaluateCommercialPolicy.ts` as a mandatory `follow_up_dispatch_policy` gate before that internal write (opt-out/quiet-hours/identity-conflict/ai-blocked); this does not change any row above and does not mark `schedule_followup` `operational: verified`.
 - `multi_request_only` means the capability exists only in a non-canonical helper path.
 - `accepted_with_debt` means usable and documented, but still carrying explicit debt.
 - Planned rows are roadmap only; they are not productively wired just because docs exist.

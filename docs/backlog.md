@@ -273,3 +273,16 @@ Referencia arquitectonica: `docs/product/ai-sdr-implementation-blueprint.md`
 - TASK-P1K-012H End-to-End Scenario Simulator | DONE
 - TASK-P1K-012J Final Integration and Acceptance | DONE
 - P1K | ACCEPTED AND CLOSED
+
+## Test Infrastructure Debt
+
+| Task | Status | Module | Objective | Allowed scope | Out of scope | Expected files/tables/nodes | Dependencies | Acceptance criteria | Validation commands | Reporting requirements |
+|---|---|---|---|---|---|---|---|---|---|---|
+| TEST-INFRA-01 Eliminar handles abiertos restantes de la suite completa | READY | Test Infrastructure | Cerrar los handles (sockets HTTP keep-alive, pools MariaDB) que quedan abiertos al final de archivos de test que atraviesan infraestructura real, para que `tests/**/*.test.ts` termine sola con `exit code 0` en una unica corrida sin depender de `--test-timeout`. | Solo teardown de tests (`after()`, helpers bajo `tests/helpers/`). | Runtime de produccion, Customer Service, cambios funcionales de cualquier release ACS-R. | Archivos de test bajo `tests/`; posible extension de `tests/helpers/closeTestHttpServer.ts`. | Ninguna sobre codigo de producto. | La suite completa (`npx tsx --test "tests/**/*.test.ts"`) termina por si sola, sin timeout, con exit code 0. | `npx tsx --test --test-concurrency=1 --test-reporter=spec "tests/**/*.test.ts"` | Reportar archivo, handle exacto y fix aplicado por archivo. |
+
+Alcance conocido a la fecha (ACS-R1-05-T02, commits `f2524f9`, `91b55c0`):
+
+- `tests/commercial/customerSession.test.ts` (ya corregido en `91b55c0`);
+- cualquier otro archivo que complete sus assertions pero no libere el proceso (no auditado exhaustivamente en una unica corrida limpia todavia).
+
+No bloquea ninguna release `ACS-R1-05`.

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test, { after } from "node:test";
@@ -22,8 +23,21 @@ Object.assign(process.env, {
   DB_PASSWORD: "una_clave_local",
   DB_URL: "",
   DATABASE_URL: "",
-  DB_WRITE_ENABLED: "true"
+  DB_WRITE_ENABLED: "true",
+  // ACS-R1-05-T02: the follow_up_dispatch_policy gate fails closed when
+  // disabled (task section 9) - every test in this file exercises genuine
+  // follow-up persistence, so the gate must be enabled here the same way a
+  // real operator would enable it in production.
+  BRAIN_COMMERCIAL_POLICY_ENABLED: "true"
 });
+
+// Fixed, known-daytime moment (15:00 America/Santiago, outside the 21:00-09:00
+// quiet-hours window - see followUpDispatchPolicy.ts) used as `currentTime`
+// everywhere below instead of the real wall clock. Quiet hours is now a real,
+// timezone-aware gate (ACS-R1-05-T02); using `new Date()` here would make
+// these tests flaky depending on what time of day they happen to run.
+const FIXED_NOW_ISO = "2026-01-15T18:00:00.000Z";
+const FIXED_NOW_MS = Date.parse(FIXED_NOW_ISO);
 
 after(async () => {
   try {
@@ -130,14 +144,44 @@ async function insertFollowUpRow(input: {
   return actionId;
 }
 
-const PAST_ACTIVITY = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+async function seedConversation(overrides: { aiEnabled?: boolean; humanOwnerActive?: boolean; status?: string } = {}): Promise<{ id: number }> {
+  const suffix = uniqueSuffix("conv");
+  const publicId = randomUUID();
+  const insert = await safeExecute(
+    `INSERT INTO conversation (public_id, channel, provider, channel_account_id, external_contact_id, status, ai_enabled, human_owner_active)
+      VALUES (?, 'whatsapp', 'meta', ?, ?, ?, ?, ?)`,
+    [
+      publicId,
+      `test-account-${suffix}`,
+      `test-contact-${suffix}`,
+      overrides.status ?? "open",
+      overrides.aiEnabled === false ? 0 : 1,
+      overrides.humanOwnerActive ? 1 : 0
+    ]
+  );
+  assert.ok(insert.ok, insert.ok ? "" : insert.error);
+  const row = await safeQueryRows<{ id: number }>("SELECT id FROM conversation WHERE public_id = ? LIMIT 1", [publicId]);
+  assert.ok(row.ok && row.rows[0]?.id, row.ok ? "missing seeded conversation id" : row.error);
+  return { id: row.rows[0]!.id };
+}
+
+async function seedOnboardingConflict(conversationId: number) {
+  const insert = await safeExecute(
+    `INSERT INTO crm_customer_onboarding_state (conversation_id, status, purpose, collected_json, pending_fields_json)
+      VALUES (?, 'conflict', 'quote', '{}', '[]')`,
+    [conversationId]
+  );
+  assert.ok(insert.ok, insert.ok ? "" : insert.error);
+}
+
+const PAST_ACTIVITY = new Date(FIXED_NOW_MS - 2 * 24 * 60 * 60 * 1000).toISOString();
 
 test("primer follow-up crea una fila con attempt_number = 1", async () => {
   const seed = await seedOpportunity();
   const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
   const repo = createSalesConsultativeOperationsRepository();
-  const currentTime = new Date().toISOString();
-  const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const currentTime = FIXED_NOW_ISO;
+  const dueAt = new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString();
 
   const result = await repo.createFollowUpAction({
     opportunity,
@@ -171,9 +215,9 @@ test("[T01.1-1] el historial de la oportunidad A no afecta el de la oportunidad 
   const resultB = await repo.createFollowUpAction({
     opportunity: opportunityB,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Seguimiento para B.",
-    currentTime: new Date().toISOString(),
+    currentTime: FIXED_NOW_ISO,
     metadata: null
   });
 
@@ -213,9 +257,9 @@ test("[T01.1-1b] sin opportunity_id, el scope prioriza conversation_case_id exac
   const resultB = await repo.createFollowUpAction({
     opportunity: opportunityB,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Seguimiento para conversacion B.",
-    currentTime: new Date().toISOString(),
+    currentTime: FIXED_NOW_ISO,
     metadata: { conversationId: conversationCaseIdB }
   });
 
@@ -233,8 +277,8 @@ test("[T01.1-2] retry exacto del mismo plan reutiliza la misma fila (existing_ac
   const seed = await seedOpportunity();
   const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
   const repo = createSalesConsultativeOperationsRepository();
-  const currentTime = new Date().toISOString();
-  const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const currentTime = FIXED_NOW_ISO;
+  const dueAt = new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString();
 
   const first = await repo.createFollowUpAction({
     opportunity,
@@ -251,7 +295,7 @@ test("[T01.1-2] retry exacto del mismo plan reutiliza la misma fila (existing_ac
   // absolute dueAt alone does not make it a different plan as long as the
   // relative delay (policy.defaultDelayHours) that sales-consultative's
   // cadence hint translates to is unchanged.
-  const secondCurrentTime = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const secondCurrentTime = new Date(FIXED_NOW_MS + 5 * 60 * 1000).toISOString();
   const second = await repo.createFollowUpAction({
     opportunity,
     actionType: "schedule_follow_up",
@@ -281,9 +325,9 @@ test("[T01.1-3/4] un plan distinto mientras hay una accion activa retorna active
   const first = await repo.createFollowUpAction({
     opportunity: firstOpportunity,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Seguimiento de interes en producto.",
-    currentTime: new Date().toISOString(),
+    currentTime: FIXED_NOW_ISO,
     metadata: null
   });
   assert.equal(first.ok, true);
@@ -305,9 +349,9 @@ test("[T01.1-3/4] un plan distinto mientras hay una accion activa retorna active
   const conflicting = await repo.createFollowUpAction({
     opportunity: conflictingOpportunity,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Seguimiento de cotizacion.",
-    currentTime: new Date(Date.now() + 60 * 1000).toISOString(),
+    currentTime: new Date(FIXED_NOW_MS + 60 * 1000).toISOString(),
     metadata: null
   });
 
@@ -337,9 +381,9 @@ for (const status of NON_CONSUMING_STATUSES) {
     const result = await repo.createFollowUpAction({
       opportunity,
       actionType: "schedule_follow_up",
-      dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
       messageText: `Seguimiento tras estado ${status}.`,
-      currentTime: new Date().toISOString(),
+      currentTime: FIXED_NOW_ISO,
       metadata: null
     });
 
@@ -365,9 +409,9 @@ for (const status of CONSUMING_STATUSES) {
     const result = await repo.createFollowUpAction({
       opportunity,
       actionType: "schedule_follow_up",
-      dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
       messageText: `Segundo intento tras ${status}.`,
-      currentTime: new Date().toISOString(),
+      currentTime: FIXED_NOW_ISO,
       metadata: null
     });
 
@@ -390,12 +434,12 @@ test("[T01.1-11] una accion terminal (executed) permite crear un segundo intento
   const seed = await seedOpportunity();
   const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
   const repo = createSalesConsultativeOperationsRepository();
-  const currentTime = new Date().toISOString();
+  const currentTime = FIXED_NOW_ISO;
 
   const first = await repo.createFollowUpAction({
     opportunity,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Seguimos en contacto.",
     currentTime,
     metadata: null
@@ -416,9 +460,9 @@ test("[T01.1-11] una accion terminal (executed) permite crear un segundo intento
   const second = await repo.createFollowUpAction({
     opportunity,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Retomando el seguimiento.",
-    currentTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    currentTime: new Date(FIXED_NOW_MS + 60 * 60 * 1000).toISOString(),
     metadata: null
   });
 
@@ -447,9 +491,9 @@ test("[T01.1-12] max_attempts se obtiene de la fuente canonica COMMERCIAL_FOLLOW
   const result = await repo.createFollowUpAction({
     opportunity,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Seguimos en contacto.",
-    currentTime: new Date().toISOString(),
+    currentTime: FIXED_NOW_ISO,
     metadata: null
   });
   assert.equal(result.ok, true);
@@ -466,9 +510,9 @@ test("[T01.1-13] recommended persiste policy_status=allowed y action.status=plan
   const result = await repo.createFollowUpAction({
     opportunity,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Seguimiento de bajo riesgo.",
-    currentTime: new Date().toISOString(),
+    currentTime: FIXED_NOW_ISO,
     metadata: null
   });
   assert.equal(result.ok, true);
@@ -496,9 +540,9 @@ test("[T01.1-14] requires_operator_review persiste policy_status=requires_review
   const result = await repo.createFollowUpAction({
     opportunity,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Seguimiento de pago.",
-    currentTime: new Date().toISOString(),
+    currentTime: FIXED_NOW_ISO,
     metadata: null
   });
   assert.equal(result.ok, true);
@@ -514,7 +558,7 @@ test("[T01.1-15] otros tipos de accion conservan exactamente su persistencia pre
   const seed = await seedOpportunity();
   const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
   const repo = createSalesConsultativeOperationsRepository();
-  const currentTime = new Date().toISOString();
+  const currentTime = FIXED_NOW_ISO;
 
   const result = await repo.createFollowUpAction({
     opportunity,
@@ -567,8 +611,8 @@ test("[T01.1-17] scheduled_for persiste correctamente como DATETIME (no ISO crud
   const seed = await seedOpportunity();
   const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
   const repo = createSalesConsultativeOperationsRepository();
-  const currentTime = new Date().toISOString();
-  const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const currentTime = FIXED_NOW_ISO;
+  const dueAt = new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString();
   const messageText = "Seguimos en contacto.";
 
   const expectedPlan = planCommercialFollowUp(
@@ -635,9 +679,9 @@ test("alcanzar max_attempts no crea una nueva accion ejecutable", async () => {
   const fourth = await repo.createFollowUpAction({
     opportunity,
     actionType: "schedule_follow_up",
-    dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     messageText: "Cuarto intento.",
-    currentTime: new Date().toISOString(),
+    currentTime: FIXED_NOW_ISO,
     metadata: null
   });
 
@@ -648,4 +692,298 @@ test("alcanzar max_attempts no crea una nueva accion ejecutable", async () => {
   const rows = await loadFollowUpRows(seed.id);
   assert.equal(rows.length, 3);
   assert.ok(rows.every((row) => row.status === "executed"));
+});
+
+// ACS-R1-05-T02: follow_up_dispatch_policy gate, real MariaDB coverage
+// (task section 13). Items 8/9/10/11 of that list (an active row is not
+// overwritten, an exact retry keeps reusing the row, two opportunities
+// sharing wa_id stay isolated, other action types are unaffected) are
+// already exercised by the T01.1 tests above - they now run with
+// BRAIN_COMMERCIAL_POLICY_ENABLED=true and still pass, which is exactly
+// the T01.1 regression evidence this section relies on instead of
+// duplicating the same scenarios again.
+
+test("[T02-1] follow-up permitido con conversation real (senales limpias) crea una fila planned", async () => {
+  const seed = await seedOpportunity();
+  const conversation = await seedConversation();
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
+  const repo = createSalesConsultativeOperationsRepository();
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "Seguimiento con conversation real.",
+    currentTime: FIXED_NOW_ISO,
+    metadata: { conversationId: conversation.id }
+  });
+
+  assert.equal(result.ok, true);
+  assert.ok(result.actionId);
+
+  const [row] = await loadFollowUpRows(seed.id);
+  assert.equal(row!.status, "planned");
+  assert.equal(row!.policy_status, "allowed");
+});
+
+test("[T02-2] opt-out (crm_opportunities.signals_json estructurado) no crea fila ejecutable", async () => {
+  const seed = await seedOpportunity();
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY, overrides: { signals: ["opt_out"] } });
+  const repo = createSalesConsultativeOperationsRepository();
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "No deberia crear fila por opt-out.",
+    currentTime: FIXED_NOW_ISO,
+    metadata: null
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actionId, null);
+  assert.match(result.warning ?? "", /^follow_up_dispatch_deny:opt_out_active$/);
+
+  const rows = await loadFollowUpRows(seed.id);
+  assert.equal(rows.length, 0);
+});
+
+test("[T02-3] identity conflict (crm_customer_onboarding_state.status='conflict') no crea fila ejecutable", async () => {
+  const seed = await seedOpportunity();
+  const conversation = await seedConversation();
+  await seedOnboardingConflict(conversation.id);
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
+  const repo = createSalesConsultativeOperationsRepository();
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "No deberia crear fila por conflicto de identidad.",
+    currentTime: FIXED_NOW_ISO,
+    metadata: { conversationId: conversation.id }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actionId, null);
+  assert.match(result.warning ?? "", /^follow_up_dispatch_deny:identity_conflict$/);
+
+  const rows = await loadFollowUpRows(seed.id);
+  assert.equal(rows.length, 0);
+});
+
+test("[T02-3b] AI bloqueada (conversation.ai_enabled=0) no crea fila ejecutable", async () => {
+  const seed = await seedOpportunity();
+  const conversation = await seedConversation({ aiEnabled: false });
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
+  const repo = createSalesConsultativeOperationsRepository();
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "No deberia crear fila con AI bloqueada.",
+    currentTime: FIXED_NOW_ISO,
+    metadata: { conversationId: conversation.id }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actionId, null);
+  assert.match(result.warning ?? "", /^follow_up_dispatch_deny:ai_blocked$/);
+
+  const rows = await loadFollowUpRows(seed.id);
+  assert.equal(rows.length, 0);
+});
+
+test("[T02-4] quiet hours nunca crea action.status=planned", async () => {
+  const seed = await seedOpportunity();
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
+  const repo = createSalesConsultativeOperationsRepository();
+  const nightTime = "2026-01-16T02:00:00.000Z"; // 2026-01-15 23:00 America/Santiago - inside quiet hours.
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(Date.parse(nightTime) + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "Seguimiento propuesto de noche.",
+    currentTime: nightTime,
+    metadata: null
+  });
+
+  assert.equal(result.ok, true);
+  assert.ok(result.actionId);
+
+  const [row] = await loadFollowUpRows(seed.id);
+  assert.notEqual(row!.status, "planned");
+  assert.equal(row!.status, "requires_review");
+  assert.equal(row!.policy_status, "requires_review");
+});
+
+test("[T02-5] human owner activo (sin AI bloqueada) produce requires_review, nunca planned", async () => {
+  const seed = await seedOpportunity();
+  const conversation = await seedConversation({ humanOwnerActive: true });
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
+  const repo = createSalesConsultativeOperationsRepository();
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "Seguimiento con dueno humano activo.",
+    currentTime: FIXED_NOW_ISO,
+    metadata: { conversationId: conversation.id }
+  });
+
+  assert.equal(result.ok, true);
+  assert.ok(result.actionId);
+
+  const [row] = await loadFollowUpRows(seed.id);
+  assert.notEqual(row!.status, "planned");
+  assert.equal(row!.status, "requires_review");
+  assert.equal(row!.policy_status, "requires_review");
+  assert.equal(row!.approval_requirement, "operator_review");
+});
+
+test("[T02-6] plan-level requires_operator_review permanece requires_review bajo la politica (nunca se degrada a planned)", async () => {
+  const seed = await seedOpportunity();
+  const opportunity = buildOpportunity({
+    ...seed,
+    lastActivityAt: PAST_ACTIVITY,
+    overrides: {
+      primaryIntent: "checkout",
+      currentSummary: "Cliente pregunto por el pago y checkout del pedido.",
+      signals: ["checkout_pending"]
+    }
+  });
+  const repo = createSalesConsultativeOperationsRepository();
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "Seguimiento de pago.",
+    currentTime: FIXED_NOW_ISO,
+    metadata: null
+  });
+
+  assert.equal(result.ok, true);
+  assert.ok(result.actionId);
+
+  const [row] = await loadFollowUpRows(seed.id);
+  assert.equal(row!.status, "requires_review");
+  assert.equal(row!.policy_status, "requires_review");
+});
+
+test("[T02-7] policy disabled no crea fila ejecutable (fail closed, no allowed por defecto)", async () => {
+  const seed = await seedOpportunity();
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
+  const repo = createSalesConsultativeOperationsRepository();
+  const previous = process.env.BRAIN_COMMERCIAL_POLICY_ENABLED;
+  process.env.BRAIN_COMMERCIAL_POLICY_ENABLED = "false";
+
+  try {
+    const result = await repo.createFollowUpAction({
+      opportunity,
+      actionType: "schedule_follow_up",
+      dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+      messageText: "No deberia crear fila con la politica deshabilitada.",
+      currentTime: FIXED_NOW_ISO,
+      metadata: null
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.actionId, null);
+    assert.match(result.warning ?? "", /^follow_up_dispatch_failed_safe:policy_disabled$/);
+  } finally {
+    process.env.BRAIN_COMMERCIAL_POLICY_ENABLED = previous;
+  }
+
+  const rows = await loadFollowUpRows(seed.id);
+  assert.equal(rows.length, 0);
+});
+
+// Section 13 item 7 ("fallo de la fuente de politica no crea fila
+// ejecutable") is covered against a real evaluateCommercialPolicy call by
+// tests/commercial/followUpDispatchPolicy.test.ts [10b] (channelSignals:
+// null -> failed_safe). A genuine SQL exception from the conversation/
+// crm_customer_onboarding_state query cannot be reproduced here against a
+// real, correctly migrated crm_test without mocking the repository (section
+// 13 forbids that) or corrupting shared schema - a conversationId that does
+// not match any row is not a query failure in MariaDB, it is zero matching
+// rows, which the test below proves degrades safely instead of failing
+// closed (task section 10 precedent).
+test("[T02-8] un conversationId sin fila real degrada a sin senal adicional, no a fallo tecnico", async () => {
+  const seed = await seedOpportunity();
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
+  const repo = createSalesConsultativeOperationsRepository();
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "Seguimiento con conversationId inexistente.",
+    currentTime: FIXED_NOW_ISO,
+    // Present, in-range, but matches no real conversation row - exercises
+    // the query branch of loadFollowUpDispatchChannelSignals
+    // (conversationId !== null), not the "no conversationId at all" branch
+    // already covered by the first test in this file.
+    metadata: { conversationId: 999999999 }
+  });
+
+  assert.equal(result.ok, true);
+  assert.ok(result.actionId);
+
+  const [row] = await loadFollowUpRows(seed.id);
+  assert.equal(row!.status, "planned");
+  assert.equal(row!.policy_status, "allowed");
+});
+
+test("[T02-9] policy_status y policy_notes_json coinciden con la evaluacion real (requires_review con reason code seguro)", async () => {
+  const seed = await seedOpportunity();
+  const conversation = await seedConversation({ humanOwnerActive: true });
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
+  const repo = createSalesConsultativeOperationsRepository();
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "Seguimiento con dueno humano activo.",
+    currentTime: FIXED_NOW_ISO,
+    metadata: { conversationId: conversation.id }
+  });
+  assert.equal(result.ok, true);
+  assert.ok(result.actionId);
+
+  const [row] = await loadFollowUpRows(seed.id);
+  assert.equal(row!.policy_status, "requires_review");
+  const notes = JSON.parse(row!.policy_notes_json as string) as string[];
+  assert.ok(notes.includes("human_owner_active"), `policy_notes_json debe incluir human_owner_active: ${row!.policy_notes_json}`);
+});
+
+test("[T02-10] ningun dato sensible se persiste en policy_notes_json ni block_reasons_json", async () => {
+  const seed = await seedOpportunity();
+  const conversation = await seedConversation({ humanOwnerActive: true });
+  const opportunity = buildOpportunity({ ...seed, lastActivityAt: PAST_ACTIVITY });
+  const repo = createSalesConsultativeOperationsRepository();
+
+  const result = await repo.createFollowUpAction({
+    opportunity,
+    actionType: "schedule_follow_up",
+    dueAt: new Date(FIXED_NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    messageText: "Seguimiento con dueno humano activo, mi telefono es +56912345678 y mi correo es cliente@example.com.",
+    currentTime: FIXED_NOW_ISO,
+    metadata: { conversationId: conversation.id }
+  });
+  assert.equal(result.ok, true);
+  assert.ok(result.actionId);
+
+  const [row] = await loadFollowUpRows(seed.id);
+  const policyNotesRaw = row!.policy_notes_json as string;
+  const blockReasonsRaw = row!.block_reasons_json as string;
+  for (const raw of [policyNotesRaw, blockReasonsRaw]) {
+    assert.doesNotMatch(raw, /\+?56\d{8,9}/, "no debe contener un telefono/wa_id");
+    assert.doesNotMatch(raw, /@example\.com/, "no debe contener un email");
+    assert.doesNotMatch(raw, /telefono|correo/i, "no debe contener texto libre del mensaje del cliente");
+  }
 });

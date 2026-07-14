@@ -3,9 +3,9 @@ release: ACS-R1-05
 title: Autonomous Follow-up Runtime
 doc_id: release-acs-r1-05-autonomous-follow-up-runtime
 status: parallel_in_progress
-updated_at: 2026-07-15
-current_task: ACS-R1-05-T02
-next_task: ACS-R1-05-T03
+updated_at: 2026-07-14
+current_task: ACS-R1-05-T03
+next_task: ACS-R1-05-T04
 blocked: false
 owner: product
 source_of_truth_for:
@@ -63,8 +63,8 @@ Esta release no redefine hallazgos: el alcance completo, la matriz de clasificac
 | ID | Tarea | Estado | Dependencias | Gap(s) de la auditoria que cierra |
 | -- | ----- | ------ | ------------ | ---------------------------------- |
 | ACS-R1-05-T01 | Consolidar planner y persistencia | done | [Follow-up runtime reconciliation](../audits/follow-up-runtime-reconciliation.md) | P0-1 (hardcodes `attempt_number`/`max_attempts`/`policy_status`, idempotency key sin scope temporal); consolida `follow-up-planner/planFollowUp.ts` como fuente de calculo para `sales-consultative/repository.ts` |
-| ACS-R1-05-T02 | Aplicar follow-up dispatch policy | in_progress | ACS-R1-05-T01 | P0-4 (opt-out/quiet-hours/identity-conflict shadow-only, nunca gatean el write real); conecta `follow_up_dispatch_policy` (`evaluateCommercialPolicy`) como gate obligatorio antes de `upsertActionRow` |
-| ACS-R1-05-T03 | Hardening del worker | ready | ACS-R1-05-T01 | P0-2 (sin stale-lock recovery), P0-3 (sin retry/enforcement de `max_attempts`), P1-1 (`cancelFollowUp` sin precondicion de status) |
+| ACS-R1-05-T02 | Aplicar follow-up dispatch policy | done | ACS-R1-05-T01 | P0-4 (opt-out/quiet-hours/identity-conflict shadow-only, nunca gatean el write real); conecta `follow_up_dispatch_policy` (`evaluateCommercialPolicy`) como gate obligatorio antes de `upsertActionRow` |
+| ACS-R1-05-T03 | Hardening del worker | in_progress | ACS-R1-05-T01 | P0-2 (sin stale-lock recovery), P0-3 (sin retry/enforcement de `max_attempts`), P1-1 (`cancelFollowUp` sin precondicion de status) |
 | ACS-R1-05-T04 | Consolidar outbox y delivery outcomes | ready | ACS-R1-05-T01 | P1-3 (delivery outcomes no llegan a `crm_opportunities`), P1-4 (dos escritores divergentes de `brain_message_outbox`) |
 | ACS-R1-05-T05 | Aislar runtimes paralelos o muertos | ready | ACS-R1-05-T01 | P2-1 (5 planners paralelos), P2-2 (`multi-request/requestFollowups.ts` muerto), P2-5 (modulo `outbox-worker/` hyphenated duplicado) |
 | ACS-R1-05-T06 | Seguridad y configuracion operacional | ready | ACS-R1-05-T01 | P1-2 (`failure_reason` sin redactar), P1-5 (flags auto-escalados en silencio por los dos workers) |
@@ -72,15 +72,37 @@ Esta release no redefine hallazgos: el alcance completo, la matriz de clasificac
 
 ## Tarea actual
 
-`ACS-R1-05-T02`
+`ACS-R1-05-T03`
 
 ## Definition of Done de la tarea actual
 
-`ACS-R1-05-T02` debe conectar `policy/evaluateCommercialPolicy.ts` (`follow_up_dispatch_policy`: opt-out, quiet hours, identity conflict) como gate obligatorio antes de que `upsertFollowUpActionRow` (`sales-consultative/repository.ts`) persista una fila `schedule_followup` ejecutable (`planned`/`requires_review`) - hoy esa evaluacion corre solo en shadow mode (`runCommercialShadowEvaluation`) y nunca gatea el write real (P0-4). Un cliente con opt-out activo o dentro de quiet hours no debe recibir una fila `schedule_followup` persistida como ejecutable.
+`ACS-R1-05-T03` debe endurecer `autonomous-followup-worker.ts`/`runFollowupTick.ts`: recuperacion de stale-lock para acciones abandonadas en `executing` (P0-2, comparar con `outboxWorker.ts`'s `isStaleLockedTimestamp`), retry de `failed` con enforcement real de `max_attempts` por el worker en vez de solo declarado en el schema (P0-3), y una precondicion de status en `cancelFollowUp` para cerrar la race plausible con el claim atomico (P1-1). Debe respetar - sin reabrirlo ni copiarlo - el `follow_up_dispatch_policy` que T02 conecto antes del INSERT de `crm_agent_actions`.
 
 ## Siguiente tarea
 
-`ACS-R1-05-T03` (`ready`, no iniciada - depende de que T02 conecte primero el policy gate que T03 debe respetar al endurecer el worker)
+`ACS-R1-05-T04` (`ready`, no iniciada - depende de que T03 cierre el hardening del worker primero)
+
+## Evidencia de cierre - ACS-R1-05-T02
+
+- Estado: `done`.
+- SHA funcional: ver seccion de commits de `ACTIVE_RELEASE.md`. Rama `acs-r1-05-t02-followup-dispatch-policy`.
+- Archivos funcionales: `lib/brain/commercial/sales-consultative/followUpDispatchPolicy.ts` (nuevo - adapter puro `follow_up_dispatch_policy` sobre `policy/evaluateCommercialPolicy.ts`), `lib/brain/commercial/sales-consultative/repository.ts` (gate conectado en `upsertFollowUpActionRow`, justo antes del `INSERT INTO crm_agent_actions`), `lib/brain/commercial/sales-consultative/followUpPlanAdapter.ts` (`FOLLOW_UP_TIMEZONE` exportado para reuso, sin cambio de comportamiento).
+- **Arquitectura**: `sales-consultative/engine.ts` (trigger, sin cambios) -> `planCommercialFollowUp` (T01, sin cambios) -> `follow_up_dispatch_policy` (`evaluateFollowUpDispatchPolicy`, nuevo) -> `upsertFollowUpActionRow` (INSERT en `crm_agent_actions`). El gate es la unica via que puede convertir un plan `recommended`/`requires_operator_review` en una fila ejecutable; ningun caller puede saltarselo porque esta dentro de la misma funcion que hace el INSERT, no en un paso opcional externo.
+- **Boundary de politica**: `evaluateFollowUpDispatchPolicy` llama directamente a `policy/evaluateCommercialPolicy.ts` con un `SalesAgentResult` intencionalmente vacio (`proposedActions`/`toolRequests`/`entityProposals: []`, `responseProposal: null`) - el gate de canal del evaluador (`computeChannelSignals`: opt-out/ai-blocked/identity-conflict fuerzan `blocked`; human-owner/quiet-hours/manual-approval fuerzan `requires_review`) es independiente de esos arrays, asi que este uso ejercita exactamente el "boundary puro" sin duplicar ninguna regla de bloqueo dentro de `sales-consultative`. No se llama `runCommercialShadowEvaluation` en ningun punto del path nuevo.
+- **Resultado de dispatch explicito**: `FollowUpDispatchDecision = "allow" | "require_review" | "deny" | "failed_safe"`, mapeado desde `CommercialPolicyStatus` por una funcion pura e independientemente testeable (`mapCommercialPolicyStatusToDispatchDecision`): `allowed`/`allowed_with_restrictions -> allow`; `requires_review -> require_review`; `blocked -> deny`; `failed_safe -> failed_safe`. Nunca se usa un booleano `blocked` suelto.
+- **Fuentes reales de senales** (`loadFollowUpDispatchChannelSignals`):
+  - `optOut`: `crm_opportunities.signals_json` (array estructurado ya cargado en la oportunidad, nunca el texto libre del ultimo mensaje). Ningun escritor real del repositorio popula hoy una entrada `"opt_out"` en ese array (no existe capa de opt-out capture ni tabla de Customer Preference en este repo - T02 no la agrega, section 6 regla 7 de la tarea), asi que el gate evalua `false` en la practica hasta que exista ese escritor; el mecanismo esta real y conectado, no es una constante hardcodeada.
+  - `quietHoursActive`: `computeQuietHoursActive(currentTime, timezone)`, hora y timezone explicitos (`FOLLOW_UP_TIMEZONE = "America/Santiago"`, reexportado de `followUpPlanAdapter.ts`), nunca la timezone del servidor. Ventana 21:00-09:00 local, nueva constante nombrada (`FOLLOW_UP_QUIET_HOURS_START_HOUR`/`END_HOUR`) porque `follow-up-decision-policy.md` deja la ventana "configurable by context" sin un valor canonico previo. Un `currentTime` no parseable degrada fail-closed (tratado como dentro de quiet hours).
+  - `humanOwnerActive` / `aiBlocked`: `conversation.human_owner_active` / `conversation.ai_enabled` (migraciones 008/010), las mismas columnas que `updateOpportunityHandoffState` (`native-whatsapp/service.ts`) escribe de forma confiable - a diferencia de `crm_opportunities.human_owner_active`/`ai_blocked`, que no se usan aqui porque ese camino de escritura re-persiste el valor previo al turno (ver comentario en el codigo). Sourced como dos booleanos independientes, no combinados: `evaluateCommercialPolicy` ya les da severidad distinta (`aiBlocked` es parte del bloqueo duro; `humanOwnerActive` solo exige revision) - combinarlos habria hecho inalcanzable el resultado "revision" cuando solo hay dueno humano activo sin IA explicitamente deshabilitada.
+  - `identityConflict`: `crm_customer_onboarding_state.status = 'conflict'` (migracion 023, el estado nativo real de resolucion de identidad de ACS-R1-04), nunca el `resolver_identity.identity_type` legacy que usa el runtime shadow.
+  - `conversation status`/disponibilidad: `conversation.status = 'open'` alimenta `available`/`outboundAllowed`.
+  - Un `conversationId` sin fila real en `conversation` (incluida ausencia total de `conversationId`) degrada a "sin senal adicional" (no bloquea, no es un fallo) - preserva el invariante T01 de "fallback seguro sin contexto completo". Solo una excepcion tecnica real de `safeQueryRows` (`ok:false`) hace fallar cerrado el gate completo.
+- **Configuracion**: `BRAIN_COMMERCIAL_POLICY_ENABLED` (leido con el mecanismo tipado existente `readEnvFlag`, `config/commercialCycleConfig.ts`), default `false` ya documentado en `.env.example`. Sin dependencia de `BRAIN_COMMERCIAL_SHADOW_ENABLED` ni `BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER` en ningun punto del nuevo codigo (verificado con un test dedicado que lee el codigo fuente y confirma ausencia de esos imports/flags). Politica deshabilitada -> `failed_safe`, nunca `allowed` por omision.
+- **Mapeo a persistencia**: `allow` conserva `action.status`/`policy_status` calculados por el plan (`planned`/`allowed` o `requires_review`/`requires_review`, sin cambio de T01). `require_review` fuerza `action.status = "requires_review"`/`policy_status = "requires_review"` aunque el plan hubiera propuesto `planned` - nunca degrada a `planned` (cubre quiet hours y human-owner-active). `deny`/`failed_safe` no insertan fila (mismo patron que T01's `follow_up_plan_not_persisted:<status>`): retornan `follow_up_dispatch_deny:<reasonCode>` / `follow_up_dispatch_failed_safe:<reasonCode>`, sin sobrescribir una fila activa previa. `approval_requirement` se eleva a `"operator_review"` solo cuando el plan tenia `"none"` y el dispatch exige revision.
+- **Persistencia sin PII**: solo se agregan codigos cortos y fijos (`opt_out_active`, `quiet_hours_active`, `identity_conflict`, `ai_blocked`, `human_owner_active`, `conversation_unavailable`) a `policy_notes_json`, nunca el `CommercialPolicyResult` completo, contexto comercial, telefonos, emails, mensajes ni stack traces. `block_reasons_json` sigue siendo exclusivamente el de T01 (`plan.blockReasons`).
+- **Invariantes T01.1 preservadas**: el gate corre unicamente en el tramo final antes del INSERT (despues de retry-exacto, `active_followup_exists` y `existing_action_reused`), nunca altera `loadFollowUpActionHistory`, nunca recalcula `attemptNumber` por su cuenta, nunca cancela ni sobrescribe una fila activa. Los 19 tests de T01.1 corren sin modificacion de aserciones (solo se fijo un `currentTime` deterministico y se activo `BRAIN_COMMERCIAL_POLICY_ENABLED=true` en el harness, ver seccion de tests) y siguen en verde.
+- Tests nuevos: `tests/commercial/followUpDispatchPolicy.test.ts` (14 tests puros, sin DB, cubre los 12 casos pedidos mas 2 adicionales de `computeQuietHoursActive`), mas 11 tests nuevos en `tests/commercial/salesConsultativeFollowUpRepository.test.ts` (`[T02-1]`..`[T02-10]`, MariaDB real contra `crm_test`, sin mocks del repositorio). `crm_test` reseteada y migrada dos veces (23 migraciones, cero checksum conflicts).
+- No objetivo de T02 tocado: `runFollowupTick.ts`, `autonomous-outbox-worker.ts`, `metaClient.ts`, `applyMetaDeliveryStatus`, `multi-request/requestFollowups.ts`, `autonomous-loop`, sanitizacion de `failure_reason`, recuperacion de stale-lock, retry de `failed`, frequency cap, Customer Service, Address Book, Voice; cero tablas o migraciones nuevas; cancelacion eager por inbound no implementada.
 
 ## Evidencia de cierre - ACS-R1-05-T01
 

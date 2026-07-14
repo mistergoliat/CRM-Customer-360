@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
+import { getPool } from "@/lib/db";
 import {
   resolveNativeCustomerSession,
   mapOperationToOnboardingPurpose,
@@ -21,8 +22,14 @@ import type {
 import type { CustomerResolutionEvidence } from "@/lib/domains/customer-service";
 
 // ---------------------------------------------------------------------------
-// Fakes - no DB, no HTTP. resolveNativeCustomerSession is exercised purely
-// through its dependency-injection seams (task section 5's contract).
+// Most tests here use fakes injected through resolveNativeCustomerSession's
+// dependency seams (task section 5's contract) - no DB, no HTTP. Test 11 is
+// the exception: it deliberately omits resolveCustomerExternal to prove the
+// real default dependency (through the Capability Gateway) fails closed
+// rather than fabricating a result. That default path can open local
+// persistence infrastructure (Capability Gateway execution log, a real
+// MariaDB pool connection - see the teardown below) - it never contacts a
+// deployed Customer Service endpoint.
 // ---------------------------------------------------------------------------
 
 const TRUSTED_INBOUND: TrustedInboundIdentity = {
@@ -669,4 +676,12 @@ test("42: consecutive calls with an unrelated message never leak consent across 
   );
   assert.doesNotMatch(JSON.stringify(result.decision), /consent/i);
   assert.doesNotMatch(JSON.stringify(result.decision), /autorizo/i);
+});
+
+// Test 11's un-injected default dependency path opens a real MariaDB pool
+// connection (Capability Gateway execution log) and never closes it,
+// leaving a live keep-alive socket that blocks the process from exiting.
+// Release it the same way the other DB-backed integration tests do.
+after(async () => {
+  await getPool().end();
 });

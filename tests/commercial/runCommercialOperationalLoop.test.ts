@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
+import { getPool } from "../../lib/db";
 import { createFakeSalesAgentProvider, type SalesAgentFakeProviderBehavior } from "../../lib/brain/commercial/sales-agent/providers/fakeSalesAgentProvider";
 import {
   SALES_AGENT_CONTRACT_VERSION,
@@ -581,4 +582,14 @@ test("operational loop is deterministic and JSON serializable", async () => {
   assert.deepEqual(JSON.parse(JSON.stringify(first)), JSON.parse(JSON.stringify(second)));
   assert.doesNotThrow(() => JSON.stringify(first));
   assert.doesNotThrow(() => JSON.stringify(second));
+});
+
+// "persistence writes state and decision when enabled" exercises the real
+// default storage (operational-loop/persistCommercialState.ts, withConnection
+// -> lib/db.ts getPool()) rather than a fake - a genuine MariaDB pool
+// connection is opened and never closed, leaving a live keep-alive socket
+// that blocks the process from exiting. Release it the same way the
+// DB-backed repository tests do.
+after(async () => {
+  await getPool().end();
 });
