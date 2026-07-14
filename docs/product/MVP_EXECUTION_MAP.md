@@ -237,3 +237,7 @@ Este documento no define prioridad temporal. Define ownership, dependencias y ga
 - No puede usar mocks como evidencia de operacion productiva.
 - No puede adelantar politicas de contacto, consentimiento o autoridad.
 - Una release ACS sigue siendo la unidad de integracion y aceptacion.
+
+## 6.8 Dependencias externas en pausa
+
+El workstream `Customer & Identity` depende de un Customer Service externo en estado `PAUSED_EXTERNAL`; los workstreams de Address Book (dentro de `Customer & Identity`, `ACS-R1-05`) y Voice (`ACS-R1-09`) permanecen en `DEFERRED`, sin bloquear `Commercial Runtime` ni el follow-up autonomo. Fuente canonica de estos estados: [../audits/follow-up-runtime-reconciliation.md](../audits/follow-up-runtime-reconciliation.md).

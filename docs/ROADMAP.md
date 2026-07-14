@@ -36,6 +36,10 @@ La secuencia ACS es la unica roadmap normativa activa.
 | `ACS-R1-09` | `planned` | Voice | Platform & Integrations | Voice contract | Voice initiation | Voice outcomes and transcription linkage | Consent, authority y outcomes listos |
 | `ACS-R2` | `planned` | Quotes & Transactions | Voice, Platform & Integrations | Transactional contracts | Transactional integrations | Transactional capabilities | Gating transaccional completo |
 
+## Dependencias externas en pausa
+
+`ACS-R1-04` depende de un Customer Service externo actualmente en pausa (`PAUSED_EXTERNAL`); `ACS-R1-05` (Address Book) y `ACS-R1-09` (Voice) permanecen `planned`/`DEFERRED` y no bloquean el follow-up autonomo. Fuente canonica de estos estados y del estado real del runtime de follow-up: [Follow-up runtime reconciliation](audits/follow-up-runtime-reconciliation.md).
+
 ## Criterios generales
 
 - Entrada: la release especifique alcance, dependencias, ADR y contratos aplicables.
