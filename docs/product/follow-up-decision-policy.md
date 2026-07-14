@@ -330,6 +330,10 @@ Do not expose private chain-of-thought or unrestricted internal reasoning.
 - Customer Master,
 - SaaS multi-tenant.
 
+## Relation to the real dispatch gate (ACS-R1-05-T02)
+
+This document defines the policy vocabulary and invariants (opt-out, identity conflict, recent reply, quiet-hours windows). Since ACS-R1-05-T02, the "do not ignore opt-out or explicit rejection" and "identity conflict blocks sensitive outbound" invariants above are enforced for real, connected dispatch decisions - not only described here - by `sales-consultative/followUpDispatchPolicy.ts` (`follow_up_dispatch_policy`), which calls the shared `policy/evaluateCommercialPolicy.ts` boundary as a mandatory gate immediately before `sales-consultative/repository.ts` persists a `schedule_followup` row. Real signal sources: `optOut` from the opportunity's structured `signals_json` (no opt-out capture channel exists yet in this repo, so it evaluates false until one is built - a documented gap, not a silent invented default); `quietHoursActive` from an explicit current time and the `America/Santiago` timezone (a concrete 21:00-09:00 window, since this document leaves the window "configurable by context" without fixing one); `identityConflict` from the real native identity resolution state (`crm_customer_onboarding_state.status = 'conflict'`, ACS-R1-04). A quiet-hours or human-owner-active signal never lets a follow-up reach `action.status = planned`; opt-out, identity conflict, or AI-blocked deny the write outright. See `docs/releases/ACS-R1-05-autonomous-follow-up-runtime.md` ("Evidencia de cierre - ACS-R1-05-T02") for full detail.
+
 ## TypeScript contract
 
 The associated TypeScript contracts live in:

@@ -108,6 +108,8 @@ Since ACS-R1-05-T01, `sales-consultative/repository.ts` is a real, connected cal
 
 `planId`/`idempotencyKey` (`buildSignature`/`finalizePlan`) deliberately exclude `scheduledFor` from the identity hash: `scheduledFor` derives from `createdAt` (the caller's `now`) plus `policy.defaultDelayHours`, so it drifts on every call even for the exact same logical plan. Two calls at different wall-clock moments for the same opportunity/intent/attemptNumber/status/policy produce the same `planId`/`idempotencyKey` - this is what lets `sales-consultative/repository.ts` tell an exact retry apart from a genuinely different plan (ACS-R1-05-T01.1).
 
+Since ACS-R1-05-T02, a plan's `status`/`attemptNumber`/etc. is no longer the last word on whether a row becomes executable: `sales-consultative/repository.ts` runs `follow_up_dispatch_policy` (`followUpDispatchPolicy.ts`, real opt-out/quiet-hours/identity-conflict/ai-blocked signals through `policy/evaluateCommercialPolicy.ts`) immediately before the INSERT. A `recommended` plan can still land as `action.status = "requires_review"` (never `"planned"`) if the channel gate demands review (quiet hours, human owner active); it can be denied outright (no row persisted) on opt-out, identity conflict, or AI-blocked. This planner's own output (`plan.status`, `executable`/`persisted` always `false`) is unchanged by T02 - the gate is strictly a downstream persistence-layer concern.
+
 The queue is the correct destination when the product must:
 
 - persist operator review,
