@@ -57,7 +57,7 @@ Fuente normativa: [ROADMAP](ROADMAP.md#dependencias-externas-y-capacidades-en-pa
 ## Workstream paralelo autorizado
 
 - `ACS-R1-05` - Autonomous Follow-up Runtime
-- current task: `ACS-R1-05-T01`
+- current task: `ACS-R1-05-T02`
 - status: `parallel_in_progress`
 
 Este workstream:
@@ -66,6 +66,8 @@ Este workstream:
 - no altera el bloqueo de `ACS-R1-04-T08`;
 - no activa `ACS-R1-04-T09`;
 - puede avanzar porque no depende del Customer Service externo (`PAUSED_EXTERNAL`).
+
+`ACS-R1-05-T01` (cerrada, commit `d3b07ca`; primer intento `ef9c5ca` fue rechazado por semantica incorrecta de historial/intentos/idempotencia) consolido `sales-consultative/repository.ts` sobre `follow-up-planner/planFollowUp.ts` como unica fuente de calculo de `attemptNumber`/`maxAttempts`/`scheduledFor` para filas `schedule_followup` (antes hardcodeadas `1`/`1`/`"allowed"`). El historial durable (`loadFollowUpActionHistory`) queda escopado estrictamente por `opportunity_id` cuando existe (nunca cae a `wa_id` compartido entre oportunidades distintas), o por `conversation_case_id` exacto cuando no; solo estados explicitos (`planned`/`requires_review`/`executing`) cuentan como activos, y solo `executing`/`executed`/`failed` consumen un intento comercial (`rejected`/`blocked`/`cancelled`/`expired` no agotan `maxAttempts`). Un retry exacto (mismo `planId`/`intent`/`attemptNumber`) reutiliza la fila activa; un plan distinto mientras una fila sigue activa devuelve `active_followup_exists` sin sobrescribir (T01 no implementa supersession); sin fila activa, un intento terminal habilita el siguiente legitimo. `policy_status` y `action.status` son mapeos independientes de `plan.status` (nunca se persiste crudo), y `maxAttempts` viene de una constante canonica nombrada (`COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS`). Otros tipos de accion (`send_whatsapp_reply`, `prepare_quote_draft`, `take_over_case`, `pause_ai`, `mark_lost_candidate`, `create_internal_task`) conservan exactamente su persistencia previa. Probado con MariaDB real contra `crm_test` (`tests/commercial/salesConsultativeFollowUpRepository.test.ts`, 19/19) mas tests puros de planner/adapter (`followUpPlanAdapter.test.ts` 12/12, `followUpPlanner.test.ts` +1 regresion). Detalle completo, incluidos dos bugs pre-existentes de escritura real corregidos de paso, en la seccion "Evidencia de cierre" de la release spec.
 
 Detalle de alcance, tareas y Definition of Done: [ACS-R1-05 - Autonomous Follow-up Runtime](releases/ACS-R1-05-autonomous-follow-up-runtime.md). Estado tecnico real del runtime (que existe, que esta conectado, gaps): [Follow-up runtime reconciliation](audits/follow-up-runtime-reconciliation.md).
 

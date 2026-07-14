@@ -328,12 +328,19 @@ function buildPolicyNotes(input: {
   return [...new Set(notes)].slice(0, 12);
 }
 
+// Deliberately excludes scheduledFor (and any other now/createdAt-derived
+// value): scheduledFor = plusHours(createdAt, defaultDelayHours), so it
+// drifts on every call even when the logical plan (opportunity/intent/
+// attemptNumber/status/policy) did not change. Including it here would make
+// planId/idempotencyKey unstable across two calls at different wall-clock
+// moments for what is otherwise the exact same retry - the caller-facing
+// identity of a plan must depend only on its commercial content, never on
+// when it happened to be computed.
 function buildSignature(input: {
   status: string;
   intent: string;
   channel: string;
   recipient: string | null;
-  scheduledFor: string | null;
   reasonCode: string;
   attemptNumber: number;
   maxAttempts: number;
@@ -348,7 +355,6 @@ function buildSignature(input: {
     intent: input.intent,
     channel: input.channel,
     recipient: input.recipient,
-    scheduledFor: input.scheduledFor,
     reasonCode: input.reasonCode,
     attemptNumber: input.attemptNumber,
     maxAttempts: input.maxAttempts,
@@ -372,7 +378,6 @@ function finalizePlan(plan: CommercialFollowUpPlan, policy: CommercialFollowUpPl
     intent: plan.intent,
     channel: plan.channel,
     recipient: plan.recipient,
-    scheduledFor: plan.scheduledFor,
     reasonCode: plan.rationale,
     attemptNumber: plan.attemptNumber,
     maxAttempts: plan.maxAttempts,

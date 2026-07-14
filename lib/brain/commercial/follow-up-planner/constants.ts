@@ -92,6 +92,14 @@ export const COMMERCIAL_FOLLOW_UP_MAX_POLICY_NOTES = 12;
 export const COMMERCIAL_FOLLOW_UP_MAX_BLOCK_REASONS = 8;
 export const COMMERCIAL_FOLLOW_UP_MAX_ATTEMPT_NUMBER = 999;
 
+// Default policy.maxAttempts fed to planCommercialFollowUp by callers that do
+// not yet have a real configured follow-up policy source (ACS-R1-05-T02 wires
+// evaluateCommercialPolicy; until then this is the single named, importable
+// default - never re-declare this literal elsewhere). Distinct from
+// COMMERCIAL_FOLLOW_UP_MAX_ATTEMPT_NUMBER above, which is the planner's own
+// internal ceiling on attemptNumber itself, not a policy default.
+export const COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS = 3;
+
 export const COMMERCIAL_FOLLOW_UP_ACTIVE_OPPORTUNITY_STATUSES = [
   "new",
   "engaged",
