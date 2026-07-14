@@ -4,6 +4,10 @@ import { auditLog } from "@/lib/audit";
 import { createOutboxPlannedRecord } from "@/lib/brain/messaging";
 import { getColumns, queryRows, safeQueryRows, withConnection } from "@/lib/db";
 import { isDbWriteEnabled } from "@/lib/write-access";
+import { COMMERCIAL_ACTION_LIFECYCLE_VERSION, COMMERCIAL_ACTION_TERMINAL_STATUSES } from "../action-lifecycle";
+import { planCommercialFollowUp } from "../follow-up-planner";
+import { COMMERCIAL_POLICY_VERSION } from "../policy/policyConstants";
+import { buildFollowUpPlanningInput, mapFollowUpPlanStatusToActionStatus } from "./followUpPlanAdapter";
 import type {
   SalesConsultativeActionType,
   SalesConsultativeOperationsRepository,
@@ -203,96 +207,49 @@ function buildDeterministicQuoteId(opportunityKey: string, currentTime: string) 
   return `quote-${stableHash(`${opportunityKey}:${currentTime}`).slice(0, 24)}`;
 }
 
-async function upsertActionRow(input: {
-  opportunity: SalesConsultativeOpportunity | null;
-  actionType: SalesConsultativeActionType;
-  dueAt: string | null;
-  messageText: string;
-  currentTime: string;
-  metadata?: Record<string, unknown> | null;
-}) {
-  const available = await tableExists("crm_agent_actions");
-  if (!available) {
-    return { ok: false, rowId: null, warning: "crm_agent_actions unavailable" };
-  }
+type AgentActionRow = {
+  action_id: string;
+  idempotency_key: string;
+  opportunity_id: string | number | null;
+  decision_id: string | null;
+  decision_row_id: number | null;
+  conversation_case_id: string | number | null;
+  message_id: string | null;
+  wa_id: string | null;
+  channel: string;
+  action_type: string;
+  status: string;
+  risk_level: string;
+  approval_requirement: string;
+  draft_payload_json: string;
+  final_payload_json: string | null;
+  execution_payload_json: string | null;
+  draft_message: string | null;
+  final_message: string | null;
+  scheduled_for: string | null;
+  expires_at: string | null;
+  attempt_number: number;
+  max_attempts: number;
+  block_reasons_json: string;
+  cancel_reason: string | null;
+  failure_reason: string | null;
+  policy_status: string;
+  policy_notes_json: string;
+  source: string;
+  created_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  executed_at: string | null;
+  cancelled_at: string | null;
+  outbox_message_id: number | null;
+  lifecycle_version: string | null;
+  policy_version: string | null;
+  runtime_version: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
-  const opportunityId = asId(input.opportunity?.id ?? null);
-  const waId = asText(input.opportunity?.waId ?? null);
-  const actionType = mapConsultativeActionToQueueType(input.actionType);
-  const rowActionId = `sales-action-${stableHash([
-    input.opportunity?.opportunityKey ?? "none",
-    actionType,
-    input.currentTime,
-    input.messageText
-  ].join("|")).slice(0, 24)}`;
-  const idempotencyKey = `sales-action:${input.opportunity?.opportunityKey ?? waId ?? "none"}:${actionType}`;
-
-  const existing = await safeQueryRows<{ id: number }>("SELECT id FROM crm_agent_actions WHERE idempotency_key = ? LIMIT 1", [idempotencyKey]);
-  if (!existing.ok) {
-    return { ok: false, rowId: null, warning: existing.error };
-  }
-  if (existing.rows[0]?.id) {
-    return { ok: true, rowId: existing.rows[0].id, warning: "existing_action_reused" };
-  }
-
-  const status =
-    actionType === "send_whatsapp_reply"
-      ? "proposed"
-      : actionType === "schedule_followup"
-        ? "planned"
-        : actionType === "take_over_case"
-          ? "requires_review"
-          : actionType === "pause_ai"
-            ? "blocked"
-            : "planned";
-
-  const action = {
-    action_id: rowActionId,
-    idempotency_key: idempotencyKey,
-    opportunity_id: opportunityId,
-    decision_id: null,
-    decision_row_id: null,
-    conversation_case_id: asId(input.metadata?.conversationId ?? input.opportunity?.conversationCaseId ?? null),
-    message_id: null,
-    wa_id: waId,
-    channel: "whatsapp",
-    action_type: actionType,
-    status,
-    risk_level: actionType === "take_over_case" ? "high" : "low",
-    approval_requirement: actionType === "take_over_case" ? "operator_review" : "none",
-    draft_payload_json: serializeJson({
-      consultativeActionType: input.actionType,
-      mappedActionType: actionType,
-      messageText: input.messageText,
-      metadata: input.metadata ?? null
-    }),
-    final_payload_json: null,
-    execution_payload_json: null,
-    draft_message: input.messageText,
-    final_message: null,
-    scheduled_for: input.dueAt,
-    expires_at: null,
-    attempt_number: 1,
-    max_attempts: 1,
-    block_reasons_json: serializeJson([]),
-    cancel_reason: null,
-    failure_reason: null,
-    policy_status: "allowed",
-    policy_notes_json: serializeJson([]),
-    source: "ai_sdr",
-    created_by: "ai",
-    approved_by: null,
-    approved_at: null,
-    executed_at: null,
-    cancelled_at: null,
-    outbox_message_id: null,
-    lifecycle_version: "brain.commercial.sales-consultative.v1",
-    policy_version: "brain.commercial.policy.v1",
-    runtime_version: "brain.commercial.sales-consultative.v1",
-    created_at: toMysqlDateTime(input.currentTime),
-    updated_at: toMysqlDateTime(input.currentTime)
-  };
-
+async function insertAgentActionRow(action: AgentActionRow) {
   await withConnection(async (connection) => {
     const [insertResult] = await connection.execute<ResultSetHeader>(
       `
@@ -336,7 +293,7 @@ async function upsertActionRow(input: {
           runtime_version,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         action.action_id,
@@ -388,8 +345,243 @@ async function upsertActionRow(input: {
     return null;
   });
 
-  const inserted = await safeQueryRows<{ id: number }>("SELECT id FROM crm_agent_actions WHERE idempotency_key = ? LIMIT 1", [idempotencyKey]);
+  const inserted = await safeQueryRows<{ id: number }>("SELECT id FROM crm_agent_actions WHERE idempotency_key = ? LIMIT 1", [action.idempotency_key]);
   return { ok: inserted.ok, rowId: inserted.ok ? inserted.rows[0]?.id ?? null : null, warning: inserted.ok ? null : inserted.error };
+}
+
+// Active/terminal vocabulary for schedule_followup history reads reuses the
+// canonical action-lifecycle contract (COMMERCIAL_ACTION_TERMINAL_STATUSES)
+// instead of inventing a parallel status list. "Retryable" is not a distinct
+// status set: any terminal row unblocks the next attempt (ACS-R1-05-T01 spec
+// section 7, rule 4).
+async function loadFollowUpActionHistory(input: { opportunityId: string | number | null; waId: string | null }) {
+  const available = await tableExists("crm_agent_actions");
+  if (!available) {
+    return { ok: false as const, warning: "crm_agent_actions unavailable", activeActionId: null, maxAttemptNumber: 0 };
+  }
+  if (input.opportunityId === null && !input.waId) {
+    return { ok: true as const, warning: null, activeActionId: null, maxAttemptNumber: 0 };
+  }
+
+  const params: Array<string | number> = [];
+  let sql = "SELECT id, status, attempt_number FROM crm_agent_actions WHERE action_type = 'schedule_followup'";
+  if (input.opportunityId !== null) {
+    sql += " AND opportunity_id = ?";
+    params.push(input.opportunityId);
+  } else {
+    sql += " AND wa_id = ?";
+    params.push(input.waId as string);
+  }
+  sql += " ORDER BY id DESC LIMIT 50";
+
+  const result = await safeQueryRows<{ id: number; status: string; attempt_number: number }>(sql, params);
+  if (!result.ok) {
+    return { ok: false as const, warning: result.error, activeActionId: null, maxAttemptNumber: 0 };
+  }
+
+  const terminalStatuses = COMMERCIAL_ACTION_TERMINAL_STATUSES as readonly string[];
+  const activeRow = result.rows.find((row) => !terminalStatuses.includes(row.status));
+  const maxAttemptNumber = result.rows.reduce((max, row) => Math.max(max, asNumber(row.attempt_number) ?? 0), 0);
+
+  return { ok: true as const, warning: null, activeActionId: activeRow?.id ?? null, maxAttemptNumber };
+}
+
+async function upsertFollowUpActionRow(input: {
+  opportunity: SalesConsultativeOpportunity | null;
+  dueAt: string | null;
+  messageText: string;
+  currentTime: string;
+  opportunityId: string | number | null;
+  waId: string | null;
+  metadata?: Record<string, unknown> | null;
+}) {
+  const history = await loadFollowUpActionHistory({ opportunityId: input.opportunityId, waId: input.waId });
+  if (!history.ok) {
+    return { ok: false, rowId: null, warning: history.warning };
+  }
+  if (history.activeActionId !== null) {
+    return { ok: true, rowId: history.activeActionId, warning: "existing_action_reused" };
+  }
+
+  const plan = planCommercialFollowUp(
+    buildFollowUpPlanningInput({
+      opportunity: input.opportunity,
+      draftMessage: input.messageText,
+      dueAt: input.dueAt,
+      currentTime: input.currentTime,
+      priorAttemptNumber: history.maxAttemptNumber
+    })
+  );
+
+  const status = mapFollowUpPlanStatusToActionStatus(plan.status);
+  if (!status) {
+    return { ok: true, rowId: null, warning: `follow_up_plan_not_persisted:${plan.status}` };
+  }
+
+  const existingByKey = await safeQueryRows<{ id: number }>(
+    "SELECT id FROM crm_agent_actions WHERE idempotency_key = ? LIMIT 1",
+    [plan.idempotencyKey]
+  );
+  if (!existingByKey.ok) {
+    return { ok: false, rowId: null, warning: existingByKey.error };
+  }
+  if (existingByKey.rows[0]?.id) {
+    return { ok: true, rowId: existingByKey.rows[0].id, warning: "existing_action_reused" };
+  }
+
+  const rowActionId = `sales-followup-${stableHash(plan.idempotencyKey).slice(0, 28)}`;
+
+  return insertAgentActionRow({
+    action_id: rowActionId,
+    idempotency_key: plan.idempotencyKey,
+    opportunity_id: input.opportunityId,
+    decision_id: plan.decisionId,
+    decision_row_id: null,
+    conversation_case_id: asId(input.metadata?.conversationId ?? input.opportunity?.conversationCaseId ?? null),
+    message_id: plan.messageId,
+    wa_id: input.waId,
+    channel: "whatsapp",
+    action_type: "schedule_followup",
+    status,
+    risk_level: plan.riskLevel,
+    approval_requirement: plan.approvalRequirement,
+    draft_payload_json: serializeJson({
+      planId: plan.planId,
+      intent: plan.intent,
+      status: plan.status,
+      attemptNumber: plan.attemptNumber,
+      maxAttempts: plan.maxAttempts,
+      scheduledFor: plan.scheduledFor,
+      rationale: plan.rationale
+    }),
+    final_payload_json: null,
+    execution_payload_json: null,
+    draft_message: plan.draftMessage,
+    final_message: null,
+    scheduled_for: plan.scheduledFor ? toMysqlDateTime(plan.scheduledFor) : null,
+    expires_at: null,
+    attempt_number: plan.attemptNumber,
+    max_attempts: plan.maxAttempts,
+    block_reasons_json: serializeJson(plan.blockReasons),
+    cancel_reason: plan.cancelReason,
+    failure_reason: null,
+    policy_status: plan.status,
+    policy_notes_json: serializeJson(plan.policyNotes),
+    source: "ai_sdr",
+    created_by: "ai",
+    approved_by: null,
+    approved_at: null,
+    executed_at: null,
+    cancelled_at: null,
+    outbox_message_id: null,
+    lifecycle_version: COMMERCIAL_ACTION_LIFECYCLE_VERSION,
+    policy_version: COMMERCIAL_POLICY_VERSION,
+    runtime_version: "brain.commercial.sales-consultative.v1",
+    created_at: toMysqlDateTime(input.currentTime),
+    updated_at: toMysqlDateTime(input.currentTime)
+  });
+}
+
+async function upsertActionRow(input: {
+  opportunity: SalesConsultativeOpportunity | null;
+  actionType: SalesConsultativeActionType;
+  dueAt: string | null;
+  messageText: string;
+  currentTime: string;
+  metadata?: Record<string, unknown> | null;
+}) {
+  const available = await tableExists("crm_agent_actions");
+  if (!available) {
+    return { ok: false, rowId: null, warning: "crm_agent_actions unavailable" };
+  }
+
+  const opportunityId = asId(input.opportunity?.id ?? null);
+  const waId = asText(input.opportunity?.waId ?? null);
+  const actionType = mapConsultativeActionToQueueType(input.actionType);
+
+  if (actionType === "schedule_followup") {
+    return upsertFollowUpActionRow({
+      opportunity: input.opportunity,
+      dueAt: input.dueAt,
+      messageText: input.messageText,
+      currentTime: input.currentTime,
+      opportunityId,
+      waId,
+      metadata: input.metadata
+    });
+  }
+
+  const rowActionId = `sales-action-${stableHash([
+    input.opportunity?.opportunityKey ?? "none",
+    actionType,
+    input.currentTime,
+    input.messageText
+  ].join("|")).slice(0, 24)}`;
+  const idempotencyKey = `sales-action:${input.opportunity?.opportunityKey ?? waId ?? "none"}:${actionType}`;
+
+  const existing = await safeQueryRows<{ id: number }>("SELECT id FROM crm_agent_actions WHERE idempotency_key = ? LIMIT 1", [idempotencyKey]);
+  if (!existing.ok) {
+    return { ok: false, rowId: null, warning: existing.error };
+  }
+  if (existing.rows[0]?.id) {
+    return { ok: true, rowId: existing.rows[0].id, warning: "existing_action_reused" };
+  }
+
+  const status =
+    actionType === "send_whatsapp_reply"
+      ? "proposed"
+      : actionType === "take_over_case"
+        ? "requires_review"
+        : actionType === "pause_ai"
+          ? "blocked"
+          : "planned";
+
+  return insertAgentActionRow({
+    action_id: rowActionId,
+    idempotency_key: idempotencyKey,
+    opportunity_id: opportunityId,
+    decision_id: null,
+    decision_row_id: null,
+    conversation_case_id: asId(input.metadata?.conversationId ?? input.opportunity?.conversationCaseId ?? null),
+    message_id: null,
+    wa_id: waId,
+    channel: "whatsapp",
+    action_type: actionType,
+    status,
+    risk_level: actionType === "take_over_case" ? "high" : "low",
+    approval_requirement: actionType === "take_over_case" ? "operator_review" : "none",
+    draft_payload_json: serializeJson({
+      consultativeActionType: input.actionType,
+      mappedActionType: actionType,
+      messageText: input.messageText,
+      metadata: input.metadata ?? null
+    }),
+    final_payload_json: null,
+    execution_payload_json: null,
+    draft_message: input.messageText,
+    final_message: null,
+    scheduled_for: input.dueAt,
+    expires_at: null,
+    attempt_number: 1,
+    max_attempts: 1,
+    block_reasons_json: serializeJson([]),
+    cancel_reason: null,
+    failure_reason: null,
+    policy_status: "allowed",
+    policy_notes_json: serializeJson([]),
+    source: "ai_sdr",
+    created_by: "ai",
+    approved_by: null,
+    approved_at: null,
+    executed_at: null,
+    cancelled_at: null,
+    outbox_message_id: null,
+    lifecycle_version: "brain.commercial.sales-consultative.v1",
+    policy_version: "brain.commercial.policy.v1",
+    runtime_version: "brain.commercial.sales-consultative.v1",
+    created_at: toMysqlDateTime(input.currentTime),
+    updated_at: toMysqlDateTime(input.currentTime)
+  });
 }
 
 async function upsertOpportunityArrayField(input: {
