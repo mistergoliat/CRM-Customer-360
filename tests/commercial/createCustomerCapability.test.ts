@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before, beforeEach } from "node:test";
+import { getPool } from "@/lib/db";
+import { closeTestHttpServer } from "../helpers/closeTestHttpServer";
 import { resolveCapabilityGatewayDefinition, resetCustomerServicePortForTests, setOnboardingServiceForTests, resetOnboardingServiceForTests, setCustomerMasterProjectionReaderForTests } from "@/lib/brain/commercial/capability-gateway";
 import type { CapabilityGatewayContext } from "@/lib/brain/commercial/capability-gateway";
 import type { NativeCustomerSessionExecutionContext } from "@/lib/brain/commercial/native-cycle/customer-session";
@@ -49,7 +51,15 @@ before(async () => {
 });
 
 after(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeTestHttpServer(server);
+  // resolveCapabilityGatewayDefinition(...).execute(...) runs through the
+  // real Capability Gateway, which persists a real crm_capability_executions
+  // row per call (capability-gateway/repository.ts) - not something this
+  // file's test doubles cover, and not something it opened on purpose to
+  // leave dangling. Release the pool the same way the DB-backed T01/T02
+  // repository tests already do; a pool that was never actually used still
+  // closes immediately and safely.
+  await getPool().end();
 });
 
 beforeEach(() => {

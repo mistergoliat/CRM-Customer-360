@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
+import { getPool } from "../../lib/db";
 import { processInbound } from "../../lib/brain/processInbound";
 import { runCommercialShadowEvaluation } from "../../lib/brain/commercial/shadow/runCommercialShadowEvaluation";
 import { makeBrainActionResolveResponse, makeBrainContextResolveResponse, makeCommercialShadowFlags, makeInboundRequest } from "./fixtures";
@@ -346,4 +347,15 @@ test("commercial execution bridge adapter can run without changing inbound respo
   assert.equal(result.adapters.commercialExecutionBridge?.status, "skipped");
   assert.equal(result.adapters.commercialExecutionBridge?.sideEffects.messageSent, false);
   assert.ok(result.warnings.includes("bridge_test_warning"));
+});
+
+// processInbound routes through the same commercial execution bridge /
+// operational-loop persistence path as runCommercialOperationalLoop.test.ts
+// (operational-loop/persistCommercialState.ts, withConnection -> lib/db.ts
+// getPool()) whenever a test does not fully stub that path - a real MariaDB
+// pool connection is opened and never closed, leaving live keep-alive
+// sockets that block the process from exiting. Release it the same way the
+// DB-backed repository tests do.
+after(async () => {
+  await getPool().end();
 });

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before, beforeEach } from "node:test";
+import { getPool } from "@/lib/db";
+import { closeTestHttpServer } from "../helpers/closeTestHttpServer";
 import {
   resolveCapabilityGatewayDefinition,
   resetCustomerServicePortForTests,
@@ -56,7 +58,8 @@ before(async () => {
 });
 
 after(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeTestHttpServer(server);
+  await getPool().end();
 });
 
 beforeEach(() => {
