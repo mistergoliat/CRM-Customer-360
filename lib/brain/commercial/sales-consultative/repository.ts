@@ -4,10 +4,16 @@ import { auditLog } from "@/lib/audit";
 import { createOutboxPlannedRecord } from "@/lib/brain/messaging";
 import { getColumns, queryRows, safeQueryRows, withConnection } from "@/lib/db";
 import { isDbWriteEnabled } from "@/lib/write-access";
-import { COMMERCIAL_ACTION_LIFECYCLE_VERSION, COMMERCIAL_ACTION_TERMINAL_STATUSES } from "../action-lifecycle";
+import { COMMERCIAL_ACTION_LIFECYCLE_VERSION } from "../action-lifecycle";
 import { planCommercialFollowUp } from "../follow-up-planner";
 import { COMMERCIAL_POLICY_VERSION } from "../policy/policyConstants";
-import { buildFollowUpPlanningInput, mapFollowUpPlanStatusToActionStatus } from "./followUpPlanAdapter";
+import {
+  buildFollowUpPlanningInput,
+  isFollowUpActiveStatus,
+  isFollowUpAttemptConsumingStatus,
+  mapFollowUpPlanStatusToActionStatus,
+  mapFollowUpPlanStatusToPolicyStatus
+} from "./followUpPlanAdapter";
 import type {
   SalesConsultativeActionType,
   SalesConsultativeOperationsRepository,
@@ -349,41 +355,78 @@ async function insertAgentActionRow(action: AgentActionRow) {
   return { ok: inserted.ok, rowId: inserted.ok ? inserted.rows[0]?.id ?? null : null, warning: inserted.ok ? null : inserted.error };
 }
 
-// Active/terminal vocabulary for schedule_followup history reads reuses the
-// canonical action-lifecycle contract (COMMERCIAL_ACTION_TERMINAL_STATUSES)
-// instead of inventing a parallel status list. "Retryable" is not a distinct
-// status set: any terminal row unblocks the next attempt (ACS-R1-05-T01 spec
-// section 7, rule 4).
-async function loadFollowUpActionHistory(input: { opportunityId: string | number | null; waId: string | null }) {
+type FollowUpActiveRowIdentity = {
+  id: number;
+  status: string;
+  attemptNumber: number;
+  planId: string | null;
+  intent: string | null;
+};
+
+function extractFollowUpDraftIdentity(value: unknown): { planId: string | null; intent: string | null } {
+  const record = asRecord(value);
+  return {
+    planId: asText(record?.planId),
+    intent: asText(record?.intent)
+  };
+}
+
+// Scope rules (ACS-R1-05-T01.1 correction, section 4):
+// 1. opportunity_id present -> scope EXCLUSIVELY to that opportunity_id.
+//    Never falls back to wa_id when an opportunity is already known, so two
+//    opportunities sharing the same wa_id never mix attempt/active state.
+// 2. opportunity_id absent -> prefer an exact conversation_case_id match
+//    among rows that also have no opportunity_id; only fall back to wa_id
+//    for rows with no opportunity_id either. A row that already belongs to
+//    a different, identified opportunity is never consumed.
+// 3. Always scoped to action_type = 'schedule_followup'.
+async function loadFollowUpActionHistory(input: {
+  opportunityId: string | number | null;
+  conversationCaseId: string | number | null;
+  waId: string | null;
+}) {
   const available = await tableExists("crm_agent_actions");
   if (!available) {
-    return { ok: false as const, warning: "crm_agent_actions unavailable", activeActionId: null, maxAttemptNumber: 0 };
-  }
-  if (input.opportunityId === null && !input.waId) {
-    return { ok: true as const, warning: null, activeActionId: null, maxAttemptNumber: 0 };
+    return { ok: false as const, warning: "crm_agent_actions unavailable", activeRow: null, maxConsumedAttemptNumber: 0 };
   }
 
   const params: Array<string | number> = [];
-  let sql = "SELECT id, status, attempt_number FROM crm_agent_actions WHERE action_type = 'schedule_followup'";
+  let sql = "SELECT id, status, attempt_number, draft_payload_json FROM crm_agent_actions WHERE action_type = 'schedule_followup'";
   if (input.opportunityId !== null) {
     sql += " AND opportunity_id = ?";
     params.push(input.opportunityId);
+  } else if (input.conversationCaseId !== null) {
+    sql += " AND opportunity_id IS NULL AND conversation_case_id = ?";
+    params.push(input.conversationCaseId);
+  } else if (input.waId) {
+    sql += " AND opportunity_id IS NULL AND wa_id = ?";
+    params.push(input.waId);
   } else {
-    sql += " AND wa_id = ?";
-    params.push(input.waId as string);
+    return { ok: true as const, warning: null, activeRow: null as FollowUpActiveRowIdentity | null, maxConsumedAttemptNumber: 0 };
   }
   sql += " ORDER BY id DESC LIMIT 50";
 
-  const result = await safeQueryRows<{ id: number; status: string; attempt_number: number }>(sql, params);
+  const result = await safeQueryRows<{ id: number; status: string; attempt_number: number; draft_payload_json: unknown }>(sql, params);
   if (!result.ok) {
-    return { ok: false as const, warning: result.error, activeActionId: null, maxAttemptNumber: 0 };
+    return { ok: false as const, warning: result.error, activeRow: null, maxConsumedAttemptNumber: 0 };
   }
 
-  const terminalStatuses = COMMERCIAL_ACTION_TERMINAL_STATUSES as readonly string[];
-  const activeRow = result.rows.find((row) => !terminalStatuses.includes(row.status));
-  const maxAttemptNumber = result.rows.reduce((max, row) => Math.max(max, asNumber(row.attempt_number) ?? 0), 0);
+  const activeRawRow = result.rows.find((row) => isFollowUpActiveStatus(row.status));
+  const activeRow: FollowUpActiveRowIdentity | null = activeRawRow
+    ? {
+        id: activeRawRow.id,
+        status: activeRawRow.status,
+        attemptNumber: asNumber(activeRawRow.attempt_number) ?? 0,
+        ...extractFollowUpDraftIdentity(activeRawRow.draft_payload_json)
+      }
+    : null;
 
-  return { ok: true as const, warning: null, activeActionId: activeRow?.id ?? null, maxAttemptNumber };
+  const maxConsumedAttemptNumber = result.rows.reduce((max, row) => {
+    if (!isFollowUpAttemptConsumingStatus(row.status)) return max;
+    return Math.max(max, asNumber(row.attempt_number) ?? 0);
+  }, 0);
+
+  return { ok: true as const, warning: null, activeRow, maxConsumedAttemptNumber };
 }
 
 async function upsertFollowUpActionRow(input: {
@@ -395,26 +438,50 @@ async function upsertFollowUpActionRow(input: {
   waId: string | null;
   metadata?: Record<string, unknown> | null;
 }) {
-  const history = await loadFollowUpActionHistory({ opportunityId: input.opportunityId, waId: input.waId });
+  const conversationCaseId = asId(input.metadata?.conversationId ?? input.opportunity?.conversationCaseId ?? null);
+
+  const history = await loadFollowUpActionHistory({
+    opportunityId: input.opportunityId,
+    conversationCaseId,
+    waId: input.waId
+  });
   if (!history.ok) {
     return { ok: false, rowId: null, warning: history.warning };
   }
-  if (history.activeActionId !== null) {
-    return { ok: true, rowId: history.activeActionId, warning: "existing_action_reused" };
-  }
 
+  // attemptNumber only advances past rows that actually consumed a
+  // commercial attempt (executing/executed/failed); recomputed regardless of
+  // whether an active row exists, so the exact-retry vs conflicting-plan
+  // comparison below has a real plan to compare against.
   const plan = planCommercialFollowUp(
     buildFollowUpPlanningInput({
       opportunity: input.opportunity,
       draftMessage: input.messageText,
       dueAt: input.dueAt,
       currentTime: input.currentTime,
-      priorAttemptNumber: history.maxAttemptNumber
+      priorAttemptNumber: history.maxConsumedAttemptNumber
     })
   );
 
+  if (history.activeRow) {
+    const isExactRetry =
+      history.activeRow.planId === plan.planId &&
+      history.activeRow.intent === plan.intent &&
+      history.activeRow.attemptNumber === plan.attemptNumber;
+
+    if (isExactRetry) {
+      return { ok: true, rowId: history.activeRow.id, warning: "existing_action_reused" };
+    }
+
+    // A different logical plan (planId/intent/attemptNumber changed) while an
+    // action is still active: T01 does not implement supersession or
+    // automatic cancellation, so this is reported, never silently applied.
+    return { ok: true, rowId: history.activeRow.id, warning: "active_followup_exists" };
+  }
+
   const status = mapFollowUpPlanStatusToActionStatus(plan.status);
-  if (!status) {
+  const policyStatus = mapFollowUpPlanStatusToPolicyStatus(plan.status);
+  if (!status || !policyStatus) {
     return { ok: true, rowId: null, warning: `follow_up_plan_not_persisted:${plan.status}` };
   }
 
@@ -437,7 +504,7 @@ async function upsertFollowUpActionRow(input: {
     opportunity_id: input.opportunityId,
     decision_id: plan.decisionId,
     decision_row_id: null,
-    conversation_case_id: asId(input.metadata?.conversationId ?? input.opportunity?.conversationCaseId ?? null),
+    conversation_case_id: conversationCaseId,
     message_id: plan.messageId,
     wa_id: input.waId,
     channel: "whatsapp",
@@ -465,7 +532,7 @@ async function upsertFollowUpActionRow(input: {
     block_reasons_json: serializeJson(plan.blockReasons),
     cancel_reason: plan.cancelReason,
     failure_reason: null,
-    policy_status: plan.status,
+    policy_status: policyStatus,
     policy_notes_json: serializeJson(plan.policyNotes),
     source: "ai_sdr",
     created_by: "ai",

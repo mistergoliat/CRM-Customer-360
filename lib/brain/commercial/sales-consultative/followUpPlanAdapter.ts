@@ -1,4 +1,4 @@
-import type { CommercialFollowUpPlanningInput } from "../follow-up-planner";
+import { COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS, type CommercialFollowUpPlanningInput } from "../follow-up-planner";
 import type { SalesConsultativeOpportunity } from "./types";
 
 // ponytail: single de-facto follow-up policy until ACS-R1-05-T02 wires a real
@@ -10,8 +10,31 @@ import type { SalesConsultativeOpportunity } from "./types";
 // intents regardless of this flag (planFollowUp.ts#deriveApprovalRequirement).
 const FOLLOW_UP_TIMEZONE = "America/Santiago";
 const FOLLOW_UP_DEFAULT_DELAY_HOURS = 2;
-const FOLLOW_UP_DEFAULT_MAX_ATTEMPTS = 3;
 const FOLLOW_UP_DEFAULT_COOLDOWN_HOURS = 24;
+
+// Explicit T01 status classification for schedule_followup rows in
+// crm_agent_actions. Never inferred as "anything not terminal" - an unknown
+// or future status (e.g. a T02+ addition) must degrade safely by falling
+// outside both sets below, not be treated as active or as consuming an
+// attempt by default.
+export const FOLLOW_UP_ACTIVE_ACTION_STATUSES = ["planned", "requires_review", "executing"] as const;
+export type FollowUpActiveActionStatus = (typeof FOLLOW_UP_ACTIVE_ACTION_STATUSES)[number];
+
+// A row only "consumes" a commercial attempt once contact was actually
+// attempted: the worker claimed it (executing) or it reached a terminal
+// outcome that required claiming it first (executed/failed). Rows that never
+// got a real attempt (rejected/blocked/cancelled/expired) must not exhaust
+// maxAttempts.
+export const FOLLOW_UP_ATTEMPT_CONSUMING_STATUSES = ["executing", "executed", "failed"] as const;
+export type FollowUpAttemptConsumingStatus = (typeof FOLLOW_UP_ATTEMPT_CONSUMING_STATUSES)[number];
+
+export function isFollowUpActiveStatus(status: string): status is FollowUpActiveActionStatus {
+  return (FOLLOW_UP_ACTIVE_ACTION_STATUSES as readonly string[]).includes(status);
+}
+
+export function isFollowUpAttemptConsumingStatus(status: string): status is FollowUpAttemptConsumingStatus {
+  return (FOLLOW_UP_ATTEMPT_CONSUMING_STATUSES as readonly string[]).includes(status);
+}
 
 function toIso(value: string | Date | null | undefined): string | null {
   if (!value) return null;
@@ -27,8 +50,21 @@ function hoursBetween(fromIso: string, toIsoValue: string | null): number {
   return Math.max(0, (to - from) / (60 * 60 * 1000));
 }
 
+// action.status: what crm_agent_actions.status becomes. Only these two plan
+// statuses ever produce an executable row; every other plan.status (blocked,
+// not_needed, cancelled, expired, invalid) returns null - no row is created.
 export function mapFollowUpPlanStatusToActionStatus(status: string): "planned" | "requires_review" | null {
   if (status === "recommended") return "planned";
+  if (status === "requires_operator_review") return "requires_review";
+  return null;
+}
+
+// policy_status: intentionally a separate vocabulary from plan.status
+// (crm_agent_actions.policy_status is a general column shared by every action
+// type, whose other writers already use "allowed" - see upsertActionRow's
+// generic path). plan.status is never persisted verbatim as policy_status.
+export function mapFollowUpPlanStatusToPolicyStatus(status: string): "allowed" | "requires_review" | null {
+  if (status === "recommended") return "allowed";
   if (status === "requires_operator_review") return "requires_review";
   return null;
 }
@@ -39,6 +75,12 @@ export type BuildFollowUpPlanningInputArgs = {
   dueAt: string | null;
   currentTime: string;
   priorAttemptNumber: number;
+  /**
+   * Overrides the canonical COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS
+   * (follow-up-planner/constants.ts) default. Test-only injection point -
+   * production callers should omit this and get the named canonical value.
+   */
+  maxAttempts?: number;
 };
 
 /**
@@ -101,7 +143,7 @@ export function buildFollowUpPlanningInput(input: BuildFollowUpPlanningInputArgs
       createdAt: null
     },
     policy: {
-      maxAttempts: FOLLOW_UP_DEFAULT_MAX_ATTEMPTS,
+      maxAttempts: input.maxAttempts ?? COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS,
       cooldownHours: FOLLOW_UP_DEFAULT_COOLDOWN_HOURS,
       defaultDelayHours: hoursBetween(now, toIso(input.dueAt)),
       requireOperatorReview: false,

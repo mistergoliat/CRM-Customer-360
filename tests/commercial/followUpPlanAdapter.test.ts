@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planCommercialFollowUp } from "../../lib/brain/commercial/follow-up-planner";
-import { buildFollowUpPlanningInput, mapFollowUpPlanStatusToActionStatus } from "../../lib/brain/commercial/sales-consultative/followUpPlanAdapter";
+import { COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS, planCommercialFollowUp } from "../../lib/brain/commercial/follow-up-planner";
+import {
+  buildFollowUpPlanningInput,
+  isFollowUpActiveStatus,
+  isFollowUpAttemptConsumingStatus,
+  mapFollowUpPlanStatusToActionStatus,
+  mapFollowUpPlanStatusToPolicyStatus
+} from "../../lib/brain/commercial/sales-consultative/followUpPlanAdapter";
 import type { SalesConsultativeOpportunity } from "../../lib/brain/commercial/sales-consultative/types";
 
 const CURRENT_TIME = "2026-06-20T15:00:00.000Z";
@@ -119,9 +125,39 @@ test("maxAttempts y policyStatus del plan no quedan hardcodeados a 1/allowed", (
   );
 
   assert.notEqual(plan.maxAttempts, 1);
-  assert.equal(plan.maxAttempts, 3);
+  assert.equal(plan.maxAttempts, COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS);
   assert.notEqual(plan.status as string, "allowed");
   assert.equal(plan.status, "recommended");
+});
+
+test("maxAttempts viene de la fuente canonica COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS, no de un literal enterrado en el adapter", () => {
+  const opportunity = makeOpportunity();
+
+  const defaultPlan = planCommercialFollowUp(
+    buildFollowUpPlanningInput({
+      opportunity,
+      draftMessage: "seguimiento",
+      dueAt: null,
+      currentTime: CURRENT_TIME,
+      priorAttemptNumber: 0
+    })
+  );
+  assert.equal(defaultPlan.maxAttempts, COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS);
+
+  // Test-only injection point: proves the value is a real parameter, not a
+  // hardcoded literal duplicated inside the adapter.
+  const overriddenPlan = planCommercialFollowUp(
+    buildFollowUpPlanningInput({
+      opportunity,
+      draftMessage: "seguimiento",
+      dueAt: null,
+      currentTime: CURRENT_TIME,
+      priorAttemptNumber: 0,
+      maxAttempts: 1
+    })
+  );
+  assert.equal(overriddenPlan.maxAttempts, 1);
+  assert.notEqual(overriddenPlan.maxAttempts, COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS);
 });
 
 test("un plan bloqueado no mapea a una accion planned", () => {
@@ -167,5 +203,58 @@ test("mapFollowUpPlanStatusToActionStatus cubre recommended y requires_operator_
   assert.equal(mapFollowUpPlanStatusToActionStatus("requires_operator_review"), "requires_review");
   for (const status of ["blocked", "not_needed", "cancelled", "expired", "invalid"]) {
     assert.equal(mapFollowUpPlanStatusToActionStatus(status), null);
+  }
+});
+
+test("mapFollowUpPlanStatusToPolicyStatus es un mapeo separado de action.status, no plan.status crudo", () => {
+  assert.equal(mapFollowUpPlanStatusToPolicyStatus("recommended"), "allowed");
+  assert.equal(mapFollowUpPlanStatusToPolicyStatus("requires_operator_review"), "requires_review");
+  for (const status of ["blocked", "not_needed", "cancelled", "expired", "invalid"]) {
+    assert.equal(mapFollowUpPlanStatusToPolicyStatus(status), null);
+  }
+
+  // The two mappings are independently testable and diverge in value for
+  // "recommended" (policy_status=allowed vs action.status=planned) - proving
+  // plan.status is never persisted verbatim as policy_status.
+  assert.notEqual(mapFollowUpPlanStatusToPolicyStatus("recommended"), mapFollowUpPlanStatusToActionStatus("recommended"));
+});
+
+test("recommended y requires_operator_review producen policy_status y action.status correctos y distintos entre si", () => {
+  const opportunity = makeOpportunity();
+  const recommendedPlan = planCommercialFollowUp(
+    buildFollowUpPlanningInput({ opportunity, draftMessage: "seguimiento", dueAt: null, currentTime: CURRENT_TIME, priorAttemptNumber: 0 })
+  );
+  assert.equal(recommendedPlan.status, "recommended");
+  assert.equal(mapFollowUpPlanStatusToActionStatus(recommendedPlan.status), "planned");
+  assert.equal(mapFollowUpPlanStatusToPolicyStatus(recommendedPlan.status), "allowed");
+
+  const reviewOpportunity = makeOpportunity({
+    primaryIntent: "checkout",
+    currentSummary: "Cliente pregunto por el pago y checkout del pedido.",
+    signals: ["checkout_pending"]
+  });
+  const reviewPlan = planCommercialFollowUp(
+    buildFollowUpPlanningInput({ opportunity: reviewOpportunity, draftMessage: "seguimiento de pago", dueAt: null, currentTime: CURRENT_TIME, priorAttemptNumber: 0 })
+  );
+  assert.equal(reviewPlan.status, "requires_operator_review");
+  assert.equal(mapFollowUpPlanStatusToActionStatus(reviewPlan.status), "requires_review");
+  assert.equal(mapFollowUpPlanStatusToPolicyStatus(reviewPlan.status), "requires_review");
+});
+
+test("isFollowUpActiveStatus reconoce exclusivamente planned/requires_review/executing", () => {
+  assert.equal(isFollowUpActiveStatus("planned"), true);
+  assert.equal(isFollowUpActiveStatus("requires_review"), true);
+  assert.equal(isFollowUpActiveStatus("executing"), true);
+  for (const status of ["executed", "failed", "rejected", "blocked", "cancelled", "expired", "draft", "proposed", "approved", "edited", "scheduled", "some_future_status"]) {
+    assert.equal(isFollowUpActiveStatus(status), false, `${status} must not be treated as active`);
+  }
+});
+
+test("isFollowUpAttemptConsumingStatus reconoce exclusivamente executing/executed/failed", () => {
+  assert.equal(isFollowUpAttemptConsumingStatus("executing"), true);
+  assert.equal(isFollowUpAttemptConsumingStatus("executed"), true);
+  assert.equal(isFollowUpAttemptConsumingStatus("failed"), true);
+  for (const status of ["rejected", "blocked", "cancelled", "expired", "planned", "requires_review", "draft", "proposed", "some_future_status"]) {
+    assert.equal(isFollowUpAttemptConsumingStatus(status), false, `${status} must not consume an attempt`);
   }
 });

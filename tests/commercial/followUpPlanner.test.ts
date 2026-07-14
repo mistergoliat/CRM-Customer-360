@@ -419,6 +419,40 @@ test("returns a stable idempotency key and JSON serializable output", () => {
   assert.doesNotThrow(() => JSON.stringify(first));
 });
 
+test("idempotencyKey/planId stay stable for the same logical plan even when `now` (and therefore scheduledFor) drifts between calls", () => {
+  const opportunity = {
+    ...makeOpportunity(),
+    primaryIntent: "product_inquiry",
+    missingRequirements: [],
+    nextActionType: null
+  };
+  const policy = {
+    maxAttempts: 3,
+    cooldownHours: 0,
+    defaultDelayHours: 2,
+    requireOperatorReview: false,
+    allowLowRiskAutoApprovalPreview: true
+  };
+
+  const first = planCommercialFollowUp(makeInput({ now: "2026-06-17T12:00:00.000Z", opportunity, policy }));
+  // A later call, seconds after, for the exact same logical plan (same
+  // opportunity/intent/attemptNumber/status/policy) - only `now` differs.
+  const second = planCommercialFollowUp(makeInput({ now: "2026-06-17T12:00:07.421Z", opportunity, policy }));
+
+  assert.equal(first.status, "recommended");
+  assert.equal(second.status, "recommended");
+  assert.notEqual(first.scheduledFor, second.scheduledFor, "sanity check: scheduledFor does drift with now");
+  assert.equal(first.planId, second.planId);
+  assert.equal(first.idempotencyKey, second.idempotencyKey);
+
+  // A genuinely different attempt (durable history advanced) must still get
+  // a different identity, so this is not a blanket "always equal" digest.
+  const thirdLastDecision = { decisionId: null, nextActionJson: { attemptNumber: 1 }, policyStatus: null, riskLevel: null, approvalRequirement: null, decisionStatus: null, createdAt: null };
+  const third = planCommercialFollowUp(makeInput({ now: "2026-06-17T12:00:00.000Z", opportunity, policy, lastDecision: thirdLastDecision }));
+  assert.notEqual(third.attemptNumber, first.attemptNumber);
+  assert.notEqual(third.idempotencyKey, first.idempotencyKey);
+});
+
 test("validates the plan and keeps the proposed action non executable", () => {
   const plan = planCommercialFollowUp(makeInput());
   const validation = validateFollowUpPlan(plan);
