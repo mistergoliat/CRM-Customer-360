@@ -489,3 +489,115 @@ test("absence of experimental metadata does not break the delivery outcome", asy
   assert.equal(result.ok, true);
   assert.equal(await countOutcomes(outboxId, "delivered"), 1);
 });
+
+// --- Opportunity projection concurrency (ACS-R1-05-T04.1, P1-3) -----------
+// The projection UPDATE's WHERE clause is the sole authority for ordering -
+// these tests fire genuinely concurrent webhooks (Promise.all, no sleeps)
+// and assert the deterministic final state the SQL guard guarantees,
+// regardless of which transaction physically commits first.
+
+test("concurrent old/new outbound messages for the same opportunity: the newer message's projection always wins", async () => {
+  const conversation = await seedConversation("concurrent-old-new");
+  const opportunityId = await seedOpportunity({ conversationCaseId: conversation.conversationId, waId: conversation.waId, label: "concurrent-old-new" });
+
+  const providerMessageIdOld = `wamid.${uniqueSuffix("concurrent-old")}`;
+  const outboxIdOld = await seedSentOutboxMessage({ conversation, opportunityId, providerMessageId: providerMessageIdOld, label: "concurrent-old" });
+
+  const providerMessageIdNew = `wamid.${uniqueSuffix("concurrent-new")}`;
+  const outboxIdNew = await seedSentOutboxMessage({ conversation, opportunityId, providerMessageId: providerMessageIdNew, label: "concurrent-new" });
+  assert.ok(outboxIdNew > outboxIdOld, "the second seeded outbox row must have a higher id");
+
+  await Promise.all([
+    applyMetaDeliveryStatus({ providerMessageId: providerMessageIdOld, status: "delivered", occurredAt: new Date().toISOString(), rawPayload: {} }),
+    applyMetaDeliveryStatus({ providerMessageId: providerMessageIdNew, status: "delivered", occurredAt: new Date().toISOString(), rawPayload: {} })
+  ]);
+
+  const projected = await loadOpportunityProjection(opportunityId);
+  assert.equal(projected.last_outbound_outbox_message_id, outboxIdNew);
+  assert.equal(projected.last_outbound_provider_message_id, providerMessageIdNew);
+});
+
+test("concurrent read and delivered for the same message: read wins regardless of commit order", async () => {
+  const conversation = await seedConversation("concurrent-read-delivered");
+  const opportunityId = await seedOpportunity({ conversationCaseId: conversation.conversationId, waId: conversation.waId, label: "concurrent-read-delivered" });
+  const providerMessageId = `wamid.${uniqueSuffix("concurrent-read-delivered")}`;
+  const outboxId = await seedSentOutboxMessage({ conversation, opportunityId, providerMessageId, label: "concurrent-read-delivered" });
+
+  await Promise.all([
+    applyMetaDeliveryStatus({ providerMessageId, status: "read", occurredAt: new Date().toISOString(), rawPayload: {} }),
+    applyMetaDeliveryStatus({ providerMessageId, status: "delivered", occurredAt: new Date().toISOString(), rawPayload: {} })
+  ]);
+
+  const projected = await loadOpportunityProjection(opportunityId);
+  assert.equal(projected.last_outbound_delivery_status, "read");
+
+  const outbox = await safeQueryRows<{ provider_status: string }>("SELECT provider_status FROM brain_message_outbox WHERE id = ? LIMIT 1", [outboxId]);
+  assert.ok(outbox.ok);
+  assert.equal(outbox.rows[0].provider_status, "read");
+});
+
+test("concurrent read and sent for the same message: read wins regardless of commit order", async () => {
+  const conversation = await seedConversation("concurrent-read-sent");
+  const opportunityId = await seedOpportunity({ conversationCaseId: conversation.conversationId, waId: conversation.waId, label: "concurrent-read-sent" });
+  const providerMessageId = `wamid.${uniqueSuffix("concurrent-read-sent")}`;
+  const outboxId = await seedSentOutboxMessage({ conversation, opportunityId, providerMessageId, label: "concurrent-read-sent" });
+
+  await Promise.all([
+    applyMetaDeliveryStatus({ providerMessageId, status: "read", occurredAt: new Date().toISOString(), rawPayload: {} }),
+    applyMetaDeliveryStatus({ providerMessageId, status: "sent", occurredAt: new Date().toISOString(), rawPayload: {} })
+  ]);
+
+  const projected = await loadOpportunityProjection(opportunityId);
+  assert.equal(projected.last_outbound_delivery_status, "read");
+
+  const outbox = await safeQueryRows<{ provider_status: string }>("SELECT provider_status FROM brain_message_outbox WHERE id = ? LIMIT 1", [outboxId]);
+  assert.ok(outbox.ok);
+  assert.equal(outbox.rows[0].provider_status, "read");
+});
+
+test("concurrent failed and delivered for the same message: delivered wins regardless of commit order", async () => {
+  const conversation = await seedConversation("concurrent-failed-delivered");
+  const opportunityId = await seedOpportunity({ conversationCaseId: conversation.conversationId, waId: conversation.waId, label: "concurrent-failed-delivered" });
+  const providerMessageId = `wamid.${uniqueSuffix("concurrent-failed-delivered")}`;
+  const outboxId = await seedSentOutboxMessage({ conversation, opportunityId, providerMessageId, label: "concurrent-failed-delivered" });
+
+  await Promise.all([
+    applyMetaDeliveryStatus({ providerMessageId, status: "failed", occurredAt: new Date().toISOString(), rawPayload: {} }),
+    applyMetaDeliveryStatus({ providerMessageId, status: "delivered", occurredAt: new Date().toISOString(), rawPayload: {} })
+  ]);
+
+  const projected = await loadOpportunityProjection(opportunityId);
+  assert.equal(projected.last_outbound_delivery_status, "delivered");
+
+  const outbox = await safeQueryRows<{ provider_status: string }>("SELECT provider_status FROM brain_message_outbox WHERE id = ? LIMIT 1", [outboxId]);
+  assert.ok(outbox.ok);
+  assert.equal(outbox.rows[0].provider_status, "delivered");
+
+  // Both distinct events remain in the append-only outcome history, even
+  // though the projection converged to a single value.
+  assert.equal(await countOutcomes(outboxId, "failed"), 1);
+  assert.equal(await countOutcomes(outboxId, "delivered"), 1);
+});
+
+test("a rejected projection event never modifies last_outbound_delivery_status_at", async () => {
+  const conversation = await seedConversation("rejected-no-timestamp-change");
+  const opportunityId = await seedOpportunity({ conversationCaseId: conversation.conversationId, waId: conversation.waId, label: "rejected-no-timestamp-change" });
+  const providerMessageId = `wamid.${uniqueSuffix("rejected-no-timestamp-change")}`;
+  const outboxId = await seedSentOutboxMessage({ conversation, opportunityId, providerMessageId, label: "rejected-no-timestamp-change" });
+
+  await applyMetaDeliveryStatus({ providerMessageId, status: "read", occurredAt: "2026-01-01T00:00:00.000Z", rawPayload: {} });
+  const before = await loadOpportunityProjection(opportunityId);
+  assert.equal(before.last_outbound_delivery_status, "read");
+
+  // 'delivered' arriving after 'read' is rejected by the projection guard.
+  const rejected = await applyMetaDeliveryStatus({ providerMessageId, status: "delivered", occurredAt: "2026-01-02T00:00:00.000Z", rawPayload: {} });
+  assert.equal(rejected.ok, true);
+  if (rejected.ok) assert.equal(rejected.opportunityProjectionApplied, false);
+
+  const after = await loadOpportunityProjection(opportunityId);
+  assert.equal(after.last_outbound_delivery_status, "read");
+  assert.equal(String(after.last_outbound_delivery_status_at), String(before.last_outbound_delivery_status_at));
+
+  // The rejected event is still recorded append-only.
+  assert.equal(await countOutcomes(outboxId, "delivered"), 1);
+});

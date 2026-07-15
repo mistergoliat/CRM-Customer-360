@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test, { after } from "node:test";
 import { getPool, safeQueryRows } from "@/lib/db";
-import { writeCanonicalOutboxMessage, BRAIN_MESSAGE_OUTBOX_TABLE } from "@/lib/brain/messaging/canonicalOutboxWriter";
+import { writeCanonicalOutboxMessage, buildCanonicalOutboxDedupeKey, BRAIN_MESSAGE_OUTBOX_TABLE } from "@/lib/brain/messaging/canonicalOutboxWriter";
 import { createOutboxPlannedRecord } from "@/lib/brain/messaging/outbox";
 import { SqlExecutionUnitOfWork } from "@/lib/brain/commercial/execution-gate/sqlExecutionUnitOfWork";
 import type { CanonicalOutboxCommand } from "@/lib/brain/commercial/execution-gate/types";
@@ -76,6 +76,7 @@ function buildCommand(input: {
   recipient: string;
   conversationCaseId: number | string | null;
   opportunityId: number | string | null;
+  messageText?: string;
 }): CanonicalOutboxCommand {
   return {
     commandId: input.idempotencyKey,
@@ -87,7 +88,7 @@ function buildCommand(input: {
     channel: "whatsapp",
     commandType: "whatsapp_text",
     recipient: input.recipient,
-    messageText: "Mensaje de prueba del execution gate.",
+    messageText: input.messageText ?? "Mensaje de prueba del execution gate.",
     metadata: {
       source: "ai_sdr",
       sandbox: true,
@@ -343,4 +344,116 @@ test("absence of experimental metadata does not break the send or dedupe key", a
   });
   assert.equal(result.inserted, true);
   assert.equal(result.row.meta_payload_json, null);
+});
+
+// --- Canonical dedupe parity across adapters (ACS-R1-05-T04.1, P1-4) -------
+
+test("both adapters compute the same dedupe_key for the same logical command and collapse to one row", async () => {
+  const actionId = `shared-action-${uniqueSuffix("parity")}`;
+  // actionType is a fixed enum (BrainExecutionActionType) in the legacy
+  // adapter's real input shape - it stands in for `idempotencyKey` in the
+  // canonical identity, exactly as production callers already use it.
+  const idempotencyKeyComponent = "send_whatsapp_message" as const;
+  const recipient = "56900000010";
+  const content = "Mismo contenido logico entre adapters";
+
+  const expectedKey = buildCanonicalOutboxDedupeKey({
+    channel: "whatsapp",
+    actionId,
+    idempotencyKey: idempotencyKeyComponent,
+    recipient,
+    content
+  });
+
+  // Legacy adapter: sourceRequestId stands in for actionId, actionType for idempotencyKey.
+  const legacyResult = await createOutboxPlannedRecord({
+    dedupeKeyInput: {
+      source: "brain",
+      actionType: idempotencyKeyComponent,
+      channel: "whatsapp",
+      waId: recipient,
+      sourceRequestId: actionId
+    },
+    status: "planned",
+    source: "brain",
+    sourceRequestId: actionId,
+    waId: recipient,
+    phoneNumberId: "phone-parity",
+    messageText: content
+  });
+  assert.ok(legacyResult.ok, legacyResult.ok ? "" : legacyResult.warning);
+  assert.equal(legacyResult.row.dedupe_key, expectedKey);
+
+  // Execution-gate adapter: identical actionId/idempotencyKey/recipient/content/channel.
+  const command = buildCommand({
+    idempotencyKey: expectedKey,
+    recipient,
+    conversationCaseId: null,
+    opportunityId: null,
+    messageText: content
+  });
+  const uow = new SqlExecutionUnitOfWork();
+  const gateResult = await uow.run(({ outbox }) => outbox.insertCommand(command));
+
+  assert.equal(gateResult.duplicate, true);
+  assert.equal(gateResult.inserted, false);
+  assert.equal(gateResult.rowId, legacyResult.row.id);
+
+  const rows = await safeQueryRows<{ total: number }>(`SELECT COUNT(*) AS total FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\` WHERE dedupe_key = ?`, [expectedKey]);
+  assert.ok(rows.ok);
+  assert.equal(Number(rows.rows[0].total), 1);
+});
+
+test("concurrent adapters (legacy + execution-gate) with the same logical command leave exactly one row", async () => {
+  const actionId = `shared-action-${uniqueSuffix("concurrent-parity")}`;
+  const idempotencyKeyComponent = "send_whatsapp_message" as const;
+  const recipient = "56900000011";
+  const content = "Contenido identico enviado por ambos adapters a la vez";
+
+  const expectedKey = buildCanonicalOutboxDedupeKey({
+    channel: "whatsapp",
+    actionId,
+    idempotencyKey: idempotencyKeyComponent,
+    recipient,
+    content
+  });
+
+  const command = buildCommand({
+    idempotencyKey: expectedKey,
+    recipient,
+    conversationCaseId: null,
+    opportunityId: null,
+    messageText: content
+  });
+  const uow = new SqlExecutionUnitOfWork();
+
+  const [legacyResult, gateResult] = await Promise.all([
+    createOutboxPlannedRecord({
+      dedupeKeyInput: {
+        source: "brain",
+        actionType: idempotencyKeyComponent,
+        channel: "whatsapp",
+        waId: recipient,
+        sourceRequestId: actionId
+      },
+      status: "planned",
+      source: "brain",
+      sourceRequestId: actionId,
+      waId: recipient,
+      phoneNumberId: "phone-concurrent-parity",
+      messageText: content
+    }),
+    uow.run(({ outbox }) => outbox.insertCommand(command))
+  ]);
+
+  assert.ok(legacyResult.ok, legacyResult.ok ? "" : legacyResult.warning);
+  assert.equal(legacyResult.row.dedupe_key, expectedKey);
+  assert.equal(legacyResult.row.id, gateResult.rowId);
+
+  const insertedCount = [legacyResult.persisted, gateResult.inserted].filter(Boolean).length;
+  assert.equal(insertedCount, 1);
+
+  const rows = await safeQueryRows<{ total: number }>(`SELECT COUNT(*) AS total FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\` WHERE dedupe_key = ?`, [expectedKey]);
+  assert.ok(rows.ok);
+  assert.equal(Number(rows.rows[0].total), 1);
 });

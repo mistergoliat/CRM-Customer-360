@@ -11,7 +11,6 @@ import {
   recordCommercialEvent
 } from "@/lib/brain/commercial/events";
 import { normalizeWhatsAppRecipientDigits } from "@/lib/brain/messaging/whatsapp-transport/constants";
-import { shouldProjectDeliveryStatus } from "@/lib/brain/commercial/delivery/deliveryStatusProjection";
 import { appendConversationMessage } from "@/lib/brain/local-ai-sdr/repository";
 import { createPrestashopProductRepository, createSalesConsultativeOperationsRepository, runSalesConsultativeService } from "@/lib/brain/commercial/sales-consultative";
 import type {
@@ -538,17 +537,44 @@ type OpportunityDeliveryProjectionRow = {
   last_outbound_delivery_status: string | null;
 };
 
+// Shared SQL rank fragments (ACS-R1-05-T04.1, P1-3): must stay in lockstep
+// with deliveryStatusProjection.ts's DELIVERY_STATUS_RANK. Used by all three
+// delivery-status projections (conversation_message, brain_message_outbox,
+// crm_opportunities) so a concurrent pair of status writes for the SAME row
+// resolves by rank inside the UPDATE's own WHERE clause - never by a prior
+// TypeScript read-then-decide against a status that a sibling write can
+// change before this one commits.
+const DELIVERY_RANK_CASE = "CASE ? WHEN 'sent' THEN 1 WHEN 'failed' THEN 2 WHEN 'delivered' THEN 3 WHEN 'read' THEN 4 ELSE 0 END";
+function currentDeliveryRankCase(column: string) {
+  return `CASE ${column} WHEN 'sent' THEN 1 WHEN 'failed' THEN 2 WHEN 'delivered' THEN 3 WHEN 'read' THEN 4 ELSE 0 END`;
+}
+
 /**
- * Monotonic, CAS-guarded projection of the last relevant outbound delivery
- * status onto crm_opportunities (ACS-R1-05-T04 section 10). Never touches
+ * Monotonic, atomically-guarded projection of the last relevant outbound
+ * delivery status onto crm_opportunities (ACS-R1-05-T04 section 10, hardened
+ * for concurrency in ACS-R1-05-T04.1). Never touches
  * status/stage/temperature/priority/waiting_for/next_action_* - delivery
  * projects delivery, it does not redefine commercial state.
  *
- * A strictly newer outbox message (higher id) always resets the tracked
- * status; the same outbox message advances only per shouldProjectDeliveryStatus;
- * an older outbox message is never applied. The read-then-CAS-update pattern
- * (guarded by the exact previous last_outbound_outbox_message_id) detects a
- * concurrent writer instead of silently overwriting it.
+ * The WHERE clause alone is the authority for whether the write may
+ * apply - never a prior TypeScript read-then-decide, which cannot prevent
+ * two concurrent status updates for the SAME outbox message from racing
+ * (the earlier read-then-CAS-on-outbox-id design only guarded against
+ * cross-message staleness; it let two same-message updates with different
+ * statuses both pass, with the later commit silently overwriting a
+ * higher-precedence status). The three rules below are expressed directly
+ * in SQL so MariaDB's row lock resolves the race, not application code:
+ *
+ *  1. stored id IS NULL           -> first projection ever, always applies.
+ *  2. stored id < incoming id     -> strictly newer message, always applies
+ *                                     (a new message resets tracked status).
+ *  3. stored id = incoming id     -> same message: apply only if the
+ *                                     incoming status has higher precedence
+ *                                     than the stored one (sent -> delivered
+ *                                     | read | failed; delivered -> read;
+ *                                     read/failed never advance further).
+ *  stored id > incoming id        -> older message, matches no branch above,
+ *                                     the UPDATE is a no-op (affectedRows=0).
  */
 async function projectOpportunityDeliveryStatus(input: {
   opportunityId: number;
@@ -557,26 +583,6 @@ async function projectOpportunityDeliveryStatus(input: {
   status: "sent" | "delivered" | "read" | "failed";
   occurredAt: string;
 }): Promise<{ applied: boolean; warning?: string }> {
-  const current = await safeQueryRows<OpportunityDeliveryProjectionRow>(
-    "SELECT id, last_outbound_outbox_message_id, last_outbound_delivery_status FROM crm_opportunities WHERE id = ? LIMIT 1",
-    [input.opportunityId]
-  );
-  if (!current.ok || !current.rows[0]) {
-    return { applied: false, warning: "opportunity_not_found" };
-  }
-
-  const previousOutboxMessageId = current.rows[0].last_outbound_outbox_message_id;
-  const isNewerMessage = previousOutboxMessageId === null || previousOutboxMessageId === undefined || input.outboxMessageId > previousOutboxMessageId;
-  const isOlderMessage = !isNewerMessage && input.outboxMessageId < previousOutboxMessageId;
-  if (isOlderMessage) {
-    return { applied: false, warning: "stale_outbound_message" };
-  }
-
-  const shouldApply = isNewerMessage || shouldProjectDeliveryStatus(current.rows[0].last_outbound_delivery_status, input.status);
-  if (!shouldApply) {
-    return { applied: false, warning: "not_monotonic" };
-  }
-
   const update = await safeExecute(
     `
       UPDATE crm_opportunities
@@ -586,15 +592,49 @@ async function projectOpportunityDeliveryStatus(input: {
           last_outbound_delivery_status_at = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-        AND last_outbound_outbox_message_id <=> ?
+        AND (
+          last_outbound_outbox_message_id IS NULL
+          OR last_outbound_outbox_message_id < ?
+          OR (
+            last_outbound_outbox_message_id = ?
+            AND (
+              last_outbound_delivery_status IS NULL
+              OR ${DELIVERY_RANK_CASE} > ${currentDeliveryRankCase("last_outbound_delivery_status")}
+            )
+          )
+        )
     `,
-    [input.outboxMessageId, input.providerMessageId, input.status, toMysqlDateTime(input.occurredAt), input.opportunityId, previousOutboxMessageId]
+    [
+      input.outboxMessageId,
+      input.providerMessageId,
+      input.status,
+      toMysqlDateTime(input.occurredAt),
+      input.opportunityId,
+      input.outboxMessageId,
+      input.outboxMessageId,
+      input.status
+    ]
   );
 
-  if (!update.ok || update.affectedRows === 0) {
-    return { applied: false, warning: "concurrent_projection_conflict" };
+  if (update.ok && update.affectedRows > 0) {
+    return { applied: true };
   }
-  return { applied: true };
+
+  // Not applied - classify why for observability. This read is diagnostic
+  // only: it cannot introduce a race, since the write decision above was
+  // already made atomically by the guarded UPDATE itself.
+  const current = await safeQueryRows<OpportunityDeliveryProjectionRow>(
+    "SELECT id, last_outbound_outbox_message_id, last_outbound_delivery_status FROM crm_opportunities WHERE id = ? LIMIT 1",
+    [input.opportunityId]
+  );
+  if (!current.ok || !current.rows[0]) {
+    return { applied: false, warning: "opportunity_not_found" };
+  }
+  const previousOutboxMessageId = current.rows[0].last_outbound_outbox_message_id;
+  if (previousOutboxMessageId !== null && previousOutboxMessageId !== undefined && input.outboxMessageId < previousOutboxMessageId) {
+    return { applied: false, warning: "stale_outbound_message" };
+  }
+  return { applied: false, warning: "not_monotonic" };
 }
 
 async function loadActiveOpportunity(conversationCaseId: string) {
@@ -1236,40 +1276,45 @@ export async function applyMetaDeliveryStatus(input: {
     warnings.push("outbox_not_found_for_outcome");
   }
 
-  // 6/7. Calculate + apply monotonic projections (secondary, best-effort).
-  const messageProjectionApplied = shouldProjectDeliveryStatus(message.status, input.status);
-  if (messageProjectionApplied) {
-    await queryRows(
-      `
-        UPDATE conversation_message
-        SET status = ?, metadata_json = ?, updated_at = ?
-        WHERE id = ?
-      `,
-      [
-        input.status,
-        JSON.stringify({
-          provider_status: input.status,
-          raw_payload: input.rawPayload
-        }),
-        toMysqlDateTime(input.occurredAt),
-        message.id
-      ]
-    );
-  }
-
-  const outboxProjectionApplied = shouldProjectDeliveryStatus(
-    typeof currentOutbox?.provider_status === "string" ? currentOutbox.provider_status : null,
-    input.status
+  // 6/7. Apply monotonic projections (secondary, best-effort). Each UPDATE's
+  // own WHERE clause is the sole authority for ordering (ACS-R1-05-T04.1,
+  // P1-3) - a prior TypeScript read-then-decide (the original T04 design)
+  // cannot prevent two concurrent status writes for the SAME row from
+  // racing: both could read the same stale "current" status, both decide to
+  // apply, and an unguarded UPDATE would let whichever commits last silently
+  // overwrite a higher-precedence status.
+  const messageUpdate = await safeExecute(
+    `
+      UPDATE conversation_message
+      SET status = ?, metadata_json = ?, updated_at = ?
+      WHERE id = ?
+        AND (status IS NULL OR ${DELIVERY_RANK_CASE} > ${currentDeliveryRankCase("status")})
+    `,
+    [
+      input.status,
+      JSON.stringify({
+        provider_status: input.status,
+        raw_payload: input.rawPayload
+      }),
+      toMysqlDateTime(input.occurredAt),
+      message.id,
+      input.status
+    ]
   );
-  if (currentOutbox && outboxProjectionApplied) {
-    await queryRows(
+  const messageProjectionApplied = messageUpdate.ok && messageUpdate.affectedRows > 0;
+
+  let outboxProjectionApplied = false;
+  if (currentOutbox) {
+    const outboxUpdate = await safeExecute(
       `
         UPDATE brain_message_outbox
         SET provider_status = ?, provider_status_updated_at = ?, updated_at = ?
         WHERE provider_message_id = ?
+          AND (provider_status IS NULL OR ${DELIVERY_RANK_CASE} > ${currentDeliveryRankCase("provider_status")})
       `,
-      [input.status, toMysqlDateTime(input.occurredAt), toMysqlDateTime(input.occurredAt), input.providerMessageId]
+      [input.status, toMysqlDateTime(input.occurredAt), toMysqlDateTime(input.occurredAt), input.providerMessageId, input.status]
     );
+    outboxProjectionApplied = outboxUpdate.ok && outboxUpdate.affectedRows > 0;
   }
 
   // 8. Opportunity projection.

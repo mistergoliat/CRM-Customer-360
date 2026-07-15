@@ -11,6 +11,7 @@ import {
   type SandboxAutonomyEvaluationResult
 } from "../../lib/brain/commercial/autonomy-sandbox";
 import { buildOutboxCommand } from "../../lib/brain/commercial/execution-gate/buildOutboxCommand";
+import { buildCanonicalOutboxDedupeKey } from "../../lib/brain/messaging/canonicalOutboxWriter";
 import {
   evaluateExecutionGate,
   executeActionThroughGate,
@@ -461,8 +462,21 @@ test("command builder is deterministic", () => {
   const second = buildOutboxCommand({ action, evaluatedAt: FIXED_TIME });
 
   assert.deepEqual(first, second);
+  // commandId stays a readable, human-debuggable reference - never the dedupe identity.
   assert.equal(first.commandId, "outbox:action:action-001:gate:test-001");
-  assert.equal(first.idempotencyKey, "outbox:action:action-001:gate:test-001");
+  // idempotencyKey is the canonical dedupe_key (ACS-R1-05-T04.1, P1-4): the
+  // same shared builder outbox.ts uses, not the readable commandId string.
+  assert.equal(
+    first.idempotencyKey,
+    buildCanonicalOutboxDedupeKey({
+      channel: "whatsapp",
+      actionId: action.actionId,
+      idempotencyKey: action.idempotencyKey,
+      recipient: action.waId!,
+      content: action.draftMessage!
+    })
+  );
+  assert.notEqual(first.idempotencyKey, first.commandId);
 });
 
 test("duplicate outbox is detected without inserting a second row", async () => {

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { withConnection } from "@/lib/db";
 import { hashMessageText } from "./dedupe";
@@ -78,6 +79,34 @@ export type CanonicalOutboxWriteResult = {
   rowId: number;
   row: BrainOutboxRecord;
 };
+
+/** The single logical identity of an outbox send (ACS-R1-05-T04.1, P1-4). */
+export type CanonicalOutboxIdentity = {
+  channel: string;
+  actionId: string;
+  idempotencyKey: string;
+  recipient: string;
+  content: string;
+};
+
+/**
+ * The ONLY function allowed to compute a brain_message_outbox dedupe_key.
+ * Both adapters (outbox.ts, execution-gate/buildOutboxCommand.ts) call this
+ * with their own domain fields mapped onto the same five parameters - same
+ * actionId + idempotencyKey + recipient + content + channel always yields the
+ * same key, regardless of which adapter produced it. Adapters may map
+ * genuinely different logical types onto different (actionId, idempotencyKey)
+ * namespaces, but never diverge for the same logical command.
+ */
+export function buildCanonicalOutboxDedupeKey(identity: CanonicalOutboxIdentity): string {
+  const contentHash = hashMessageText(identity.content ?? "");
+  const hash = crypto
+    .createHash("sha256")
+    .update([identity.channel, identity.actionId, identity.idempotencyKey, identity.recipient, contentHash].join("|"))
+    .digest("hex")
+    .slice(0, 24);
+  return `brain-outbox-${hash}`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

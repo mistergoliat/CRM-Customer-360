@@ -5,6 +5,7 @@ import { buildDedupeKey, hashMessageText } from "./dedupe";
 import {
   BRAIN_MESSAGE_OUTBOX_TABLE,
   BRAIN_MESSAGE_OUTBOX_MODEL_VERSION,
+  buildCanonicalOutboxDedupeKey,
   rowToRecord,
   writeCanonicalOutboxMessage,
   type BrainOutboxRecord,
@@ -110,10 +111,25 @@ export async function findOutboxByDedupeKey(dedupeKey: string): Promise<BrainOut
 
 /**
  * Legacy public entrypoint. Delegates all persistence to the canonical
- * writer (ACS-R1-05-T04, P1-4) - no SQL of its own left here.
+ * writer (ACS-R1-05-T04, P1-4) - no SQL of its own left here. The dedupe key
+ * is built by the same shared function the execution-gate adapter uses
+ * (ACS-R1-05-T04.1, P1-4): this adapter has no crm_agent_actions row backing
+ * it, so `sourceRequestId` (the originating turn/request) stands in for
+ * `actionId`, and `actionType` (constant per call site) stands in for
+ * `idempotencyKey` - two calls sharing the same source request, action type,
+ * recipient, content and channel are the same logical send and dedupe to the
+ * same row, exactly like an execution-gate retry would.
  */
 export async function createOutboxPlannedRecord(input: BrainOutboxRecordInput): Promise<BrainOutboxPersistResult> {
-  const dedupeKey = buildDedupeKey(input.dedupeKeyInput);
+  const waId = input.waId ?? input.dedupeKeyInput.waId ?? null;
+  const messageText = input.messageText ?? null;
+  const dedupeKey = buildCanonicalOutboxDedupeKey({
+    channel: input.dedupeKeyInput.channel ?? "whatsapp",
+    actionId: input.sourceRequestId ?? input.dedupeKeyInput.sourceRequestId ?? "legacy",
+    idempotencyKey: input.dedupeKeyInput.actionType,
+    recipient: waId ?? "",
+    content: messageText ?? ""
+  });
 
   try {
     const result = await writeCanonicalOutboxMessage({
@@ -123,10 +139,10 @@ export async function createOutboxPlannedRecord(input: BrainOutboxRecordInput): 
       sourceRequestId: input.sourceRequestId ?? input.dedupeKeyInput.sourceRequestId ?? null,
       sourceAgentName: input.sourceAgentName ?? null,
       sourceAgentVersion: input.sourceAgentVersion ?? null,
-      waId: input.waId ?? input.dedupeKeyInput.waId ?? null,
+      waId,
       phoneNumberId: input.phoneNumberId ?? input.dedupeKeyInput.phoneNumberId ?? null,
       conversationCaseId: input.conversationCaseId ?? input.dedupeKeyInput.conversationCaseId ?? null,
-      messageText: input.messageText ?? null,
+      messageText,
       metaPayloadJson: input.metaPayloadJson ?? null,
       providerMessageId: input.providerMessageId ?? null,
       errorCode: input.errorCode ?? null,
