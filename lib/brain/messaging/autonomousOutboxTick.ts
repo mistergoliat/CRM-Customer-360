@@ -12,6 +12,8 @@ import {
   buildDeliveryOutcomeDedupeKey,
   extractDeliveryExperimentAttribution
 } from "@/lib/brain/commercial/action-queue/persistActionOutcome";
+import { redactErrorMessage } from "@/lib/brain/commercial/redactErrorMessage";
+import { isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
 import { isWhatsAppWindowOpen } from "@/lib/domains/conversations/control";
 
 /**
@@ -235,8 +237,13 @@ export async function runOutboxTick(options: OutboxTickOptions): Promise<OutboxT
 
     // Allowlist guard BEFORE locking, so a non-allowlisted row is never left
     // claimed (it stays planned and visible instead of stuck in 'locked').
-    if (allowedWaIds.length > 0 && candidate.wa_id && !allowedWaIds.includes(candidate.wa_id)) {
-      log(`[worker:outbox] skipping non-allowlisted wa_id ${candidate.wa_id}`);
+    // ACS-R1-05-T06.1: isWaIdAuthorizedForPilot digit-normalizes both sides
+    // (a raw .includes() could miss a match on "+56 9..." vs "569...") and
+    // treats a missing wa_id as unauthorized whenever the allowlist is active
+    // - the previous `candidate.wa_id &&` short-circuit let a null wa_id skip
+    // the guard entirely.
+    if (!isWaIdAuthorizedForPilot(candidate.wa_id, allowedWaIds)) {
+      log(`[worker:outbox] skipping non-allowlisted wa_id ${candidate.wa_id ?? "(none)"}`);
       result.skipped++;
       continue;
     }
@@ -299,12 +306,17 @@ export async function runOutboxTick(options: OutboxTickOptions): Promise<OutboxT
         providerMessageId = sendResult.provider_message_id ?? null;
       } else {
         sendErrorCode = sendResult.error_code ?? "send_failed";
-        sendErrorMessage = sendResult.error_message ?? null;
+        // ACS-R1-05-T06.1 (P1-2): redacted once here so every downstream
+        // write (crm_action_executions.error_message, brain_message_outbox.
+        // error_message, markActionFailed's failure_reason) inherits the
+        // sanitized value - a provider error can otherwise echo back the
+        // recipient's own phone number/email in its message text.
+        sendErrorMessage = sendResult.error_message ? redactErrorMessage(sendResult.error_message) : null;
         httpStatus = (sendResult as { http_status?: number | null }).http_status ?? null;
       }
     } catch (error) {
       sendErrorCode = "exception";
-      sendErrorMessage = error instanceof Error ? error.message : String(error);
+      sendErrorMessage = redactErrorMessage(error) || "unknown";
     }
 
     const completedAt = new Date().toISOString();

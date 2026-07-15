@@ -22,6 +22,7 @@
 
 import path from "node:path";
 import { loadLocalEnv, loadEnvFile, PROJECT_ROOT } from "./db-utils";
+import { loadFollowUpWorkerRuntimeConfig, assertFollowUpWorkerRuntimeConfigIsSafe } from "../lib/brain/runtime/autonomousRuntimeConfig";
 
 const DEFAULT_POLL_MS = 30000; // check every 30s — don't need sub-minute precision
 const DEFAULT_LIMIT = 5;
@@ -110,6 +111,12 @@ async function closeGracefully() {
 
 async function main() {
   await loadRuntimeEnv();
+
+  // ACS-R1-05-T06.1: fail closed before polling starts, not on the first
+  // tick - a partial chain (some of the five structural flags true, others
+  // false) silently drops a follow-up somewhere between the LLM call and the
+  // outbox write instead of ever raising an error.
+  assertFollowUpWorkerRuntimeConfigIsSafe(loadFollowUpWorkerRuntimeConfig());
 
   const pollMs = readIntArg("poll-ms", DEFAULT_POLL_MS);
   const limit = readIntArg("limit", DEFAULT_LIMIT);

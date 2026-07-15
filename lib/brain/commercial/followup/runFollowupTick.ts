@@ -1,6 +1,7 @@
 import { safeExecute, safeQueryRows } from "@/lib/db";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import { redactErrorMessage } from "@/lib/brain/commercial/redactErrorMessage";
+import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
 import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON, hasAttemptsRemaining } from "./followUpWorkerPolicy";
 
 /**
@@ -50,6 +51,8 @@ export type FollowupTickResult = {
   cancelled: Array<{ actionId: string; reason: string }>;
   executed: string[];
   failed: string[];
+  /** ACS-R1-05-T06.1: candidates skipped for pilot isolation - row and attempt_number left untouched, never claimed. */
+  skippedUnauthorized: string[];
 };
 
 export type FollowupTickOptions = {
@@ -253,12 +256,24 @@ export async function shouldCancelFollowUp(candidate: FollowUpCandidate): Promis
 export async function runFollowupTick(options: FollowupTickOptions): Promise<FollowupTickResult> {
   const log = options.log ?? (() => void 0);
   const cycleRunner = options.cycleRunner ?? runNativeAutonomousCycle;
-  const result: FollowupTickResult = { processed: 0, cancelled: [], executed: [], failed: [] };
+  const result: FollowupTickResult = { processed: 0, cancelled: [], executed: [], failed: [], skippedUnauthorized: [] };
 
   const candidates = await selectDueFollowUps(options.limit, options.actionIds);
   if (candidates.length === 0) return result;
 
+  // ACS-R1-05-T06.1 (P1-5 pilot isolation): read once per tick, never mutates
+  // process.env. A candidate whose wa_id isn't allowlisted is skipped before
+  // any claim CAS runs - the row and its attempt_number stay exactly as they
+  // were, never touched, unlike a cancellation (which writes cancel_reason).
+  const pilotAllowlist = loadAutonomousPilotAllowlist();
+
   for (const candidate of candidates) {
+    if (!isWaIdAuthorizedForPilot(candidate.wa_id, pilotAllowlist)) {
+      log(`[worker:followup] skipping unauthorized wa_id for action ${candidate.action_id} (pilot allowlist)`);
+      result.skippedUnauthorized.push(candidate.action_id);
+      continue;
+    }
+
     if (options.dryRun) {
       log(`[worker:followup] DRY RUN — would process action ${candidate.action_id} (origin status=${candidate.status})`);
       result.processed++;
