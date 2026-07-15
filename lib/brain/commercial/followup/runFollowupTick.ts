@@ -78,7 +78,7 @@ export async function selectDueFollowUps(limit: number, actionIds?: string[]): P
       WHERE action_type = 'schedule_followup'
         AND (
           (status = 'planned' AND scheduled_for <= UTC_TIMESTAMP())
-          OR (status = 'executing' AND updated_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND))
+          OR (status = 'executing' AND updated_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND))
           OR (status = 'failed' AND attempt_number < max_attempts)
         )
         AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP())${scope}
@@ -136,6 +136,11 @@ export async function claimPlannedFollowUp(actionId: string): Promise<boolean> {
 // so two concurrent recoveries on the same row can never both win: whichever
 // commits first bumps updated_at, and the loser's own WHERE clause (still
 // requiring the pre-recovery stale updated_at) no longer matches.
+// ACS-R1-05-T03.2: the cutoff uses CURRENT_TIMESTAMP(3), the same session
+// clock that writes updated_at - never UTC_TIMESTAMP(), which is a distinct
+// (always-UTC) clock. updated_at is a plain DATETIME with no timezone of its
+// own, so comparing a session-clock write against a UTC-clock cutoff only
+// worked by accident when the session happened to run in UTC.
 export async function claimStaleExecutingFollowUp(actionId: string): Promise<boolean> {
   const result = await safeExecute(
     `UPDATE crm_agent_actions
@@ -144,7 +149,7 @@ export async function claimStaleExecutingFollowUp(actionId: string): Promise<boo
         AND action_type = 'schedule_followup'
         AND status = 'executing'
         AND attempt_number < max_attempts
-        AND updated_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND)`,
+        AND updated_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND)`,
     [actionId, FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS]
   );
   return result.ok && result.affectedRows > 0;
@@ -159,7 +164,8 @@ export async function claimStaleExecutingFollowUp(actionId: string): Promise<boo
 // longer matches (status != 'executing'), so this is naturally idempotent.
 // Two concurrent terminalizations on the same row: only one's UPDATE
 // actually changes anything, by the same row-lock CAS mechanism as every
-// other claim in this file.
+// other claim in this file. ACS-R1-05-T03.2: same CURRENT_TIMESTAMP(3)
+// cutoff as claimStaleExecutingFollowUp above, for the same reason.
 export async function terminalizeExhaustedStaleFollowUp(actionId: string): Promise<boolean> {
   const result = await safeExecute(
     `UPDATE crm_agent_actions
@@ -168,7 +174,7 @@ export async function terminalizeExhaustedStaleFollowUp(actionId: string): Promi
         AND action_type = 'schedule_followup'
         AND status = 'executing'
         AND attempt_number >= max_attempts
-        AND updated_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND)`,
+        AND updated_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND)`,
     [FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON, actionId, FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS]
   );
   return result.ok && result.affectedRows > 0;

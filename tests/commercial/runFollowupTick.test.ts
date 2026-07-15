@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { getPool, safeExecute, safeQueryRows } from "@/lib/db";
+import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import { getPool, safeExecute, safeQueryRows, withConnection } from "@/lib/db";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import {
   runFollowupTick,
@@ -812,4 +813,120 @@ test("a second tick does not duplicate execution of an already-executed action",
 
   const row = await loadAction(actionId);
   assert.equal(row?.status, "executed");
+});
+
+// ---------------------------------------------------------------------------
+// ACS-R1-05-T03.2: stale recovery/terminalization must not depend on the
+// MariaDB session running in UTC. Both the updated_at write and the stale
+// cutoff comparison use CURRENT_TIMESTAMP(3) - the session's own clock -
+// never UTC_TIMESTAMP(), which is a different, always-UTC clock. This test
+// forces a non-UTC session time zone on one dedicated connection (held for
+// the whole test via withConnection, never returned to the shared pool with
+// the override still applied) and re-issues the exact CAS statements used by
+// claimStaleExecutingFollowUp/terminalizeExhaustedStaleFollowUp/
+// selectDueFollowUps directly on that connection - those functions
+// themselves go through the app's shared pool via safeExecute/safeQueryRows,
+// which cannot be pinned to one physical connection, so this is the only way
+// to genuinely prove "same connection, same session, non-UTC" rather than
+// relying on the pool happening to reuse one connection. All staleness
+// windows are built with DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL n SECOND) -
+// the session's own SQL clock - never a JS Date computation, so this holds
+// regardless of real wall-clock time or how far off -04:00 is from UTC.
+// ---------------------------------------------------------------------------
+
+test("stale recovery and terminalization stay correct under a non-UTC session time zone", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+
+  await withConnection(async (connection) => {
+    const [tzRows] = await connection.query<RowDataPacket[]>("SELECT @@session.time_zone AS tz");
+    const originalTimeZone = String(tzRows[0]?.tz ?? "SYSTEM");
+
+    try {
+      await connection.query("SET time_zone = '-04:00'");
+
+      // Seed a freshly-claimed 'executing' row, its updated_at written by
+      // this same -04:00 session's own CURRENT_TIMESTAMP(3).
+      await connection.execute(
+        `UPDATE crm_agent_actions SET status = 'executing', attempt_number = 1, max_attempts = 3, updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ?`,
+        [actionId]
+      );
+
+      // 1. A recently-claimed 'executing' row is never mistaken for stale.
+      const [recentAttempt] = await connection.execute<ResultSetHeader>(
+        `UPDATE crm_agent_actions
+          SET attempt_number = attempt_number + 1, updated_at = CURRENT_TIMESTAMP(3)
+          WHERE action_id = ? AND action_type = 'schedule_followup' AND status = 'executing'
+            AND attempt_number < max_attempts
+            AND updated_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND)`,
+        [actionId, FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS]
+      );
+      assert.equal(recentAttempt.affectedRows, 0);
+
+      // Backdate updated_at using this same session's own SQL clock (never a
+      // JS Date computation), so staleness is genuinely relative to -04:00's
+      // own now() - not to any assumption about the real UTC offset.
+      await connection.execute(
+        `UPDATE crm_agent_actions SET updated_at = DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND) WHERE action_id = ?`,
+        [FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60, actionId]
+      );
+
+      // 2 & 3. Stale 'executing' is recovered, attempt_number incremented exactly once.
+      const [recovered] = await connection.execute<ResultSetHeader>(
+        `UPDATE crm_agent_actions
+          SET attempt_number = attempt_number + 1, updated_at = CURRENT_TIMESTAMP(3)
+          WHERE action_id = ? AND action_type = 'schedule_followup' AND status = 'executing'
+            AND attempt_number < max_attempts
+            AND updated_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND)`,
+        [actionId, FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS]
+      );
+      assert.equal(recovered.affectedRows, 1);
+
+      const [afterRecoveryRows] = await connection.query<RowDataPacket[]>(
+        "SELECT attempt_number FROM crm_agent_actions WHERE action_id = ?",
+        [actionId]
+      );
+      assert.equal(afterRecoveryRows[0]?.attempt_number, 2);
+
+      // 5. The row just recovered (updated_at freshly set by this same
+      // session) must not immediately look stale again.
+      const [immediateReclaim] = await connection.execute<ResultSetHeader>(
+        `UPDATE crm_agent_actions
+          SET attempt_number = attempt_number + 1, updated_at = CURRENT_TIMESTAMP(3)
+          WHERE action_id = ? AND action_type = 'schedule_followup' AND status = 'executing'
+            AND attempt_number < max_attempts
+            AND updated_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND)`,
+        [actionId, FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS]
+      );
+      assert.equal(immediateReclaim.affectedRows, 0);
+
+      // Exhaust attempts and backdate again via the session's own SQL clock.
+      await connection.execute(
+        `UPDATE crm_agent_actions SET attempt_number = max_attempts, updated_at = DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND) WHERE action_id = ?`,
+        [FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60, actionId]
+      );
+
+      // 4. Exhausted stale 'executing' is terminalized to 'failed'.
+      const [terminalized] = await connection.execute<ResultSetHeader>(
+        `UPDATE crm_agent_actions
+          SET status = 'failed', failure_reason = ?, updated_at = CURRENT_TIMESTAMP(3)
+          WHERE action_id = ? AND action_type = 'schedule_followup' AND status = 'executing'
+            AND attempt_number >= max_attempts
+            AND updated_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND)`,
+        [FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON, actionId, FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS]
+      );
+      assert.equal(terminalized.affectedRows, 1);
+
+      const [finalRows] = await connection.query<RowDataPacket[]>(
+        "SELECT status, failure_reason FROM crm_agent_actions WHERE action_id = ?",
+        [actionId]
+      );
+      assert.equal(finalRows[0]?.status, "failed");
+      assert.equal(finalRows[0]?.failure_reason, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON);
+    } finally {
+      // 6. Restore the session's original time zone before this connection
+      // is released back to the shared pool - never leak -04:00 into it.
+      await connection.query("SET time_zone = ?", [originalTimeZone]);
+    }
+  });
 });
