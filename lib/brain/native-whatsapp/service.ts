@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { auditLog } from "@/lib/audit";
-import { queryRows, safeQueryRows, withTransaction } from "@/lib/db";
+import { queryRows, safeExecute, safeQueryRows, withTransaction } from "@/lib/db";
 import { findDistinctCustomersByNormalizedValue, findExternalIdentityByNormalizedValue, findExternalIdentityByProviderExternalId, upsertExternalIdentity } from "@/lib/integrations/customer-external-identity";
 import {
   loadCommercialEventByDedupeKey,
@@ -11,6 +11,7 @@ import {
   recordCommercialEvent
 } from "@/lib/brain/commercial/events";
 import { normalizeWhatsAppRecipientDigits } from "@/lib/brain/messaging/whatsapp-transport/constants";
+import { shouldProjectDeliveryStatus } from "@/lib/brain/commercial/delivery/deliveryStatusProjection";
 import { appendConversationMessage } from "@/lib/brain/local-ai-sdr/repository";
 import { createPrestashopProductRepository, createSalesConsultativeOperationsRepository, runSalesConsultativeService } from "@/lib/brain/commercial/sales-consultative";
 import type {
@@ -240,17 +241,6 @@ function parseJsonObject(value: unknown): Record<string, unknown> | null {
     }
   }
   return null;
-}
-
-function shouldProjectDeliveryStatus(currentStatus: string | null, nextStatus: "sent" | "delivered" | "read" | "failed") {
-  const current = currentStatus?.toLowerCase().trim() ?? null;
-  if (!current) return true;
-  if (current === nextStatus) return false;
-  if (current === "read") return false;
-  if (current === "delivered") return nextStatus === "read";
-  if (current === "sent") return nextStatus === "delivered" || nextStatus === "read" || nextStatus === "failed";
-  if (current === "failed") return false;
-  return true;
 }
 
 function stableId(parts: string[]) {
@@ -510,12 +500,101 @@ async function loadConversationMessageById(messageId: number) {
 }
 
 async function loadOutboxByProviderMessageId(providerMessageId: string) {
-  const result = await safeQueryRows<{ id: number; provider_status: string | null }>(
-    "SELECT id, provider_status FROM brain_message_outbox WHERE provider_message_id = ? LIMIT 1",
+  const result = await safeQueryRows<{ id: number; provider_status: string | null; meta_payload_json: unknown }>(
+    "SELECT id, provider_status, meta_payload_json FROM brain_message_outbox WHERE provider_message_id = ? LIMIT 1",
     [providerMessageId]
   );
   if (!result.ok) return null;
   return result.rows[0] ?? null;
+}
+
+// Priority 1 for opportunity resolution (ACS-R1-05-T04 section 10): the
+// opportunity_id folded into the outbox row's own meta_payload_json by the
+// canonical writer. Priority 2: the crm_agent_actions row this outbox
+// message belongs to. Never falls back to "the conversation's current active
+// opportunity" - a late webhook could otherwise attribute an old message to
+// a newer, unrelated opportunity.
+async function resolveOutboxOpportunityId(outboxMetaPayloadJson: unknown, actionId: string | null): Promise<number | null> {
+  const metaPayload = parseJsonObject(outboxMetaPayloadJson);
+  const fromMeta = metaPayload?.opportunity_id;
+  if (typeof fromMeta === "number" && Number.isFinite(fromMeta)) return fromMeta;
+  if (typeof fromMeta === "string" && fromMeta.trim()) {
+    const parsed = Number(fromMeta.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  if (actionId) {
+    const rows = await safeQueryRows<{ opportunity_id: number | null }>("SELECT opportunity_id FROM crm_agent_actions WHERE action_id = ? LIMIT 1", [actionId]);
+    const opportunityId = rows.ok ? rows.rows[0]?.opportunity_id ?? null : null;
+    if (opportunityId !== null && opportunityId !== undefined) return opportunityId;
+  }
+
+  return null;
+}
+
+type OpportunityDeliveryProjectionRow = {
+  id: number;
+  last_outbound_outbox_message_id: number | null;
+  last_outbound_delivery_status: string | null;
+};
+
+/**
+ * Monotonic, CAS-guarded projection of the last relevant outbound delivery
+ * status onto crm_opportunities (ACS-R1-05-T04 section 10). Never touches
+ * status/stage/temperature/priority/waiting_for/next_action_* - delivery
+ * projects delivery, it does not redefine commercial state.
+ *
+ * A strictly newer outbox message (higher id) always resets the tracked
+ * status; the same outbox message advances only per shouldProjectDeliveryStatus;
+ * an older outbox message is never applied. The read-then-CAS-update pattern
+ * (guarded by the exact previous last_outbound_outbox_message_id) detects a
+ * concurrent writer instead of silently overwriting it.
+ */
+async function projectOpportunityDeliveryStatus(input: {
+  opportunityId: number;
+  outboxMessageId: number;
+  providerMessageId: string;
+  status: "sent" | "delivered" | "read" | "failed";
+  occurredAt: string;
+}): Promise<{ applied: boolean; warning?: string }> {
+  const current = await safeQueryRows<OpportunityDeliveryProjectionRow>(
+    "SELECT id, last_outbound_outbox_message_id, last_outbound_delivery_status FROM crm_opportunities WHERE id = ? LIMIT 1",
+    [input.opportunityId]
+  );
+  if (!current.ok || !current.rows[0]) {
+    return { applied: false, warning: "opportunity_not_found" };
+  }
+
+  const previousOutboxMessageId = current.rows[0].last_outbound_outbox_message_id;
+  const isNewerMessage = previousOutboxMessageId === null || previousOutboxMessageId === undefined || input.outboxMessageId > previousOutboxMessageId;
+  const isOlderMessage = !isNewerMessage && input.outboxMessageId < previousOutboxMessageId;
+  if (isOlderMessage) {
+    return { applied: false, warning: "stale_outbound_message" };
+  }
+
+  const shouldApply = isNewerMessage || shouldProjectDeliveryStatus(current.rows[0].last_outbound_delivery_status, input.status);
+  if (!shouldApply) {
+    return { applied: false, warning: "not_monotonic" };
+  }
+
+  const update = await safeExecute(
+    `
+      UPDATE crm_opportunities
+      SET last_outbound_outbox_message_id = ?,
+          last_outbound_provider_message_id = ?,
+          last_outbound_delivery_status = ?,
+          last_outbound_delivery_status_at = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+        AND last_outbound_outbox_message_id <=> ?
+    `,
+    [input.outboxMessageId, input.providerMessageId, input.status, toMysqlDateTime(input.occurredAt), input.opportunityId, previousOutboxMessageId]
+  );
+
+  if (!update.ok || update.affectedRows === 0) {
+    return { applied: false, warning: "concurrent_projection_conflict" };
+  }
+  return { applied: true };
 }
 
 async function loadActiveOpportunity(conversationCaseId: string) {
@@ -1064,23 +1143,102 @@ export async function processNativeWhatsAppInbound(input: {
   return result;
 }
 
+export type ApplyMetaDeliveryStatusResult =
+  | {
+      ok: true;
+      warning: string | null;
+      conversationId: number;
+      messageId: number;
+      outcomeInserted: boolean;
+      outcomeDuplicate: boolean;
+      messageProjectionApplied: boolean;
+      outboxProjectionApplied: boolean;
+      opportunityProjectionApplied: boolean;
+      opportunityId: number | null;
+    }
+  | {
+      ok: false;
+      warning: string;
+      outcomeInserted: false;
+      outcomeDuplicate: false;
+      messageProjectionApplied: false;
+      outboxProjectionApplied: false;
+      opportunityProjectionApplied: false;
+      opportunityId: null;
+    };
+
+function failedDeliveryStatusResult(warning: string): ApplyMetaDeliveryStatusResult {
+  return {
+    ok: false,
+    warning,
+    outcomeInserted: false,
+    outcomeDuplicate: false,
+    messageProjectionApplied: false,
+    outboxProjectionApplied: false,
+    opportunityProjectionApplied: false,
+    opportunityId: null
+  };
+}
+
+/**
+ * Applies a Meta delivery-status webhook event end to end (ACS-R1-05-T04
+ * section 12): resolve message/outbox/action/opportunity, persist an
+ * append-only idempotent outcome (principal step - a genuine DB failure here
+ * fails the whole call, never swallowed), then project monotonically onto
+ * the message timeline, the outbox transport record and the opportunity
+ * (secondary, best-effort, individually reported).
+ */
 export async function applyMetaDeliveryStatus(input: {
   providerMessageId: string;
   status: "sent" | "delivered" | "read" | "failed";
   occurredAt: string;
   rawPayload: unknown;
-}) {
+}): Promise<ApplyMetaDeliveryStatusResult> {
+  // 1. Resolve conversation_message.
   const message = await loadConversationMessageByProviderMessageId("meta", input.providerMessageId);
-  if (!message) {
-    return { ok: false as const, warning: "message_not_found" };
-  }
+  if (!message) return failedDeliveryStatusResult("message_not_found");
 
   const conversation = await loadConversationById(message.conversation_id);
-  if (!conversation) {
-    return { ok: false as const, warning: "conversation_not_found" };
+  if (!conversation) return failedDeliveryStatusResult("conversation_not_found");
+
+  // 2. Resolve outbox by provider_message_id.
+  const currentOutbox = await loadOutboxByProviderMessageId(input.providerMessageId);
+
+  // 3. Resolve action/execution/opportunity.
+  const { loadActionIdByOutboxMessageId, recordDeliveryOutcome, extractDeliveryExperimentAttribution } = await import(
+    "@/lib/brain/commercial/action-queue/persistActionOutcome"
+  );
+  const actionId = currentOutbox?.id ? await loadActionIdByOutboxMessageId(currentOutbox.id) : null;
+  const opportunityId = currentOutbox ? await resolveOutboxOpportunityId(currentOutbox.meta_payload_json, actionId) : null;
+
+  const warnings: string[] = [];
+
+  // 4/5. Build outcome idempotency key + persist append-only history. This is
+  // the principal step: a real persistence failure fails the whole call.
+  let outcomeInserted = false;
+  let outcomeDuplicate = false;
+  if (currentOutbox?.id) {
+    const experimentAttribution = extractDeliveryExperimentAttribution(currentOutbox.meta_payload_json);
+    const outcomeResult = await recordDeliveryOutcome(
+      currentOutbox.id,
+      input.providerMessageId,
+      input.status,
+      input.occurredAt,
+      typeof input.rawPayload === "object" && input.rawPayload !== null ? (input.rawPayload as Record<string, unknown>) : null,
+      experimentAttribution ? { experiment: experimentAttribution } : null
+    );
+    if (!outcomeResult.ok) {
+      return failedDeliveryStatusResult(`outcome_persist_failed:${outcomeResult.warning ?? "unknown"}`);
+    }
+    outcomeInserted = outcomeResult.inserted;
+    outcomeDuplicate = outcomeResult.duplicate;
+  } else {
+    warnings.push("outbox_not_found_for_outcome");
   }
 
-  if (shouldProjectDeliveryStatus(message.status, input.status)) {
+  // 6/7. Calculate + apply monotonic projections (secondary, best-effort).
+  const messageProjectionApplied = shouldProjectDeliveryStatus(message.status, input.status);
+  if (messageProjectionApplied) {
     await queryRows(
       `
         UPDATE conversation_message
@@ -1099,12 +1257,11 @@ export async function applyMetaDeliveryStatus(input: {
     );
   }
 
-  const currentOutbox = await loadOutboxByProviderMessageId(input.providerMessageId);
   const outboxProjectionApplied = shouldProjectDeliveryStatus(
     typeof currentOutbox?.provider_status === "string" ? currentOutbox.provider_status : null,
     input.status
   );
-  if (outboxProjectionApplied) {
+  if (currentOutbox && outboxProjectionApplied) {
     await queryRows(
       `
         UPDATE brain_message_outbox
@@ -1115,13 +1272,32 @@ export async function applyMetaDeliveryStatus(input: {
     );
   }
 
+  // 8. Opportunity projection.
+  let opportunityProjectionApplied = false;
+  if (currentOutbox?.id) {
+    if (opportunityId !== null) {
+      const projection = await projectOpportunityDeliveryStatus({
+        opportunityId,
+        outboxMessageId: currentOutbox.id,
+        providerMessageId: input.providerMessageId,
+        status: input.status,
+        occurredAt: input.occurredAt
+      });
+      opportunityProjectionApplied = projection.applied;
+      if (!projection.applied && projection.warning) warnings.push(`opportunity_projection:${projection.warning}`);
+    } else {
+      warnings.push("opportunity_not_resolved");
+    }
+  }
+
+  // 9. Domain event (unchanged behavior).
   const deliveryEvent = normalizeMetaWhatsAppStatusCommercialEvent({
     providerMessageId: input.providerMessageId,
     status: input.status,
     occurredAt: input.occurredAt,
     customerId: conversation.customer_id,
     conversationId: conversation.id,
-    opportunityId: null,
+    opportunityId,
     messageId: message.id,
     metadata: {
       conversationPublicId: conversation.public_id,
@@ -1132,22 +1308,7 @@ export async function applyMetaDeliveryStatus(input: {
 
   await recordCommercialEvent(deliveryEvent);
 
-  // Record ActionOutcome for delivery status changes — closes the execution loop.
-  // Only when the monotonic projection applied: a duplicate or out-of-order
-  // webhook must not create a duplicate outcome row.
-  if (currentOutbox?.id && outboxProjectionApplied) {
-    const { recordDeliveryOutcome } = await import("@/lib/brain/commercial/action-queue/persistActionOutcome");
-    await recordDeliveryOutcome(
-      currentOutbox.id,
-      input.providerMessageId,
-      input.status as "sent" | "delivered" | "read" | "failed",
-      input.occurredAt,
-      typeof input.rawPayload === "object" && input.rawPayload !== null
-        ? (input.rawPayload as Record<string, unknown>)
-        : null
-    ).catch(() => void 0); // best-effort, never fail the delivery status update
-  }
-
+  // 10. Audit.
   await auditLog({
     action: "whatsapp.delivery_status.applied",
     entityType: "conversation_message",
@@ -1155,11 +1316,26 @@ export async function applyMetaDeliveryStatus(input: {
     after: {
       providerMessageId: input.providerMessageId,
       status: input.status,
-      conversationId: conversation.id
+      conversationId: conversation.id,
+      outcomeInserted,
+      outcomeDuplicate,
+      opportunityProjectionApplied
     }
   });
 
-  return { ok: true as const, warning: null, conversationId: conversation.id, messageId: message.id };
+  // 11. Structured result.
+  return {
+    ok: true,
+    warning: warnings.length > 0 ? warnings.join(";") : null,
+    conversationId: conversation.id,
+    messageId: message.id,
+    outcomeInserted,
+    outcomeDuplicate,
+    messageProjectionApplied,
+    outboxProjectionApplied,
+    opportunityProjectionApplied,
+    opportunityId
+  };
 }
 
 export async function loadNativeConversationDetailByPublicId(publicId: string) {

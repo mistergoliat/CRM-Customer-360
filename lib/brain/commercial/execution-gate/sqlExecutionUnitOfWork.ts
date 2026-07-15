@@ -2,8 +2,7 @@ import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 import { withConnection } from "@/lib/db";
 import { deserializeAgentActionRow, type CrmAgentAction } from "../action-queue";
 import { CRM_AGENT_ACTIONS_TABLE } from "../action-queue/constants";
-import { BRAIN_MESSAGE_OUTBOX_TABLE } from "../../messaging/outbox";
-import { hashMessageText } from "../../messaging/dedupe";
+import { BRAIN_MESSAGE_OUTBOX_TABLE, writeCanonicalOutboxMessage } from "../../messaging/canonicalOutboxWriter";
 import type { AgentActionRepository, ExecutionUnitOfWork, OutboxRepository } from "./repositories";
 import type { CanonicalOutboxCommand } from "./types";
 
@@ -14,10 +13,6 @@ function asNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
-}
-
-function asJson(value: unknown) {
-  return JSON.stringify(value ?? null);
 }
 
 function toMysqlDateTime(value: string | Date | null | undefined): string | null {
@@ -86,69 +81,40 @@ class SqlOutboxRepository implements OutboxRepository {
   }
 
   async insertCommand(command: CanonicalOutboxCommand): Promise<{ inserted: boolean; duplicate: boolean; rowId: number | null }> {
-    const existing = await this.findByIdempotencyKey(command.idempotencyKey);
-    if (existing) return { inserted: false, duplicate: true, rowId: existing.id };
-
-    // The action doesn't carry a phone_number_id; the canonical value is the
-    // conversation's channel_account_id (the Meta phone number the customer
-    // wrote to). Without it the worker cannot send the message at all.
-    let phoneNumberId: string | null = null;
-    if (command.conversationCaseId !== null && command.conversationCaseId !== undefined) {
-      const [convRows] = await this.connection.execute(
-        "SELECT channel_account_id FROM conversation WHERE id = ? LIMIT 1",
-        [command.conversationCaseId]
-      );
-      const convRow = (convRows as Record<string, unknown>[])[0];
-      phoneNumberId = convRow && typeof convRow.channel_account_id === "string" ? convRow.channel_account_id : null;
-    }
-    if (!phoneNumberId) {
-      phoneNumberId = process.env.META_WHATSAPP_DEFAULT_PHONE_NUMBER_ID?.trim() || null;
-    }
-
-    const [result] = await this.connection.execute<ResultSetHeader>(
-      `
-        INSERT IGNORE INTO \`${BRAIN_MESSAGE_OUTBOX_TABLE}\`
-          (
-            dedupe_key, channel, direction, status, source, source_request_id,
-            source_agent_name, source_agent_version, wa_id, phone_number_id,
-            conversation_case_id, message_text, message_hash, meta_payload_json,
-            provider_message_id, error_code, error_message, planned_at, locked_at,
-            sent_at, failed_at, created_at, updated_at
-          )
-        VALUES (?, ?, 'outbound', 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?)
-      `,
-      [
-        command.idempotencyKey,
-        command.channel,
-        command.metadata.source,
-        command.commandId,
-        "sales-agent",
-        command.metadata.runtimeVersion,
-        command.recipient,
-        phoneNumberId,
-        command.conversationCaseId,
-        command.messageText,
-        hashMessageText(command.messageText),
-        asJson({
+    // Delegates to the canonical writer (ACS-R1-05-T04, P1-4) - same INSERT
+    // SQL, same column normalization, same phone_number_id resolution as the
+    // legacy outbox.ts adapter. Passing this.connection keeps the write
+    // inside the unit-of-work's own transaction instead of opening a second one.
+    const result = await writeCanonicalOutboxMessage(
+      {
+        dedupeKey: command.idempotencyKey,
+        status: "planned",
+        source: command.metadata.source,
+        sourceRequestId: command.actionId,
+        sourceAgentName: "sales-agent",
+        sourceAgentVersion: command.metadata.runtimeVersion,
+        waId: command.recipient,
+        phoneNumberId: null,
+        conversationCaseId: command.conversationCaseId,
+        messageText: command.messageText,
+        metaPayloadJson: {
           commandId: command.commandId,
           actionId: command.actionId,
           opportunityId: command.opportunityId,
           decisionId: command.decisionId,
           commandType: command.commandType,
           metadata: command.metadata
-        }),
-        toMysqlDateTime(command.createdAt),
-        toMysqlDateTime(command.createdAt),
-        toMysqlDateTime(command.createdAt)
-      ]
+        },
+        providerMessageId: null,
+        errorCode: null,
+        errorMessage: null,
+        opportunityId: command.opportunityId,
+        plannedAt: command.createdAt
+      },
+      this.connection
     );
 
-    if (result.affectedRows === 0) {
-      const duplicate = await this.findByIdempotencyKey(command.idempotencyKey);
-      return { inserted: false, duplicate: true, rowId: duplicate?.id ?? null };
-    }
-
-    return { inserted: true, duplicate: false, rowId: result.insertId || null };
+    return { inserted: result.inserted, duplicate: result.duplicate, rowId: result.rowId };
   }
 }
 
