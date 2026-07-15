@@ -48,38 +48,39 @@ function parseOptions(): CliOptions {
   };
 }
 
+const LIVE_AUTONOMY_STATUS_FLAGS = [
+  "BRAIN_ENABLE_REAL_MODEL",
+  "BRAIN_SALES_AGENT_ENABLED",
+  "BRAIN_SALES_AGENT_DRY_RUN",
+  "BRAIN_COMMERCIAL_SHADOW_ENABLED",
+  "BRAIN_COMMERCIAL_RUNTIME_ENABLED",
+  "BRAIN_COMMERCIAL_POLICY_ENABLED",
+  "BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER",
+  "BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED",
+  "BRAIN_COMMERCIAL_AUTONOMY_AFTER_CONSULTATIVE_ENABLED",
+  "BRAIN_COMMERCIAL_STATE_PERSISTENCE_ENABLED",
+  "BRAIN_AGENT_ACTION_QUEUE_ENABLED",
+  "BRAIN_AGENT_ACTION_PERSISTENCE_ENABLED",
+  "BRAIN_AUTONOMOUS_SANDBOX_ENABLED",
+  "BRAIN_AUTONOMOUS_REPLY_ENABLED",
+  "BRAIN_EXECUTION_GATE_ENABLED",
+  "BRAIN_OUTBOX_BRIDGE_ENABLED",
+  "BRAIN_EXECUTION_GATE_SANDBOX_REQUIRED"
+] as const;
+
+/** Read-only startup summary so an operator can see what this run will actually do - never mutates process.env. */
+function logLiveAutonomyStatus() {
+  const summary = LIVE_AUTONOMY_STATUS_FLAGS.map((key) => `${key}=${process.env[key]?.trim() || "(unset)"}`).join(" ");
+  console.log(`[autonomy:live] config: ${summary}`);
+}
+
+// ACS-R1-05-T06 (P1-5): this CLI only reads configuration - it never writes
+// to process.env. Every flag below must be set explicitly in .env/.env.local
+// by the operator; an unset flag stays disabled like any other process.
 async function loadRuntimeEnv() {
   await loadLocalEnv();
   await loadEnvFile(path.resolve(PROJECT_ROOT, ".env.local"), false);
   await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), false);
-
-  const defaults: Record<string, string> = {
-    BRAIN_ENABLE_REAL_MODEL: "true",
-    BRAIN_SALES_AGENT_ENABLED: "true",
-    BRAIN_SALES_AGENT_DRY_RUN: "false",
-    BRAIN_COMMERCIAL_SHADOW_ENABLED: "true",
-    BRAIN_COMMERCIAL_RUNTIME_ENABLED: "true",
-    BRAIN_COMMERCIAL_POLICY_ENABLED: "true",
-    BRAIN_COMMERCIAL_SHADOW_TIMEOUT_MS: "60000",
-    BRAIN_COMMERCIAL_CONTEXT_TIMEOUT_MS: "5000",
-    BRAIN_COMMERCIAL_RUNTIME_TIMEOUT_MS: "45000",
-    BRAIN_COMMERCIAL_POLICY_TIMEOUT_MS: "5000",
-    BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER: "true",
-    BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED: "true",
-    BRAIN_COMMERCIAL_AUTONOMY_AFTER_CONSULTATIVE_ENABLED: "true",
-    BRAIN_COMMERCIAL_STATE_PERSISTENCE_ENABLED: "true",
-    BRAIN_AGENT_ACTION_QUEUE_ENABLED: "true",
-    BRAIN_AGENT_ACTION_PERSISTENCE_ENABLED: "true",
-    BRAIN_AUTONOMOUS_SANDBOX_ENABLED: "true",
-    BRAIN_AUTONOMOUS_REPLY_ENABLED: "true",
-    BRAIN_EXECUTION_GATE_ENABLED: "true",
-    BRAIN_OUTBOX_BRIDGE_ENABLED: "true",
-    BRAIN_EXECUTION_GATE_SANDBOX_REQUIRED: "false"
-  };
-
-  for (const [key, value] of Object.entries(defaults)) {
-    if (!process.env[key]) process.env[key] = value;
-  }
 }
 
 function buildInboundRequest(options: CliOptions, index: number) {
@@ -261,6 +262,7 @@ export async function main() {
   if (!process.env.BRAIN_MODEL_NAME) {
     throw new Error("Missing BRAIN_MODEL_NAME. Add the model name to .env.");
   }
+  logLiveAutonomyStatus();
 
   const indexes = Array.from({ length: options.runs }, (_, index) => index + 1);
   const started = Date.now();

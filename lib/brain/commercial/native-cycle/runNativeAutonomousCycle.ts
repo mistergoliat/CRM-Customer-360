@@ -22,6 +22,7 @@ import {
   readEnvFlag
 } from "../config/commercialCycleConfig";
 import { buildNativeBrainContextShim } from "./buildNativeBrainContextShim";
+import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
 import { isMultiRequestRuntimeEnabled, runMultiRequestAutonomousCycle } from "../multi-request";
 import type { MultiRequestCycleResult } from "../multi-request";
 import type { CommercialShadowResult } from "../shadow";
@@ -122,6 +123,18 @@ function dedupeWarnings(values: string[]): string[] {
 export async function runNativeAutonomousCycle(
   input: NativeAutonomousCycleInput
 ): Promise<NativeAutonomousCycleResult> {
+  // Step 0 (ACS-R1-05-T06.1, P1-5 pilot isolation): when BRAIN_AUTONOMOUS_TEST_WA_IDS
+  // is configured, a wa_id outside it gets zero autonomous side effects - no
+  // LLM call, no Customer 360 load, no resolveNativeCustomerSession (which can
+  // call the external Customer Service), no decision/action persistence, no
+  // outbox write. Checked before anything else, for both the legacy and
+  // multi-request runtimes below - an empty allowlist means no restriction is
+  // configured and every existing caller keeps its current behavior.
+  const pilotAllowlist = loadAutonomousPilotAllowlist();
+  if (!isWaIdAuthorizedForPilot(input.waId, pilotAllowlist)) {
+    return { ran: false, reason: "wa_id_not_authorized_for_pilot", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+  }
+
   // Step 1: which runtime, if any, is enabled this turn. Multi-request is
   // authoritative when on - the legacy pipeline below never runs the same
   // turn (checked first, same priority as before ACS-R1-04-T05).

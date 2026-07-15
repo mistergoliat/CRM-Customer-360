@@ -930,3 +930,99 @@ test("stale recovery and terminalization stay correct under a non-UTC session ti
     }
   });
 });
+
+// ACS-R1-05-T06.1 (P1-5 pilot isolation, layer 2). withPilotAllowlist sets
+// BRAIN_AUTONOMOUS_TEST_WA_IDS only for the duration of the callback and
+// always restores the prior value - runFollowupTick reads it fresh from
+// process.env on every call, so tests must never leak it to a sibling test.
+async function withPilotAllowlist<T>(allowlist: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env.BRAIN_AUTONOMOUS_TEST_WA_IDS;
+  process.env.BRAIN_AUTONOMOUS_TEST_WA_IDS = allowlist;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env.BRAIN_AUTONOMOUS_TEST_WA_IDS;
+    else process.env.BRAIN_AUTONOMOUS_TEST_WA_IDS = previous;
+  }
+}
+
+test("[T06.1] an unauthorized wa_id is skipped before any claim - row and attempt_number stay intact, cycle runner never called", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  const before = await loadAction(actionId);
+
+  let calls = 0;
+  const result = await withPilotAllowlist("56900000000", () =>
+    runFollowupTick({
+      limit: 10,
+      actionIds: [actionId],
+      cycleRunner: async (...args) => {
+        calls += 1;
+        return fakeCycleRunner(...args);
+      }
+    })
+  );
+
+  assert.equal(calls, 0);
+  assert.deepEqual(result.skippedUnauthorized, [actionId]);
+  assert.equal(result.executed.length, 0);
+  assert.equal(result.cancelled.length, 0);
+  assert.equal(result.failed.length, 0);
+
+  const after = await loadAction(actionId);
+  assert.equal(after?.status, before?.status);
+  assert.equal(after?.attempt_number, before?.attempt_number);
+  assert.equal(after?.cancel_reason, before?.cancel_reason);
+});
+
+test("[T06.1] a mixed batch executes the authorized wa_id and leaves the unauthorized one completely untouched", async () => {
+  const authorizedConversation = await seedConversation();
+  const unauthorizedConversation = await seedConversation();
+  const authorizedActionId = await scheduleFollowUpAction({ conversationId: authorizedConversation.id, waId: authorizedConversation.waId });
+  const unauthorizedActionId = await scheduleFollowUpAction({ conversationId: unauthorizedConversation.id, waId: unauthorizedConversation.waId });
+  const unauthorizedBefore = await loadAction(unauthorizedActionId);
+
+  let calls = 0;
+  const result = await withPilotAllowlist(authorizedConversation.waId, () =>
+    runFollowupTick({
+      limit: 10,
+      actionIds: [authorizedActionId, unauthorizedActionId],
+      cycleRunner: async (...args) => {
+        calls += 1;
+        return fakeCycleRunner(...args);
+      }
+    })
+  );
+
+  assert.equal(calls, 1);
+  assert.deepEqual(result.executed, [authorizedActionId]);
+  assert.deepEqual(result.skippedUnauthorized, [unauthorizedActionId]);
+
+  const authorizedAfter = await loadAction(authorizedActionId);
+  assert.equal(authorizedAfter?.status, "executed");
+
+  const unauthorizedAfter = await loadAction(unauthorizedActionId);
+  assert.equal(unauthorizedAfter?.status, unauthorizedBefore?.status);
+  assert.equal(unauthorizedAfter?.attempt_number, unauthorizedBefore?.attempt_number);
+});
+
+test("[T06.1] an empty pilot allowlist keeps existing unrestricted behavior (no regression for callers that never configure it)", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+
+  let calls = 0;
+  const result = await withPilotAllowlist("", () =>
+    runFollowupTick({
+      limit: 10,
+      actionIds: [actionId],
+      cycleRunner: async (...args) => {
+        calls += 1;
+        return fakeCycleRunner(...args);
+      }
+    })
+  );
+
+  assert.equal(calls, 1);
+  assert.deepEqual(result.executed, [actionId]);
+  assert.equal(result.skippedUnauthorized.length, 0);
+});

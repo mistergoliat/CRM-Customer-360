@@ -1,5 +1,7 @@
 import { safeExecute, safeQueryRows } from "@/lib/db";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
+import { redactErrorMessage } from "@/lib/brain/commercial/redactErrorMessage";
+import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
 import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON, hasAttemptsRemaining } from "./followUpWorkerPolicy";
 
 /**
@@ -49,6 +51,8 @@ export type FollowupTickResult = {
   cancelled: Array<{ actionId: string; reason: string }>;
   executed: string[];
   failed: string[];
+  /** ACS-R1-05-T06.1: candidates skipped for pilot isolation - row and attempt_number left untouched, never claimed. */
+  skippedUnauthorized: string[];
 };
 
 export type FollowupTickOptions = {
@@ -252,12 +256,24 @@ export async function shouldCancelFollowUp(candidate: FollowUpCandidate): Promis
 export async function runFollowupTick(options: FollowupTickOptions): Promise<FollowupTickResult> {
   const log = options.log ?? (() => void 0);
   const cycleRunner = options.cycleRunner ?? runNativeAutonomousCycle;
-  const result: FollowupTickResult = { processed: 0, cancelled: [], executed: [], failed: [] };
+  const result: FollowupTickResult = { processed: 0, cancelled: [], executed: [], failed: [], skippedUnauthorized: [] };
 
   const candidates = await selectDueFollowUps(options.limit, options.actionIds);
   if (candidates.length === 0) return result;
 
+  // ACS-R1-05-T06.1 (P1-5 pilot isolation): read once per tick, never mutates
+  // process.env. A candidate whose wa_id isn't allowlisted is skipped before
+  // any claim CAS runs - the row and its attempt_number stay exactly as they
+  // were, never touched, unlike a cancellation (which writes cancel_reason).
+  const pilotAllowlist = loadAutonomousPilotAllowlist();
+
   for (const candidate of candidates) {
+    if (!isWaIdAuthorizedForPilot(candidate.wa_id, pilotAllowlist)) {
+      log(`[worker:followup] skipping unauthorized wa_id for action ${candidate.action_id} (pilot allowlist)`);
+      result.skippedUnauthorized.push(candidate.action_id);
+      continue;
+    }
+
     if (options.dryRun) {
       log(`[worker:followup] DRY RUN — would process action ${candidate.action_id} (origin status=${candidate.status})`);
       result.processed++;
@@ -341,14 +357,15 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
       result.executed.push(candidate.action_id);
       result.processed++;
     } catch (error) {
-      log(`[worker:followup] error for action ${candidate.action_id}: ${error instanceof Error ? error.message : String(error)}`);
+      const safeMessage = redactErrorMessage(error) || "unknown";
+      log(`[worker:followup] error for action ${candidate.action_id}: ${safeMessage}`);
       // Terminal vs retryable is decided at the next claim attempt (P0-3's
       // attempt_number < max_attempts precondition), not by a distinct status
       // here - a row that ran out of attempts simply never matches that
       // precondition again.
       await safeQueryRows(
         `UPDATE crm_agent_actions SET status = 'failed', failure_reason = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ? AND status = 'executing'`,
-        [error instanceof Error ? error.message : "unknown", candidate.action_id]
+        [safeMessage, candidate.action_id]
       );
       result.failed.push(candidate.action_id);
     }

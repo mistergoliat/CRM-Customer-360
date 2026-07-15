@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { safeExecute, safeQueryRows } from "../../../db";
+import { redactErrorMessage } from "../redactErrorMessage";
 
 const EXECUTIONS_TABLE = "crm_action_executions";
 const OUTCOMES_TABLE = "crm_action_outcomes";
@@ -187,13 +188,14 @@ export async function markActionFailed(
   errorCode: string | null,
   errorMessage: string | null
 ): Promise<void> {
+  const safeMessage = errorMessage ? redactErrorMessage(errorMessage) : errorMessage;
   await safeQueryRows(
     `UPDATE \`${ACTIONS_TABLE}\`
       SET status = 'failed',
           failure_reason = ?,
           updated_at = CURRENT_TIMESTAMP(3)
       WHERE action_id = ? AND status IN ('proposed','planned','approved')`,
-    [errorCode ? `${errorCode}: ${errorMessage ?? ""}` : errorMessage, actionId]
+    [errorCode ? `${errorCode}: ${safeMessage ?? ""}` : safeMessage, actionId]
   );
 }
 
