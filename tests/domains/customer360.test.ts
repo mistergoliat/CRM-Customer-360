@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { NextResponse } from "next/server";
 import { createCustomer360QueryService, createLifecycleEventAssembler, type AddressBookPortResult, type Customer360AddressItem, type Customer360ProfileProjection, type Customer360Section, type CustomerProfilePortResult, type Customer360Snapshot } from "../../lib/domains/customer-360";
-import { createCustomer360GetHandler } from "../../app/api/customers/[id]/360/route";
+import { createCustomer360GetHandler } from "../../app/api/customers/[id]/360/handler";
 
 function section<T>(source: string, items: T[], state: "real" | "partial" | "unavailable" | "error" = "real"): Customer360Section<T> {
   return {
