@@ -3,9 +3,9 @@ release: ACS-R1-05
 title: Autonomous Follow-up Runtime
 doc_id: release-acs-r1-05-autonomous-follow-up-runtime
 status: parallel_in_progress
-updated_at: 2026-07-14
-current_task: ACS-R1-05-T04
-next_task: ACS-R1-05-T05
+updated_at: 2026-07-15
+current_task: ACS-R1-05-T05
+next_task: ACS-R1-05-T06
 blocked: false
 owner: product
 source_of_truth_for:
@@ -65,22 +65,36 @@ Esta release no redefine hallazgos: el alcance completo, la matriz de clasificac
 | ACS-R1-05-T01 | Consolidar planner y persistencia | done | [Follow-up runtime reconciliation](../audits/follow-up-runtime-reconciliation.md) | P0-1 (hardcodes `attempt_number`/`max_attempts`/`policy_status`, idempotency key sin scope temporal); consolida `follow-up-planner/planFollowUp.ts` como fuente de calculo para `sales-consultative/repository.ts` |
 | ACS-R1-05-T02 | Aplicar follow-up dispatch policy | done | ACS-R1-05-T01 | P0-4 (opt-out/quiet-hours/identity-conflict shadow-only, nunca gatean el write real); conecta `follow_up_dispatch_policy` (`evaluateCommercialPolicy`) como gate obligatorio antes de `upsertActionRow` |
 | ACS-R1-05-T03 | Hardening del worker | done | ACS-R1-05-T01 | P0-2 (sin stale-lock recovery), P0-3 (sin retry/enforcement de `max_attempts`), P1-1 (`cancelFollowUp` sin precondicion de status) |
-| ACS-R1-05-T04 | Consolidar outbox y delivery outcomes | in_progress | ACS-R1-05-T01 | P1-3 (delivery outcomes no llegan a `crm_opportunities`), P1-4 (dos escritores divergentes de `brain_message_outbox`) |
-| ACS-R1-05-T05 | Aislar runtimes paralelos o muertos | ready | ACS-R1-05-T01 | P2-1 (5 planners paralelos), P2-2 (`multi-request/requestFollowups.ts` muerto), P2-5 (modulo `outbox-worker/` hyphenated duplicado) |
+| ACS-R1-05-T04 | Consolidar outbox y delivery outcomes | done | ACS-R1-05-T01 | P1-3 (delivery outcomes no llegan a `crm_opportunities`), P1-4 (dos escritores divergentes de `brain_message_outbox`) |
+| ACS-R1-05-T05 | Aislar runtimes paralelos o muertos | in_progress | ACS-R1-05-T01 | P2-1 (5 planners paralelos), P2-2 (`multi-request/requestFollowups.ts` muerto), P2-5 (modulo `outbox-worker/` hyphenated duplicado) |
 | ACS-R1-05-T06 | Seguridad y configuracion operacional | ready | ACS-R1-05-T01 | P1-2 (`failure_reason` sin redactar), P1-5 (flags auto-escalados en silencio por los dos workers) |
 | ACS-R1-05-T07 | E2E productivo y restart recovery | ready | ACS-R1-05-T01 a T06 | Cierra la release: verifica end-to-end (patron del harness existente de identity onboarding) que el runtime consolidado sostiene reinicio/retry sin duplicar ni perder envios |
 
 ## Tarea actual
 
-`ACS-R1-05-T04`
+`ACS-R1-05-T05`
 
 ## Definition of Done de la tarea actual
 
-`ACS-R1-05-T04` debe consolidar los dos escritores divergentes de `brain_message_outbox` (`outbox.ts`'s `createOutboxPlannedRecord` y `execution-gate/sqlExecutionUnitOfWork.ts`'s `SqlOutboxRepository.insertCommand`) en un unico writer (P1-4), y extender `applyMetaDeliveryStatus` (`native-whatsapp/service.ts`) para que los delivery outcomes lleguen hasta `crm_opportunities`, hoy un dead-end en `crm_action_outcomes`/`brain_message_outbox` (P1-3). Debe reutilizar - sin reabrirlo - el hardening del worker que T03 cerro (stale-lock recovery, retry de `failed`, precondicion de `cancelFollowUp`).
+`ACS-R1-05-T05` debe aislar o eliminar el codigo muerto/paralelo identificado por la auditoria: `multi-request/requestFollowups.ts` (cero callers productivos), la familia `autonomous-loop` relativa a produccion, y el modulo `outbox-worker/` hyphenated (alcanzable solo desde el simulador `/dev`); y reconciliar `ai-sdr-follow-up-planner.md`/`follow-up-decision-policy.md` con la implementacion real (`sales-consultative`).
 
 ## Siguiente tarea
 
-`ACS-R1-05-T05` (`ready`, no iniciada - depende de que T01 haya cerrado, ya satisfecho)
+`ACS-R1-05-T06` (`ready`, no iniciada - depende de que T01 haya cerrado, ya satisfecho)
+
+## Evidencia de cierre - ACS-R1-05-T04
+
+- Estado: `done`.
+- SHA funcional: ver seccion de commits de `ACTIVE_RELEASE.md`. Rama `acs-r1-05-t04-outbox-delivery-outcomes`.
+- Archivos funcionales: `lib/brain/messaging/canonicalOutboxWriter.ts` (nuevo - unico writer de `brain_message_outbox`), `lib/brain/messaging/outbox.ts` (`createOutboxPlannedRecord` delega, sin SQL propio), `lib/brain/commercial/execution-gate/sqlExecutionUnitOfWork.ts` (`SqlOutboxRepository.insertCommand` delega, sin SQL propio), `lib/brain/commercial/action-queue/persistActionOutcome.ts` (dedupe key deterministico + insercion idempotente), `lib/brain/commercial/delivery/deliveryStatusProjection.ts` (nuevo - `shouldProjectDeliveryStatus` centralizado), `lib/brain/native-whatsapp/service.ts` (`applyMetaDeliveryStatus` reestructurado, resolucion de oportunidad, proyeccion CAS), `lib/brain/commercial/sales-consultative/repository.ts` (`queueCustomerMessageRecord` ahora envia `opportunityId`), `lib/brain/messaging/autonomousOutboxTick.ts` (outcome `sent`/`failed` con dedupe key y atribucion de experimento), `migrations/025_action_outcome_idempotency_and_opportunity_delivery_projection.sql`.
+- **P1-4 (writer canonico)**: `createOutboxPlannedRecord` (`outbox.ts`) y `SqlOutboxRepository.insertCommand` (`sqlExecutionUnitOfWork.ts`) delegan ambos a `writeCanonicalOutboxMessage` - una sola sentencia `INSERT IGNORE`, una sola normalizacion de columnas, una sola resolucion de `phone_number_id` (explicito -> `conversation.channel_account_id` -> `META_WHATSAPP_DEFAULT_PHONE_NUMBER_ID`). Verificado por `rg -n "INSERT( IGNORE)? INTO.*BRAIN_MESSAGE_OUTBOX_TABLE" lib scripts app`: una sola coincidencia productiva (`canonicalOutboxWriter.ts`). El writer acepta una `PoolConnection` opcional - `SqlOutboxRepository` la pasa para participar en la transaccion del execution gate (sin abrir una segunda conexion); `createOutboxPlannedRecord` la omite y usa una conexion propia. Cada adapter conserva su propio esquema de `dedupe_key` (hash de `outbox.ts`, `commandId` de execution-gate) - la consolidacion es de SQL/columnas/concurrencia, no una clave unica forzada entre dos dominios de accion distintos que hoy nunca colisionan.
+- **P1-3 (proyeccion hasta opportunity)**: `applyMetaDeliveryStatus` reestructurado en los pasos del contrato (resolver mensaje/outbox/accion/oportunidad -> construir idempotency key -> persistir outcome append-only -> proyectar mensaje/outbox/oportunidad monotonicamente -> evento -> auditoria -> resultado estructurado). La oportunidad se resuelve por prioridad: `meta_payload_json.opportunity_id` del outbox (escrito por el writer canonico cuando el caller lo conoce) y, si falta, `crm_agent_actions.opportunity_id` via el `action_id` enlazado al outbox - nunca "la oportunidad activa actual de la conversacion". `crm_opportunities` gana cuatro columnas nuevas (`last_outbound_outbox_message_id`, `last_outbound_provider_message_id`, `last_outbound_delivery_status`, `last_outbound_delivery_status_at`, migracion 025) actualizadas por un CAS de lectura-mas-`UPDATE ... WHERE last_outbound_outbox_message_id <=> ?` que nunca deja sobrescribir la proyeccion de un mensaje outbound mas nuevo con un webhook de uno mas viejo, y nunca toca `status`/`stage`/`temperature`/`priority`/`waiting_for`/`next_action_type`/`next_action_due_at`.
+- **Idempotencia de outcomes**: `crm_action_outcomes.outcome_dedupe_key` (VARCHAR(64), UNIQUE, nullable - migracion 025) es `sha256("delivery|meta|<provider_message_id>|<outcome_type>")`, construido por `buildDeliveryOutcomeDedupeKey` y usado tanto por el camino de exito HTTP (`autonomousOutboxTick.ts`, outcome `sent` inmediatamente al aceptar Meta) como por el webhook (`recordDeliveryOutcome`) - un webhook `sent` posterior para el mismo mensaje resuelve a la misma fila via `INSERT IGNORE` + re-seleccion, nunca una segunda fila. `outcome_id` sigue siendo un UUID aleatorio (identidad externa), pero ya no es lo que garantiza unicidad. Outcomes sin `provider_message_id` (fallo de envio antes de que Meta asigne uno) se insertan con `outcome_dedupe_key = NULL`, permitido por el indice unico nullable, sin romper la lectura de outcomes legacy sin clave.
+- **Historial append-only vs proyeccion monotonica**: `shouldProjectDeliveryStatus` (`deliveryStatusProjection.ts`) es ahora la unica funcion de ranking, reutilizada por `conversation_message`, `brain_message_outbox` y `crm_opportunities` - antes vivia solo en `native-whatsapp/service.ts`. El registro del outcome ya NO esta condicionado a que la proyeccion avance (a diferencia del codigo previo a T04): un evento `delivered` tardio se registra como outcome aunque la proyeccion ya este en `read`, cumpliendo el requisito de historial completo independiente de la proyeccion visible.
+- **Manejo de fallos**: la persistencia del outcome es el paso principal - una falla real de DB hace fallar toda la llamada (`{ok:false, warning:"outcome_persist_failed:..."}"`), reemplazando el `.catch(() => void 0)` previo que la silenciaba. Las proyecciones de mensaje/outbox/oportunidad son secundarias y best-effort, cada una reportada en el resultado estructurado (`messageProjectionApplied`, `outboxProjectionApplied`, `opportunityProjectionApplied`, `opportunityId`, `warning`).
+- **Trazabilidad de A/B testing**: el writer canonico acepta `experiment` opcional (`experimentId`/`variantId`/`templateId`/`promptVersion`/`contentHash`), plegado en `meta_payload_json.experiment`; al registrar cualquier outcome, esa atribucion se copia a `crm_action_outcomes.metadata_json.experiment` (`extractDeliveryExperimentAttribution`). No se implemento asignador de variantes, calculo estadistico ni UI - solo la trazabilidad hasta outcomes, tal como exige el alcance de T04.
+- No reabre el hardening del worker cerrado en T03 (`runFollowupTick.ts`, `followUpWorkerPolicy.ts` sin cambios); no toca `ACS-R1-04`; no declara el runtime `operational: verified`.
+- Tests: 26 tests nuevos con MariaDB real (`tests/commercial/canonicalOutboxWriter.test.ts` 10/10, `tests/commercial/deliveryOutcomeProjection.test.ts` 16/16) mas 282/282 en regresion combinada (outbox-ownership, native-whatsapp, execution gate, sales-consultative, follow-up T01/T02/T03, action queue, outbox worker simulador). `npm run e2e:autonomous` comparado explicitamente contra el mismo commit base sin los cambios de T04 (via `git stash`): identico en ambos casos (`PASS:8, PARTIAL:1 [A], FAIL:1 [H]`) - ningun fallo es atribuible a T04.
 
 ## Evidencia de cierre - ACS-R1-05-T03
 
