@@ -45,30 +45,38 @@ function readBoolArg(name: string, fallback = false): boolean {
   return raw.toLowerCase() !== "false" && raw !== "0";
 }
 
+// ACS-R1-05-T06 (P1-5): this worker only reads configuration - it never
+// writes to process.env. Re-entering the autonomous cycle on each due
+// follow-up requires the operator to explicitly enable the commercial
+// pipeline (BRAIN_SALES_AGENT_ENABLED, BRAIN_COMMERCIAL_*, BRAIN_EXECUTION_
+// GATE_ENABLED, BRAIN_OUTBOX_BRIDGE_ENABLED, etc.) in .env/.env.local
+// themselves; an unset flag stays disabled, same as any other process.
 async function loadRuntimeEnv() {
   await loadLocalEnv();
   await loadEnvFile(path.resolve(PROJECT_ROOT, ".env.local"), false);
   await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), false);
+}
 
-  // Follow-up worker enables the full autonomous cycle for each re-entry
-  const overrides: Record<string, string> = {
-    BRAIN_SALES_AGENT_ENABLED: "true",
-    BRAIN_SALES_AGENT_DRY_RUN: "false",
-    BRAIN_COMMERCIAL_SHADOW_ENABLED: "true",
-    BRAIN_COMMERCIAL_RUNTIME_ENABLED: "true",
-    BRAIN_COMMERCIAL_POLICY_ENABLED: "true",
-    BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER: "true",
-    BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED: "true",
-    BRAIN_COMMERCIAL_STATE_PERSISTENCE_ENABLED: "true",
-    BRAIN_AGENT_ACTION_QUEUE_ENABLED: "true",
-    BRAIN_AGENT_ACTION_PERSISTENCE_ENABLED: "true",
-    BRAIN_EXECUTION_GATE_ENABLED: "true",
-    BRAIN_OUTBOX_BRIDGE_ENABLED: "true",
-    BRAIN_AUTONOMOUS_REPLY_ENABLED: "true"
-  };
-  for (const [key, value] of Object.entries(overrides)) {
-    if (!process.env[key]) process.env[key] = value;
-  }
+const AUTONOMOUS_CYCLE_STATUS_FLAGS = [
+  "BRAIN_SALES_AGENT_ENABLED",
+  "BRAIN_SALES_AGENT_DRY_RUN",
+  "BRAIN_COMMERCIAL_SHADOW_ENABLED",
+  "BRAIN_COMMERCIAL_RUNTIME_ENABLED",
+  "BRAIN_COMMERCIAL_POLICY_ENABLED",
+  "BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER",
+  "BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED",
+  "BRAIN_COMMERCIAL_STATE_PERSISTENCE_ENABLED",
+  "BRAIN_AGENT_ACTION_QUEUE_ENABLED",
+  "BRAIN_AGENT_ACTION_PERSISTENCE_ENABLED",
+  "BRAIN_EXECUTION_GATE_ENABLED",
+  "BRAIN_OUTBOX_BRIDGE_ENABLED",
+  "BRAIN_AUTONOMOUS_REPLY_ENABLED"
+] as const;
+
+/** Read-only startup summary so an operator can see what the re-entered cycle will actually do - never mutates process.env. */
+function logAutonomousCycleStatus() {
+  const summary = AUTONOMOUS_CYCLE_STATUS_FLAGS.map((key) => `${key}=${process.env[key]?.trim() || "(unset)"}`).join(" ");
+  console.log(`[worker:followup] autonomous cycle config: ${summary}`);
 }
 
 let workerRunning = true;
@@ -108,6 +116,7 @@ async function main() {
   const dryRun = readBoolArg("dry-run", false);
 
   console.log(`[worker:followup] starting — pollMs=${pollMs} limit=${limit} dryRun=${dryRun}`);
+  logAutonomousCycleStatus();
 
   process.on("SIGINT", () => void closeGracefully());
   process.on("SIGTERM", () => void closeGracefully());

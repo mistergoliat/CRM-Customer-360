@@ -23,6 +23,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { loadLocalEnv, loadEnvFile, PROJECT_ROOT } from "./db-utils";
+import { loadOutboxWorkerRuntimeConfig, assertOutboxWorkerRuntimeConfigIsSafe } from "../lib/brain/runtime/autonomousRuntimeConfig";
 
 const DEFAULT_BATCH_SIZE = 5;
 const DEFAULT_POLL_MS = 4000;
@@ -48,20 +49,16 @@ function readBoolArg(name: string, fallback = false): boolean {
   return raw.toLowerCase() !== "false" && raw !== "0";
 }
 
+// ACS-R1-05-T06 (P1-5): this worker only reads configuration - it never
+// writes to process.env, and an absent flag stays disabled. Real Meta send
+// requires the operator to explicitly set BRAIN_META_SEND_ENABLED (and,
+// per the pilot contract below, BRAIN_OUTBOX_WORKER_ENABLED/
+// BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND + a non-empty allowlist) in
+// .env/.env.local themselves.
 async function loadRuntimeEnv() {
   await loadLocalEnv();
   await loadEnvFile(path.resolve(PROJECT_ROOT, ".env.local"), false);
   await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), false);
-
-  const overrides: Record<string, string> = {
-    BRAIN_META_SEND_ENABLED: "true",
-    BRAIN_OUTBOX_WORKER_ENABLED: "true",
-    BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND: "true",
-    BRAIN_PERSIST_CANONICAL_OUTBOUND: "true"
-  };
-  for (const [key, value] of Object.entries(overrides)) {
-    if (!process.env[key]) process.env[key] = value;
-  }
 }
 
 let workerRunning = true;
@@ -108,17 +105,23 @@ async function runTick(options: {
 async function main() {
   await loadRuntimeEnv();
 
+  // Fail closed at startup, not per-message: real send authorized with an
+  // empty allowlist is invalid pilot configuration, never "send to everyone".
+  const runtimeConfig = loadOutboxWorkerRuntimeConfig();
+  assertOutboxWorkerRuntimeConfigIsSafe(runtimeConfig);
+
   const batchSize = readIntArg("batch-size", DEFAULT_BATCH_SIZE);
   const pollMs = readIntArg("poll-ms", DEFAULT_POLL_MS);
   const lockSeconds = readIntArg("lock-seconds", DEFAULT_LOCK_SECONDS);
   const dryRun = readBoolArg("dry-run", false);
-  const allowedWaIds = (process.env.BRAIN_AUTONOMOUS_TEST_WA_IDS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const allowedWaIds = runtimeConfig.autonomousTestWaIds;
   const workerId = `outbox-worker-${randomUUID().slice(0, 8)}`;
 
-  console.log(`[worker:outbox] starting workerId=${workerId} batchSize=${batchSize} pollMs=${pollMs} dryRun=${dryRun}`);
+  console.log(
+    `[worker:outbox] starting workerId=${workerId} batchSize=${batchSize} pollMs=${pollMs} dryRun=${dryRun} ` +
+      `outboxWorkerEnabled=${runtimeConfig.outboxWorkerEnabled} metaSendEnabled=${runtimeConfig.metaSendEnabled} ` +
+      `allowRealSend=${runtimeConfig.outboxWorkerAllowRealSend}`
+  );
   if (allowedWaIds.length > 0) {
     console.log(`[worker:outbox] allowlist: ${allowedWaIds.join(", ")}`);
   } else {

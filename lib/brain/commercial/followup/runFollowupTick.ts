@@ -1,5 +1,6 @@
 import { safeExecute, safeQueryRows } from "@/lib/db";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
+import { redactErrorMessage } from "@/lib/brain/commercial/redactErrorMessage";
 import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON, hasAttemptsRemaining } from "./followUpWorkerPolicy";
 
 /**
@@ -341,14 +342,15 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
       result.executed.push(candidate.action_id);
       result.processed++;
     } catch (error) {
-      log(`[worker:followup] error for action ${candidate.action_id}: ${error instanceof Error ? error.message : String(error)}`);
+      const safeMessage = redactErrorMessage(error) || "unknown";
+      log(`[worker:followup] error for action ${candidate.action_id}: ${safeMessage}`);
       // Terminal vs retryable is decided at the next claim attempt (P0-3's
       // attempt_number < max_attempts precondition), not by a distinct status
       // here - a row that ran out of attempts simply never matches that
       // precondition again.
       await safeQueryRows(
         `UPDATE crm_agent_actions SET status = 'failed', failure_reason = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ? AND status = 'executing'`,
-        [error instanceof Error ? error.message : "unknown", candidate.action_id]
+        [safeMessage, candidate.action_id]
       );
       result.failed.push(candidate.action_id);
     }
