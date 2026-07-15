@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test, { after } from "node:test";
 import { getPool, safeExecute, safeQueryRows } from "@/lib/db";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
-import { runFollowupTick, selectDueFollowUps, shouldCancelFollowUp } from "@/lib/brain/commercial/followup/runFollowupTick";
+import {
+  runFollowupTick,
+  selectDueFollowUps,
+  shouldCancelFollowUp,
+  cancelFollowUp,
+  claimPlannedFollowUp
+} from "@/lib/brain/commercial/followup/runFollowupTick";
+import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS } from "@/lib/brain/commercial/followup/followUpWorkerPolicy";
 import type { runNativeAutonomousCycle, NativeAutonomousCycleResult } from "@/lib/brain/commercial/native-cycle";
 
 Object.assign(process.env, {
@@ -98,12 +105,46 @@ async function scheduleFollowUpAction(input: {
 }
 
 async function loadAction(actionId: string) {
-  const result = await safeQueryRows<{ status: string; cancel_reason: string | null; failure_reason: string | null }>(
-    "SELECT status, cancel_reason, failure_reason FROM crm_agent_actions WHERE action_id = ? LIMIT 1",
+  const result = await safeQueryRows<{
+    status: string;
+    cancel_reason: string | null;
+    failure_reason: string | null;
+    attempt_number: number;
+    max_attempts: number;
+  }>(
+    "SELECT status, cancel_reason, failure_reason, attempt_number, max_attempts FROM crm_agent_actions WHERE action_id = ? LIMIT 1",
     [actionId]
   );
   assert.ok(result.ok, result.ok ? "" : result.error);
   return result.rows[0] ?? null;
+}
+
+// Directly mutates state that the application code paths cannot normally
+// reach in a single call (a backdated updated_at for staleness, or an
+// arbitrary attempt_number/max_attempts/status combination) so tests can
+// exercise the worker's recovery/retry/cancellation preconditions in
+// isolation, without depending on real elapsed time.
+async function setActionState(
+  actionId: string,
+  input: { status: string; attemptNumber?: number; maxAttempts?: number; updatedAt?: Date }
+): Promise<void> {
+  const updatedAt = input.updatedAt ?? new Date();
+  const result = await safeExecute(
+    `UPDATE crm_agent_actions
+      SET status = ?,
+          attempt_number = COALESCE(?, attempt_number),
+          max_attempts = COALESCE(?, max_attempts),
+          updated_at = ?
+      WHERE action_id = ?`,
+    [
+      input.status,
+      input.attemptNumber ?? null,
+      input.maxAttempts ?? null,
+      updatedAt.toISOString().slice(0, 19).replace("T", " "),
+      actionId
+    ]
+  );
+  assert.ok(result.ok, result.ok ? "" : result.error);
 }
 
 test("a due follow-up executes exactly once through the injected cycle runner", async () => {
@@ -273,4 +314,313 @@ test("shouldCancelFollowUp reports no cancellation for a healthy, still-relevant
   const rows = await selectDueFollowUps(50, [actionId]);
   const decision = await shouldCancelFollowUp(rows[0]);
   assert.equal(decision.cancel, false);
+});
+
+// ---------------------------------------------------------------------------
+// ACS-R1-05-T03: stale-lock recovery (P0-2)
+// ---------------------------------------------------------------------------
+
+test("a recently-locked executing action is not recovered as stale", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  await setActionState(actionId, { status: "executing", attemptNumber: 1, maxAttempts: 3, updatedAt: new Date() });
+
+  let calls = 0;
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    cycleRunner: async (...args) => {
+      calls += 1;
+      return fakeCycleRunner(...args);
+    }
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(result.executed.length, 0);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "executing");
+});
+
+test("a stale-locked executing action with attempts remaining is recovered and executes", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  const staleUpdatedAt = new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
+  await setActionState(actionId, { status: "executing", attemptNumber: 1, maxAttempts: 3, updatedAt: staleUpdatedAt });
+
+  let calls = 0;
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    cycleRunner: async (...args) => {
+      calls += 1;
+      return fakeCycleRunner(...args);
+    }
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(result.executed, [actionId]);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "executed");
+  // Recovery resumes the same in-flight attempt; it is not a new commercial
+  // attempt, so attempt_number is unchanged by the recovery itself.
+  assert.equal(row?.attempt_number, 1);
+});
+
+test("a stale-locked executing action with no attempts remaining is never recovered", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  const staleUpdatedAt = new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
+  await setActionState(actionId, { status: "executing", attemptNumber: 3, maxAttempts: 3, updatedAt: staleUpdatedAt });
+
+  let calls = 0;
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    cycleRunner: async (...args) => {
+      calls += 1;
+      return fakeCycleRunner(...args);
+    }
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(result.executed.length, 0);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "executing");
+  assert.equal(row?.attempt_number, 3);
+});
+
+test("two concurrent ticks racing to recover the same stale-locked action: only one recovers it", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  const staleUpdatedAt = new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
+  await setActionState(actionId, { status: "executing", attemptNumber: 1, maxAttempts: 3, updatedAt: staleUpdatedAt });
+
+  let calls = 0;
+  const runOnce = () =>
+    runFollowupTick({
+      limit: 10,
+      actionIds: [actionId],
+      cycleRunner: async (...args) => {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return fakeCycleRunner(...args);
+      }
+    });
+
+  const [a, b] = await Promise.all([runOnce(), runOnce()]);
+  assert.equal(calls, 1);
+  assert.equal(a.executed.length + b.executed.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// ACS-R1-05-T03: retry of failed actions with max_attempts enforcement (P0-3)
+// ---------------------------------------------------------------------------
+
+test("a failed action with attempts remaining is retried and attempt_number is incremented exactly once", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  await setActionState(actionId, { status: "failed", attemptNumber: 1, maxAttempts: 3 });
+
+  let calls = 0;
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    cycleRunner: async (...args) => {
+      calls += 1;
+      return fakeCycleRunner(...args);
+    }
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(result.executed, [actionId]);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "executed");
+  assert.equal(row?.attempt_number, 2);
+});
+
+test("a failed action at max_attempts is never retried", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  await setActionState(actionId, { status: "failed", attemptNumber: 3, maxAttempts: 3 });
+
+  let calls = 0;
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    cycleRunner: async (...args) => {
+      calls += 1;
+      return fakeCycleRunner(...args);
+    }
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(result.executed.length, 0);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "failed");
+  assert.equal(row?.attempt_number, 3);
+});
+
+test("a cycle failure with attempts remaining leaves the action retryable", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  await setActionState(actionId, { status: "planned", attemptNumber: 1, maxAttempts: 3 });
+
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    cycleRunner: async () => {
+      throw new Error("boom");
+    }
+  });
+
+  assert.deepEqual(result.failed, [actionId]);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "failed");
+
+  const due = await selectDueFollowUps(50, [actionId]);
+  assert.equal(due.length, 1);
+});
+
+test("a cycle failure at max_attempts leaves the action terminal", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  // Default attempt_number/max_attempts from scheduleFollowUpAction is 1/1.
+
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    cycleRunner: async () => {
+      throw new Error("boom");
+    }
+  });
+
+  assert.deepEqual(result.failed, [actionId]);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "failed");
+
+  const due = await selectDueFollowUps(50, [actionId]);
+  assert.equal(due.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// ACS-R1-05-T03: cancelFollowUp status precondition (P1-1)
+// ---------------------------------------------------------------------------
+
+test("cancelFollowUp cancels a planned action", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+
+  const outcome = await cancelFollowUp(actionId, "manual_test_reason");
+  assert.equal(outcome.cancelled, true);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "cancelled");
+  assert.equal(row?.cancel_reason, "manual_test_reason");
+});
+
+test("cancelFollowUp cancels a failed, still-retryable action", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  await setActionState(actionId, { status: "failed", attemptNumber: 1, maxAttempts: 3 });
+
+  const outcome = await cancelFollowUp(actionId, "manual_test_reason");
+  assert.equal(outcome.cancelled, true);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "cancelled");
+});
+
+test("cancelFollowUp never cancels an executing action", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  await setActionState(actionId, { status: "executing", attemptNumber: 1, maxAttempts: 3 });
+
+  const outcome = await cancelFollowUp(actionId, "manual_test_reason");
+  assert.equal(outcome.cancelled, false);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "executing");
+});
+
+test("a race between cancellation and claim on a planned action: only one transition wins", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+
+  const [cancelOutcome, claimed] = await Promise.all([
+    cancelFollowUp(actionId, "race_test"),
+    claimPlannedFollowUp(actionId)
+  ]);
+
+  // Exactly one of the two competing transitions may have won.
+  assert.equal(cancelOutcome.cancelled !== claimed, true);
+  const row = await loadAction(actionId);
+  if (cancelOutcome.cancelled) {
+    assert.equal(row?.status, "cancelled");
+  } else {
+    assert.equal(row?.status, "executing");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ACS-R1-05-T03: candidate scoping invariants
+// ---------------------------------------------------------------------------
+
+test("a requires_review action is never selected or executed by the follow-up tick", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  await setActionState(actionId, { status: "requires_review" });
+
+  const due = await selectDueFollowUps(50, [actionId]);
+  assert.equal(due.length, 0);
+
+  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  assert.equal(result.processed, 0);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "requires_review");
+});
+
+test("an action of a different action_type is never touched by the follow-up tick", async () => {
+  const conversation = await seedConversation();
+  const actionId = `action-${uniqueSuffix("other-type")}`;
+  const insert = await safeExecute(
+    `INSERT INTO crm_agent_actions (
+        action_id, idempotency_key, conversation_case_id, wa_id, channel,
+        action_type, status, draft_message, scheduled_for, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'whatsapp', 'send_whatsapp_reply', 'planned', ?, ?, NOW(), NOW())`,
+    [
+      actionId,
+      actionId,
+      conversation.id,
+      conversation.waId,
+      "hola",
+      new Date(Date.now() - 60_000).toISOString().slice(0, 19).replace("T", " ")
+    ]
+  );
+  assert.ok(insert.ok, insert.ok ? "" : insert.error);
+
+  const due = await selectDueFollowUps(50, [actionId]);
+  assert.equal(due.length, 0);
+
+  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  assert.equal(result.processed, 0);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "planned");
+});
+
+test("a second tick does not duplicate execution of an already-executed action", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+
+  let calls = 0;
+  const cycleRunner: typeof runNativeAutonomousCycle = async (...args) => {
+    calls += 1;
+    return fakeCycleRunner(...args);
+  };
+
+  const first = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+  assert.deepEqual(first.executed, [actionId]);
+
+  const second = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+  assert.equal(second.processed, 0);
+  assert.equal(calls, 1);
+
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "executed");
 });

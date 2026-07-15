@@ -1,17 +1,27 @@
 import { safeExecute, safeQueryRows } from "@/lib/db";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
+import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS } from "./followUpWorkerPolicy";
 
 /**
  * One follow-up polling tick, shared by the worker script, tests and the E2E
  * harness (the cycle runner is injectable so no LLM call is needed to
  * exercise selection, cancellation and idempotency).
  *
+ * Candidate selection (selectDueFollowUps) returns three disjoint groups,
+ * each with its own CAS claim:
+ *  - status='planned' and due            -> claimPlannedFollowUp
+ *  - status='executing' and stale-locked -> claimStaleExecutingFollowUp (P0-2)
+ *  - status='failed' with attempts left  -> claimFailedFollowUpRetry (P0-3)
+ * A row with attempt_number >= max_attempts is terminal in every group and
+ * is never selected again.
+ *
  * Cancellation rules (checked before re-entry):
  *  - customer replied since the follow-up was scheduled → cancel
  *  - human owner active / AI paused / conversation closed → cancel
  *  - opportunity in terminal status → cancel
- * Idempotency: status moves planned → executing via compare-and-swap, so a
- * concurrent worker can never re-run the same follow-up.
+ * cancelFollowUp only overwrites planned/failed rows (P1-1) - a row already
+ * claimed to 'executing' by a concurrent tick is left untouched and reported
+ * as a lost race, never clobbered.
  */
 
 export type FollowUpCandidate = {
@@ -21,6 +31,9 @@ export type FollowUpCandidate = {
   conversation_case_id: string | number | null;
   scheduled_for: string | null;
   draft_message: string | null;
+  status: string;
+  attempt_number: number;
+  max_attempts: number;
 };
 
 export type FollowupTickResult = {
@@ -45,27 +58,48 @@ export async function selectDueFollowUps(limit: number, actionIds?: string[]): P
   // otherwise consume the LIMIT before an in-memory filter could apply.
   const scope = actionIds && actionIds.length > 0 ? ` AND action_id IN (${actionIds.map(() => "?").join(",")})` : "";
   const result = await safeQueryRows<FollowUpCandidate>(
-    `SELECT id, action_id, wa_id, conversation_case_id, scheduled_for, draft_message
+    `SELECT id, action_id, wa_id, conversation_case_id, scheduled_for, draft_message, status, attempt_number, max_attempts
       FROM crm_agent_actions
       WHERE action_type = 'schedule_followup'
-        AND status = 'planned'
-        AND scheduled_for <= UTC_TIMESTAMP()
+        AND (
+          (status = 'planned' AND scheduled_for <= UTC_TIMESTAMP())
+          OR (status = 'executing' AND attempt_number < max_attempts AND updated_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND))
+          OR (status = 'failed' AND attempt_number < max_attempts)
+        )
         AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP())${scope}
-      ORDER BY scheduled_for ASC
+      ORDER BY scheduled_for ASC, id ASC
       LIMIT ?`,
-    [...(actionIds && actionIds.length > 0 ? actionIds : []), limit]
+    [FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS, ...(actionIds && actionIds.length > 0 ? actionIds : []), limit]
   );
   return result.ok ? result.rows : [];
 }
 
-async function cancelFollowUp(actionId: string, reason: string): Promise<void> {
-  await safeQueryRows(
-    `UPDATE crm_agent_actions SET status = 'cancelled', cancel_reason = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ?`,
+// P1-1: explicit status precondition. Only planned/failed rows can be
+// cancelled here - executing/executed/cancelled/requires_review are never
+// overwritten. Callers must inspect `cancelled` to tell a real cancellation
+// apart from a lost race against a concurrent claim.
+export async function cancelFollowUp(actionId: string, reason: string): Promise<{ cancelled: boolean }> {
+  const result = await safeExecute(
+    `UPDATE crm_agent_actions SET status = 'cancelled', cancel_reason = ?, updated_at = CURRENT_TIMESTAMP(3)
+      WHERE action_id = ? AND status IN ('planned', 'failed')`,
     [reason, actionId]
   );
+  return { cancelled: result.ok && result.affectedRows > 0 };
 }
 
-async function markFollowUpExecuting(actionId: string): Promise<boolean> {
+// Cancels a row this tick already owns (status='executing' from its own
+// claim, whichever CAS produced it). Distinct from cancelFollowUp: here
+// 'executing' is exactly the precondition, not the forbidden state.
+async function abortClaimedFollowUp(actionId: string, reason: string): Promise<boolean> {
+  const result = await safeExecute(
+    `UPDATE crm_agent_actions SET status = 'cancelled', cancel_reason = ?, updated_at = CURRENT_TIMESTAMP(3)
+      WHERE action_id = ? AND status = 'executing'`,
+    [reason, actionId]
+  );
+  return result.ok && result.affectedRows > 0;
+}
+
+export async function claimPlannedFollowUp(actionId: string): Promise<boolean> {
   // Atomic compare-and-swap: only move if still 'planned' (prevents double-run)
   const result = await safeExecute(
     `UPDATE crm_agent_actions SET status = 'executing', updated_at = CURRENT_TIMESTAMP(3)
@@ -73,6 +107,41 @@ async function markFollowUpExecuting(actionId: string): Promise<boolean> {
     [actionId]
   );
   return result.ok && result.affectedRows > 0;
+}
+
+// P0-2: recovers a row abandoned mid-flight by a crashed worker. Same
+// attempt_number as before - this resumes the in-flight attempt, it is not a
+// new commercial attempt (no confirmed send happened yet). The staleness and
+// attempt-count checks are re-verified here (not just at selection time) so
+// two concurrent recoveries can never both win.
+export async function claimStaleExecutingFollowUp(actionId: string): Promise<boolean> {
+  const result = await safeExecute(
+    `UPDATE crm_agent_actions SET updated_at = CURRENT_TIMESTAMP(3)
+      WHERE action_id = ? AND status = 'executing' AND attempt_number < max_attempts
+        AND updated_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND)`,
+    [actionId, FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS]
+  );
+  return result.ok && result.affectedRows > 0;
+}
+
+// P0-3: retries a definitively failed row as a genuine new attempt -
+// attempt_number is incremented exactly once, atomically with the claim, so
+// a concurrent retry claim on the same row can never double-increment it. A
+// row at attempt_number >= max_attempts is terminal and never matches.
+export async function claimFailedFollowUpRetry(actionId: string): Promise<boolean> {
+  const result = await safeExecute(
+    `UPDATE crm_agent_actions SET status = 'executing', attempt_number = attempt_number + 1, updated_at = CURRENT_TIMESTAMP(3)
+      WHERE action_id = ? AND status = 'failed' AND attempt_number < max_attempts`,
+    [actionId]
+  );
+  return result.ok && result.affectedRows > 0;
+}
+
+async function claimFollowUpCandidate(candidate: FollowUpCandidate): Promise<boolean> {
+  if (candidate.status === "planned") return claimPlannedFollowUp(candidate.action_id);
+  if (candidate.status === "executing") return claimStaleExecutingFollowUp(candidate.action_id);
+  if (candidate.status === "failed") return claimFailedFollowUpRetry(candidate.action_id);
+  return false;
 }
 
 export async function shouldCancelFollowUp(candidate: FollowUpCandidate): Promise<{ cancel: boolean; reason: string }> {
@@ -124,6 +193,21 @@ export async function shouldCancelFollowUp(candidate: FollowUpCandidate): Promis
   return { cancel: false, reason: "" };
 }
 
+function reportCancelOutcome(
+  outcome: { cancelled: boolean },
+  actionId: string,
+  reason: string,
+  result: FollowupTickResult,
+  log: (message: string) => void
+): void {
+  if (outcome.cancelled) {
+    log(`[worker:followup] cancelling action ${actionId}: ${reason}`);
+    result.cancelled.push({ actionId, reason });
+  } else {
+    log(`[worker:followup] cancellation lost race against worker claim for action ${actionId} (reason=${reason})`);
+  }
+}
+
 export async function runFollowupTick(options: FollowupTickOptions): Promise<FollowupTickResult> {
   const log = options.log ?? (() => void 0);
   const cycleRunner = options.cycleRunner ?? runNativeAutonomousCycle;
@@ -133,29 +217,60 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
   if (candidates.length === 0) return result;
 
   for (const candidate of candidates) {
-    if (!candidate.wa_id) {
-      await cancelFollowUp(candidate.action_id, "missing_wa_id");
-      result.cancelled.push({ actionId: candidate.action_id, reason: "missing_wa_id" });
-      continue;
-    }
+    const isRecoveryCandidate = candidate.status === "executing";
 
-    const { cancel, reason } = await shouldCancelFollowUp(candidate);
-    if (cancel) {
-      log(`[worker:followup] cancelling action ${candidate.action_id}: ${reason}`);
-      await cancelFollowUp(candidate.action_id, reason);
-      result.cancelled.push({ actionId: candidate.action_id, reason });
-      continue;
-    }
+    if (!isRecoveryCandidate) {
+      // planned/failed origin: revalidate before claiming, exactly as before
+      // T03 - cancelFollowUp's own CAS (not this ordering) is what closes P1-1.
+      if (!candidate.wa_id) {
+        reportCancelOutcome(await cancelFollowUp(candidate.action_id, "missing_wa_id"), candidate.action_id, "missing_wa_id", result, log);
+        continue;
+      }
 
-    if (options.dryRun) {
-      log(`[worker:followup] DRY RUN — would re-enter follow-up for wa_id=${candidate.wa_id}`);
+      const { cancel, reason } = await shouldCancelFollowUp(candidate);
+      if (cancel) {
+        reportCancelOutcome(await cancelFollowUp(candidate.action_id, reason), candidate.action_id, reason, result, log);
+        continue;
+      }
+
+      if (options.dryRun) {
+        log(`[worker:followup] DRY RUN — would re-enter follow-up for wa_id=${candidate.wa_id}`);
+        result.processed++;
+        continue;
+      }
+    } else if (options.dryRun) {
+      log(`[worker:followup] DRY RUN — would attempt stale-lock recovery for action ${candidate.action_id}`);
       result.processed++;
       continue;
     }
 
-    // Atomic claim — skip if another worker already took this row.
-    const locked = await markFollowUpExecuting(candidate.action_id);
+    // Claim CAS — skip if another worker already took this row, or if the
+    // preconditions (staleness/attempts remaining) no longer hold.
+    const locked = await claimFollowUpCandidate(candidate);
     if (!locked) continue;
+
+    // Recovery candidates were not revalidated pre-claim (no safe way to do
+    // so without first owning the row) - revalidate now that this tick holds
+    // the 'executing' claim, aborting via the executing-scoped transition.
+    if (isRecoveryCandidate) {
+      if (!candidate.wa_id) {
+        await abortClaimedFollowUp(candidate.action_id, "missing_wa_id");
+        result.cancelled.push({ actionId: candidate.action_id, reason: "missing_wa_id" });
+        continue;
+      }
+      const { cancel, reason } = await shouldCancelFollowUp(candidate);
+      if (cancel) {
+        await abortClaimedFollowUp(candidate.action_id, reason);
+        log(`[worker:followup] cancelling recovered action ${candidate.action_id}: ${reason}`);
+        result.cancelled.push({ actionId: candidate.action_id, reason });
+        continue;
+      }
+    }
+
+    // Both claim paths above already require wa_id (checked pre-claim for
+    // planned/failed, post-claim for recovered executing rows) - this only
+    // narrows the type for the cycleRunner call below.
+    if (!candidate.wa_id) continue;
 
     const convRows = await safeQueryRows<{ id: number; public_id: string }>(
       `SELECT id, public_id FROM conversation WHERE id = ? LIMIT 1`,
@@ -163,7 +278,7 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     );
     const conversation = convRows.ok ? convRows.rows[0] ?? null : null;
     if (!conversation) {
-      await cancelFollowUp(candidate.action_id, "conversation_not_found");
+      await abortClaimedFollowUp(candidate.action_id, "conversation_not_found");
       result.cancelled.push({ actionId: candidate.action_id, reason: "conversation_not_found" });
       continue;
     }
@@ -198,6 +313,10 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
       result.processed++;
     } catch (error) {
       log(`[worker:followup] error for action ${candidate.action_id}: ${error instanceof Error ? error.message : String(error)}`);
+      // Terminal vs retryable is decided at the next claim attempt (P0-3's
+      // attempt_number < max_attempts precondition), not by a distinct status
+      // here - a row that ran out of attempts simply never matches that
+      // precondition again.
       await safeQueryRows(
         `UPDATE crm_agent_actions SET status = 'failed', failure_reason = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ? AND status = 'executing'`,
         [error instanceof Error ? error.message : "unknown", candidate.action_id]
