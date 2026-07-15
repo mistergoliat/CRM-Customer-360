@@ -61,7 +61,7 @@ const failedResponseWithSensitiveMessage = (): OutboxTickSendResult =>
     status: "failed",
     error_code: "meta_http_error",
     error_message:
-      "Meta rejected the request for recipient 56912345678 (contact billing@example.com), Authorization: Bearer abc123.def-456_ghi",
+      "Meta rejected the request for recipient 56912345678 (contact billing@example.com), Authorization: Bearer not-a-real-secret.fixture-000",
     blocked_reasons: ["meta_http_error"],
     warnings: [],
     http_status: 400,
@@ -193,7 +193,7 @@ test("[T06.1] a Meta error containing a phone number, email and Bearer token is 
   const row = await loadOutboxRow(outboxId);
   assert.equal(row.status, "failed");
   assert.ok(row.error_message, "error_message must be persisted");
-  for (const sensitive of ["56912345678", "billing@example.com", "abc123.def-456_ghi"]) {
+  for (const sensitive of ["56912345678", "billing@example.com", "not-a-real-secret.fixture-000"]) {
     assert.ok(!row.error_message!.includes(sensitive), `error_message must not contain "${sensitive}"`);
   }
 
@@ -203,7 +203,7 @@ test("[T06.1] a Meta error containing a phone number, email and Bearer token is 
   );
   assert.ok(executions.ok);
   const executionMessage = executions.rows[0]?.error_message ?? "";
-  for (const sensitive of ["56912345678", "billing@example.com", "abc123.def-456_ghi"]) {
+  for (const sensitive of ["56912345678", "billing@example.com", "not-a-real-secret.fixture-000"]) {
     assert.ok(!executionMessage.includes(sensitive), `crm_action_executions.error_message must not contain "${sensitive}"`);
   }
 });

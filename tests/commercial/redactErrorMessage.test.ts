@@ -9,8 +9,8 @@ import { redactErrorMessage } from "@/lib/brain/commercial/redactErrorMessage";
 // error_message without any sanitization.
 
 test("[1] redacts a Bearer token", () => {
-  const result = redactErrorMessage(new Error("request failed: Authorization: Bearer abc123.def-456_ghi"));
-  assert.ok(!result.includes("abc123"));
+  const result = redactErrorMessage(new Error("request failed: Authorization: Bearer not-a-real-secret.fixture-000"));
+  assert.ok(!result.includes("not-a-real-secret"));
   assert.ok(result.includes("Bearer [redacted]") || result.includes("[redacted]"));
 });
 
@@ -56,9 +56,9 @@ test("[8] a short digit run (HTTP status, port) is left untouched - only 8+ digi
 
 test("[9] a single Meta error combining a Bearer token, an email and a phone number is fully redacted", () => {
   const result = redactErrorMessage(
-    "Meta rejected the request for recipient 56912345678 (contact billing@example.com), Authorization: Bearer abc123.def-456_ghi"
+    "Meta rejected the request for recipient 56912345678 (contact billing@example.com), Authorization: Bearer not-a-real-secret.fixture-000"
   );
-  for (const sensitive of ["56912345678", "billing@example.com", "abc123.def-456_ghi"]) {
+  for (const sensitive of ["56912345678", "billing@example.com", "not-a-real-secret.fixture-000"]) {
     assert.ok(!result.includes(sensitive), `must not contain "${sensitive}"`);
   }
 });
