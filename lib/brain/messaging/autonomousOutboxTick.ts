@@ -8,7 +8,9 @@ import {
   persistActionOutcome,
   markActionExecuted,
   markActionFailed,
-  loadActionIdByOutboxMessageId
+  loadActionIdByOutboxMessageId,
+  buildDeliveryOutcomeDedupeKey,
+  extractDeliveryExperimentAttribution
 } from "@/lib/brain/commercial/action-queue/persistActionOutcome";
 import { isWhatsAppWindowOpen } from "@/lib/domains/conversations/control";
 
@@ -74,6 +76,7 @@ type FullOutboxRow = {
   phone_number_id: string | null;
   conversation_case_id: string | number | null;
   message_text: string | null;
+  meta_payload_json: unknown;
   attempt_count: number;
 };
 
@@ -109,7 +112,7 @@ export function computeRetryDelaySeconds(attemptCount: number, baseSeconds: numb
 
 async function loadFullOutboxRow(outboxId: number): Promise<FullOutboxRow | null> {
   const result = await safeQueryRows<FullOutboxRow>(
-    `SELECT id, dedupe_key, status, source, wa_id, phone_number_id, conversation_case_id, message_text, attempt_count
+    `SELECT id, dedupe_key, status, source, wa_id, phone_number_id, conversation_case_id, message_text, meta_payload_json, attempt_count
       FROM brain_message_outbox WHERE id = ? LIMIT 1`,
     [outboxId]
   );
@@ -306,6 +309,7 @@ export async function runOutboxTick(options: OutboxTickOptions): Promise<OutboxT
 
     const completedAt = new Date().toISOString();
     const attemptNumber = row.attempt_count + 1;
+    const experimentAttribution = extractDeliveryExperimentAttribution(row.meta_payload_json);
 
     if (sendStatus === "succeeded") {
       const update = await safeExecute(
@@ -340,6 +344,8 @@ export async function runOutboxTick(options: OutboxTickOptions): Promise<OutboxT
         retryable: false,
         correlationId: row.dedupe_key
       });
+      // Same outcome_dedupe_key contract as the webhook path (recordDeliveryOutcome):
+      // a later Meta "sent" webhook for this same providerMessageId reuses this row.
       await persistActionOutcome({
         actionId: actionId ?? `outbox:${row.id}`,
         actionRowId: null,
@@ -348,7 +354,13 @@ export async function runOutboxTick(options: OutboxTickOptions): Promise<OutboxT
         providerMessageId,
         outcomeType: "sent",
         occurredAt: completedAt,
-        metadataJson: { workerId: options.workerId, dedupeKey: row.dedupe_key, attemptNumber }
+        metadataJson: {
+          workerId: options.workerId,
+          dedupeKey: row.dedupe_key,
+          attemptNumber,
+          ...(experimentAttribution ? { experiment: experimentAttribution } : {})
+        },
+        outcomeDedupeKey: providerMessageId ? buildDeliveryOutcomeDedupeKey("meta", providerMessageId, "sent") : null
       });
 
       await persistCanonicalOutboundMessage({
@@ -429,7 +441,14 @@ export async function runOutboxTick(options: OutboxTickOptions): Promise<OutboxT
       providerMessageId: null,
       outcomeType: "failed",
       occurredAt: completedAt,
-      metadataJson: { workerId: options.workerId, dedupeKey: row.dedupe_key, attemptNumber, errorCode: sendErrorCode }
+      metadataJson: {
+        workerId: options.workerId,
+        dedupeKey: row.dedupe_key,
+        attemptNumber,
+        errorCode: sendErrorCode,
+        ...(experimentAttribution ? { experiment: experimentAttribution } : {})
+      }
+      // No outcomeDedupeKey: no provider_message_id exists yet for a failed send attempt.
     });
     if (actionId) await markActionFailed(actionId, sendErrorCode, sendErrorMessage);
     await auditLog({

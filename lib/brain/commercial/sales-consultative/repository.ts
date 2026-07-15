@@ -1241,7 +1241,8 @@ async function queueCustomerMessageRecord(input: {
       model_version: "brain.commercial.sales-consultative.v1",
       currentTime: input.currentTime,
       metadata: input.metadata ?? null
-    }
+    },
+    opportunityId: input.opportunity?.id ?? null
   });
   if (!outbox.ok) {
     return { ok: false, queued: false, outboxId: null, warning: outbox.warning };
