@@ -7,9 +7,14 @@ import {
   selectDueFollowUps,
   shouldCancelFollowUp,
   cancelFollowUp,
-  claimPlannedFollowUp
+  claimPlannedFollowUp,
+  claimStaleExecutingFollowUp,
+  terminalizeExhaustedStaleFollowUp
 } from "@/lib/brain/commercial/followup/runFollowupTick";
-import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS } from "@/lib/brain/commercial/followup/followUpWorkerPolicy";
+import {
+  FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS,
+  FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON
+} from "@/lib/brain/commercial/followup/followUpWorkerPolicy";
 import type { runNativeAutonomousCycle, NativeAutonomousCycleResult } from "@/lib/brain/commercial/native-cycle";
 
 Object.assign(process.env, {
@@ -361,12 +366,42 @@ test("a stale-locked executing action with attempts remaining is recovered and e
   assert.deepEqual(result.executed, [actionId]);
   const row = await loadAction(actionId);
   assert.equal(row?.status, "executed");
-  // Recovery resumes the same in-flight attempt; it is not a new commercial
-  // attempt, so attempt_number is unchanged by the recovery itself.
-  assert.equal(row?.attempt_number, 1);
+  // ACS-R1-05-T03.1: recovering a stale executing row IS a new commercial
+  // attempt (the crashed run's outcome is unknown) - attempt_number must
+  // move from 1 to 2, incremented exactly once by the recovery claim itself.
+  assert.equal(row?.attempt_number, 2);
 });
 
-test("a stale-locked executing action with no attempts remaining is never recovered", async () => {
+test("successive stale recoveries increment attempt_number each time until max_attempts is reached", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  const stale = () => new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
+  await setActionState(actionId, { status: "executing", attemptNumber: 1, maxAttempts: 3, updatedAt: stale() });
+
+  const first = await claimStaleExecutingFollowUp(actionId);
+  assert.equal(first, true);
+  let row = await loadAction(actionId);
+  assert.equal(row?.attempt_number, 2);
+  assert.equal(row?.status, "executing");
+
+  // Simulate the just-recovered attempt stranding again (a second crash)
+  // by backdating updated_at once more, without going through a full cycle.
+  await setActionState(actionId, { status: "executing", updatedAt: stale() });
+  const second = await claimStaleExecutingFollowUp(actionId);
+  assert.equal(second, true);
+  row = await loadAction(actionId);
+  assert.equal(row?.attempt_number, 3);
+
+  // A third recovery attempt: attempt_number(3) is no longer < max_attempts(3).
+  await setActionState(actionId, { status: "executing", updatedAt: stale() });
+  const third = await claimStaleExecutingFollowUp(actionId);
+  assert.equal(third, false);
+  row = await loadAction(actionId);
+  assert.equal(row?.status, "executing");
+  assert.equal(row?.attempt_number, 3);
+});
+
+test("a stale-locked executing action with no attempts remaining is terminalized to failed, never recovered", async () => {
   const conversation = await seedConversation();
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
   const staleUpdatedAt = new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
@@ -384,9 +419,32 @@ test("a stale-locked executing action with no attempts remaining is never recove
 
   assert.equal(calls, 0);
   assert.equal(result.executed.length, 0);
+  assert.deepEqual(result.failed, [actionId]);
   const row = await loadAction(actionId);
-  assert.equal(row?.status, "executing");
+  assert.equal(row?.status, "failed");
+  // Terminalization never touches attempt_number - it is not a new attempt.
   assert.equal(row?.attempt_number, 3);
+  assert.equal(row?.failure_reason, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON);
+});
+
+test("a second tick never re-touches a terminalized exhausted stale action", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  const staleUpdatedAt = new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
+  await setActionState(actionId, { status: "executing", attemptNumber: 3, maxAttempts: 3, updatedAt: staleUpdatedAt });
+
+  const first = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  assert.deepEqual(first.failed, [actionId]);
+
+  const due = await selectDueFollowUps(50, [actionId]);
+  assert.equal(due.length, 0);
+
+  const second = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  assert.equal(second.processed, 0);
+  assert.equal(second.failed.length, 0);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "failed");
+  assert.equal(row?.failure_reason, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON);
 });
 
 test("two concurrent ticks racing to recover the same stale-locked action: only one recovers it", async () => {
@@ -410,6 +468,137 @@ test("two concurrent ticks racing to recover the same stale-locked action: only 
   const [a, b] = await Promise.all([runOnce(), runOnce()]);
   assert.equal(calls, 1);
   assert.equal(a.executed.length + b.executed.length, 1);
+  const row = await loadAction(actionId);
+  // Exactly one recovery claim won, so attempt_number moved by exactly 1.
+  assert.equal(row?.attempt_number, 2);
+});
+
+test("two concurrent terminalizations of the same exhausted stale action: only one modifies it", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  const staleUpdatedAt = new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
+  await setActionState(actionId, { status: "executing", attemptNumber: 3, maxAttempts: 3, updatedAt: staleUpdatedAt });
+
+  const [a, b] = await Promise.all([
+    terminalizeExhaustedStaleFollowUp(actionId),
+    terminalizeExhaustedStaleFollowUp(actionId)
+  ]);
+
+  assert.equal(a !== b, true);
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "failed");
+  assert.equal(row?.failure_reason, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON);
+});
+
+// ---------------------------------------------------------------------------
+// ACS-R1-05-T03.1: uniform post-claim revalidation (all claim origins)
+// ---------------------------------------------------------------------------
+
+test("a planned claim followed by a customer reply cancels before the cycle runs", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    createdAt: new Date(Date.now() - 5000)
+  });
+
+  let calls = 0;
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    onAfterClaim: async () => {
+      // Proves the claim already happened (planned -> executing) before this
+      // hook fires, i.e. before revalidation - not a pre-claim check.
+      const midClaim = await loadAction(actionId);
+      assert.equal(midClaim?.status, "executing");
+      await processNativeWhatsAppInbound({
+        providerMessageId: `wamid.${uniqueSuffix("postclaim-reply")}`,
+        phoneNumberId: `phone-${uniqueSuffix("pnid")}`,
+        externalSenderId: conversation.waId,
+        senderPhone: conversation.waId,
+        senderName: "Cliente Followup Test",
+        messageType: "text",
+        text: "Ya no necesito, gracias",
+        occurredAt: new Date().toISOString(),
+        rawPayload: {}
+      });
+    },
+    cycleRunner: async (...args) => {
+      calls += 1;
+      return fakeCycleRunner(...args);
+    }
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(result.cancelled[0]?.reason, "customer_replied_since_schedule");
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "cancelled");
+});
+
+test("a retry claim from failed followed by a terminal opportunity cancels before the cycle runs", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  await setActionState(actionId, { status: "failed", attemptNumber: 1, maxAttempts: 3 });
+
+  let calls = 0;
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    onAfterClaim: async () => {
+      // Proves the retry claim already incremented attempt_number and moved
+      // the row to 'executing' before this hook fires.
+      const midClaim = await loadAction(actionId);
+      assert.equal(midClaim?.status, "executing");
+      assert.equal(midClaim?.attempt_number, 2);
+      const oppInsert = await safeExecute(
+        `INSERT INTO crm_opportunities (
+            opportunity_key, wa_id, channel, primary_intent, status, temperature, priority,
+            requirements_json, missing_requirements_json, product_interests_json, objections_json, signals_json
+          ) VALUES (?, ?, 'whatsapp', 'unknown', 'lost', 'warm', 'normal', '[]', '[]', '[]', '[]', '[]')`,
+        [`opp-${uniqueSuffix("postclaim-terminal")}`, conversation.waId]
+      );
+      assert.ok(oppInsert.ok, oppInsert.ok ? "" : oppInsert.error);
+    },
+    cycleRunner: async (...args) => {
+      calls += 1;
+      return fakeCycleRunner(...args);
+    }
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(result.cancelled[0]?.reason, "opportunity_terminal_status:lost");
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "cancelled");
+});
+
+test("a stale-lock recovery claim followed by a human takeover cancels before the cycle runs", async () => {
+  const conversation = await seedConversation();
+  const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
+  const staleUpdatedAt = new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
+  await setActionState(actionId, { status: "executing", attemptNumber: 1, maxAttempts: 3, updatedAt: staleUpdatedAt });
+
+  let calls = 0;
+  const result = await runFollowupTick({
+    limit: 10,
+    actionIds: [actionId],
+    onAfterClaim: async () => {
+      // Proves the stale-lock recovery already incremented attempt_number
+      // before this hook fires.
+      const midClaim = await loadAction(actionId);
+      assert.equal(midClaim?.status, "executing");
+      assert.equal(midClaim?.attempt_number, 2);
+      await safeExecute("UPDATE conversation SET human_owner_active = 1 WHERE id = ?", [conversation.id]);
+    },
+    cycleRunner: async (...args) => {
+      calls += 1;
+      return fakeCycleRunner(...args);
+    }
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(result.cancelled[0]?.reason, "human_owner_active");
+  const row = await loadAction(actionId);
+  assert.equal(row?.status, "cancelled");
 });
 
 // ---------------------------------------------------------------------------

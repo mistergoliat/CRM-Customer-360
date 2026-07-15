@@ -48,3 +48,10 @@ export function isStaleExecutingLock(
 ): boolean {
   return nowMs - updatedAtMs > staleLockSeconds * 1000;
 }
+
+// ACS-R1-05-T03.1: fixed, short, PII-free failure_reason for a stale
+// 'executing' row that has exhausted max_attempts. Never the raw error that
+// stranded the row (that already lived on a prior 'failed' row, if any) -
+// this code means specifically "recovered past the lock window with zero
+// attempts left", not a cycleRunner error.
+export const FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON = "follow_up_stale_execution_exhausted";
