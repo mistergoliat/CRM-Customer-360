@@ -21,7 +21,7 @@
  */
 
 import path from "node:path";
-import { loadLocalEnv, loadEnvFile, PROJECT_ROOT } from "./db-utils";
+import { loadEnvFile, PROJECT_ROOT } from "./db-utils";
 import { loadFollowUpWorkerRuntimeConfig, assertFollowUpWorkerRuntimeConfigIsSafe } from "../lib/brain/runtime/autonomousRuntimeConfig";
 
 const DEFAULT_POLL_MS = 30000; // check every 30s — don't need sub-minute precision
@@ -53,9 +53,9 @@ function readBoolArg(name: string, fallback = false): boolean {
 // GATE_ENABLED, BRAIN_OUTBOX_BRIDGE_ENABLED, etc.) in .env/.env.local
 // themselves; an unset flag stays disabled, same as any other process.
 async function loadRuntimeEnv() {
-  await loadLocalEnv();
-  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env.local"), false);
-  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), false);
+  // Production workers use the deployment environment as the authoritative
+  // source. Do not let infra/.env replace DATABASE_URL with local Docker DB_*.
+  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), true);
 }
 
 const AUTONOMOUS_CYCLE_STATUS_FLAGS = [

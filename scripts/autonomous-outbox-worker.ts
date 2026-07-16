@@ -22,7 +22,7 @@
 
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { loadLocalEnv, loadEnvFile, PROJECT_ROOT } from "./db-utils";
+import { loadEnvFile, PROJECT_ROOT } from "./db-utils";
 import { loadOutboxWorkerRuntimeConfig, assertOutboxWorkerRuntimeConfigIsSafe } from "../lib/brain/runtime/autonomousRuntimeConfig";
 
 const DEFAULT_BATCH_SIZE = 5;
@@ -56,9 +56,9 @@ function readBoolArg(name: string, fallback = false): boolean {
 // BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND + a non-empty allowlist) in
 // .env/.env.local themselves.
 async function loadRuntimeEnv() {
-  await loadLocalEnv();
-  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env.local"), false);
-  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), false);
+  // Production workers use the deployment environment as the authoritative
+  // source. Do not let infra/.env replace DATABASE_URL with local Docker DB_*.
+  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), true);
 }
 
 let workerRunning = true;
