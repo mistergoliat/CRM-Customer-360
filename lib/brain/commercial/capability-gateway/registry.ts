@@ -1,5 +1,5 @@
 import { createCatalogPort } from "@/lib/catalog";
-import type { CatalogPort, CatalogProduct, CatalogSearchResult } from "@/lib/catalog";
+import type { CatalogBatchItemInput, CatalogBatchResult, CatalogPort, CatalogProduct, CatalogSearchResult } from "@/lib/catalog";
 import type { CapabilityGatewayContext, CapabilityGatewayDefinition, CapabilityGovernanceMetadata } from "./types";
 import { CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS } from "./customerIdentityCapabilities";
 
@@ -106,6 +106,78 @@ function getProductDetailsCapability(getPort: () => CatalogPort | null): Capabil
   };
 }
 
+function asBatchItems(value: unknown): CatalogBatchItemInput[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const items: CatalogBatchItemInput[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return null;
+    const record = entry as Record<string, unknown>;
+    const productId = asProductId(record.productId);
+    if (!productId) return null;
+    items.push({
+      productId,
+      ...(typeof record.combinationId === "string" || typeof record.combinationId === "number" ? { combinationId: String(record.combinationId) } : {}),
+      ...(typeof record.quantity === "number" && Number.isFinite(record.quantity) ? { quantity: record.quantity } : {})
+    });
+  }
+  return items;
+}
+
+/**
+ * ACS-R1-05-T06.2: batch hydration for search candidates. Internal
+ * enrichment capability, deliberately NOT aliased in toolAliases.ts - the
+ * Sales Agent never requests it directly (C5 of the task contract: one
+ * search intent from the model, the infra runs search -> batch
+ * automatically). Registered here so it goes through the same governed
+ * execution, retry and crm_capability_executions audit trail as every other
+ * capability, exactly like get_product_details is already called directly
+ * from buildCatalogGroundedMessage.ts today.
+ */
+function batchGetProductsCapability(getPort: () => CatalogPort | null): CapabilityGatewayDefinition<{ items: unknown }, CatalogBatchResult> {
+  return {
+    capability: "batch_get_products",
+    version: CAPABILITY_GATEWAY_VERSION,
+    description: "Hydrate up to 20 search candidates (price, stock, variants) in one call via the catalog microservice.",
+    governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
+    maxRetries: 1,
+    async checkAvailability() {
+      if (catalogUnavailable(getPort())) {
+        return { status: "unavailable", reason: "catalog_service_not_configured" };
+      }
+      return { status: "available", reason: null };
+    },
+    async execute(input, context: CapabilityGatewayContext) {
+      const port = getPort();
+      if (catalogUnavailable(port)) {
+        return { status: "temporarily_blocked", data: null, errorCode: "catalog_service_not_configured", retryable: true, evidence: [] };
+      }
+      const items = asBatchItems(input.items);
+      if (!items) {
+        return { status: "invalid_arguments", data: null, errorCode: "items_required", retryable: false, evidence: [] };
+      }
+
+      const result = await port.batchGetProducts({ items }, { correlationId: context.correlationId });
+      if (!result.ok) {
+        return mapCatalogErrorToOutcome(result.error);
+      }
+
+      return {
+        status: "completed",
+        data: result.value,
+        errorCode: null,
+        retryable: false,
+        evidence: [
+          {
+            source: result.value.provenance.source,
+            summary: `batch_get_products hydrated ${result.value.items.filter((item) => item.ok).length}/${result.value.items.length} item(s).`,
+            capturedAt: result.value.provenance.retrievedAt
+          }
+        ]
+      };
+    }
+  };
+}
+
 function mapCatalogErrorToOutcome(error: { code: string; message: string; retryable: boolean }) {
   const evidence = [{ source: "catalog_service_http", summary: error.message, capturedAt: new Date().toISOString() }];
   switch (error.code) {
@@ -138,6 +210,7 @@ export function resetCapabilityGatewayCatalogPortForTests() {
 export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[] = [
   searchProductsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   getProductDetailsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
+  batchGetProductsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   // ACS-R1-04-T06. record_customer_interest is deliberately not registered:
   // no operational persistence exists yet (docs/CAPABILITY_MATRIX.md).
   ...CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS

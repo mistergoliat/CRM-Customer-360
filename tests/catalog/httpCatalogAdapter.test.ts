@@ -172,6 +172,87 @@ test("empty response body on 200 maps to invalid_response", async () => {
   assert.equal(result.error.code, "invalid_response");
 });
 
+test("ACS-R1-05-T06.2: batchGetProducts POSTs to /v1/products/batch and maps mixed success/failure items", async () => {
+  handler = (req, res) => {
+    assert.equal(req.method, "POST");
+    assert.equal(req.url, "/v1/products/batch");
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const parsed = JSON.parse(body) as { items: Array<{ productId: number; combinationId?: number; quantity?: number }> };
+      assert.equal(parsed.items.length, 2);
+      assert.equal(parsed.items[0].productId, 7);
+      sendJson(res, 200, {
+        items: [
+          {
+            ok: true,
+            input: { productId: 7, combinationId: 0, quantity: 1 },
+            product: {
+              product: { productId: 7, name: "Jaula X", sku: "SKU-7", shortDescription: null, longDescription: null, active: true },
+              selectedVariant: null,
+              attributes: [],
+              variants: [],
+              pricing: { quantity: 1, baseUnitPrice: 100000, effectiveUnitPrice: 89990, subtotal: 89990, currency: "CLP", taxIncluded: true, taxMode: "configured_rate", discountApplied: true, discountType: "amount", discountValue: 10010, specificPriceId: 3, pricingMode: "sql_specific_price" },
+              stock: { physicalQuantity: 2, available: true, shopId: 1 },
+              freshness: { productCheckedAt: new Date().toISOString(), priceCalculatedAt: new Date().toISOString(), stockCheckedAt: new Date().toISOString(), cached: false }
+            }
+          },
+          {
+            ok: false,
+            input: { productId: 999, combinationId: 0, quantity: 1 },
+            error: { code: "PRODUCT_NOT_FOUND", message: "Product was not found", correlationId: "c" }
+          }
+        ]
+      });
+    });
+  };
+
+  const result = await makeAdapter().batchGetProducts(
+    { items: [{ productId: "7" }, { productId: "999" }] },
+    { correlationId: "corr-batch-1" }
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.items.length, 2);
+  const [first, second] = result.value.items;
+  assert.equal(first.ok, true);
+  if (first.ok) {
+    assert.equal(first.product.price?.amount, 89990);
+    assert.equal(first.input.productId, "7");
+  }
+  assert.equal(second.ok, false);
+  if (!second.ok) {
+    assert.equal(second.error.code, "not_found");
+    assert.equal(second.input.productId, "999");
+  }
+  assert.equal(requestCount, 1);
+});
+
+test("batchGetProducts caps at 20 items per real service contract", async () => {
+  handler = (req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const parsed = JSON.parse(body) as { items: unknown[] };
+      assert.equal(parsed.items.length, 20);
+      sendJson(res, 200, { items: [] });
+    });
+  };
+
+  const items = Array.from({ length: 25 }, (_, index) => ({ productId: String(index + 1) }));
+  const result = await makeAdapter().batchGetProducts({ items }, { correlationId: "corr-batch-2" });
+  assert.equal(result.ok, true);
+});
+
+test("batchGetProducts with an empty items array short-circuits without a network call", async () => {
+  handler = () => assert.fail("should not perform a network call for an empty batch");
+  const result = await makeAdapter().batchGetProducts({ items: [] }, { correlationId: "corr-batch-3" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.items.length, 0);
+  assert.equal(requestCount, 0);
+});
+
 test("error messages never leak the configured API key", async () => {
   handler = (_req, res) => sendJson(res, 500, { error: { code: "INTERNAL_ERROR", message: "x-api-key=super-secret-value leaked in message", correlationId: "c" } });
   const result = await makeAdapter().searchProducts({ query: "q" }, { correlationId: "corr-11" });
