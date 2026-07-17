@@ -319,16 +319,69 @@ test("missing idempotency key blocks autonomy", () => {
   assert.ok(result.blockReasons.includes("missing_idempotency_key"));
 });
 
-test("unsafe message blocks autonomy", () => {
+test("ACS-R1-05-T06.2: legitimate commercial phrases are no longer lexically blocked", () => {
+  const legitimatePhrases = [
+    "¿Quieres que revise los precios?",
+    "Puedo confirmar el stock.",
+    "Voy a comparar las alternativas.",
+    "No puedo garantizarte disponibilidad sin revisarla.",
+    "Antes de confirmar el precio debo consultar el catálogo.",
+    "Hay stock asegurado para hoy."
+  ];
+
+  for (const draftMessage of legitimatePhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "eligible", `expected "${draftMessage}" to be eligible, got blocked by ${result.blockReasons.join(",")}`);
+    assert.ok(!result.blockReasons.includes("unsafe_message"));
+  }
+});
+
+test("empty message still blocks autonomy on technical grounds", () => {
   const result = evaluate({
     action: {
-      draftMessage: "Hay stock asegurado para hoy.",
+      draftMessage: "",
       finalMessage: null
     }
   });
 
   assert.equal(result.status, "blocked");
   assert.ok(result.blockReasons.includes("unsafe_message"));
+});
+
+test("overlong message still blocks autonomy on technical grounds", () => {
+  const result = evaluate({
+    action: {
+      draftMessage: "x".repeat(801),
+      finalMessage: null
+    }
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.ok(result.blockReasons.includes("unsafe_message"));
+});
+
+test("credential marker still blocks autonomy", () => {
+  const result = evaluate({
+    action: {
+      draftMessage: "Authorization: Bearer sk-abc123def456",
+      finalMessage: null
+    }
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.ok(result.blockReasons.includes("unsafe_payload"));
+});
+
+test("raw JSON payload still blocks autonomy", () => {
+  const result = evaluate({
+    action: {
+      draftMessage: JSON.stringify({ productId: "123", price: 79990 }),
+      finalMessage: null
+    }
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.ok(result.blockReasons.includes("unsafe_payload"));
 });
 
 test("unresolved placeholder blocks autonomy", () => {

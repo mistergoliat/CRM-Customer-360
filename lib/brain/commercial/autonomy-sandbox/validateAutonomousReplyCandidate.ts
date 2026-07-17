@@ -56,13 +56,19 @@ function hasCredentialMarker(text: string) {
   return /(\bBearer\b|\bsk-[A-Za-z0-9_-]+\b|\b(api[-_]?key|token|secret|password|cookie|authorization)\b)/i.test(text);
 }
 
-function hasPromiseOrSensitiveCommercialClaim(text: string) {
-  const normalized = normalizeText(text);
-  const sensitiveTerms = ["precio", "stock", "descuento", "entrega", "despacho", "garantia", "reclamo", "queja", "reembolso", "devolucion"];
-  const promiseTerms = ["promet", "garantiz", "asegur", "confirm", "aseguro", "aseguramos", "te damos", "te garantizo"];
-  return sensitiveTerms.some((term) => normalized.includes(term)) || promiseTerms.some((term) => normalized.includes(term));
-}
-
+/**
+ * ACS-R1-05-T06.2: commercial truthfulness (price/stock/delivery claims,
+ * promises) is governed upstream by the Sales Agent contract, Commercial
+ * Policy, the Capability Gateway and catalog grounding - never by lexical
+ * matching on the final message text. A prior keyword list here
+ * (precio/stock/descuento/garantia/... plus promise verbs like
+ * confirm/asegur/garantiz) blocked legitimate commercial replies on pure
+ * substring match (e.g. "Puedo confirmar el stock" was flagged as unsafe
+ * purely for containing "confirm"), leaving customers without a response.
+ * This function intentionally only checks technical/operational safety:
+ * unresolved placeholders, credentials, raw JSON payloads - see
+ * buildMessageSafety below for the full list this sandbox still enforces.
+ */
 function buildMessageSafety(input: SandboxAutonomyEvaluationInput) {
   const candidate = asText(input.action.finalMessage) ?? asText(input.action.draftMessage);
   const fallback = candidate ?? null;
@@ -90,11 +96,6 @@ function buildMessageSafety(input: SandboxAutonomyEvaluationInput) {
 
   if (isJsonLike(fallback)) {
     reasons.push("unsafe_payload");
-    return { reasons, messagePreview: null };
-  }
-
-  if (hasPromiseOrSensitiveCommercialClaim(fallback)) {
-    reasons.push("unsafe_message");
     return { reasons, messagePreview: null };
   }
 
