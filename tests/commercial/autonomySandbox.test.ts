@@ -336,6 +336,53 @@ test("ACS-R1-05-T06.2: legitimate commercial phrases are no longer lexically blo
   }
 });
 
+test("ACS-R1-05-T06.2 (P1 correction): legitimate commercial questions and pending actions stay allowed", () => {
+  const allowedPhrases = [
+    "¿Quieres que revise el precio?",
+    "Voy a consultar el stock.",
+    "Necesito confirmar el despacho.",
+    "Dejaré el precio pendiente de validación.",
+    "Voy a consultar las condiciones de garantía.",
+    "Necesito verificar la garantía.",
+    "El precio informado por catálogo es $500.000.",
+    "El catálogo informa disponibilidad.",
+    "La ficha indica una garantía de 12 meses.",
+    "El producto soporta hasta 150 kg según su especificación."
+  ];
+
+  for (const draftMessage of allowedPhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "eligible", `expected "${draftMessage}" to be eligible, got blocked by ${result.blockReasons.join(",")}`);
+    assert.ok(!result.blockReasons.includes("unsupported_commercial_commitment"));
+  }
+});
+
+test("ACS-R1-05-T06.2 (P1 correction): unsupported commercial commitments are blocked, never a bare topic word", () => {
+  const blockedPhrases = [
+    "Te garantizo stock.",
+    "Llega mañana con seguridad.",
+    "Te mantengo ese precio.",
+    "Te confirmo un descuento.",
+    "El despacho está asegurado.",
+    "La garantía cubrirá cualquier falla.",
+    "No tendrás ningún problema con la garantía.",
+    "Este equipo te servirá con total seguridad.",
+    // conjugation / phrasing variants - must not pass just by dodging one exact wording
+    "Te garantizamos que habrá stock.",
+    "Aseguramos que no tendrás problemas.",
+    "Confirmamos el descuento para ti.",
+    "Te prometemos entrega mañana.",
+    "Sin duda alguna, tendrás el descuento.",
+    "Cien por ciento seguro que llega mañana."
+  ];
+
+  for (const draftMessage of blockedPhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "blocked", `expected "${draftMessage}" to be blocked, got ${result.status}`);
+    assert.ok(result.blockReasons.includes("unsupported_commercial_commitment"), `expected "${draftMessage}" to be blocked by unsupported_commercial_commitment, got ${result.blockReasons.join(",")}`);
+  }
+});
+
 test("empty message still blocks autonomy on technical grounds", () => {
   const result = evaluate({
     action: {

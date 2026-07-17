@@ -40,7 +40,7 @@ function mapSandboxBlockReasons(input: ExecutionGateInput): ExecutionGateBlockRe
   if (reasons.includes("missing_recipient")) mapped.push("missing_recipient");
   if (reasons.includes("missing_idempotency_key")) mapped.push("missing_idempotency_key");
   if (reasons.includes("action_expired")) mapped.push("action_expired");
-  if (reasons.includes("unsafe_message") || reasons.includes("unsafe_payload")) mapped.push("unsafe_message");
+  if (reasons.includes("unsafe_message") || reasons.includes("unsafe_payload") || reasons.includes("unsupported_commercial_commitment")) mapped.push("unsafe_message");
   if (reasons.includes("duplicate_or_conflicting_action")) mapped.push("conflicting_action");
   if (reasons.includes("approval_required")) mapped.push("approval_not_satisfied");
   if (reasons.includes("risk_too_high")) mapped.push("risk_not_allowed");

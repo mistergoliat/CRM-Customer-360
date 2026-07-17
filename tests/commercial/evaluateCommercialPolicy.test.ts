@@ -269,6 +269,96 @@ test("blocks a price claim without evidence", () => {
   assert.ok(result.issues.some((issue) => issue.code === "sensitive_claim_blocked" || issue.code === "evidence_unverified" || issue.code === "claim_source_not_authorized"));
 });
 
+// ACS-R1-05-T06.2 (P1 correction): commitment grounding. The same declarative
+// draftText sentence must be allowed when backed by a real, verified claim
+// and require review when the Sales Agent wrote the fact in prose without
+// ever declaring a matching claim - evaluateCommercialClaims.ts alone cannot
+// catch the second case because it only ever governs claims that were
+// actually declared.
+
+test("a declarative catalog price statement is allowed when backed by a verified claim", () => {
+  const salesAgentResult = makeBaseResult({
+    responseProposal: {
+      messageIntent: "quote",
+      draftText: "El precio informado por catálogo es $500.000.",
+      language: "es",
+      tone: "friendly",
+      questions: [],
+      claims: [
+        {
+          type: "price",
+          value: "$500.000",
+          evidenceSource: "tool_result",
+          evidenceSummary: "Precio hidratado desde el catalogo real.",
+          verified: true,
+          confidence: "high",
+          expiresAt: "2026-06-18T00:00:00.000Z"
+        }
+      ],
+      disclaimers: [],
+      requiresApproval: "none",
+      blockedClaims: [],
+      confidence: "high"
+    },
+    evidence: [makeEvidence({ source: "tool_result", summary: "Fuente de precio autorizada.", expiresAt: "2026-06-18T00:00:00.000Z" })]
+  });
+
+  const result = evaluateCommercialPolicy(
+    makePolicyInput({
+      salesAgentResult,
+      featureFlags: { ...makePolicyInput().featureFlags, allowSensitiveClaims: true }
+    })
+  );
+
+  assert.equal(result.status, "allowed");
+  assert.ok(!result.warnings.includes("commercial_statement_missing_evidence"));
+});
+
+test("the identical declarative catalog price statement requires review when no matching claim was declared at all", () => {
+  const salesAgentResult = makeBaseResult({
+    responseProposal: {
+      messageIntent: "answer",
+      draftText: "El precio informado por catálogo es $500.000.",
+      language: "es",
+      tone: "friendly",
+      questions: [],
+      claims: [],
+      disclaimers: [],
+      requiresApproval: "none",
+      blockedClaims: [],
+      confidence: "high"
+    }
+  });
+
+  const result = evaluateCommercialPolicy(makePolicyInput({ salesAgentResult }));
+
+  assert.equal(result.status, "requires_review");
+  assert.ok(result.warnings.includes("commercial_statement_missing_evidence"));
+  assert.ok(result.appliedRules.includes("POLICY-DRAFT-STATEMENT-EVIDENCE"));
+});
+
+test("questions and pending-action sentences about sensitive topics never require grounding", () => {
+  const salesAgentResult = makeBaseResult({
+    responseProposal: {
+      messageIntent: "clarify",
+      draftText: "¿Quieres que revise el precio? Voy a consultar el stock. Necesito confirmar el despacho.",
+      language: "es",
+      tone: "friendly",
+      questions: ["¿Quieres que revise el precio?"],
+      claims: [],
+      disclaimers: [],
+      requiresApproval: "none",
+      blockedClaims: [],
+      confidence: "high"
+    }
+  });
+
+  const result = evaluateCommercialPolicy(makePolicyInput({ salesAgentResult }));
+
+  assert.equal(result.status, "allowed");
+  assert.ok(!result.warnings.includes("commercial_statement_missing_evidence"));
+});
+
 test("downgrades stale stock claims to review", () => {
   const salesAgentResult = makeBaseResult({
     responseProposal: {

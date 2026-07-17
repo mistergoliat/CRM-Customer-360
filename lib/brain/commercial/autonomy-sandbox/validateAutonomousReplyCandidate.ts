@@ -12,6 +12,7 @@ import type {
   SandboxAutonomyValidationResult
 } from "./types";
 import { parseAutonomousTestWaIds } from "./parseWhitelist";
+import { hasUnsupportedCommercialCommitment } from "./detectUnsupportedCommercialCommitment";
 
 const CLOSED_CASE_STATUSES = new Set(["closed", "resolved", "done", "cancelled", "expired", "archived", "finalized"]);
 const BLOCKED_STATUSES = new Set(["blocked", "cancelled", "failed", "executed", "rejected", "draft", "executing"]);
@@ -96,6 +97,11 @@ function buildMessageSafety(input: SandboxAutonomyEvaluationInput) {
 
   if (isJsonLike(fallback)) {
     reasons.push("unsafe_payload");
+    return { reasons, messagePreview: null };
+  }
+
+  if (hasUnsupportedCommercialCommitment(fallback)) {
+    reasons.push("unsupported_commercial_commitment");
     return { reasons, messagePreview: null };
   }
 

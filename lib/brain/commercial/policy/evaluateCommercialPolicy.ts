@@ -2,6 +2,7 @@ import { COMMERCIAL_POLICY_CONTRACT_VERSION, COMMERCIAL_POLICY_VERSION } from ".
 import { createCommercialPolicyFailedSafe } from "./createCommercialPolicyFailedSafe";
 import { evaluateCommercialActions } from "./evaluateCommercialActions";
 import { evaluateCommercialClaims } from "./evaluateCommercialClaims";
+import { evaluateCommercialCommitmentGrounding } from "./evaluateCommercialCommitmentGrounding";
 import { evaluateCommercialEntityProposals } from "./evaluateCommercialEntityProposals";
 import { evaluateCommercialToolRequests } from "./evaluateCommercialToolRequests";
 import type {
@@ -272,11 +273,26 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
   const entityProposalEvaluation = evaluateCommercialEntityProposals(input);
   const channelSignals = computeChannelSignals(input);
 
+  /**
+   * ACS-R1-05-T06.2 (P1 correction): a claim only counts as grounding
+   * evidence for the draft-text scan below when its own assessment came
+   * back fully "allowed" (verified, fresh, strong source for sensitive
+   * types) - a claim under review or already blocked is not evidence.
+   */
+  const groundedClaimTypes = new Set(
+    claimEvaluation.assessments.filter((assessment) => assessment.status === "allowed").map((assessment) => assessment.claim.type)
+  );
+  const commitmentGrounding = evaluateCommercialCommitmentGrounding(
+    input.salesAgentResult.responseProposal?.draftText ?? null,
+    groundedClaimTypes
+  );
+
   const issues: CommercialPolicyIssue[] = [
     ...claimEvaluation.issues,
     ...actionEvaluation.issues,
     ...toolRequestEvaluation.issues,
-    ...entityProposalEvaluation.issues
+    ...entityProposalEvaluation.issues,
+    ...commitmentGrounding.issues
   ];
 
   const warnings = uniqueStrings([
@@ -284,6 +300,7 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
     ...actionEvaluation.warnings,
     ...toolRequestEvaluation.warnings,
     ...entityProposalEvaluation.warnings,
+    ...commitmentGrounding.warnings,
     ...(channelSignals.channelBlock ? ["outbound_blocked"] : []),
     /**
      * ACS-R1-05-T06.2: each review cause is reported by its own real name -
@@ -338,6 +355,7 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
     ...actionEvaluation.appliedRules,
     ...toolRequestEvaluation.appliedRules,
     ...entityProposalEvaluation.appliedRules,
+    ...commitmentGrounding.appliedRules,
     ...channelAppliedRules
   ]);
 
@@ -384,7 +402,14 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
     toolRequestEvaluation.assessments.filter((assessment) => assessment.status === "review").length +
     entityProposalEvaluation.assessments.filter((assessment) => assessment.status === "review").length;
 
-  const status = buildStatus(blockedCount, reviewCount, hasFatalIssue, hasAllowedContent, channelSignals.channelReview, channelSignals.channelBlock);
+  const status = buildStatus(
+    blockedCount,
+    reviewCount,
+    hasFatalIssue,
+    hasAllowedContent,
+    channelSignals.channelReview || commitmentGrounding.requiresReview,
+    channelSignals.channelBlock
+  );
   const requiresApproval = maxApproval(
     maxApproval(claimEvaluation.requiresApproval, actionEvaluation.requiresApproval),
     maxApproval(toolRequestEvaluation.requiresApproval, entityProposalEvaluation.requiresApproval)
