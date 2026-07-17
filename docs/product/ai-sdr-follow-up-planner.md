@@ -160,3 +160,14 @@ Move to execution control only after:
 - outbox integration is ready,
 - scheduler semantics are explicit,
 - the operator can review the action before send.
+
+## Runtime authority (ACS-R1-05-T05)
+
+`docs/audits/follow-up-runtime-reconciliation.md` found five parallel implementations of follow-up decision logic (P2-1). `ACS-R1-05-T05` closed that gap without changing this planner's contract:
+
+- **Canonical productive chain**: `sales-consultative/engine.ts` (trigger) -> `follow-up-planner/planFollowUp.ts` (this document, `planCommercialFollowUp` - the only source of `intent`/`scheduledFor`/`attemptNumber`/`maxAttempts`/`status`/`riskLevel`/`approvalRequirement`/`idempotencyKey`) -> `sales-consultative/followUpDispatchPolicy.ts` (gate) -> `sales-consultative/repository.ts` (persistence, `crm_agent_actions`) -> `autonomous-followup-worker.ts`/`runFollowupTick.ts` -> `runNativeAutonomousCycle` -> `canonicalOutboxWriter.ts` -> `autonomous-outbox-worker.ts` -> Meta.
+- **Removed (dead, zero productive callers)**: `multi-request/requestFollowups.ts`'s scheduler/persister (`scheduleRequestFollowup`, `scheduleFollowupFromDefinition`, `runRequestFollowupTick`) - it computed its own `delayMinutes`-based cooldown and wrote `crm_agent_actions` rows under `action_type = 'request_followup'` through a path nothing in production ever called. The module's read-only projection (`listPendingFollowupsForRequest`, used by `requestsView.ts` for the HUB request panel) was kept - it is not a planner, it does not compute or persist anything.
+- **Isolated as a dev-only sandbox, not production coverage**: `lib/brain/commercial/autonomous-loop/**` (+ its private dependencies `follow-up-scheduling/**`, `follow-up-replanning/**`) and `lib/brain/messaging/outbox-worker/**` (hyphenated). Both are fully in-memory (fake transport, fake DB state), reachable only from `app/(hub)/dev/ai-sdr-simulator` behind `BRAIN_SCENARIO_SIMULATOR_ENABLED`/`BRAIN_SCENARIO_SIMULATOR_ALLOW_EXECUTE_FAKE` (both default `false`). They are no longer re-exported from the production `lib/brain/commercial`/`lib/brain/messaging` barrels, and `tests/commercial/followUpRuntimeAuthority.test.ts` asserts no production file outside that dev boundary imports them.
+- `policy/evaluateCommercialPolicy.ts` is unaffected - it is already the real, connected `follow_up_dispatch_policy` gate since `ACS-R1-05-T02` (see `follow-up-decision-policy.md`).
+
+After `T05`, no configuration selects an alternate planner for productive follow-up: `planCommercialFollowUp` is the only one with a real caller.

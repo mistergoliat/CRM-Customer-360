@@ -341,3 +341,13 @@ The associated TypeScript contracts live in:
 - `lib/brain/commercial/followUpTypes.ts`
 - `lib/brain/commercial/followUpConstants.ts`
 - `lib/brain/commercial/index.ts`
+
+## Runtime authority (ACS-R1-05-T05)
+
+`docs/audits/follow-up-runtime-reconciliation.md` found five parallel follow-up decision implementations (P2-1: this document's own vocabulary, `follow-up-planner/planFollowUp.ts`, `sales-consultative/engine.ts`, `autonomous-loop/evaluateAutonomousLoop.ts`, and the dead `multi-request/requestFollowups.ts`). `ACS-R1-05-T05` reconciled that without changing this policy's invariants:
+
+- The only productive persister of `schedule_followup` is `sales-consultative/repository.ts`, gated by `follow_up_dispatch_policy` (`sales-consultative/followUpDispatchPolicy.ts` -> `policy/evaluateCommercialPolicy.ts`, connected since `ACS-R1-05-T02`, see above).
+- `multi-request/requestFollowups.ts` had its own scheduler/persister (`scheduleRequestFollowup`, `scheduleFollowupFromDefinition`, `runRequestFollowupTick`) removed - it duplicated this policy's decision surface (its own `delayMinutes`-per-intent cooldown, its own `crm_agent_actions` writer) with zero productive callers. `multi-request` keeps recommending context/intent for its own request lifecycle; it no longer has any path to plan or persist a follow-up.
+- `lib/brain/commercial/autonomous-loop/**` (plus `follow-up-scheduling/**`/`follow-up-replanning/**`) is an in-memory-only dev sandbox reachable solely from `app/(hub)/dev/ai-sdr-simulator`, not re-exported from any production barrel. It cannot compete with the policy described here for a real customer.
+
+No configuration lets an operator choose an alternate policy/planner for productive follow-up dispatch.
