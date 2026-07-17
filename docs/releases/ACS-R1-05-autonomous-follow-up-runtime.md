@@ -3,9 +3,9 @@ release: ACS-R1-05
 title: Autonomous Follow-up Runtime
 doc_id: release-acs-r1-05-autonomous-follow-up-runtime
 status: parallel_in_progress
-updated_at: 2026-07-15
-current_task: ACS-R1-05-T05
-next_task: ACS-R1-05-T07
+updated_at: 2026-07-17
+current_task: ACS-R1-05-T07
+next_task: none (T07 closes ACS-R1-05)
 blocked: false
 owner: product
 source_of_truth_for:
@@ -66,25 +66,40 @@ Esta release no redefine hallazgos: el alcance completo, la matriz de clasificac
 | ACS-R1-05-T02 | Aplicar follow-up dispatch policy | done | ACS-R1-05-T01 | P0-4 (opt-out/quiet-hours/identity-conflict shadow-only, nunca gatean el write real); conecta `follow_up_dispatch_policy` (`evaluateCommercialPolicy`) como gate obligatorio antes de `upsertActionRow` |
 | ACS-R1-05-T03 | Hardening del worker | done | ACS-R1-05-T01 | P0-2 (sin stale-lock recovery), P0-3 (sin retry/enforcement de `max_attempts`), P1-1 (`cancelFollowUp` sin precondicion de status) |
 | ACS-R1-05-T04 | Consolidar outbox y delivery outcomes | done | ACS-R1-05-T01 | P1-3 (delivery outcomes no llegan a `crm_opportunities`), P1-4 (dos escritores divergentes de `brain_message_outbox`) |
-| ACS-R1-05-T05 | Aislar runtimes paralelos o muertos | ready | ACS-R1-05-T01 | P2-1 (5 planners paralelos), P2-2 (`multi-request/requestFollowups.ts` muerto), P2-5 (modulo `outbox-worker/` hyphenated duplicado) |
+| ACS-R1-05-T05 | Aislar runtimes paralelos o muertos | done | ACS-R1-05-T01 | P2-1 (5 planners paralelos), P2-2 (`multi-request/requestFollowups.ts` muerto), P2-5 (modulo `outbox-worker/` hyphenated duplicado) |
 | ACS-R1-05-T06 | Seguridad y configuracion operacional | done | ACS-R1-05-T01 | P1-2 (`failure_reason` sin redactar), P1-5 (flags auto-escalados en silencio por los dos workers) |
 | ACS-R1-05-T07 | E2E productivo y restart recovery | ready | ACS-R1-05-T01 a T06 | Cierra la release: verifica end-to-end (patron del harness existente de identity onboarding) que el runtime consolidado sostiene reinicio/retry sin duplicar ni perder envios |
 
 ## Tarea actual
 
-`ACS-R1-05-T05`
+`ACS-R1-05-T07`
 
 ## Definition of Done de la tarea actual
 
-`ACS-R1-05-T05` debe aislar o eliminar el codigo muerto/paralelo identificado por la auditoria: `multi-request/requestFollowups.ts` (cero callers productivos), la familia `autonomous-loop` relativa a produccion, y el modulo `outbox-worker/` hyphenated (alcanzable solo desde el simulador `/dev`); y reconciliar `ai-sdr-follow-up-planner.md`/`follow-up-decision-policy.md` con la implementacion real (`sales-consultative`).
+`ACS-R1-05-T07` (`ready`, no iniciada en esta rama) cierra la release: E2E productivo y restart recovery sobre el runtime ya consolidado (`T01`..`T06`). Su fila de dependencias exige `T01 a T06`, rango que ahora esta completo (`T05` cerro en esta rama). **No objetivo de esta rama**: `ACS-R1-05-T05` no implementa `T07` ni ejecuta su smoke - ver nota operativa.
 
 ## Siguiente tarea
 
-`ACS-R1-05-T07` (`ready`, no iniciada - su fila de dependencias exige T01 a T06, lo que incluye T05; no puede aceptarse formalmente hasta que T05 cierre, ver nota operativa)
+Ninguna dentro de `ACS-R1-05`: `ACS-R1-05-T07` cierra la release.
 
-## Nota operativa - diferimiento de ACS-R1-05-T05
+## Nota operativa - integracion pendiente antes de T07
 
-`ACS-R1-05-T05` se diferio temporalmente (de `in_progress` a `ready`, sin codigo tocado - no existia rama ni commit propios en el momento del diferimiento) para priorizar `ACS-R1-05-T06` y acelerar el piloto controlado. `T05` sigue siendo obligatoria antes de la aceptacion formal de `ACS-R1-05-T07` (su fila de dependencias exige `T01 a T06`, rango que incluye `T05`). El smoke E2E controlado que `T06` deja preparado (allowlist no vacia, workers fail-closed, sin auto-escalacion de flags) **no equivale** a `ACS-R1-05-T07` ni habilita declarar `operational: verified` en `CAPABILITY_MATRIX.md` - es unicamente la condicion de seguridad operacional para poder ejecutarlo de forma controlada.
+`ACS-R1-05-T05` cerro en la rama `acs-r1-05-t05-isolate-parallel-runtimes`, creada directamente desde `develop` y sin mezclar ni hacer cherry-pick de `acs-r1-05-t06-2-sales-turn-continuity` (rama separada, ya pusheada, congelada, pendiente de validacion DB - no reconciliada todavia en la tabla de tareas de este documento). `ACS-R1-05-T07` requiere integrar de forma controlada `T05` (esta rama) + la rama congelada `acs-r1-05-t06-2-sales-turn-continuity` y ejecutar la validacion DB/restart recovery antes de poder cerrarse. No se declara `follow-up operational: verified` en ningun documento como resultado de `T05`.
+
+## Evidencia de cierre - ACS-R1-05-T05
+
+Estado: `done`. Rama `acs-r1-05-t05-isolate-parallel-runtimes`, creada desde `develop` (`433aaab`, sincronizado con `origin/develop`).
+
+Cierra `P2-1`/`P2-2`/`P2-5` de la auditoria sin agregar funcionalidad, sin cambiar politica comercial/cadencias/retries/contenido/handoff/catalogo/envio, y sin tocar `crm_agent_actions`/`crm_agent_decisions`/`brain_message_outbox`/`crm_action_outcomes`/`commercial_event` (cero migraciones, cero cambios de schema).
+
+- **P2-2 (`multi-request/requestFollowups.ts`, dead)**: `scheduleRequestFollowup`, `scheduleFollowupFromDefinition`, `runRequestFollowupTick` y `cancelFollowupRow` se eliminaron - verificado con `rg` que su unico caller productivo (`sales-consultative`, `runNativeAutonomousCycle`, `runMultiRequestAutonomousCycle`) nunca los invocaba; sus unicos usos vivian en `tests/commercial/requestFollowups.test.ts` (eliminado con ellos, 6 tests exclusivos del runtime muerto). `listPendingFollowupsForRequest` (lectura pura sobre `crm_agent_actions` filtrada por `action_type = 'request_followup'`) se conservo intacta: es un caller productivo real de `requestsView.ts` -> `app/api/conversations/[id]/requests/route.ts`. `tests/commercial/requestsView.test.ts` se actualizo para sembrar la fila de prueba con un INSERT directo (`seedPendingRequestFollowup`) en vez de la funcion eliminada - la aserción general que valida ("la vista HUB expone `pendingFollowups`") no cambio.
+- **P2-1 (5 planners paralelos)**: tras esta tarea, `follow-up-planner/planFollowUp.ts#planCommercialFollowUp` es la unica funcion productiva que calcula `intent`/`scheduledFor`/`attemptNumber`/`maxAttempts`/`status`/`riskLevel`/`approvalRequirement`/`idempotencyKey` para `schedule_followup` (consumida exclusivamente por `sales-consultative/repository.ts`, sin cambios de esta tarea). `policy/evaluateCommercialPolicy.ts` ya era el gate real conectado desde `ACS-R1-05-T02` (sin cambios). `autonomous-loop/evaluateAutonomousLoop.ts` y `multi-request/requestFollowups.ts` (los dos planners sin caller productivo) quedan aislados/eliminados como se describe arriba y abajo.
+- **P2-5 (`lib/brain/messaging/outbox-worker/` hyphenated)**: se confirmo con `rg` que es alcanzable unicamente desde `lib/brain/commercial/autonomous-loop/**` (en memoria, `FakeMessageTransport`/`FakeWhatsAppHttpClient`, cero SQL, cero `fetch`, cero `graph.facebook` - ya cubierto por un test existente que audita el codigo fuente del modulo) y desde su propio test (`tests/commercial/outboxWorker.test.ts`, con un comentario nuevo de cabecera que deja explicito que cubre el simulador, no el worker productivo `lib/brain/messaging/outboxWorker.ts`). No se reescribio el simulador para usar el runtime canonico via DI: el simulador ya no ejecuta ningun SQL/sender/claim/retry real (verificado, no solo asumido) y esta marcado "Legacy scenario simulator" en la propia UI (`app/(hub)/dev/ai-sdr-simulator/page.tsx`, colapsado bajo un `<details>`), asi que reconstruirlo para inyectar el worker real habria sido una remodelacion funcional fuera del alcance de una tarea de aislamiento. En su lugar se corto su alcanzabilidad: `lib/brain/commercial/index.ts` y `lib/brain/messaging/index.ts` ya no re-exportan `autonomous-loop`, `scenario-simulator`, `follow-up-scheduling`, `follow-up-replanning` ni `../messaging/outbox-worker` (ninguna de esas rutas tenia un caller productivo via esos barrels - confirmado antes de tocarlos).
+- **Familia `autonomous-loop` relativa a produccion**: clasificada componente por componente (ver seccion de auditoria de la tarea) - `evaluateAutonomousLoop.ts`/`executeAutonomousLoop.ts` (simulador in-memory), `follow-up-scheduling/**`/`follow-up-replanning/**` (contratos puros, sin DB, consumidos solo por el simulador), `scenario-simulator/**` (orquestador del simulador, UI en `/dev`). Ninguno tiene caller productivo; ninguno se elimino como codigo (serian utiles si el producto decide en el futuro construir un scheduler multi-cliente real sobre esos contratos puros), pero los cuatro quedan fuera de los barrels de produccion y cubiertos por el test de autoridad nuevo.
+- **Reconciliacion documental**: `ai-sdr-follow-up-planner.md` y `follow-up-decision-policy.md` ahora documentan la cadena canonica real y los componentes eliminados/aislados (secciones "Runtime authority (ACS-R1-05-T05)").
+- **Tests**: `tests/commercial/followUpRuntimeAuthority.test.ts` (nuevo, 5 tests estaticos, sin DB): sin import productivo de `autonomous-loop`/`scenario-simulator`/`outbox-worker` hyphenated fuera del boundary dev; los barrels de produccion no los re-exportan; `requestFollowups.ts` no define los tres exports eliminados; `sales-consultative/repository.ts` es el unico persistidor productivo de `schedule_followup` y deriva de `follow-up-planner`; `canonicalOutboxWriter.ts` sigue siendo el unico escritor SQL productivo de `brain_message_outbox`. Verificado que estos 3 de los 5 tests fallan contra `develop` HEAD (`433aaab`) antes de esta tarea (sanity check via `git stash`), confirmando que no son vacuos.
+- **Regresion**: `npx tsc --noEmit` limpio; `npm run build` exitoso (incluida la ruta `/dev/ai-sdr-simulator`, que sigue compilando via imports directos a sus propios submodulos). Suite completa: entorno sin Docker/MariaDB disponible (igual que la auditoria original) - `develop` HEAD (`433aaab`) da 1293 tests, 959 pass, 334 fail; esta rama da 1292 tests (6 tests exclusivos del runtime muerto eliminados, 5 tests de autoridad nuevos), 964 pass, 328 fail. Diff exacto de nombres de test fallidos: el conjunto de fallos de esta rama es un subconjunto estricto del de `develop` (cero fallos nuevos); los 6 fallos que desaparecen son exactamente los de `requestFollowups.test.ts` (fallaban por `ECONNREFUSED`, no por logica). `followUpPlanner.test.ts`/`followUpPlanAdapter.test.ts`/`followUpDispatchPolicy.test.ts` (puros, sin DB) siguen 100% en verde sin ninguna asercion modificada.
+- No objetivo de `T05` tocado: `crm_agent_actions`/`crm_agent_decisions`/`brain_message_outbox`/`crm_action_outcomes`/`commercial_event` (schema intacto), cadencia/max attempts/quiet hours/opt-out/human ownership/aiBlocked/identity conflict/stale-lock recovery/retry/cancellation/Meta delivery/outbox dedupe/failure redaction/pilot allowlist (todo T01-T04/T06 sin tocar), `ACS-R1-05-T06.2` (rama separada, no incluida, no integrada), `ACS-R1-05-T07` (no iniciada).
 
 ## Evidencia de cierre - ACS-R1-05-T06
 
@@ -197,3 +212,5 @@ Ninguno propio de esta release. No depende de Customer Service (`PAUSED_EXTERNAL
 - Frequency cap por customer: no existe en ningun path (planner, policy o persistencia). No es alcance de `ACS-R1-05-T01`..`T07`; registrar como tarea futura si el negocio lo requiere.
 - `metaSendAdapter.ts` (envio con guards de politica) permanece sin usar por ningun worker productivo (P3-1 de la auditoria); no es bloqueante para esta release.
 - El `correlationId` de follow-up no se persiste como columna propia (P3-2); reconstruir la traza sigue requiriendo joins por `decision_id`/`action_id`.
+- `ACS-R1-05-T05` no elimino el codigo fuente de `autonomous-loop/**`, `follow-up-scheduling/**`, `follow-up-replanning/**` ni `messaging/outbox-worker/**` (hyphenated) - los aislo de los barrels de produccion y los cubrio con un test de autoridad. Son simuladores/contratos puros reales y podrian reutilizarse si el producto decide construir un scheduler multi-cliente sobre esos contratos; si se decide que no tienen valor futuro, borrarlos por completo queda como limpieza posterior, no bloqueante.
+- `tests/commercial/outboxWorker.test.ts` no se reemplazo/movio a un nombre que deje explicito desde el nombre de archivo que cubre el simulador hyphenated, no el worker productivo `outboxWorker.ts` - se documento con un comentario de cabecera en vez de un rename para mantener el diff minimo; un rename futuro es cosmetico, no bloqueante.

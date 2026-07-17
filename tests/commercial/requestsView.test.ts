@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test, { after } from "node:test";
-import { getPool } from "@/lib/db";
+import { getPool, safeExecute } from "@/lib/db";
 import {
   deferRequestAction,
   loadConversationRequestsView,
   loadRequestDetailView,
-  runMultiRequestAutonomousCycle,
-  scheduleRequestFollowup
+  runMultiRequestAutonomousCycle
 } from "@/lib/brain/commercial/multi-request";
 import { createQuoteDraft } from "@/lib/brain/commercial/quotes";
 import { escalateRequest } from "@/lib/brain/commercial/request-escalations";
@@ -42,6 +42,27 @@ function uniqueSuffix(label: string) {
   return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
+/**
+ * Test-only seed for a pending `request_followup` row. ACS-R1-05-T05 removed
+ * the productive scheduler (`scheduleRequestFollowup`, zero real callers) -
+ * this inserts the same shape directly so `listPendingFollowupsForRequest`
+ * (still the real, connected read path behind `requestsView.ts`) has
+ * something to project.
+ */
+async function seedPendingRequestFollowup(requestId: string, scheduledFor: string): Promise<void> {
+  const actionId = `action-${randomUUID()}`;
+  const idempotencyKey = `followup-test-${randomUUID()}`;
+  const insert = await safeExecute(
+    `INSERT IGNORE INTO \`crm_agent_actions\` (
+        action_id, idempotency_key, request_id, action_type, status,
+        risk_level, approval_requirement, draft_payload_json, scheduled_for,
+        source, created_by
+      ) VALUES (?, ?, ?, 'request_followup', 'scheduled', 'low', 'none', ?, ?, 'multi_request_runtime', 'ai')`,
+    [actionId, idempotencyKey, requestId, JSON.stringify({ purpose: "quote_follow_up" }), scheduledFor.slice(0, 19).replace("T", " ")]
+  );
+  assert.equal(insert.ok, true, insert.ok ? "" : insert.error);
+}
+
 test("the HUB view composes state, facts, quote, escalation, deferred work and trail per request", async () => {
   const conversationId = 900000000 + Math.floor(Math.random() * 99999999);
 
@@ -67,11 +88,7 @@ test("the HUB view composes state, facts, quote, escalation, deferred work and t
     actionType: "send_quote",
     reason: "waiting_confirmation"
   });
-  await scheduleRequestFollowup({
-    requestId: quoteRequest.requestId,
-    purpose: "quote_follow_up",
-    scheduledFor: new Date(Date.now() + 3_600_000).toISOString()
-  });
+  await seedPendingRequestFollowup(quoteRequest.requestId, new Date(Date.now() + 3_600_000).toISOString());
   await escalateRequest({
     requestId: complaintRequest.requestId,
     category: "customer_service",
