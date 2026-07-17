@@ -95,7 +95,10 @@ async function persistDisposition(input: {
     nextBestAction: input.disposition.nextBestActionDefined ? "defined" : null,
     followUpEligible: input.disposition.followUpEligible,
     followUpReason: input.disposition.followUpReason,
-    terminalOutcome: input.disposition.terminalOutcome
+    terminalOutcome: input.disposition.terminalOutcome,
+    acknowledgementSender: input.disposition.acknowledgementSender,
+    waitingFor: input.disposition.waitingFor,
+    handoffCreated: input.disposition.handoffCreated
   };
 
   try {
@@ -135,6 +138,9 @@ function baseDisposition(overrides: Partial<SalesTurnDisposition> & Pick<SalesTu
     fallbackUsed: false,
     followUpEligible: false,
     followUpReason: null,
+    acknowledgementSender: null,
+    waitingFor: "none",
+    handoffCreated: false,
     ...overrides
   };
 }
@@ -204,6 +210,8 @@ export async function ensureAutonomousSalesTurnContinuity(
     const disposition = baseDisposition({
       terminalOutcome: "human_response_required",
       responseOwner: "human",
+      waitingFor: "human_response",
+      handoffCreated: true,
       commercialObjective: mapCommercialObjective(nextActionType, catalogExecuted),
       opportunityAdvanced,
       nextBestActionDefined,
@@ -248,9 +256,19 @@ export async function ensureAutonomousSalesTurnContinuity(
       caseStatus: resultingState?.status ?? null
     });
 
+    /**
+     * ACS-R1-05-T06.2 (second correction, section 9): the AI may author the
+     * acknowledgement text, but ownership of the actual resolution is
+     * always the human being handed off to - `responseOwner` reads "human"
+     * even when `dispatched.outboxWritten` is true; `acknowledgementSender`
+     * separately records that the AI sent that specific message.
+     */
     const disposition = baseDisposition({
       terminalOutcome: dispatched.outboxWritten ? "handoff_acknowledgement_planned" : "human_response_required",
-      responseOwner: dispatched.outboxWritten ? "ai" : "human",
+      responseOwner: "human",
+      acknowledgementSender: dispatched.outboxWritten ? "ai" : null,
+      waitingFor: "human_response",
+      handoffCreated: true,
       commercialObjective: "handoff",
       responsePlanned: dispatched.outboxWritten,
       opportunityAdvanced,
@@ -299,6 +317,7 @@ export async function ensureAutonomousSalesTurnContinuity(
       const disposition = baseDisposition({
         terminalOutcome: "human_response_required",
         responseOwner: "human",
+        waitingFor: "human_response",
         commercialObjective: mapCommercialObjective(nextActionType, catalogExecuted),
         opportunityAdvanced,
         nextBestActionDefined,
@@ -321,6 +340,16 @@ export async function ensureAutonomousSalesTurnContinuity(
     }
 
     const fallbackClass = classifyFallback(cycle);
+    /**
+     * ACS-R1-05-T06.2 (second correction, section 9): only `unsafe_primary_draft`
+     * means the draft was blocked for CONTENT reasons (an unsupported
+     * commitment, or an ungrounded commercial statement) - that genuinely
+     * needs a person's judgment, not just a retry. `catalog_unavailable` /
+     * `model_unavailable` / `invalid_model_result` are infrastructure
+     * failures the AI can legitimately keep owning and retry autonomously
+     * on a later turn, so `responseOwner` stays "ai" for those.
+     */
+    const isSafetyFallback = fallbackClass === "unsafe_primary_draft";
     const message = buildContinuityFallbackMessage(fallbackClass, commercialNeed);
     const dispatched = await dispatchFallbackAction({
       conversationId: input.conversationId,
@@ -339,7 +368,10 @@ export async function ensureAutonomousSalesTurnContinuity(
 
     const disposition = baseDisposition({
       terminalOutcome: dispatched.outboxWritten ? "fallback_outbox_planned" : "continuity_failed",
-      responseOwner: dispatched.outboxWritten ? "ai" : "none",
+      responseOwner: isSafetyFallback ? "human" : dispatched.outboxWritten ? "ai" : "none",
+      acknowledgementSender: isSafetyFallback && dispatched.outboxWritten ? "ai" : null,
+      waitingFor: isSafetyFallback ? "human_response" : "none",
+      handoffCreated: isSafetyFallback,
       commercialObjective: mapCommercialObjective(nextActionType, catalogExecuted),
       responsePlanned: dispatched.outboxWritten,
       opportunityAdvanced,
@@ -348,6 +380,19 @@ export async function ensureAutonomousSalesTurnContinuity(
       followUpEligible,
       followUpReason
     });
+
+    /**
+     * ACS-R1-05-T06.2 (second correction, section 14): "duplicate_ignored"
+     * means a concurrent execution already legitimately owns this exact
+     * fallback's idempotency key (persistAgentAction.ts's ER_DUP_ENTRY
+     * recovery, or a prior terminal row) - that sibling call already wrote,
+     * or will write, its own disposition. If ITS outbox write had not yet
+     * landed at the exact instant we re-selected its row, that is a timing
+     * artifact of this call losing the race, never a real continuity
+     * failure - persisting `autonomous_turn_continuity_failed` here would
+     * be spurious for a turn that its sibling is actively completing.
+     */
+    const lostRaceToConcurrentSibling = dispatched.actionPersistence?.status === "duplicate_ignored";
 
     if (dispatched.outboxWritten) {
       await persistDisposition({
@@ -362,7 +407,7 @@ export async function ensureAutonomousSalesTurnContinuity(
         fallbackActionId: dispatched.action?.actionId ?? null,
         outboxId: dispatched.outboxId === null ? null : String(dispatched.outboxId)
       });
-    } else {
+    } else if (!lostRaceToConcurrentSibling) {
       await persistContinuityFailed({
         inboundMessageId,
         correlationId: input.correlationId,

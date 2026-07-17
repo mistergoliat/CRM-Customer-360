@@ -154,6 +154,104 @@ function createUnsafeDraftProvider(): SalesAgentProvider {
   };
 }
 
+/**
+ * ACS-R1-05-T06.2 (second correction, section 4/8/9). A provider whose draft
+ * states a concrete commercial fact (a specific price) without declaring any
+ * matching claim - never a technical sandbox block, never an absolute
+ * promise the sandbox's commitment detector would catch. This is meant to
+ * trip ONLY evaluateCommercialCommitmentGrounding.ts's instance-level check,
+ * so the turn can be traced end-to-end: policy requires_review -> action
+ * requires_review -> escalate_to_operator -> handoff acknowledgement, with
+ * responseOwner correctly attributed to the human, not the AI.
+ */
+function createUngroundedDeclarativeStatementProvider(): SalesAgentProvider {
+  return {
+    name: "test-ungrounded-declarative-provider",
+    version: "test.v1",
+    async invoke(request: SalesAgentProviderRequest) {
+      const rawOutput = {
+        runId: request.correlationId ?? "fake-run-id",
+        contractVersion: request.contractVersion,
+        outcome: "response_proposed",
+        analysis: {
+          summary: "Cliente busca jaula de potencia con presupuesto definido.",
+          qualificationState: "qualified",
+          customerReadiness: "ready",
+          productFit: "good",
+          confidence: "high",
+          riskLevel: "low",
+          reasonCodes: ["customer_message_present"]
+        },
+        decision: {
+          type: "respond_now",
+          reason: "Hay contexto suficiente para responder.",
+          confidence: "high",
+          riskLevel: "low",
+          requiresApproval: "none",
+          errorCode: "none",
+          reasonCodes: ["customer_message_present"],
+          policyTags: ["commercial_reply"]
+        },
+        shouldRespondNow: true,
+        shouldRequestTool: false,
+        shouldRequestHuman: false,
+        shouldEvaluateFollowUp: false,
+        proposedActions: [],
+        toolRequests: [],
+        entityProposals: [],
+        responseProposal: {
+          messageIntent: "answer",
+          draftText: "El precio informado por catálogo es $999.999.",
+          language: "es",
+          tone: "friendly",
+          questions: [],
+          claims: [],
+          disclaimers: [],
+          requiresApproval: "none",
+          blockedClaims: [],
+          confidence: "medium"
+        },
+        evidence: [
+          { source: "customer_message", summary: "Mensaje del cliente.", verified: true, confidence: "high", reference: "latest_inbound_message", capturedAt: new Date(0).toISOString(), expiresAt: null }
+        ],
+        policyAssessment: {
+          status: "allowed",
+          blocked: false,
+          reason: "Sin bloqueo de politica.",
+          confidence: "high",
+          riskLevel: "low",
+          approvalRequirement: "none",
+          errorCode: "none",
+          reasonCodes: [],
+          policyTags: ["commercial_reply"]
+        },
+        warnings: [],
+        rationale: {
+          summary: "Responder ahora.",
+          evidence: ["Mensaje inbound del cliente."],
+          counterEvidence: [],
+          assumptions: [],
+          riskFlags: [],
+          missingInformation: [],
+          policyRulesApplied: []
+        },
+        metadata: {}
+      };
+
+      return {
+        rawOutput,
+        model: "test-model",
+        inputTokens: 32,
+        outputTokens: 32,
+        estimatedCost: 0,
+        providerRequestId: "test-provider-request-id",
+        finishReason: "stop",
+        metadata: {}
+      };
+    }
+  };
+}
+
 const CYCLE_ENV = {
   BRAIN_COMMERCIAL_SHADOW_ENABLED: "true",
   BRAIN_COMMERCIAL_RUNTIME_ENABLED: "true",
@@ -196,7 +294,15 @@ test("ACS-R1-05-T06.2: a technically-blocked draft (unresolved placeholder) is t
     assert.ok(!cycle.bridge?.sandboxEvaluation?.blockReasons.includes("unsafe_message"), "must never be blocked by the removed lexical check");
 
     assert.equal(disposition.terminalOutcome, "fallback_outbox_planned");
-    assert.equal(disposition.responseOwner, "ai");
+    // ACS-R1-05-T06.2 (second correction, section 9): an unresolved
+    // placeholder reaching the sandbox is a content-safety issue
+    // (fallbackClass "unsafe_primary_draft"), not infrastructure - real
+    // resolution needs a person, so responseOwner reads "human" even
+    // though the AI is the one who sent the safe acknowledgement.
+    assert.equal(disposition.responseOwner, "human");
+    assert.equal(disposition.acknowledgementSender, "ai");
+    assert.equal(disposition.waitingFor, "human_response");
+    assert.equal(disposition.handoffCreated, true);
     assert.equal(disposition.responsePlanned, true);
     assert.equal(disposition.fallbackUsed, true);
 
@@ -223,6 +329,59 @@ test("ACS-R1-05-T06.2: a technically-blocked draft (unresolved placeholder) is t
     );
     assert.equal(eventRows.length, 1);
     assert.equal(eventRows[0].event_type, "autonomous_turn_disposition");
+  } finally {
+    process.env = previousEnv;
+    resetCapabilityGatewayCatalogPortForTests();
+  }
+});
+
+test("ACS-R1-05-T06.2 (second correction, section 4/8/9): an ungrounded declarative price statement is held for review, escalated with a safe acknowledgement, and never reaches the customer as-is", async () => {
+  const seeded = await seedConversation();
+  const previousEnv = { ...process.env };
+  Object.assign(process.env, CYCLE_ENV, { BRAIN_AUTONOMOUS_TEST_WA_IDS: seeded.waId });
+  resetCapabilityGatewayCatalogPortForTests();
+
+  try {
+    const correlationId = uniqueSuffix("corr-ungrounded");
+    const { cycle, disposition } = await ensureAutonomousSalesTurnContinuity({
+      conversationId: seeded.conversationId!,
+      conversationPublicId: seeded.conversationPublicId as string,
+      customerMasterId: seeded.customerId ?? null,
+      waId: seeded.waId,
+      phoneNumberId: seeded.phoneNumberId,
+      messageId: seeded.messageId ?? null,
+      messageText: "Necesito una jaula de potencia para entrenar en casa. Mi presupuesto maximo es 800000.",
+      correlationId,
+      currentTime: new Date().toISOString(),
+      provider: createUngroundedDeclarativeStatementProvider()
+    });
+
+    assert.equal(cycle.ran, true);
+    // Not a sandbox block - the draft has no commitment marker at all - it is
+    // policy's commitmentGrounding check that catches the missing evidence.
+    assert.ok(!cycle.bridge?.sandboxEvaluation?.blockReasons.includes("unsupported_commercial_commitment"));
+
+    assert.equal(disposition.terminalOutcome, "handoff_acknowledgement_planned");
+    assert.equal(disposition.responseOwner, "human");
+    assert.equal(disposition.acknowledgementSender, "ai");
+    assert.equal(disposition.waitingFor, "human_response");
+    assert.equal(disposition.handoffCreated, true);
+    assert.equal(disposition.commercialObjective, "handoff");
+
+    // The original ungrounded-price action must never reach the outbox.
+    const originalActionId = cycle.bridge?.action?.actionId;
+    if (originalActionId) {
+      const originalRows = await queryRows<Record<string, unknown>>("SELECT outbox_message_id FROM crm_agent_actions WHERE action_id = ?", [originalActionId]);
+      assert.equal(originalRows[0]?.outbox_message_id, null);
+    }
+
+    // Exactly one outbox message exists, and it never states the ungrounded $999.999 figure.
+    const outboxRows = await queryRows<Record<string, unknown>>(
+      "SELECT message_text FROM brain_message_outbox WHERE wa_id = ? ORDER BY id DESC LIMIT 1",
+      [seeded.waId]
+    );
+    assert.equal(outboxRows.length, 1);
+    assert.doesNotMatch(String(outboxRows[0].message_text), /999\.999/);
   } finally {
     process.env = previousEnv;
     resetCapabilityGatewayCatalogPortForTests();
@@ -324,6 +483,9 @@ test("real human ownership: AI never sends a fallback over a conversation a huma
     assert.equal(disposition.responseOwner, "human");
     assert.equal(disposition.terminalOutcome, "human_response_required");
     assert.equal(disposition.fallbackUsed, false);
+    assert.equal(disposition.waitingFor, "human_response");
+    assert.equal(disposition.handoffCreated, true);
+    assert.equal(disposition.acknowledgementSender, null, "AI never sent anything here - there is no acknowledgement to attribute");
   } finally {
     process.env = previousEnv;
     resetCapabilityGatewayCatalogPortForTests();

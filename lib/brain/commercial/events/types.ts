@@ -100,6 +100,11 @@ export type CustomerSessionWarningRecordedPayload = {
 
 export type AutonomousTurnResponseOwner = "ai" | "human" | "none";
 
+// ACS-R1-05-T06.2 (second correction, section 9). Same rationale as
+// AutonomousTurnResponseOwner above - defined once here, re-exported by
+// continuity/salesTurnDisposition.ts.
+export type AutonomousTurnWaitingFor = "customer_response" | "human_response" | "none";
+
 export type AutonomousTurnCommercialObjective =
   | "discover_need"
   | "qualify"
@@ -138,6 +143,10 @@ export type AutonomousTurnDispositionRecordedPayload = {
   followUpEligible: boolean;
   followUpReason: string | null;
   terminalOutcome: AutonomousTurnTerminalOutcome;
+  /** ACS-R1-05-T06.2 (second correction, section 9) - see SalesTurnDisposition for the field-level rationale. */
+  acknowledgementSender: AutonomousTurnResponseOwner | null;
+  waitingFor: AutonomousTurnWaitingFor;
+  handoffCreated: boolean;
 };
 
 export type AutonomousTurnContinuityFailedRecordedPayload = {

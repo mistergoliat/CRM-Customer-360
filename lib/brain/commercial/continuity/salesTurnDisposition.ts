@@ -1,10 +1,11 @@
 import type {
   AutonomousTurnCommercialObjective,
   AutonomousTurnResponseOwner,
-  AutonomousTurnTerminalOutcome
+  AutonomousTurnTerminalOutcome,
+  AutonomousTurnWaitingFor
 } from "../events/types";
 
-export type { AutonomousTurnCommercialObjective, AutonomousTurnResponseOwner, AutonomousTurnTerminalOutcome };
+export type { AutonomousTurnCommercialObjective, AutonomousTurnResponseOwner, AutonomousTurnTerminalOutcome, AutonomousTurnWaitingFor };
 
 /**
  * ACS-R1-05-T06.2 (release spec section A2). The durable, terminal record of
@@ -23,6 +24,20 @@ export type SalesTurnDisposition = {
   fallbackUsed: boolean;
   followUpEligible: boolean;
   followUpReason: string | null;
+  /**
+   * ACS-R1-05-T06.2 (second correction, section 9). When the AI sends a
+   * safe acknowledgement ("Voy a confirmar este punto con el equipo...")
+   * standing in for an unsafe/ungrounded draft, `acknowledgementSender`
+   * records that the AI authored that acknowledgement while `responseOwner`
+   * still correctly reads "human" - the real resolution depends on a
+   * person, even though the AI was the one who told the customer that.
+   * `null` when no acknowledgement-style fallback was used this turn.
+   */
+  acknowledgementSender: AutonomousTurnResponseOwner | null;
+  /** What this turn is now waiting on - "none" when the turn reached a real terminal outcome with nothing pending. */
+  waitingFor: AutonomousTurnWaitingFor;
+  /** True when this turn's outcome depends on a durable, queryable record a human can act on (the terminalized original action + this disposition event) - never a new table, never a reservation/hold record. */
+  handoffCreated: boolean;
 };
 
 /** Reasons a customer-facing fallback message may be synthesized (release spec section A7). */
