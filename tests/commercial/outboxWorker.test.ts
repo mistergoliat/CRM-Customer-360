@@ -1,3 +1,8 @@
+// This file covers `lib/brain/messaging/outbox-worker/` (hyphenated), the
+// in-memory dev-only simulator consumed by lib/brain/commercial/autonomous-loop
+// (see docs/audits/follow-up-runtime-reconciliation.md P2-5). It is NOT
+// coverage of the productive outbox worker (`lib/brain/messaging/outboxWorker.ts`,
+// `autonomousOutboxTick.ts`), which have their own tests.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
