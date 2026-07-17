@@ -440,7 +440,7 @@ test("overlong message still blocks autonomy on technical grounds", () => {
 test("credential marker still blocks autonomy", () => {
   const result = evaluate({
     action: {
-      draftMessage: "Authorization: Bearer sk-abc123def456",
+      draftMessage: "Authorization: Bearer sk-not-a-real-secret-fixture-000",
       finalMessage: null
     }
   });
