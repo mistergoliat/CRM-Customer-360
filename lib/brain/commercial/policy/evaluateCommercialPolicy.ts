@@ -66,6 +66,22 @@ function computeChannelSignals(input: CommercialPolicyInput) {
    * untouched on `channelContext` so `evaluateCommercialActions.ts` can
    * still use it to cancel a pending proactive follow-up when the customer
    * has already replied - that consumer is unaffected by this change.
+   *
+   * ACS-R1-05-T06.2 (second correction, section 10 - investigated and
+   * reverted): `quietHoursActive` was briefly removed from this gate on the
+   * theory that it could wrongly gate the reactive turn, mirroring
+   * `recentCustomerReply` above. That theory does not hold: the reactive
+   * path's own channel-context builder
+   * (shadow/runCommercialShadowEvaluation.ts#buildChannelContext) already
+   * hardcodes `quietHoursActive: false` unconditionally - the reactive
+   * turn never receives a real quiet-hours signal here in the first place.
+   * The ONLY real caller that passes a live `quietHoursActive` value into
+   * `evaluateCommercialPolicy` is `sales-consultative/followUpDispatchPolicy.ts`,
+   * which is the proactive follow-up dispatch gate and legitimately needs
+   * `channelReview` to include it. Removing it broke that gate
+   * (`followUpDispatchPolicy.test.ts`, "[7] quiet hours -> decision
+   * require_review") without fixing anything real for the reactive turn -
+   * kept here, unchanged from the original T06.2 close.
    */
   const channelReview = Boolean(channel.humanOwnerActive || channel.quietHoursActive || channel.manualApprovalRequired);
   return { channelBlock, channelReview };
@@ -274,17 +290,23 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
   const channelSignals = computeChannelSignals(input);
 
   /**
-   * ACS-R1-05-T06.2 (P1 correction): a claim only counts as grounding
-   * evidence for the draft-text scan below when its own assessment came
-   * back fully "allowed" (verified, fresh, strong source for sensitive
-   * types) - a claim under review or already blocked is not evidence.
+   * ACS-R1-05-T06.2 (P1 correction, hardened in the second correction pass):
+   * a claim only counts as grounding evidence for the draft-text scan below
+   * when its own assessment came back fully "allowed" (verified, fresh,
+   * strong source for sensitive types) - a claim under review or already
+   * blocked is not evidence. Carries `value` (not just `type`) through so
+   * grounding can match the concrete figure named in the draft against the
+   * concrete figure the claim actually attests, not merely the claim type -
+   * see evaluateCommercialCommitmentGrounding.ts for why type-only matching
+   * was insufficient (a verified price claim about one product could
+   * previously ground an unrelated price statement about a different one).
    */
-  const groundedClaimTypes = new Set(
-    claimEvaluation.assessments.filter((assessment) => assessment.status === "allowed").map((assessment) => assessment.claim.type)
-  );
+  const groundedClaims = claimEvaluation.assessments
+    .filter((assessment) => assessment.status === "allowed")
+    .map((assessment) => ({ type: assessment.claim.type, value: assessment.claim.value }));
   const commitmentGrounding = evaluateCommercialCommitmentGrounding(
     input.salesAgentResult.responseProposal?.draftText ?? null,
-    groundedClaimTypes
+    groundedClaims
   );
 
   const issues: CommercialPolicyIssue[] = [
@@ -410,9 +432,21 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
     channelSignals.channelReview || commitmentGrounding.requiresReview,
     channelSignals.channelBlock
   );
+  /**
+   * ACS-R1-05-T06.2 (second correction, section 8): `commitmentGrounding`
+   * must carry the same authority into `requiresApproval` that it already
+   * carries into `status` (via the `buildStatus` call below) - otherwise
+   * `crm_agent_decisions`/`crm_agent_actions` could persist
+   * `policy_status: "requires_review"` next to `approval_requirement: "none"`,
+   * an internally incoherent audit trail even though the turn still
+   * escalates correctly via `shouldRequestHuman`.
+   */
   const requiresApproval = maxApproval(
     maxApproval(claimEvaluation.requiresApproval, actionEvaluation.requiresApproval),
-    maxApproval(toolRequestEvaluation.requiresApproval, entityProposalEvaluation.requiresApproval)
+    maxApproval(
+      toolRequestEvaluation.requiresApproval,
+      maxApproval(entityProposalEvaluation.requiresApproval, commitmentGrounding.requiresReview ? "operator_review" : "none")
+    )
   );
   const riskLevel = maxRisk(
     maxRisk(claimEvaluation.riskLevel, actionEvaluation.riskLevel),

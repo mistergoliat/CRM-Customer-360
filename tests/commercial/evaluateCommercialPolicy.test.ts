@@ -335,6 +335,99 @@ test("the identical declarative catalog price statement requires review when no 
   assert.equal(result.status, "requires_review");
   assert.ok(result.warnings.includes("commercial_statement_missing_evidence"));
   assert.ok(result.appliedRules.includes("POLICY-DRAFT-STATEMENT-EVIDENCE"));
+  // ACS-R1-05-T06.2 (second correction, section 8): requires_review must
+  // carry the same authority into requiresApproval, never leave it "none".
+  assert.equal(result.requiresApproval, "operator_review");
+});
+
+// ACS-R1-05-T06.2 (second correction, section 4/5): instance-level grounding.
+// A verified claim only grounds a declarative statement about the SAME
+// concrete value it attests, never any statement of the same claim type.
+
+function priceClaim(value: string, overrides: Record<string, unknown> = {}) {
+  return {
+    type: "price" as const,
+    value,
+    evidenceSource: "tool_result" as const,
+    evidenceSummary: "Precio hidratado desde el catalogo real.",
+    verified: true,
+    confidence: "high" as const,
+    expiresAt: "2026-06-18T00:00:00.000Z",
+    ...overrides
+  };
+}
+
+function withDraftAndClaims(draftText: string, claims: ReturnType<typeof priceClaim>[]) {
+  return makeBaseResult({
+    responseProposal: {
+      messageIntent: "answer",
+      draftText,
+      language: "es",
+      tone: "friendly",
+      questions: [],
+      claims,
+      disclaimers: [],
+      requiresApproval: "none",
+      blockedClaims: [],
+      confidence: "high"
+    },
+    evidence: claims.length > 0 ? [makeEvidence({ source: "tool_result", summary: "Fuente de precio autorizada.", expiresAt: "2026-06-18T00:00:00.000Z" })] : []
+  });
+}
+
+function evaluateWithSensitiveClaims(salesAgentResult: SalesAgentResult) {
+  return evaluateCommercialPolicy(
+    makePolicyInput({
+      salesAgentResult,
+      featureFlags: { ...makePolicyInput().featureFlags, allowSensitiveClaims: true }
+    })
+  );
+}
+
+test("same type + same concrete value: grounded and allowed (task example: jaula A cuesta $500.000)", () => {
+  const salesAgentResult = withDraftAndClaims("La jaula A cuesta $500.000.", [priceClaim("500000")]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "allowed");
+  assert.ok(!result.warnings.includes("commercial_statement_missing_evidence"));
+});
+
+test("same type + different value (different product): requires review (task example: jaula B cuesta $900.000, claim is for jaula A at $500.000)", () => {
+  const salesAgentResult = withDraftAndClaims("La jaula B cuesta $900.000.", [priceClaim("500000")]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
+  assert.ok(result.warnings.includes("commercial_statement_missing_evidence"));
+  assert.equal(result.requiresApproval, "operator_review");
+});
+
+test("same type + different currency: requires review even when the numeric amount matches", () => {
+  const salesAgentResult = withDraftAndClaims("El precio es $500.000.", [priceClaim("500000 USD")]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
+  assert.ok(result.warnings.includes("commercial_statement_missing_evidence"));
+});
+
+test("unverified claim never grounds a declarative statement, even of the same type", () => {
+  const salesAgentResult = withDraftAndClaims("El precio es $500.000.", [priceClaim("500000", { verified: false })]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
+});
+
+test("claim from a weak/unauthorized evidence source never grounds a declarative statement", () => {
+  const salesAgentResult = withDraftAndClaims("El precio es $500.000.", [priceClaim("500000", { evidenceSource: "customer_message" })]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
+});
+
+test("a claim of an unrelated type never grounds a different-type declarative statement", () => {
+  const salesAgentResult = withDraftAndClaims("El stock está disponible.", [priceClaim("500000")]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
 });
 
 test("questions and pending-action sentences about sensitive topics never require grounding", () => {
@@ -1055,6 +1148,20 @@ test("ACS-R1-05-T06.2: quiet hours and manual approval are reported by their own
     })
   );
 
+  /**
+   * ACS-R1-05-T06.2 (second correction, section 10 - investigated and
+   * reverted): quietHoursActive keeps gating evaluateCommercialPolicy's
+   * status here, unchanged from the original T06.2 close. It was briefly
+   * removed on the theory that it could wrongly block the reactive turn,
+   * but the reactive path's own channel-context builder
+   * (shadow/runCommercialShadowEvaluation.ts#buildChannelContext) already
+   * hardcodes quietHoursActive: false unconditionally, so the reactive
+   * turn never actually receives a live quiet-hours signal here. The real
+   * caller that does is sales-consultative/followUpDispatchPolicy.ts (the
+   * proactive follow-up dispatch gate), which needs this to keep working -
+   * see followUpDispatchPolicy.test.ts "[7] quiet hours -> decision
+   * require_review".
+   */
   assert.equal(quietHoursResult.status, "requires_review");
   assert.ok(quietHoursResult.issues.some((issue) => issue.code === "quiet_hours_active"));
   assert.ok(quietHoursResult.warnings.includes("quiet_hours_active"));
