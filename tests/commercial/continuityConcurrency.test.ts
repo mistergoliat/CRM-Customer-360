@@ -86,8 +86,17 @@ test("ACS-R1-05-T06.2 (P2): two concurrent dispatchFallbackAction calls for the 
 
   const [first, second] = await Promise.all([dispatchFallbackAction(input), dispatchFallbackAction(input)]);
 
+  /**
+   * ACS-R1-05-T06.2 (second correction, section 11): before the
+   * persistAgentAction.ts fix, one of these two calls could genuinely lose
+   * the `uq_crm_agent_actions_idempotency_key` race and come back with
+   * `status: "failed"` -> `attempted: false`, even though the row itself
+   * was never duplicated. Both calls must now resolve usably.
+   */
   assert.equal(first.attempted, true);
   assert.equal(second.attempted, true);
+  assert.notEqual(first.actionPersistence?.status, "failed");
+  assert.notEqual(second.actionPersistence?.status, "failed");
   assert.equal(first.action?.actionId, second.action?.actionId, "both concurrent calls must resolve to the same idempotency-keyed action");
 
   const idempotencyKey = buildContinuityFallbackIdempotencyKey(conversationId, inboundMessageId, "catalog_unavailable");
@@ -142,12 +151,40 @@ test("ACS-R1-05-T06.2 (P2): two concurrent terminalizeBlockedAgentAction calls o
   assert.equal(rowsAfter[0]?.status, "blocked", "the row must land on 'blocked' exactly once regardless of which concurrent call won the race");
 });
 
+/**
+ * ACS-R1-05-T06.2 (second correction, section 14): an explicit
+ * synchronization barrier, not just `Promise.all`. Both concurrent
+ * `ensureAutonomousSalesTurnContinuity` calls invoke this provider once,
+ * roughly midway through their own cycle (after Customer 360 / conversation
+ * resolution, before policy/action-queue/sandbox/gate). Neither call's
+ * `invoke()` resolves until BOTH have arrived here, which forces both
+ * executions to enter the actually concurrency-sensitive back half of the
+ * pipeline (persistAgentAction, dispatchFallbackAction) at essentially the
+ * same moment - never one finishing its entire cycle, DB writes included,
+ * before the other even starts.
+ */
+function createSynchronizationBarrier(expectedArrivals: number) {
+  let arrived = 0;
+  let releaseAll!: () => void;
+  const released = new Promise<void>((resolve) => {
+    releaseAll = resolve;
+  });
+  return {
+    async arriveAndWait(): Promise<void> {
+      arrived += 1;
+      if (arrived >= expectedArrivals) releaseAll();
+      await released;
+    }
+  };
+}
+
 /** A provider whose draft trips a real technical sandbox block (unresolved placeholder), never the removed lexical check. */
-function createUnsafeDraftProvider(): SalesAgentProvider {
+function createUnsafeDraftProvider(barrier?: { arriveAndWait: () => Promise<void> }): SalesAgentProvider {
   return {
     name: "test-unsafe-draft-provider-concurrency",
     version: "test.v1",
     async invoke(request: SalesAgentProviderRequest) {
+      if (barrier) await barrier.arriveAndWait();
       const rawOutput = {
         runId: request.correlationId ?? "fake-run-id",
         contractVersion: request.contractVersion,
@@ -268,6 +305,10 @@ test("ACS-R1-05-T06.2 (P2): the same inbound processed by two concurrent ensureA
   resetCapabilityGatewayCatalogPortForTests();
 
   try {
+    // Both calls must arrive at the LLM invocation together before either is
+    // allowed to proceed into the concurrency-sensitive back half of the
+    // pipeline (policy -> action-queue -> sandbox -> gate -> persistAgentAction).
+    const barrier = createSynchronizationBarrier(2);
     const baseInput = {
       conversationId: seeded.conversationId!,
       conversationPublicId: seeded.conversationPublicId as string,
@@ -277,7 +318,7 @@ test("ACS-R1-05-T06.2 (P2): the same inbound processed by two concurrent ensureA
       messageId: seeded.messageId ?? null,
       messageText: "Necesito una jaula de potencia para entrenar en casa. Mi presupuesto maximo es 800000.",
       currentTime: new Date().toISOString(),
-      provider: createUnsafeDraftProvider()
+      provider: createUnsafeDraftProvider(barrier)
     };
 
     const [resultA, resultB] = await Promise.all([
@@ -285,9 +326,28 @@ test("ACS-R1-05-T06.2 (P2): the same inbound processed by two concurrent ensureA
       ensureAutonomousSalesTurnContinuity({ ...baseInput, correlationId: uniqueSuffix("corr-concurrent-b") })
     ]);
 
-    for (const { cycle, disposition } of [resultA, resultB]) {
+    for (const { cycle } of [resultA, resultB]) {
       assert.equal(cycle.ran, true);
-      assert.equal(disposition.terminalOutcome, "fallback_outbox_planned");
+    }
+
+    /**
+     * ACS-R1-05-T06.2 (second correction, section 9/14). The WINNER of the
+     * persistAgentAction race gets a fully "fallback_outbox_planned"
+     * disposition. The LOSER's own in-memory return value may legitimately
+     * read "continuity_failed" from its own vantage point (it did not
+     * itself confirm the outbox write) - `ensureAutonomousSalesTurnContinuity`
+     * deliberately does not persist that as a real failure event (see
+     * `lostRaceToConcurrentSibling` in the implementation), since a sibling
+     * execution already owns and completes this exact fallback. At least
+     * one of the two results must show the real, winning outcome.
+     */
+    const outcomes = [resultA, resultB].map((result) => result.disposition.terminalOutcome);
+    assert.ok(outcomes.includes("fallback_outbox_planned"), `expected at least one winner, got ${outcomes.join(",")}`);
+    for (const { disposition } of [resultA, resultB]) {
+      if (disposition.terminalOutcome === "fallback_outbox_planned") {
+        assert.equal(disposition.responseOwner, "human");
+        assert.equal(disposition.acknowledgementSender, "ai");
+      }
     }
 
     const outboxRows = await queryRows<Record<string, unknown>>("SELECT id FROM brain_message_outbox WHERE wa_id = ?", [waId]);
@@ -298,6 +358,15 @@ test("ACS-R1-05-T06.2 (P2): the same inbound processed by two concurrent ensureA
       [`autonomous-turn-disposition:${String(seeded.messageId)}`]
     );
     assert.equal(eventRows.length, 1, "two concurrent runs must dedupe to exactly one disposition event, never two");
+
+    // The core guarantee this whole file exists to prove: even if the losing
+    // call's own return value looked like a failure, no spurious
+    // `autonomous_turn_continuity_failed` event was ever persisted for it.
+    const continuityFailedRows = await queryRows<Record<string, unknown>>(
+      "SELECT id FROM commercial_event WHERE event_type = 'autonomous_turn_continuity_failed' AND conversation_id = ?",
+      [String(seeded.conversationId)]
+    );
+    assert.equal(continuityFailedRows.length, 0, "losing a persistAgentAction race to a concurrent sibling must never be recorded as a continuity failure");
   } finally {
     process.env = previousEnv;
     resetCapabilityGatewayCatalogPortForTests();

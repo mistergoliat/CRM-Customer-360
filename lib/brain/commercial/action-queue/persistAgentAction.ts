@@ -43,6 +43,16 @@ function sanitizeError(error: unknown) {
     .trim();
 }
 
+/**
+ * ACS-R1-05-T06.2 (second correction, section 11): identifies MariaDB/MySQL's
+ * real duplicate-key error (mysql2 surfaces it as `error.code === "ER_DUP_ENTRY"`)
+ * so it can be recovered from specifically - never used to swallow any other
+ * kind of persistence error, which must keep surfacing as "failed".
+ */
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ER_DUP_ENTRY";
+}
+
 async function defaultHasTable(tableName: string) {
   try {
     return await hasTable(tableName);
@@ -330,14 +340,43 @@ export async function persistAgentAction(
           }, existing.id, null, false, validation.warnings);
         }
 
-        const rowId = await insertAction(connection, validation.action!, currentTime);
-        await connection.commit();
-        return normalizeResult("inserted", {
-          ...validation.action!,
-          id: typeof rowId === "number" ? rowId : null,
-          createdAt: validation.action!.createdAt ?? currentTime,
-          updatedAt: currentTime
-        }, typeof rowId === "number" ? rowId : null, null, false, validation.warnings);
+        try {
+          const rowId = await insertAction(connection, validation.action!, currentTime);
+          await connection.commit();
+          return normalizeResult("inserted", {
+            ...validation.action!,
+            id: typeof rowId === "number" ? rowId : null,
+            createdAt: validation.action!.createdAt ?? currentTime,
+            updatedAt: currentTime
+          }, typeof rowId === "number" ? rowId : null, null, false, validation.warnings);
+        } catch (insertError) {
+          if (!isDuplicateKeyError(insertError)) throw insertError;
+          /**
+           * ACS-R1-05-T06.2 (second correction, section 11): our own SELECT
+           * above found nothing, but a concurrent transaction won the
+           * `uq_crm_agent_actions_idempotency_key` race (migrations/005)
+           * between that SELECT and this INSERT. The row now exists - this
+           * is not a real persistence failure, so it must never surface as
+           * one (a caller like dispatchFallbackAction treats "failed" as
+           * "nothing happened", which would wrongly report continuity
+           * failure for a turn a concurrent call actually handled).
+           * Re-select and resolve to the winner's row exactly like the
+           * "existing" branch above, never re-writing what it wrote.
+           */
+          const winner = await loadExistingActionByIdempotencyKey(connection, validation.action!.idempotencyKey);
+          await connection.rollback();
+          if (!winner) {
+            return normalizeResult(
+              "failed",
+              validation.action!,
+              null,
+              "Concurrent insert reported a duplicate idempotency key but the row could not be reselected.",
+              false,
+              validation.warnings
+            );
+          }
+          return normalizeResult("duplicate_ignored", winner, winner.id, "Existing action from a concurrent insert was reused.", false, validation.warnings);
+        }
       } catch (error) {
         try {
           await connection.rollback();
