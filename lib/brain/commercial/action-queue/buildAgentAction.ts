@@ -367,16 +367,30 @@ export function buildAgentActionFromNextAction(input: BuildAgentActionFromNextAc
     blockReasons,
     actionType
   });
+  /**
+   * ACS-R1-05-T06.2: `normalizedContext.policyStatus` is threaded straight
+   * from `commercialPolicyResult.status` via
+   * `loop.decisionRecord.policyStatus` (runCommercialOperationalLoop.ts) -
+   * the same single authority already written to
+   * `crm_agent_decisions.policy_status`. Recomputing a second, narrower
+   * value here from `status` alone (previously done unconditionally) could
+   * never express `allowed_with_restrictions`/`failed_safe` and let the
+   * decision/action rows diverge whenever the real policy status was one of
+   * those two. Only fall back to the local derivation when no real
+   * governing status was propagated at all.
+   */
   const policyStatus =
-    status === "blocked"
-      ? "blocked"
-      : status === "requires_review"
-        ? "requires_review"
-        : status === "cancelled"
-          ? "cancelled"
-          : status === "expired"
-            ? "expired"
-            : "allowed";
+    normalizedContext.policyStatus !== "unknown"
+      ? normalizedContext.policyStatus
+      : status === "blocked"
+        ? "blocked"
+        : status === "requires_review"
+          ? "requires_review"
+          : status === "cancelled"
+            ? "cancelled"
+            : status === "expired"
+              ? "expired"
+              : "allowed";
   const draftPayload = sanitizeAgentActionJsonValue({
     nextAction,
     recommendedChannel: nextAction.recommendedChannel,

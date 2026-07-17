@@ -19,6 +19,7 @@ export const SANDBOX_AUTONOMY_BLOCK_REASONS = [
   "missing_idempotency_key",
   "unsafe_payload",
   "unsafe_message",
+  "unsupported_commercial_commitment",
   "duplicate_or_conflicting_action",
   "action_not_ready",
   "policy_blocked"

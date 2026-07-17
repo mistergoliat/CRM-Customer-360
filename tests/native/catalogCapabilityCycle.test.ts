@@ -206,14 +206,37 @@ async function seedConversation() {
 
 test("runNativeAutonomousCycle executes search_products over HTTP, persists it, and grounds the reply in real data", async () => {
   searchRequests = [];
-  handler = (_req, res) =>
-    sendJson(res, 200, {
-      query: "jaula entrenamiento",
-      items: [
-        { productId: 501, combinationId: 0, sku: "JLA-501", name: "Jaula de entrenamiento compacta", variantLabel: null, shortDescription: null, physicalQuantity: 4, available: true, matchType: "partial_name" }
-      ],
-      freshness: { cached: false, generatedAt: new Date().toISOString() }
-    });
+  handler = (req, res) => {
+    if (req.url?.includes("/v1/products/search")) {
+      return sendJson(res, 200, {
+        query: "jaula entrenamiento",
+        items: [
+          { productId: 501, combinationId: 0, sku: "JLA-501", name: "Jaula de entrenamiento compacta", variantLabel: null, shortDescription: null, physicalQuantity: 4, available: true, matchType: "partial_name" }
+        ],
+        freshness: { cached: false, generatedAt: new Date().toISOString() }
+      });
+    }
+    if (req.method === "POST" && req.url === "/v1/products/batch") {
+      return sendJson(res, 200, {
+        items: [
+          {
+            ok: true,
+            input: { productId: 501, combinationId: 0, quantity: 1 },
+            product: {
+              product: { productId: 501, name: "Jaula de entrenamiento compacta", sku: "JLA-501", shortDescription: null, longDescription: null, active: true },
+              selectedVariant: null,
+              attributes: [],
+              variants: [],
+              pricing: { quantity: 1, baseUnitPrice: 449990, effectiveUnitPrice: 449990, subtotal: 449990, currency: "CLP", taxIncluded: true, taxMode: "configured_rate", discountApplied: false, discountType: null, discountValue: null, specificPriceId: null, pricingMode: "sql_specific_price" },
+              stock: { physicalQuantity: 4, available: true, shopId: 1 },
+              freshness: { productCheckedAt: new Date().toISOString(), priceCalculatedAt: new Date().toISOString(), stockCheckedAt: new Date().toISOString(), cached: false }
+            }
+          }
+        ]
+      });
+    }
+    return sendJson(res, 404, { error: { code: "NOT_FOUND", message: "unexpected route in test fake", correlationId: "test" } });
+  };
 
   const seeded = await seedConversation();
 

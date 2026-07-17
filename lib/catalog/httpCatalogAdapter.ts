@@ -9,6 +9,9 @@ import {
   CATALOG_ADAPTER_CONTRACT_VERSION,
   type CatalogAttribute,
   type CatalogAvailabilityStatus,
+  type CatalogBatchItemInput,
+  type CatalogBatchItemResult,
+  type CatalogBatchResult,
   type CatalogPort,
   type CatalogPortError,
   type CatalogPortErrorCode,
@@ -19,6 +22,9 @@ import {
   type CatalogSearchResult,
   type CatalogSearchResultItem
 } from "./types";
+
+/** Real service contract (POST /v1/products/batch): max 20 items per call. */
+export const CATALOG_BATCH_MAX_ITEMS = 20;
 
 export type HttpCatalogAdapterConfig = {
   baseUrl: string;
@@ -213,21 +219,73 @@ function parseProductResponse(payload: unknown, retrievedAt: string): CatalogPro
   };
 }
 
+function parseBatchItemInput(value: unknown): CatalogBatchItemInput | null {
+  if (!isRecord(value)) return null;
+  const productId = asNumber(value.productId);
+  if (productId === null) return null;
+  const combinationId = asNumber(value.combinationId);
+  const quantity = asNumber(value.quantity);
+  return {
+    productId: String(productId),
+    ...(combinationId !== null ? { combinationId: String(combinationId) } : {}),
+    ...(quantity !== null ? { quantity } : {})
+  };
+}
+
+function parseBatchItem(value: unknown, retrievedAt: string): CatalogBatchItemResult | null {
+  if (!isRecord(value)) return null;
+  const input = parseBatchItemInput(value.input);
+  if (input === null) return null;
+
+  if (value.ok === true) {
+    const product = parseProductResponse(value.product, retrievedAt);
+    if (product === null) return null;
+    return { ok: true, input, product };
+  }
+
+  if (value.ok === false) {
+    const errorBody = isRecord(value.error) ? value.error : null;
+    const providerErrorCode = errorBody ? asString(errorBody.code) ?? undefined : undefined;
+    const message = errorBody ? asString(errorBody.message) ?? "Batch item failed." : "Batch item failed.";
+    const mapped = mapProviderErrorCode(providerErrorCode, 200);
+    return {
+      ok: false,
+      input,
+      error: catalogError(mapped.code, message, mapped.retryable, providerErrorCode ?? null, errorBody ? asString(errorBody.correlationId) : null)
+    };
+  }
+
+  return null;
+}
+
+function parseBatchResponse(payload: unknown, retrievedAt: string): CatalogBatchResult | null {
+  if (!isRecord(payload) || !Array.isArray(payload.items)) return null;
+  const items = payload.items.map((entry) => parseBatchItem(entry, retrievedAt)).filter((item): item is CatalogBatchItemResult => item !== null);
+  if (items.length !== payload.items.length) return null;
+  return {
+    items,
+    provenance: { source: "catalog_service_http", retrievedAt, cached: false }
+  };
+}
+
 async function fetchJson(
   config: HttpCatalogAdapterConfig,
   path: string,
-  context: CatalogRequestContext
+  context: CatalogRequestContext,
+  init?: { method: "POST"; body: unknown }
 ): Promise<{ status: number; body: unknown } | { networkError: true }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
   try {
     const response = await fetch(`${config.baseUrl}${path}`, {
-      method: "GET",
+      method: init?.method ?? "GET",
       signal: controller.signal,
       headers: {
         "x-api-key": config.apiKey,
-        "x-correlation-id": context.correlationId
-      }
+        "x-correlation-id": context.correlationId,
+        ...(init ? { "content-type": "application/json" } : {})
+      },
+      ...(init ? { body: JSON.stringify(init.body) } : {})
     });
     const text = await response.text();
     let body: unknown = null;
@@ -256,9 +314,10 @@ async function requestOnce<T>(
   config: HttpCatalogAdapterConfig,
   path: string,
   context: CatalogRequestContext,
-  parse: (payload: unknown, retrievedAt: string) => T | null
+  parse: (payload: unknown, retrievedAt: string) => T | null,
+  init?: { method: "POST"; body: unknown }
 ): Promise<CatalogPortResult<T>> {
-  const result = await fetchJson(config, path, context);
+  const result = await fetchJson(config, path, context, init);
   const retrievedAt = new Date().toISOString();
 
   if ("networkError" in result) {
@@ -302,6 +361,17 @@ export function createHttpCatalogAdapter(config: HttpCatalogAdapterConfig): Cata
         return { ok: true, value: null };
       }
       return result;
+    },
+    async batchGetProducts(input, context) {
+      if (input.items.length === 0) {
+        return { ok: true, value: { items: [], provenance: { source: "catalog_service_http", retrievedAt: new Date().toISOString(), cached: false } } };
+      }
+      const items = input.items.slice(0, CATALOG_BATCH_MAX_ITEMS).map((item) => ({
+        productId: Number(item.productId),
+        ...(item.combinationId !== undefined ? { combinationId: Number(item.combinationId) } : {}),
+        ...(item.quantity !== undefined ? { quantity: item.quantity } : {})
+      }));
+      return requestOnce(config, "/v1/products/batch", context, parseBatchResponse, { method: "POST", body: { items } });
     }
   };
 }

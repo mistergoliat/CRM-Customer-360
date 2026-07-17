@@ -175,7 +175,10 @@ test("builds a local evaluation preview without persistence", async () => {
   assert.equal(preview.responseCorrect, false);
   assert.equal(preview.policyTooRestrictive, null);
   assert.equal(preview.missingContext, true);
-  assert.equal(preview.reviewSummary.policyStatus, "requires_review");
+  // ACS-R1-05-T06.2: see buildCommercialShadowReview.test.ts - the "valid"
+  // fixture's normal inbound message no longer forces requires_review via
+  // recentCustomerReply alone (evaluateCommercialPolicy.ts computeChannelSignals).
+  assert.equal(preview.reviewSummary.policyStatus, "allowed");
   assert.doesNotThrow(() => JSON.stringify(preview));
 
   const markup = renderToStaticMarkup(createElement(AiSdrHumanEvaluationDraft, { caseId: IDENTIFIERS.caseId, review }));

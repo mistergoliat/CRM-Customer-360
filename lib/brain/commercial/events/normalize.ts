@@ -1,4 +1,6 @@
 import type {
+  AutonomousTurnContinuityFailedRecordedPayload,
+  AutonomousTurnDispositionRecordedPayload,
   CommercialEventSource,
   CommercialEventType,
   CommercialEventV1,
@@ -17,6 +19,8 @@ import {
   COMMERCIAL_EVENT_SCHEMA_VERSION
 } from "./types";
 import {
+  buildAutonomousTurnContinuityFailedDedupeKey,
+  buildAutonomousTurnDispositionDedupeKey,
   buildCommercialEventCorrelationId,
   buildCommercialEventId,
   buildCommercialStatusEventDedupeKey,
@@ -479,5 +483,74 @@ export function normalizeCustomerSessionWarningCommercialEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: input.decisionId ? { eventKind: "customer_session_warning", decisionId: input.decisionId } : { eventKind: "customer_session_warning" }
+  });
+}
+
+// ACS-R1-05-T06.2. Canonical terminal-outcome event for a sales turn. One
+// event per inbound message (dedupe key keyed only on inboundMessageId,
+// never on the turn's outcome) - a retry/replay of the same turn resolves to
+// the same row rather than a second one.
+
+export function normalizeAutonomousTurnDispositionCommercialEvent(input: {
+  inboundMessageId: string | null;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+  payload: AutonomousTurnDispositionRecordedPayload;
+}) {
+  const dedupeSourceId = (input.inboundMessageId ?? input.correlationId ?? "").trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  return buildBaseEvent({
+    eventType: "autonomous_turn_disposition",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildAutonomousTurnDispositionDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: input.payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "autonomous_turn_disposition" }
+  });
+}
+
+export function normalizeAutonomousTurnContinuityFailedCommercialEvent(input: {
+  inboundMessageId: string | null;
+  reason: string;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = (input.inboundMessageId ?? input.correlationId ?? "").trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  const payload: AutonomousTurnContinuityFailedRecordedPayload = {
+    inboundMessageId: input.inboundMessageId,
+    reason: input.reason
+  };
+  return buildBaseEvent({
+    eventType: "autonomous_turn_continuity_failed",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildAutonomousTurnContinuityFailedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "autonomous_turn_continuity_failed" }
   });
 }

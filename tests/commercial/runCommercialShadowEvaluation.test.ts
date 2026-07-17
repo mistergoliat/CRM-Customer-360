@@ -229,8 +229,13 @@ test("shadow disabled does not call the provider", async () => {
 test("completed shadow keeps zero side effects and stable versions", async () => {
   const result = await runCommercialShadowEvaluation(makeInput());
 
-  assert.equal(result.status, "completed_with_restrictions");
-  assert.equal(result.executionDisposition, "discard_after_observation");
+  // ACS-R1-05-T06.2: this default "valid" fixture carries a normal inbound
+  // customer message, so recentCustomerReply was always true - previously
+  // that alone forced channelReview (status: "completed_with_restrictions",
+  // discard_after_observation) even though nothing else about the turn
+  // needed review. See evaluateCommercialPolicy.ts computeChannelSignals.
+  assert.equal(result.status, "completed");
+  assert.equal(result.executionDisposition, "observe_only");
   assert.deepEqual(result.sideEffects, {
     messagesSent: 0,
     toolsExecuted: 0,
@@ -309,7 +314,13 @@ test("reports review policy outcomes", async () => {
     })
   );
 
-  assert.equal(allowed.policySummary?.status, "requires_review");
+  // ACS-R1-05-T06.2: recentCustomerReply no longer forces channelReview for
+  // the reactive turn (see evaluateCommercialPolicy.ts computeChannelSignals)
+  // - both cases previously landed on "requires_review" only because of that
+  // self-block bug. The plain response case is now genuinely "allowed"; the
+  // tool-request case still requires review on its own merits (tool requests
+  // are governed independently by evaluateCommercialToolRequests).
+  assert.equal(allowed.policySummary?.status, "allowed");
   assert.equal(review.policySummary?.status, "requires_review");
 });
 

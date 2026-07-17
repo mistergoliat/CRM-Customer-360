@@ -60,34 +60,51 @@ before(async () => {
       res.end(JSON.stringify({ query: q, items: [item], freshness: { cached: false, generatedAt: new Date().toISOString() } }));
       return;
     }
+    function buildProductPayload(productId: number) {
+      const cheap = productId === 502;
+      return {
+        product: { productId, name: cheap ? "Jaula de entrenamiento economica" : "Jaula de entrenamiento premium", sku: cheap ? "JLA-502" : "JLA-501", shortDescription: null, longDescription: null, active: true },
+        selectedVariant: null,
+        attributes: [],
+        variants: [],
+        pricing: {
+          quantity: 1,
+          baseUnitPrice: cheap ? 250000 : 890000,
+          effectiveUnitPrice: cheap ? 219990 : 849990,
+          subtotal: cheap ? 219990 : 849990,
+          currency: "CLP",
+          taxIncluded: true,
+          taxMode: "configured_rate",
+          discountApplied: true,
+          discountType: "amount",
+          discountValue: cheap ? 30010 : 40010,
+          specificPriceId: 1,
+          pricingMode: "sql_specific_price"
+        },
+        stock: { physicalQuantity: cheap ? 2 : 4, available: true, shopId: 1 },
+        freshness: { productCheckedAt: new Date().toISOString(), priceCalculatedAt: new Date().toISOString(), stockCheckedAt: new Date().toISOString(), cached: false }
+      };
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/products/batch") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const parsed = JSON.parse(body) as { items: Array<{ productId: number; combinationId?: number; quantity?: number }> };
+        const items = parsed.items.map((item) => ({
+          ok: true as const,
+          input: { productId: item.productId, combinationId: item.combinationId ?? 0, quantity: item.quantity ?? 1 },
+          product: buildProductPayload(item.productId)
+        }));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ items }));
+      });
+      return;
+    }
     if (url.pathname.startsWith("/v1/products/")) {
       const productId = Number(url.pathname.split("/").pop());
-      const cheap = productId === 502;
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          product: { productId, name: cheap ? "Jaula de entrenamiento economica" : "Jaula de entrenamiento premium", sku: cheap ? "JLA-502" : "JLA-501", shortDescription: null, longDescription: null, active: true },
-          selectedVariant: null,
-          attributes: [],
-          variants: [],
-          pricing: {
-            quantity: 1,
-            baseUnitPrice: cheap ? 250000 : 890000,
-            effectiveUnitPrice: cheap ? 219990 : 849990,
-            subtotal: cheap ? 219990 : 849990,
-            currency: "CLP",
-            taxIncluded: true,
-            taxMode: "configured_rate",
-            discountApplied: true,
-            discountType: "amount",
-            discountValue: cheap ? 30010 : 40010,
-            specificPriceId: 1,
-            pricingMode: "sql_specific_price"
-          },
-          stock: { physicalQuantity: cheap ? 2 : 4, available: true, shopId: 1 },
-          freshness: { productCheckedAt: new Date().toISOString(), priceCalculatedAt: new Date().toISOString(), stockCheckedAt: new Date().toISOString(), cached: false }
-        })
-      );
+      res.end(JSON.stringify(buildProductPayload(productId)));
       return;
     }
     res.writeHead(404).end();
