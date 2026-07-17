@@ -54,7 +54,19 @@ function buildOverallDecision(status: CommercialPolicyStatus, requiresApproval: 
 function computeChannelSignals(input: CommercialPolicyInput) {
   const channel = input.channelContext;
   const channelBlock = Boolean(channel.optOut || channel.aiBlocked || channel.identityConflict);
-  const channelReview = Boolean(channel.humanOwnerActive || channel.recentCustomerReply || channel.quietHoursActive || channel.manualApprovalRequired);
+  /**
+   * ACS-R1-05-T06.2: `recentCustomerReply` is sourced upstream from
+   * `hasLatestCustomerMessage` (buildCommercialContext.ts), which is
+   * computed from the very inbound message this reactive turn is
+   * currently processing - so including it here made every reactive turn
+   * force `requires_review` on its own response ("the message blocks
+   * itself"). It intentionally does not participate in gating the governed
+   * result of the turn being processed right now. The flag itself is left
+   * untouched on `channelContext` so `evaluateCommercialActions.ts` can
+   * still use it to cancel a pending proactive follow-up when the customer
+   * has already replied - that consumer is unaffected by this change.
+   */
+  const channelReview = Boolean(channel.humanOwnerActive || channel.quietHoursActive || channel.manualApprovalRequired);
   return { channelBlock, channelReview };
 }
 
@@ -273,7 +285,14 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
     ...toolRequestEvaluation.warnings,
     ...entityProposalEvaluation.warnings,
     ...(channelSignals.channelBlock ? ["outbound_blocked"] : []),
-    ...(channelSignals.channelReview ? ["human_owner_active"] : [])
+    /**
+     * ACS-R1-05-T06.2: each review cause is reported by its own real name -
+     * never collapsed into a single generic "human_owner_active" warning
+     * when the actual trigger was quiet hours or a manual-approval flag.
+     */
+    ...(input.channelContext.humanOwnerActive ? ["human_owner_active"] : []),
+    ...(input.channelContext.quietHoursActive ? ["quiet_hours_active"] : []),
+    ...(input.channelContext.manualApprovalRequired ? ["manual_approval_required"] : [])
   ]);
 
   const channelIssues: CommercialPolicyIssue[] = [];
@@ -297,10 +316,22 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
       buildPolicyIssue("human_owner_active", "Human owner is active and requires review.", ["channelContext", "humanOwnerActive"], "POLICY-OUTBOUND-HUMAN-OWNER", null, "warning")
     );
   }
+  if (input.channelContext.quietHoursActive) {
+    channelIssues.push(
+      buildPolicyIssue("quiet_hours_active", "Quiet hours are active and require review.", ["channelContext", "quietHoursActive"], "POLICY-OUTBOUND-QUIET-HOURS", null, "warning")
+    );
+  }
+  if (input.channelContext.manualApprovalRequired) {
+    channelIssues.push(
+      buildPolicyIssue("manual_approval_required", "Manual approval is required for this channel state.", ["channelContext", "manualApprovalRequired"], "POLICY-OUTBOUND-MANUAL-APPROVAL", null, "warning")
+    );
+  }
 
   const channelAppliedRules: CommercialPolicyRuleId[] = [];
   if (channelSignals.channelBlock) channelAppliedRules.push("POLICY-OUTBOUND-OPTOUT");
-  if (channelSignals.channelReview) channelAppliedRules.push("POLICY-OUTBOUND-HUMAN-OWNER");
+  if (input.channelContext.humanOwnerActive) channelAppliedRules.push("POLICY-OUTBOUND-HUMAN-OWNER");
+  if (input.channelContext.quietHoursActive) channelAppliedRules.push("POLICY-OUTBOUND-QUIET-HOURS");
+  if (input.channelContext.manualApprovalRequired) channelAppliedRules.push("POLICY-OUTBOUND-MANUAL-APPROVAL");
 
   const appliedRules: CommercialPolicyRuleId[] = uniqueRuleIds([
     ...claimEvaluation.appliedRules,

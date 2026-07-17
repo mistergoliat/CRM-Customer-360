@@ -1,6 +1,8 @@
 import type { PoolConnection } from "mysql2/promise";
 import type { CommercialEventPersistResult } from "./types";
 import {
+  normalizeAutonomousTurnContinuityFailedCommercialEvent,
+  normalizeAutonomousTurnDispositionCommercialEvent,
   normalizeCustomerIdentityCapabilityOutcomeCommercialEvent,
   normalizeCustomerIdentityResolutionCommercialEvent,
   normalizeCustomerOnboardingTransitionCommercialEvent,
@@ -68,4 +70,20 @@ export async function recordCustomerSessionWarningCommercialEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeCustomerSessionWarningCommercialEvent(input), connection);
+}
+
+// ACS-R1-05-T06.2.
+
+export async function recordAutonomousTurnDispositionCommercialEvent(
+  input: Parameters<typeof normalizeAutonomousTurnDispositionCommercialEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeAutonomousTurnDispositionCommercialEvent(input), connection);
+}
+
+export async function recordAutonomousTurnContinuityFailedCommercialEvent(
+  input: Parameters<typeof normalizeAutonomousTurnContinuityFailedCommercialEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeAutonomousTurnContinuityFailedCommercialEvent(input), connection);
 }

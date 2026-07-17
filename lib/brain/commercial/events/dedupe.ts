@@ -64,6 +64,18 @@ export function buildCustomerSessionWarningDedupeKey(
   return `identity-warning:${messageId.trim()}:${phase.trim()}:${warningCode.trim()}`;
 }
 
+// ACS-R1-05-T06.2 dedupe keys. One canonical disposition event per inbound
+// message; a technical failure to establish continuity gets a distinct key
+// (never overwrites/collides with a successful disposition for the same message).
+
+export function buildAutonomousTurnDispositionDedupeKey(inboundMessageId: string) {
+  return `autonomous-turn-disposition:${inboundMessageId.trim()}`;
+}
+
+export function buildAutonomousTurnContinuityFailedDedupeKey(inboundMessageId: string) {
+  return `autonomous-turn-continuity-failed:${inboundMessageId.trim()}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

@@ -922,6 +922,80 @@ test("marks human owner active as review", () => {
   assert.ok(result.issues.some((issue) => issue.code === "human_owner_active"));
 });
 
+test("ACS-R1-05-T06.2: recentCustomerReply alone (human_owner_active false) does not force review on a reactive turn", () => {
+  const result = evaluateCommercialPolicy(
+    makePolicyInput({
+      channelContext: {
+        channel: "whatsapp",
+        available: true,
+        outboundAllowed: true,
+        manualApprovalRequired: false,
+        optOut: false,
+        quietHoursActive: false,
+        humanOwnerActive: false,
+        aiBlocked: false,
+        identityConflict: false,
+        recentCustomerReply: true,
+        recentHumanContact: false
+      }
+    })
+  );
+
+  assert.notEqual(result.status, "requires_review");
+  assert.notEqual(result.status, "blocked");
+  assert.ok(!result.issues.some((issue) => issue.code === "human_owner_active"));
+});
+
+test("ACS-R1-05-T06.2: quiet hours and manual approval are reported by their own real cause, never as human_owner_active", () => {
+  const quietHoursResult = evaluateCommercialPolicy(
+    makePolicyInput({
+      channelContext: {
+        channel: "whatsapp",
+        available: true,
+        outboundAllowed: true,
+        manualApprovalRequired: false,
+        optOut: false,
+        quietHoursActive: true,
+        humanOwnerActive: false,
+        aiBlocked: false,
+        identityConflict: false,
+        recentCustomerReply: false,
+        recentHumanContact: false
+      }
+    })
+  );
+
+  assert.equal(quietHoursResult.status, "requires_review");
+  assert.ok(quietHoursResult.issues.some((issue) => issue.code === "quiet_hours_active"));
+  assert.ok(quietHoursResult.warnings.includes("quiet_hours_active"));
+  assert.ok(!quietHoursResult.issues.some((issue) => issue.code === "human_owner_active"));
+  assert.ok(!quietHoursResult.warnings.includes("human_owner_active"));
+
+  const manualApprovalResult = evaluateCommercialPolicy(
+    makePolicyInput({
+      channelContext: {
+        channel: "whatsapp",
+        available: true,
+        outboundAllowed: true,
+        manualApprovalRequired: true,
+        optOut: false,
+        quietHoursActive: false,
+        humanOwnerActive: false,
+        aiBlocked: false,
+        identityConflict: false,
+        recentCustomerReply: false,
+        recentHumanContact: false
+      }
+    })
+  );
+
+  assert.equal(manualApprovalResult.status, "requires_review");
+  assert.ok(manualApprovalResult.issues.some((issue) => issue.code === "manual_approval_required"));
+  assert.ok(manualApprovalResult.warnings.includes("manual_approval_required"));
+  assert.ok(!manualApprovalResult.issues.some((issue) => issue.code === "human_owner_active"));
+  assert.ok(!manualApprovalResult.warnings.includes("human_owner_active"));
+});
+
 test("blocks identity conflicts", () => {
   const result = evaluateCommercialPolicy(
     makePolicyInput({
@@ -983,8 +1057,16 @@ test("marks recent customer reply follow-up as review", () => {
     })
   );
 
-  assert.equal(result.status, "requires_review");
+  // ACS-R1-05-T06.2: recentCustomerReply still blocks the follow_up action
+  // itself (evaluateCommercialActions.ts, unchanged) - that's the legitimate
+  // "cancel pending follow-up" use case. It no longer forces the whole turn's
+  // status to requires_review via channelReview, since this same signal is
+  // computed from the inbound message the reactive turn is currently
+  // answering and must not block that turn's own response (see
+  // computeChannelSignals in evaluateCommercialPolicy.ts).
+  assert.equal(result.status, "allowed_with_restrictions");
   assert.ok(result.issues.some((issue) => issue.code === "recent_customer_reply"));
+  assert.ok(result.blockedActions.some((action) => action.type === "follow_up"));
 });
 
 test("allows follow-up evaluation when not blocked", () => {

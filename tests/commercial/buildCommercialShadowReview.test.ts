@@ -168,13 +168,18 @@ async function buildAvailableReview(behavior: SalesAgentFakeProviderBehavior = "
 test("maps a complete available observation", async () => {
   const review = await buildAvailableReview("valid");
 
+  // ACS-R1-05-T06.2: this fixture's normal inbound message previously forced
+  // channelReview via recentCustomerReply alone (the reactive self-block
+  // bug) - the "valid" behavior has nothing else that should require review,
+  // so it is now genuinely governed as "allowed" with shouldRespondNow
+  // preserved. See evaluateCommercialPolicy.ts computeChannelSignals.
   assert.equal(review.status, "available");
   assert.equal(review.identifiers.correlationId, IDENTIFIERS.correlationId);
-  assert.equal(review.summary?.policyStatus, "requires_review");
+  assert.equal(review.summary?.policyStatus, "allowed");
   assert.equal(review.summary?.proposedOutcome, "response_proposed");
   assert.equal(review.summary?.governedOutcome, "response_proposed");
   assert.equal(review.summary?.proposedShouldRespondNow, true);
-  assert.equal(review.summary?.governedShouldRespondNow, false);
+  assert.equal(review.summary?.governedShouldRespondNow, true);
   assert.equal(review.observability.provider, "fake-sales-agent-provider");
   assert.equal(review.invariants.violationDetected, false);
   assert.ok(review.warnings.includes("review_fixture"));
