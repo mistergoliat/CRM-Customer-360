@@ -98,10 +98,10 @@ test("excludes candidates without a usable price from budget comparisons", () =>
   assert.equal(result.picks.every((pick) => pick.product.productId !== "unpriced"), true);
 });
 
-// ACS-R1-05-T06.2 (P2 correction): invalid-price exclusion. Only null,
-// undefined, NaN, Infinity and negative amounts are invalid - price 0 is a
-// legitimate priced-at-zero catalog item (ADR-005: unknown price is `null`,
-// never `0`) and must stay usable.
+// ACS-R1-05-T06.2 (P2 correction, revised in the second correction pass -
+// section 12): invalid-price exclusion. null, undefined, NaN, Infinity,
+// negative AND zero are all invalid for the MVP commercial ranking - T06.2
+// does not implement free/special-priced products.
 
 function makeRawProduct(amount: unknown, productId = "raw"): CatalogProduct {
   const base = makeProduct({ productId, amount: 100000 });
@@ -144,12 +144,10 @@ test("excludes a non-numeric string price amount", () => {
   assert.equal(result.mode, "no_candidates");
 });
 
-test("a zero price is a legitimate usable price, never excluded", () => {
-  const result = rankCatalogCandidatesByBudget([makeProduct({ productId: "free", amount: 0 })], 800000);
-  assert.equal(result.mode, "all_under_budget");
-  assert.equal(result.picks.length, 1);
-  assert.equal(result.picks[0].product.productId, "free");
-  assert.equal(result.picks[0].effectiveUnitPrice, 0);
+test("ACS-R1-05-T06.2 (section 12): a zero price is excluded, never presented as '0 CLP' or a free/economical option", () => {
+  const result = rankCatalogCandidatesByBudget([makeProduct({ productId: "zero", amount: 0 })], 800000);
+  assert.equal(result.mode, "no_candidates");
+  assert.equal(result.picks.length, 0);
 });
 
 test("invalid candidates never appear alongside valid ones in any tier", () => {
@@ -158,11 +156,13 @@ test("invalid candidates never appear alongside valid ones in any tier", () => {
     makeProduct({ productId: "valid-near", amount: 780000 }),
     makeRawProduct(-100, "invalid-negative"),
     makeRawProduct(Number.NaN, "invalid-nan"),
-    makeRawProduct("garbage", "invalid-string")
+    makeRawProduct("garbage", "invalid-string"),
+    makeProduct({ productId: "invalid-zero", amount: 0 })
   ];
   const result = rankCatalogCandidatesByBudget(products, 800000);
   const ids = result.picks.map((pick) => pick.product.productId);
   assert.ok(!ids.includes("invalid-negative"));
   assert.ok(!ids.includes("invalid-nan"));
   assert.ok(!ids.includes("invalid-string"));
+  assert.ok(!ids.includes("invalid-zero"));
 });

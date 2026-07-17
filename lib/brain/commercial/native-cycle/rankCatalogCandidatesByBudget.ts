@@ -36,17 +36,22 @@ function productKey(product: CatalogProduct): string {
 }
 
 /**
- * ACS-R1-05-T06.2 (P2 correction). Excludes null/undefined, NaN, Infinity
- * (Number.isFinite) and negative amounts (price < 0 is never a real price -
- * a negative number can only be a data/upstream bug). Zero is intentionally
- * kept as usable: the catalog domain (ADR-005) treats an unknown price as
- * `null`, never `0` - `price.amount === 0` therefore represents a real
- * priced-at-zero item (e.g. a bundled/promotional accessory) reported by the
- * catalog service, not a missing value, so hiding it would itself be
- * non-grounded (silently dropping real catalog data).
+ * ACS-R1-05-T06.2 (P2 correction, revised in the second correction pass,
+ * section 12). Excludes null/undefined, NaN, Infinity (Number.isFinite),
+ * negative amounts, AND zero. The prior pass kept zero as "technically
+ * valid" per the catalog contract's unknown-never-zero rule (ADR-005), but
+ * that rule only says a KNOWN price is never represented as zero - it does
+ * not confirm the real Catalog Service ever emits `effectiveUnitPrice: 0`
+ * for a genuinely sellable, priced item (no documented example does, and
+ * PrestaShop-backed catalogs commonly show 0 for a product with no price
+ * configured yet - a data gap, not a free item). For this MVP, T06.2 does
+ * not implement free/special-priced products (that needs its own explicit
+ * contract, out of scope here) - so a `0` is treated as unusable, exactly
+ * like any other missing price, rather than being presented to a customer
+ * as "0 CLP" / "the economical option".
  */
 function hasUsablePrice(product: CatalogProduct): product is CatalogProduct & { price: { amount: number; currency: string | null } } {
-  return product.price !== null && typeof product.price.amount === "number" && Number.isFinite(product.price.amount) && product.price.amount >= 0;
+  return product.price !== null && typeof product.price.amount === "number" && Number.isFinite(product.price.amount) && product.price.amount > 0;
 }
 
 function availabilityRank(product: CatalogProduct): number {
