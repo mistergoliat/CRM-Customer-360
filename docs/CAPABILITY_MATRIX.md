@@ -2,9 +2,9 @@
 title: CAPABILITY_MATRIX
 doc_id: product-capability-matrix
 status: active
-version: "1.12.5"
+version: "1.12.6"
 owner: architecture
-last_reviewed: 2026-07-15
+last_reviewed: 2026-07-17
 source_of_truth_for:
   - capability inventory
   - domain implementation status
@@ -58,6 +58,7 @@ La matriz representa estado tecnico real, no intencion de roadmap.
 | ---------- | ---- | ------ | ---- | ------- | ------- | ------- | ----------- | ----- | ---- |
 | `search_products` | `tool` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `verified` | `accepted_with_debt` | ACS-R1-01.1 closed: single HTTP call per invocation (gateway owns retry), governance-derived approval (not LLM `blocking`), real smoke test (`scripts/manual-test/catalog-service-smoke.ts`) - see `audits/acs-r1-01-1-capability-gateway-hardening-evidence.md`. Remaining: multi-request's own catalog registry (`lib/brain/commercial/capabilities/registry.ts`) still reads PrestaShop SQL directly, not this port; `propose_followup` in the canonical loop is not wired to the real follow-up scheduling worker |
 | `get_product_details` | `tool` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `verified` | `accepted_with_debt` | ACS-R1-01.1 closed: single HTTP call, governance-derived approval, real smoke test - see `audits/acs-r1-01-1-capability-gateway-hardening-evidence.md`. Only reachable via the deterministic ranker (`rankCatalogSearchResults.ts`) after a search - no direct LLM tool alias yet |
+| `batch_get_products` | `command` | `implemented` | `implemented` | `implemented` | `registered` | `connected` | `not_verified` | `active_development` | ACS-R1-05-T06.2: hydrates up to 20 search candidates in one `POST /v1/products/batch` call via the Capability Gateway, then `rankCatalogCandidatesByBudget.ts` selects economy/near_budget/stretch tiers. Internal enrichment only - never aliased as an LLM-facing tool (Sales Agent only ever requests `searchProducts`; the runtime chains search -> batch automatically). Unit-tested (adapter + ranking, pure); the full search -> batch -> grounded-message pipeline has an integration test (`tests/commercial/buildCatalogGroundedMessageBudget.test.ts`) that could not be executed in the implementation environment (no local MariaDB) - pending a real run before `operational: verified`. |
 
 ## Customer Identity
 
