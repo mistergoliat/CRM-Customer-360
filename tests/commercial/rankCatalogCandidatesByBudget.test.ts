@@ -97,3 +97,72 @@ test("excludes candidates without a usable price from budget comparisons", () =>
   const result = rankCatalogCandidatesByBudget(products, 800000);
   assert.equal(result.picks.every((pick) => pick.product.productId !== "unpriced"), true);
 });
+
+// ACS-R1-05-T06.2 (P2 correction): invalid-price exclusion. Only null,
+// undefined, NaN, Infinity and negative amounts are invalid - price 0 is a
+// legitimate priced-at-zero catalog item (ADR-005: unknown price is `null`,
+// never `0`) and must stay usable.
+
+function makeRawProduct(amount: unknown, productId = "raw"): CatalogProduct {
+  const base = makeProduct({ productId, amount: 100000 });
+  return { ...base, price: { ...base.price!, amount: amount as number } };
+}
+
+test("excludes a negative price", () => {
+  const result = rankCatalogCandidatesByBudget([makeRawProduct(-500, "negative")], 800000);
+  assert.equal(result.mode, "no_candidates");
+  assert.equal(result.picks.some((pick) => pick.product.productId === "negative"), false);
+});
+
+test("excludes a NaN price", () => {
+  const result = rankCatalogCandidatesByBudget([makeRawProduct(Number.NaN, "nan")], 800000);
+  assert.equal(result.mode, "no_candidates");
+});
+
+test("excludes an Infinity price", () => {
+  const result = rankCatalogCandidatesByBudget([makeRawProduct(Number.POSITIVE_INFINITY, "infinity")], 800000);
+  assert.equal(result.mode, "no_candidates");
+});
+
+test("excludes a negative-Infinity price", () => {
+  const result = rankCatalogCandidatesByBudget([makeRawProduct(Number.NEGATIVE_INFINITY, "neg-infinity")], 800000);
+  assert.equal(result.mode, "no_candidates");
+});
+
+test("excludes an undefined price amount", () => {
+  const result = rankCatalogCandidatesByBudget([makeRawProduct(undefined, "undefined-amount")], 800000);
+  assert.equal(result.mode, "no_candidates");
+});
+
+test("excludes a null price amount (already covered structurally, kept for the required matrix)", () => {
+  const result = rankCatalogCandidatesByBudget([makeProduct({ productId: "null-amount", amount: null })], 800000);
+  assert.equal(result.mode, "no_candidates");
+});
+
+test("excludes a non-numeric string price amount", () => {
+  const result = rankCatalogCandidatesByBudget([makeRawProduct("not-a-number", "string-amount")], 800000);
+  assert.equal(result.mode, "no_candidates");
+});
+
+test("a zero price is a legitimate usable price, never excluded", () => {
+  const result = rankCatalogCandidatesByBudget([makeProduct({ productId: "free", amount: 0 })], 800000);
+  assert.equal(result.mode, "all_under_budget");
+  assert.equal(result.picks.length, 1);
+  assert.equal(result.picks[0].product.productId, "free");
+  assert.equal(result.picks[0].effectiveUnitPrice, 0);
+});
+
+test("invalid candidates never appear alongside valid ones in any tier", () => {
+  const products = [
+    makeProduct({ productId: "valid-economy", amount: 300000 }),
+    makeProduct({ productId: "valid-near", amount: 780000 }),
+    makeRawProduct(-100, "invalid-negative"),
+    makeRawProduct(Number.NaN, "invalid-nan"),
+    makeRawProduct("garbage", "invalid-string")
+  ];
+  const result = rankCatalogCandidatesByBudget(products, 800000);
+  const ids = result.picks.map((pick) => pick.product.productId);
+  assert.ok(!ids.includes("invalid-negative"));
+  assert.ok(!ids.includes("invalid-nan"));
+  assert.ok(!ids.includes("invalid-string"));
+});

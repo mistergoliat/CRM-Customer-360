@@ -35,8 +35,18 @@ function productKey(product: CatalogProduct): string {
   return `${product.productId}:${product.selectedVariant?.variantId ?? "default"}`;
 }
 
+/**
+ * ACS-R1-05-T06.2 (P2 correction). Excludes null/undefined, NaN, Infinity
+ * (Number.isFinite) and negative amounts (price < 0 is never a real price -
+ * a negative number can only be a data/upstream bug). Zero is intentionally
+ * kept as usable: the catalog domain (ADR-005) treats an unknown price as
+ * `null`, never `0` - `price.amount === 0` therefore represents a real
+ * priced-at-zero item (e.g. a bundled/promotional accessory) reported by the
+ * catalog service, not a missing value, so hiding it would itself be
+ * non-grounded (silently dropping real catalog data).
+ */
 function hasUsablePrice(product: CatalogProduct): product is CatalogProduct & { price: { amount: number; currency: string | null } } {
-  return product.price !== null && typeof product.price.amount === "number";
+  return product.price !== null && typeof product.price.amount === "number" && Number.isFinite(product.price.amount) && product.price.amount >= 0;
 }
 
 function availabilityRank(product: CatalogProduct): number {
