@@ -28,8 +28,18 @@ const DIRECTED_PROMISE_VERB_PATTERN =
 
 const STANDALONE_PROMISE_VERB_PATTERN = /\b(garantizo|garantizamos|aseguro|aseguramos|prometo|prometemos|confirmamos)\b/i;
 
+/**
+ * ACS-R1-05-T06.2 (second correction, section 7): "reservado"/"apartado" are
+ * tracked here purely as a narrow linguistic defense against an unsupported
+ * commitment ("Está reservado para ti.") - this is NOT a reservation
+ * capability or domain; no inventory-hold state exists or is implied
+ * anywhere in the system. "dejar" is included in the copula group alongside
+ * "estar/quedar/ser" because "Lo dejamos reservado." is a natural completed-
+ * action phrasing of the same commitment, distinct from the future-tense
+ * "dejaré/dejaremos" hedge already covered by isPendingActionSentence.
+ */
 const PASSIVE_CERTAINTY_PATTERN =
-  /\b(est(?:á|án)|qued(?:a|ó|an|aron)|ser(?:á|án))\s+(asegurad[oa]s?|garantizad[oa]s?|confirmad[oa]s?)\b/i;
+  /\b(est(?:á|án)|qued(?:a|ó|an|aron)|ser(?:á|án)|dej(?:a|amos|ó|an|aron))\s+(asegurad[oa]s?|garantizad[oa]s?|confirmad[oa]s?|reservad[oa]s?|apartad[oa]s?)\b/i;
 
 const ABSOLUTE_CERTAINTY_MARKER_PATTERN =
   /\b(con\s+(?:toda\s+|total\s+)?seguridad|sin\s+ning[uú]n\s+problema|no\s+tendr(?:á|ás|án)\s+ning[uú]n\s+problemas?|sin\s+duda(?:\s+alguna)?|cien\s+por\s+ciento|100\s*%)\b/i;

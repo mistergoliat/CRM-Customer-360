@@ -373,13 +373,43 @@ test("ACS-R1-05-T06.2 (P1 correction): unsupported commercial commitments are bl
     "Confirmamos el descuento para ti.",
     "Te prometemos entrega mañana.",
     "Sin duda alguna, tendrás el descuento.",
-    "Cien por ciento seguro que llega mañana."
+    "Cien por ciento seguro que llega mañana.",
+    // Section 6 of the second correction task - explicit MVP block list.
+    "Te aseguramos disponibilidad.",
+    "Garantizamos entrega mañana.",
+    "La entrega está confirmada.",
+    "Ese precio está garantizado.",
+    "Con total seguridad llegará mañana."
   ];
 
   for (const draftMessage of blockedPhrases) {
     const result = evaluate({ action: { draftMessage, finalMessage: null } });
     assert.equal(result.status, "blocked", `expected "${draftMessage}" to be blocked, got ${result.status}`);
     assert.ok(result.blockReasons.includes("unsupported_commercial_commitment"), `expected "${draftMessage}" to be blocked by unsupported_commercial_commitment, got ${result.blockReasons.join(",")}`);
+  }
+});
+
+test("ACS-R1-05-T06.2 (second correction, section 7): reservation-style commitments are treated as unsupported promises - no reservation capability exists", () => {
+  const reservationPhrases = ["Está reservado para ti.", "Queda apartado a tu nombre.", "Lo dejamos reservado."];
+
+  for (const draftMessage of reservationPhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "blocked", `expected "${draftMessage}" to be blocked, got ${result.status}`);
+    assert.ok(result.blockReasons.includes("unsupported_commercial_commitment"));
+  }
+});
+
+test("ACS-R1-05-T06.2 (second correction, section 6): additional MVP-required allowed phrases", () => {
+  const allowedPhrases = [
+    "Voy a revisar el stock.",
+    "Necesito confirmar la disponibilidad.",
+    "El plazo de despacho debe validarse.",
+    "No puedo garantizarte la entrega hasta confirmarla."
+  ];
+
+  for (const draftMessage of allowedPhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "eligible", `expected "${draftMessage}" to be eligible, got blocked by ${result.blockReasons.join(",")}`);
   }
 });
 

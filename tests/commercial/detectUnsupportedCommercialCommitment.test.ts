@@ -21,7 +21,12 @@ const ALLOWED = [
   "Puedo confirmar el stock.",
   "No puedo garantizarte disponibilidad sin revisarla.",
   "Antes de confirmar el precio debo consultar el catálogo.",
-  "Hay stock asegurado para hoy."
+  "Hay stock asegurado para hoy.",
+  // Section 6 of the second correction task - explicit MVP acceptance list.
+  "Voy a revisar el stock.",
+  "Necesito confirmar la disponibilidad.",
+  "El plazo de despacho debe validarse.",
+  "No puedo garantizarte la entrega hasta confirmarla."
 ];
 
 const BLOCKED = [
@@ -39,7 +44,19 @@ const BLOCKED = [
   "Te prometemos entrega mañana.",
   "Sin duda alguna, tendrás el descuento.",
   "Cien por ciento seguro que llega mañana.",
-  "Le garantizo que no tendrá inconvenientes."
+  "Le garantizo que no tendrá inconvenientes.",
+  // Section 6 of the second correction task - explicit MVP block list.
+  "Te aseguramos disponibilidad.",
+  "Garantizamos entrega mañana.",
+  "La entrega está confirmada.",
+  "Ese precio está garantizado.",
+  "Con total seguridad llegará mañana.",
+  // Section 7 - reservation-style absolute commitments. No reservation
+  // capability exists anywhere in the system; these are treated purely as
+  // unsupported commercial commitments, exactly like "está asegurado".
+  "Está reservado para ti.",
+  "Queda apartado a tu nombre.",
+  "Lo dejamos reservado."
 ];
 
 for (const phrase of ALLOWED) {
