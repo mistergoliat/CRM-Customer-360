@@ -292,7 +292,23 @@ export async function ensureAutonomousSalesTurnContinuity(
     return { cycle, disposition };
   }
 
-  const isCustomerFacingIntent = nextActionType !== null && CUSTOMER_FACING_NEXT_ACTION_TYPES.has(nextActionType);
+  /**
+   * ACS-R1-05-T07 (found by tests/e2e/reactiveTurnFallbacks.e2e.test.ts,
+   * T07-E7): a real technical failure of the shadow evaluation or the
+   * operational loop itself (e.g. the LLM provider throwing) never selects
+   * any next action at all - nextActionType stays null, so the
+   * customer-facing-intent check below used to never trigger and this turn
+   * fell through to the generic "nextBestActionDefined ? ... :
+   * no_response_required" branch at the end of this function, silently
+   * leaving the customer without any reply. classifyFallback already knows
+   * how to recognize this exact class of failure from cycle.warnings/loop
+   * status; reuse that same signal here so it also routes into the fallback
+   * dispatch below, never just past it in silence.
+   */
+  const hasTechnicalFailureSignal =
+    cycle.warnings.some((warning) => warning.startsWith("shadow_failed:") || warning.startsWith("loop_failed:")) ||
+    (loop !== null && loop.status === "failed_safe");
+  const isCustomerFacingIntent = (nextActionType !== null && CUSTOMER_FACING_NEXT_ACTION_TYPES.has(nextActionType)) || hasTechnicalFailureSignal;
 
   if (isCustomerFacingIntent && !responsePlanned) {
     const originalBlockReasons = [...(bridge?.sandboxEvaluation?.blockReasons ?? []), ...(bridge?.executionGate?.blockReasons ?? [])];

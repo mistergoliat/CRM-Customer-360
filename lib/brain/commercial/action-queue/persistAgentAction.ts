@@ -81,6 +81,88 @@ async function loadExistingActionByIdempotencyKey(
   return deserializeAgentActionRow(first);
 }
 
+/**
+ * ACS-R1-05-T07. Action types that are the single durable reply to one
+ * specific inbound customer message - never more than one per (conversation,
+ * message) pair, regardless of which decision record authored it.
+ */
+const OUTBOX_BACKED_SINGLE_REPLY_ACTION_TYPES = new Set(["send_whatsapp_reply", "request_more_context"]);
+
+/**
+ * ACS-R1-05-T07 (found by tests/e2e/reactiveTurnRestartRecovery.e2e.test.ts,
+ * T07-E3): buildAgentAction's idempotency_key digest includes decisionId,
+ * which runCommercialOperationalLoop mints fresh on every cycle execution -
+ * two genuinely concurrent runNativeAutonomousCycle runs for the identical
+ * inbound message (e.g. a redelivered webhook processed twice before either
+ * commits its own dedupe check) therefore produce two DIFFERENT idempotency
+ * keys and, without this check, two separate action rows with two separate
+ * outbox messages carrying identical content - a real duplicate send. This
+ * is a secondary, content-independent match keyed on the one thing that IS
+ * guaranteed stable across repeated processing of the same turn: which
+ * inbound message this reply answers. Scoped to the single-reply-per-message
+ * action types only, and opt-in via enforceSingleReplyPerMessage below -
+ * every other action type/caller (proactive follow-up scheduling, quote
+ * preparation, etc.) is not necessarily 1:1 with a single inbound message
+ * and keeps its existing digest-only idempotency semantics unchanged.
+ */
+async function loadExistingSingleReplyActionForMessage(
+  connection: AgentActionQueueConnection,
+  action: CrmAgentAction
+): Promise<CrmAgentAction | null> {
+  if (!OUTBOX_BACKED_SINGLE_REPLY_ACTION_TYPES.has(action.actionType)) return null;
+  const conversationCaseId = action.conversationCaseId;
+  const messageId = action.messageId;
+  if (conversationCaseId === null || messageId === null) return null;
+
+  const [rows] = await connection.execute<RowDataPacket[]>(
+    `SELECT * FROM ${CRM_AGENT_ACTIONS_TABLE}
+      WHERE conversation_case_id = ? AND message_id = ? AND action_type = ?
+      ORDER BY id ASC LIMIT 1`,
+    toExecuteValues([String(conversationCaseId), String(messageId), action.actionType])
+  );
+  const first = rows[0];
+  if (!first) return null;
+  return deserializeAgentActionRow(first);
+}
+
+/**
+ * ACS-R1-05-T07. The secondary (conversation_case_id, message_id,
+ * action_type) match above is itself vulnerable to the same
+ * check-then-insert race it exists to close (two connections could both
+ * find nothing and both insert) - there is no unique index to fall back on
+ * for this scope (unlike idempotency_key), so a MySQL/MariaDB advisory lock
+ * serializes concurrent persistAgentAction calls for the identical
+ * (conversation, message, action_type) instead. Session-scoped: must run on
+ * the same connection as the transaction it guards, and is always released
+ * before that connection returns to the pool.
+ */
+function buildSingleReplyLockKey(action: CrmAgentAction, enforceSingleReplyPerMessage: boolean): string | null {
+  if (!enforceSingleReplyPerMessage) return null;
+  if (!OUTBOX_BACKED_SINGLE_REPLY_ACTION_TYPES.has(action.actionType)) return null;
+  if (action.conversationCaseId === null || action.messageId === null) return null;
+  return `crm-agent-action-reply:${action.conversationCaseId}:${action.messageId}:${action.actionType}`;
+}
+
+async function withOptionalSingleReplyLock<T>(connection: AgentActionQueueConnection, lockKey: string | null, fn: () => Promise<T>): Promise<T> {
+  if (!lockKey) return fn();
+
+  const [lockRows] = await connection.execute<RowDataPacket[]>("SELECT GET_LOCK(?, 10) AS acquired", toExecuteValues([lockKey]));
+  const acquired = Number((lockRows[0] as { acquired?: unknown } | undefined)?.acquired) === 1;
+  if (!acquired) {
+    throw new Error(`persist_agent_action_lock_timeout:${lockKey}`);
+  }
+
+  try {
+    return await fn();
+  } finally {
+    try {
+      await connection.execute("SELECT RELEASE_LOCK(?)", toExecuteValues([lockKey]));
+    } catch {
+      // ignore release failures - MySQL/MariaDB releases session locks automatically when the connection closes
+    }
+  }
+}
+
 async function insertAction(connection: AgentActionQueueConnection, action: CrmAgentAction, currentTime: string) {
   const row = buildAgentActionStorageRow(action);
   const [result] = await connection.execute<ResultSetHeader>(
@@ -286,6 +368,19 @@ export async function persistAgentAction(
     currentTime: string | Date;
     featureFlags?: Partial<typeof COMMERCIAL_AGENT_ACTION_QUEUE_DEFAULT_FEATURE_FLAGS> | null;
     dataAccess?: AgentActionQueueDatabaseAdapter | null;
+    /**
+     * ACS-R1-05-T07. Opt-in only: additionally treats any existing action
+     * for the same (conversation_case_id, message_id, action_type) as a
+     * duplicate of this one, even when its idempotency_key digest differs
+     * (e.g. because a concurrent cycle run minted a different decisionId for
+     * the identical inbound message). Correct for "the one primary reply to
+     * this message" callers (runCommercialExecutionBridge); wrong for
+     * dispatchFallbackAction, whose idempotency key already scopes correctly
+     * by fallbackClass and deliberately allows more than one fallback action
+     * to answer the same message over time - defaults to false so every
+     * existing caller keeps its current, unchanged semantics.
+     */
+    enforceSingleReplyPerMessage?: boolean;
   }
 ): Promise<PersistAgentActionResult> {
   const currentTime = toIsoString(input.currentTime);
@@ -320,7 +415,11 @@ export async function persistAgentAction(
       return normalizeResult("failed", validation.action, null, "No connection adapter available.", true, ["agent_action_queue_missing_connection"]);
     }
 
-    return await adapter.withConnection(async (connection) => {
+    const enforceSingleReplyPerMessage = input.enforceSingleReplyPerMessage ?? false;
+    const singleReplyLockKey = buildSingleReplyLockKey(validation.action, enforceSingleReplyPerMessage);
+
+    return await adapter.withConnection((connection) =>
+      withOptionalSingleReplyLock(connection, singleReplyLockKey, async () => {
       try {
         await connection.beginTransaction();
         const existing = await loadExistingActionByIdempotencyKey(connection, validation.action!.idempotencyKey);
@@ -340,6 +439,28 @@ export async function persistAgentAction(
           }, existing.id, null, false, validation.warnings);
         }
 
+        // ACS-R1-05-T07: a DIFFERENT cycle run (different decisionId/content
+        // digest, same underlying inbound message) already answered this
+        // exact message. Unlike the idempotency-key match above (the same
+        // retried attempt, safe to refresh), this is always left untouched -
+        // whichever run's action got here first is the one and only reply to
+        // this message, regardless of its current status. Never
+        // second-guessed or overwritten by a later/losing concurrent run.
+        const existingForMessage = enforceSingleReplyPerMessage
+          ? await loadExistingSingleReplyActionForMessage(connection, validation.action!)
+          : null;
+        if (existingForMessage) {
+          await connection.rollback();
+          return normalizeResult(
+            "duplicate_ignored",
+            existingForMessage,
+            existingForMessage.id,
+            "An existing action already answers this exact inbound message.",
+            false,
+            validation.warnings
+          );
+        }
+
         try {
           const rowId = await insertAction(connection, validation.action!, currentTime);
           await connection.commit();
@@ -352,8 +473,9 @@ export async function persistAgentAction(
         } catch (insertError) {
           if (!isDuplicateKeyError(insertError)) throw insertError;
           /**
-           * ACS-R1-05-T06.2 (second correction, section 11): our own SELECT
-           * above found nothing, but a concurrent transaction won the
+           * ACS-R1-05-T07 (fixes an incomplete ACS-R1-05-T06.2 second
+           * correction): our own SELECT above found nothing, but a
+           * concurrent transaction won the
            * `uq_crm_agent_actions_idempotency_key` race (migrations/005)
            * between that SELECT and this INSERT. The row now exists - this
            * is not a real persistence failure, so it must never surface as
@@ -362,9 +484,20 @@ export async function persistAgentAction(
            * failure for a turn a concurrent call actually handled).
            * Re-select and resolve to the winner's row exactly like the
            * "existing" branch above, never re-writing what it wrote.
+           *
+           * ROLLBACK MUST run before the re-select, never after: this
+           * connection's transaction was opened with beginTransaction()
+           * (REPEATABLE READ by default), so a plain SELECT still inside
+           * that transaction reuses the snapshot taken before the winner's
+           * INSERT committed and reliably returns nothing even though the
+           * duplicate-key error proves the row now exists (confirmed with a
+           * real concurrent MariaDB run - tests/commercial/
+           * continuityConcurrency.test.ts). Rolling back first ends that
+           * transaction so the re-select runs as its own fresh
+           * (autocommit) read and actually observes the winner's committed row.
            */
-          const winner = await loadExistingActionByIdempotencyKey(connection, validation.action!.idempotencyKey);
           await connection.rollback();
+          const winner = await loadExistingActionByIdempotencyKey(connection, validation.action!.idempotencyKey);
           if (!winner) {
             return normalizeResult(
               "failed",
@@ -385,7 +518,8 @@ export async function persistAgentAction(
         }
         return normalizeResult("failed", validation.action!, null, sanitizeError(error), false, validation.warnings);
       }
-    });
+      })
+    );
   } catch (error) {
     return normalizeResult("failed", validation.action, null, sanitizeError(error), false, validation.warnings);
   }
