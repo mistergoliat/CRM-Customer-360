@@ -360,10 +360,14 @@ test("missing message blocks before repositories are used", async () => {
   assert.ok(result.blockReasons.includes("unsafe_message"));
 });
 
-test("unsafe message blocks before repositories are used", async () => {
+test("unsafe payload (unresolved placeholder) blocks before repositories are used", async () => {
+  // ACS-R1-05-T06.2: "Hay stock asegurado para hoy." is a legitimate
+  // commercial message and is no longer lexically blocked (see
+  // autonomy-sandbox/validateAutonomousReplyCandidate.ts) - this test now
+  // exercises a genuine technical safety block instead.
   const input = makeGateInput({
     action: {
-      draftMessage: "Hay stock asegurado para hoy.",
+      draftMessage: "Hola {{customer_first_name}}, hay stock asegurado para hoy.",
       finalMessage: null
     }
   });
@@ -371,6 +375,8 @@ test("unsafe message blocks before repositories are used", async () => {
   const result = await executeActionThroughGate(input, { unitOfWork: makeThrowingUnitOfWork() as never });
 
   assert.equal(result.status, "blocked");
+  // Both sandbox-level unsafe_message and unsafe_payload map to the same
+  // gate-level reason (evaluateExecutionGate.ts#mapSandboxBlockReasons).
   assert.ok(result.blockReasons.includes("unsafe_message"));
 });
 

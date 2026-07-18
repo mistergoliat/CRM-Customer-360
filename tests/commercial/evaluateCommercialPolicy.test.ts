@@ -269,6 +269,189 @@ test("blocks a price claim without evidence", () => {
   assert.ok(result.issues.some((issue) => issue.code === "sensitive_claim_blocked" || issue.code === "evidence_unverified" || issue.code === "claim_source_not_authorized"));
 });
 
+// ACS-R1-05-T06.2 (P1 correction): commitment grounding. The same declarative
+// draftText sentence must be allowed when backed by a real, verified claim
+// and require review when the Sales Agent wrote the fact in prose without
+// ever declaring a matching claim - evaluateCommercialClaims.ts alone cannot
+// catch the second case because it only ever governs claims that were
+// actually declared.
+
+test("a declarative catalog price statement is allowed when backed by a verified claim", () => {
+  const salesAgentResult = makeBaseResult({
+    responseProposal: {
+      messageIntent: "quote",
+      draftText: "El precio informado por catálogo es $500.000.",
+      language: "es",
+      tone: "friendly",
+      questions: [],
+      claims: [
+        {
+          type: "price",
+          value: "$500.000",
+          evidenceSource: "tool_result",
+          evidenceSummary: "Precio hidratado desde el catalogo real.",
+          verified: true,
+          confidence: "high",
+          expiresAt: "2026-06-18T00:00:00.000Z"
+        }
+      ],
+      disclaimers: [],
+      requiresApproval: "none",
+      blockedClaims: [],
+      confidence: "high"
+    },
+    evidence: [makeEvidence({ source: "tool_result", summary: "Fuente de precio autorizada.", expiresAt: "2026-06-18T00:00:00.000Z" })]
+  });
+
+  const result = evaluateCommercialPolicy(
+    makePolicyInput({
+      salesAgentResult,
+      featureFlags: { ...makePolicyInput().featureFlags, allowSensitiveClaims: true }
+    })
+  );
+
+  assert.equal(result.status, "allowed");
+  assert.ok(!result.warnings.includes("commercial_statement_missing_evidence"));
+});
+
+test("the identical declarative catalog price statement requires review when no matching claim was declared at all", () => {
+  const salesAgentResult = makeBaseResult({
+    responseProposal: {
+      messageIntent: "answer",
+      draftText: "El precio informado por catálogo es $500.000.",
+      language: "es",
+      tone: "friendly",
+      questions: [],
+      claims: [],
+      disclaimers: [],
+      requiresApproval: "none",
+      blockedClaims: [],
+      confidence: "high"
+    }
+  });
+
+  const result = evaluateCommercialPolicy(makePolicyInput({ salesAgentResult }));
+
+  assert.equal(result.status, "requires_review");
+  assert.ok(result.warnings.includes("commercial_statement_missing_evidence"));
+  assert.ok(result.appliedRules.includes("POLICY-DRAFT-STATEMENT-EVIDENCE"));
+  // ACS-R1-05-T06.2 (second correction, section 8): requires_review must
+  // carry the same authority into requiresApproval, never leave it "none".
+  assert.equal(result.requiresApproval, "operator_review");
+});
+
+// ACS-R1-05-T06.2 (second correction, section 4/5): instance-level grounding.
+// A verified claim only grounds a declarative statement about the SAME
+// concrete value it attests, never any statement of the same claim type.
+
+function priceClaim(value: string, overrides: Record<string, unknown> = {}) {
+  return {
+    type: "price" as const,
+    value,
+    evidenceSource: "tool_result" as const,
+    evidenceSummary: "Precio hidratado desde el catalogo real.",
+    verified: true,
+    confidence: "high" as const,
+    expiresAt: "2026-06-18T00:00:00.000Z",
+    ...overrides
+  };
+}
+
+function withDraftAndClaims(draftText: string, claims: ReturnType<typeof priceClaim>[]) {
+  return makeBaseResult({
+    responseProposal: {
+      messageIntent: "answer",
+      draftText,
+      language: "es",
+      tone: "friendly",
+      questions: [],
+      claims,
+      disclaimers: [],
+      requiresApproval: "none",
+      blockedClaims: [],
+      confidence: "high"
+    },
+    evidence: claims.length > 0 ? [makeEvidence({ source: "tool_result", summary: "Fuente de precio autorizada.", expiresAt: "2026-06-18T00:00:00.000Z" })] : []
+  });
+}
+
+function evaluateWithSensitiveClaims(salesAgentResult: SalesAgentResult) {
+  return evaluateCommercialPolicy(
+    makePolicyInput({
+      salesAgentResult,
+      featureFlags: { ...makePolicyInput().featureFlags, allowSensitiveClaims: true }
+    })
+  );
+}
+
+test("same type + same concrete value: grounded and allowed (task example: jaula A cuesta $500.000)", () => {
+  const salesAgentResult = withDraftAndClaims("La jaula A cuesta $500.000.", [priceClaim("500000")]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "allowed");
+  assert.ok(!result.warnings.includes("commercial_statement_missing_evidence"));
+});
+
+test("same type + different value (different product): requires review (task example: jaula B cuesta $900.000, claim is for jaula A at $500.000)", () => {
+  const salesAgentResult = withDraftAndClaims("La jaula B cuesta $900.000.", [priceClaim("500000")]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
+  assert.ok(result.warnings.includes("commercial_statement_missing_evidence"));
+  assert.equal(result.requiresApproval, "operator_review");
+});
+
+test("same type + different currency: requires review even when the numeric amount matches", () => {
+  const salesAgentResult = withDraftAndClaims("El precio es $500.000.", [priceClaim("500000 USD")]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
+  assert.ok(result.warnings.includes("commercial_statement_missing_evidence"));
+});
+
+test("unverified claim never grounds a declarative statement, even of the same type", () => {
+  const salesAgentResult = withDraftAndClaims("El precio es $500.000.", [priceClaim("500000", { verified: false })]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
+});
+
+test("claim from a weak/unauthorized evidence source never grounds a declarative statement", () => {
+  const salesAgentResult = withDraftAndClaims("El precio es $500.000.", [priceClaim("500000", { evidenceSource: "customer_message" })]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
+});
+
+test("a claim of an unrelated type never grounds a different-type declarative statement", () => {
+  const salesAgentResult = withDraftAndClaims("El stock está disponible.", [priceClaim("500000")]);
+  const result = evaluateWithSensitiveClaims(salesAgentResult);
+
+  assert.equal(result.status, "requires_review");
+});
+
+test("questions and pending-action sentences about sensitive topics never require grounding", () => {
+  const salesAgentResult = makeBaseResult({
+    responseProposal: {
+      messageIntent: "clarify",
+      draftText: "¿Quieres que revise el precio? Voy a consultar el stock. Necesito confirmar el despacho.",
+      language: "es",
+      tone: "friendly",
+      questions: ["¿Quieres que revise el precio?"],
+      claims: [],
+      disclaimers: [],
+      requiresApproval: "none",
+      blockedClaims: [],
+      confidence: "high"
+    }
+  });
+
+  const result = evaluateCommercialPolicy(makePolicyInput({ salesAgentResult }));
+
+  assert.equal(result.status, "allowed");
+  assert.ok(!result.warnings.includes("commercial_statement_missing_evidence"));
+});
+
 test("downgrades stale stock claims to review", () => {
   const salesAgentResult = makeBaseResult({
     responseProposal: {
@@ -922,6 +1105,94 @@ test("marks human owner active as review", () => {
   assert.ok(result.issues.some((issue) => issue.code === "human_owner_active"));
 });
 
+test("ACS-R1-05-T06.2: recentCustomerReply alone (human_owner_active false) does not force review on a reactive turn", () => {
+  const result = evaluateCommercialPolicy(
+    makePolicyInput({
+      channelContext: {
+        channel: "whatsapp",
+        available: true,
+        outboundAllowed: true,
+        manualApprovalRequired: false,
+        optOut: false,
+        quietHoursActive: false,
+        humanOwnerActive: false,
+        aiBlocked: false,
+        identityConflict: false,
+        recentCustomerReply: true,
+        recentHumanContact: false
+      }
+    })
+  );
+
+  assert.notEqual(result.status, "requires_review");
+  assert.notEqual(result.status, "blocked");
+  assert.ok(!result.issues.some((issue) => issue.code === "human_owner_active"));
+});
+
+test("ACS-R1-05-T06.2: quiet hours and manual approval are reported by their own real cause, never as human_owner_active", () => {
+  const quietHoursResult = evaluateCommercialPolicy(
+    makePolicyInput({
+      channelContext: {
+        channel: "whatsapp",
+        available: true,
+        outboundAllowed: true,
+        manualApprovalRequired: false,
+        optOut: false,
+        quietHoursActive: true,
+        humanOwnerActive: false,
+        aiBlocked: false,
+        identityConflict: false,
+        recentCustomerReply: false,
+        recentHumanContact: false
+      }
+    })
+  );
+
+  /**
+   * ACS-R1-05-T06.2 (second correction, section 10 - investigated and
+   * reverted): quietHoursActive keeps gating evaluateCommercialPolicy's
+   * status here, unchanged from the original T06.2 close. It was briefly
+   * removed on the theory that it could wrongly block the reactive turn,
+   * but the reactive path's own channel-context builder
+   * (shadow/runCommercialShadowEvaluation.ts#buildChannelContext) already
+   * hardcodes quietHoursActive: false unconditionally, so the reactive
+   * turn never actually receives a live quiet-hours signal here. The real
+   * caller that does is sales-consultative/followUpDispatchPolicy.ts (the
+   * proactive follow-up dispatch gate), which needs this to keep working -
+   * see followUpDispatchPolicy.test.ts "[7] quiet hours -> decision
+   * require_review".
+   */
+  assert.equal(quietHoursResult.status, "requires_review");
+  assert.ok(quietHoursResult.issues.some((issue) => issue.code === "quiet_hours_active"));
+  assert.ok(quietHoursResult.warnings.includes("quiet_hours_active"));
+  assert.ok(!quietHoursResult.issues.some((issue) => issue.code === "human_owner_active"));
+  assert.ok(!quietHoursResult.warnings.includes("human_owner_active"));
+
+  const manualApprovalResult = evaluateCommercialPolicy(
+    makePolicyInput({
+      channelContext: {
+        channel: "whatsapp",
+        available: true,
+        outboundAllowed: true,
+        manualApprovalRequired: true,
+        optOut: false,
+        quietHoursActive: false,
+        humanOwnerActive: false,
+        aiBlocked: false,
+        identityConflict: false,
+        recentCustomerReply: false,
+        recentHumanContact: false
+      }
+    })
+  );
+
+  assert.equal(manualApprovalResult.status, "requires_review");
+  assert.ok(manualApprovalResult.issues.some((issue) => issue.code === "manual_approval_required"));
+  assert.ok(manualApprovalResult.warnings.includes("manual_approval_required"));
+  assert.ok(!manualApprovalResult.issues.some((issue) => issue.code === "human_owner_active"));
+  assert.ok(!manualApprovalResult.warnings.includes("human_owner_active"));
+});
+
 test("blocks identity conflicts", () => {
   const result = evaluateCommercialPolicy(
     makePolicyInput({
@@ -983,8 +1254,16 @@ test("marks recent customer reply follow-up as review", () => {
     })
   );
 
-  assert.equal(result.status, "requires_review");
+  // ACS-R1-05-T06.2: recentCustomerReply still blocks the follow_up action
+  // itself (evaluateCommercialActions.ts, unchanged) - that's the legitimate
+  // "cancel pending follow-up" use case. It no longer forces the whole turn's
+  // status to requires_review via channelReview, since this same signal is
+  // computed from the inbound message the reactive turn is currently
+  // answering and must not block that turn's own response (see
+  // computeChannelSignals in evaluateCommercialPolicy.ts).
+  assert.equal(result.status, "allowed_with_restrictions");
   assert.ok(result.issues.some((issue) => issue.code === "recent_customer_reply"));
+  assert.ok(result.blockedActions.some((action) => action.type === "follow_up"));
 });
 
 test("allows follow-up evaluation when not blocked", () => {

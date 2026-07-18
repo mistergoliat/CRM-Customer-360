@@ -2,6 +2,7 @@ import { COMMERCIAL_POLICY_CONTRACT_VERSION, COMMERCIAL_POLICY_VERSION } from ".
 import { createCommercialPolicyFailedSafe } from "./createCommercialPolicyFailedSafe";
 import { evaluateCommercialActions } from "./evaluateCommercialActions";
 import { evaluateCommercialClaims } from "./evaluateCommercialClaims";
+import { evaluateCommercialCommitmentGrounding } from "./evaluateCommercialCommitmentGrounding";
 import { evaluateCommercialEntityProposals } from "./evaluateCommercialEntityProposals";
 import { evaluateCommercialToolRequests } from "./evaluateCommercialToolRequests";
 import type {
@@ -54,7 +55,35 @@ function buildOverallDecision(status: CommercialPolicyStatus, requiresApproval: 
 function computeChannelSignals(input: CommercialPolicyInput) {
   const channel = input.channelContext;
   const channelBlock = Boolean(channel.optOut || channel.aiBlocked || channel.identityConflict);
-  const channelReview = Boolean(channel.humanOwnerActive || channel.recentCustomerReply || channel.quietHoursActive || channel.manualApprovalRequired);
+  /**
+   * ACS-R1-05-T06.2: `recentCustomerReply` is sourced upstream from
+   * `hasLatestCustomerMessage` (buildCommercialContext.ts), which is
+   * computed from the very inbound message this reactive turn is
+   * currently processing - so including it here made every reactive turn
+   * force `requires_review` on its own response ("the message blocks
+   * itself"). It intentionally does not participate in gating the governed
+   * result of the turn being processed right now. The flag itself is left
+   * untouched on `channelContext` so `evaluateCommercialActions.ts` can
+   * still use it to cancel a pending proactive follow-up when the customer
+   * has already replied - that consumer is unaffected by this change.
+   *
+   * ACS-R1-05-T06.2 (second correction, section 10 - investigated and
+   * reverted): `quietHoursActive` was briefly removed from this gate on the
+   * theory that it could wrongly gate the reactive turn, mirroring
+   * `recentCustomerReply` above. That theory does not hold: the reactive
+   * path's own channel-context builder
+   * (shadow/runCommercialShadowEvaluation.ts#buildChannelContext) already
+   * hardcodes `quietHoursActive: false` unconditionally - the reactive
+   * turn never receives a real quiet-hours signal here in the first place.
+   * The ONLY real caller that passes a live `quietHoursActive` value into
+   * `evaluateCommercialPolicy` is `sales-consultative/followUpDispatchPolicy.ts`,
+   * which is the proactive follow-up dispatch gate and legitimately needs
+   * `channelReview` to include it. Removing it broke that gate
+   * (`followUpDispatchPolicy.test.ts`, "[7] quiet hours -> decision
+   * require_review") without fixing anything real for the reactive turn -
+   * kept here, unchanged from the original T06.2 close.
+   */
+  const channelReview = Boolean(channel.humanOwnerActive || channel.quietHoursActive || channel.manualApprovalRequired);
   return { channelBlock, channelReview };
 }
 
@@ -260,11 +289,32 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
   const entityProposalEvaluation = evaluateCommercialEntityProposals(input);
   const channelSignals = computeChannelSignals(input);
 
+  /**
+   * ACS-R1-05-T06.2 (P1 correction, hardened in the second correction pass):
+   * a claim only counts as grounding evidence for the draft-text scan below
+   * when its own assessment came back fully "allowed" (verified, fresh,
+   * strong source for sensitive types) - a claim under review or already
+   * blocked is not evidence. Carries `value` (not just `type`) through so
+   * grounding can match the concrete figure named in the draft against the
+   * concrete figure the claim actually attests, not merely the claim type -
+   * see evaluateCommercialCommitmentGrounding.ts for why type-only matching
+   * was insufficient (a verified price claim about one product could
+   * previously ground an unrelated price statement about a different one).
+   */
+  const groundedClaims = claimEvaluation.assessments
+    .filter((assessment) => assessment.status === "allowed")
+    .map((assessment) => ({ type: assessment.claim.type, value: assessment.claim.value }));
+  const commitmentGrounding = evaluateCommercialCommitmentGrounding(
+    input.salesAgentResult.responseProposal?.draftText ?? null,
+    groundedClaims
+  );
+
   const issues: CommercialPolicyIssue[] = [
     ...claimEvaluation.issues,
     ...actionEvaluation.issues,
     ...toolRequestEvaluation.issues,
-    ...entityProposalEvaluation.issues
+    ...entityProposalEvaluation.issues,
+    ...commitmentGrounding.issues
   ];
 
   const warnings = uniqueStrings([
@@ -272,8 +322,16 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
     ...actionEvaluation.warnings,
     ...toolRequestEvaluation.warnings,
     ...entityProposalEvaluation.warnings,
+    ...commitmentGrounding.warnings,
     ...(channelSignals.channelBlock ? ["outbound_blocked"] : []),
-    ...(channelSignals.channelReview ? ["human_owner_active"] : [])
+    /**
+     * ACS-R1-05-T06.2: each review cause is reported by its own real name -
+     * never collapsed into a single generic "human_owner_active" warning
+     * when the actual trigger was quiet hours or a manual-approval flag.
+     */
+    ...(input.channelContext.humanOwnerActive ? ["human_owner_active"] : []),
+    ...(input.channelContext.quietHoursActive ? ["quiet_hours_active"] : []),
+    ...(input.channelContext.manualApprovalRequired ? ["manual_approval_required"] : [])
   ]);
 
   const channelIssues: CommercialPolicyIssue[] = [];
@@ -297,16 +355,29 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
       buildPolicyIssue("human_owner_active", "Human owner is active and requires review.", ["channelContext", "humanOwnerActive"], "POLICY-OUTBOUND-HUMAN-OWNER", null, "warning")
     );
   }
+  if (input.channelContext.quietHoursActive) {
+    channelIssues.push(
+      buildPolicyIssue("quiet_hours_active", "Quiet hours are active and require review.", ["channelContext", "quietHoursActive"], "POLICY-OUTBOUND-QUIET-HOURS", null, "warning")
+    );
+  }
+  if (input.channelContext.manualApprovalRequired) {
+    channelIssues.push(
+      buildPolicyIssue("manual_approval_required", "Manual approval is required for this channel state.", ["channelContext", "manualApprovalRequired"], "POLICY-OUTBOUND-MANUAL-APPROVAL", null, "warning")
+    );
+  }
 
   const channelAppliedRules: CommercialPolicyRuleId[] = [];
   if (channelSignals.channelBlock) channelAppliedRules.push("POLICY-OUTBOUND-OPTOUT");
-  if (channelSignals.channelReview) channelAppliedRules.push("POLICY-OUTBOUND-HUMAN-OWNER");
+  if (input.channelContext.humanOwnerActive) channelAppliedRules.push("POLICY-OUTBOUND-HUMAN-OWNER");
+  if (input.channelContext.quietHoursActive) channelAppliedRules.push("POLICY-OUTBOUND-QUIET-HOURS");
+  if (input.channelContext.manualApprovalRequired) channelAppliedRules.push("POLICY-OUTBOUND-MANUAL-APPROVAL");
 
   const appliedRules: CommercialPolicyRuleId[] = uniqueRuleIds([
     ...claimEvaluation.appliedRules,
     ...actionEvaluation.appliedRules,
     ...toolRequestEvaluation.appliedRules,
     ...entityProposalEvaluation.appliedRules,
+    ...commitmentGrounding.appliedRules,
     ...channelAppliedRules
   ]);
 
@@ -353,10 +424,29 @@ export function evaluateCommercialPolicy(input: CommercialPolicyInput): Commerci
     toolRequestEvaluation.assessments.filter((assessment) => assessment.status === "review").length +
     entityProposalEvaluation.assessments.filter((assessment) => assessment.status === "review").length;
 
-  const status = buildStatus(blockedCount, reviewCount, hasFatalIssue, hasAllowedContent, channelSignals.channelReview, channelSignals.channelBlock);
+  const status = buildStatus(
+    blockedCount,
+    reviewCount,
+    hasFatalIssue,
+    hasAllowedContent,
+    channelSignals.channelReview || commitmentGrounding.requiresReview,
+    channelSignals.channelBlock
+  );
+  /**
+   * ACS-R1-05-T06.2 (second correction, section 8): `commitmentGrounding`
+   * must carry the same authority into `requiresApproval` that it already
+   * carries into `status` (via the `buildStatus` call below) - otherwise
+   * `crm_agent_decisions`/`crm_agent_actions` could persist
+   * `policy_status: "requires_review"` next to `approval_requirement: "none"`,
+   * an internally incoherent audit trail even though the turn still
+   * escalates correctly via `shouldRequestHuman`.
+   */
   const requiresApproval = maxApproval(
     maxApproval(claimEvaluation.requiresApproval, actionEvaluation.requiresApproval),
-    maxApproval(toolRequestEvaluation.requiresApproval, entityProposalEvaluation.requiresApproval)
+    maxApproval(
+      toolRequestEvaluation.requiresApproval,
+      maxApproval(entityProposalEvaluation.requiresApproval, commitmentGrounding.requiresReview ? "operator_review" : "none")
+    )
   );
   const riskLevel = maxRisk(
     maxRisk(claimEvaluation.riskLevel, actionEvaluation.riskLevel),

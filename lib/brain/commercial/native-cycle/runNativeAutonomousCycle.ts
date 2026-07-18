@@ -72,6 +72,14 @@ export type NativeAutonomousCycleInput = {
   customerSessionDependencies?: ResolveNativeCustomerSessionDependencies | null;
 };
 
+/** ACS-R1-05-T06.2 (C2): the commercial need for this turn, read from already-loaded, persisted sources - never re-derived from free text, never invented. */
+export type NativeAutonomousCycleCommercialNeed = {
+  productQuery: string | null;
+  usage: string | null;
+  budgetMax: number | null;
+  currency: string | null;
+};
+
 export type NativeAutonomousCycleResult = {
   ran: boolean;
   reason?: string;
@@ -84,6 +92,8 @@ export type NativeAutonomousCycleResult = {
   customerContextState?: AutonomousCustomerContextLoadState;
   /** ACS-R1-04-T06: the minimized decision context handed to whichever runtime ran this turn. */
   customerSession?: CustomerSessionDecisionContext;
+  /** ACS-R1-05-T06.2: null only when the legacy runtime never reached the point where a commercial need could be read (e.g. conversation_not_found, multi-request runtime). */
+  commercialNeed?: NativeAutonomousCycleCommercialNeed | null;
   warnings: string[];
 };
 
@@ -132,7 +142,7 @@ export async function runNativeAutonomousCycle(
   // configured and every existing caller keeps its current behavior.
   const pilotAllowlist = loadAutonomousPilotAllowlist();
   if (!isWaIdAuthorizedForPilot(input.waId, pilotAllowlist)) {
-    return { ran: false, reason: "wa_id_not_authorized_for_pilot", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+    return { ran: false, reason: "wa_id_not_authorized_for_pilot", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
   }
 
   // Step 1: which runtime, if any, is enabled this turn. Multi-request is
@@ -143,11 +153,11 @@ export async function runNativeAutonomousCycle(
   if (!multiRequestEnabled) {
     if (!isAutonomyCycleEnabled()) {
       // Step 2: nothing will run this turn - Customer 360 is never loaded.
-      return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+      return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
     }
     if (!buildCommercialShadowFeatureFlags().commercialShadowEnabled) {
       // Step 2: legacy is gated off too - Customer 360 is never loaded.
-      return { ran: false, reason: "shadow_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, warnings: [] };
+      return { ran: false, reason: "shadow_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
     }
   }
 
@@ -202,6 +212,7 @@ export async function runNativeAutonomousCycle(
       catalogCapability: null,
       customerContextState: customer360.state,
       customerSession: session.decision,
+      commercialNeed: null,
       // Step 6: structured Customer 360 + session warnings, merged with the runtime's own.
       warnings: dedupeWarnings([...multiRequest.warnings, ...customer360.warnings, ...session.warnings])
     };
@@ -233,6 +244,7 @@ export async function runNativeAutonomousCycle(
       catalogCapability: null,
       customerContextState: customer360.state,
       customerSession: session.decision,
+      commercialNeed: null,
       warnings: dedupeWarnings(warnings)
     };
   }
@@ -372,11 +384,18 @@ export async function runNativeAutonomousCycle(
         correlationId: input.correlationId,
         trustedCustomerSession: session.execution
       });
-      catalogCapability = await buildCatalogGroundedMessage(stage.executions, {
-        correlationId: input.correlationId,
-        conversationId: input.conversationId,
-        opportunityId: typeof opportunityId === "number" ? opportunityId : null
-      });
+      catalogCapability = await buildCatalogGroundedMessage(
+        stage.executions,
+        {
+          correlationId: input.correlationId,
+          conversationId: input.conversationId,
+          opportunityId: typeof opportunityId === "number" ? opportunityId : null
+        },
+        {
+          budgetMax: snapshot.needProfile?.budgetMax ?? null,
+          usage: snapshot.needProfile?.useCase ?? null
+        }
+      );
       groundedLoop = applyCatalogGroundingToNextAction(loop, catalogCapability);
     } catch (error) {
       warnings.push(`catalog_capability_failed: ${error instanceof Error ? error.message : "unknown"}`);
@@ -427,6 +446,18 @@ export async function runNativeAutonomousCycle(
     }
   }
 
+  // ACS-R1-05-T06.2 (C2/C9): commercial need read from already-loaded,
+  // persisted sources only - crm_sales_need_profiles (via snapshot.needProfile,
+  // loaded in Fase 1 above) for usage/budget, and the catalog stage's own
+  // search query (never the raw inbound text) for productQuery. Never a
+  // second DB read, never inferred from free text here.
+  const commercialNeed: NativeAutonomousCycleCommercialNeed = {
+    productQuery: catalogCapability?.searchResult?.data?.query ?? null,
+    usage: snapshot.needProfile?.useCase ?? null,
+    budgetMax: snapshot.needProfile?.budgetMax ?? null,
+    currency: catalogCapability?.ranking?.picks[0]?.currency ?? null
+  };
+
   return {
     ran: true,
     shadow,
@@ -435,6 +466,7 @@ export async function runNativeAutonomousCycle(
     catalogCapability,
     customerContextState: customer360.state,
     customerSession: session.decision,
+    commercialNeed,
     warnings: dedupeWarnings(warnings)
   };
 }

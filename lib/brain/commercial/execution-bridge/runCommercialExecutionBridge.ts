@@ -119,7 +119,11 @@ export async function runCommercialExecutionBridge(input: RunCommercialExecution
     featureFlags: {
       queueEnabled: input.featureFlags.actionQueueEnabled,
       persistenceEnabled: input.featureFlags.actionPersistenceEnabled
-    }
+    },
+    // ACS-R1-05-T07: this is the one primary reply the bridge builds for the
+    // loop's selectedNextAction - two concurrent cycle runs for the same
+    // inbound message must never both send it (see persistAgentAction.ts).
+    enforceSingleReplyPerMessage: true
   });
 
   const actionWritten = actionPersistence.status === "inserted" || actionPersistence.status === "updated_existing";

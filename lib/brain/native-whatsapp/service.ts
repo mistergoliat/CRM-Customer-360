@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
+import { ensureAutonomousSalesTurnContinuity } from "@/lib/brain/commercial/continuity";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { auditLog } from "@/lib/audit";
 import { queryRows, safeExecute, safeQueryRows, withTransaction } from "@/lib/db";
@@ -1152,19 +1152,29 @@ export async function processNativeWhatsAppInbound(input: {
     }
   });
 
-  // Fase 1 — native autonomous cycle (PR-14).
-  // Runs after inbound is durably persisted so a failure here never undoes the
-  // already-committed ConversationMessage / CommercialEvent (ADR-007 continuity).
-  // Gating (legacy shadow/loop flags OR the multi-request runtime flags) lives
-  // entirely inside runNativeAutonomousCycle — a single source of truth. Do not
-  // duplicate that check here: an outer gate that only recognized the legacy
-  // flags previously made the whole cycle a no-op whenever only the
-  // multi-request runtime was enabled, silently starving the newer runtime.
+  // Fase 1 — native autonomous cycle (PR-14), wrapped by the ACS-R1-05-T06.2
+  // continuity service since T06.2. Runs after inbound is durably persisted
+  // so a failure here never undoes the already-committed ConversationMessage
+  // / CommercialEvent (ADR-007 continuity). Gating (legacy shadow/loop flags
+  // OR the multi-request runtime flags) lives entirely inside
+  // runNativeAutonomousCycle — a single source of truth. Do not duplicate
+  // that check here: an outer gate that only recognized the legacy flags
+  // previously made the whole cycle a no-op whenever only the multi-request
+  // runtime was enabled, silently starving the newer runtime.
   // No CommercialEvent is created here — the one persisted above is the
   // canonical event for this inbound turn; the cycle reads it via context.
+  //
+  // ACS-R1-05-T06.2: the cycle's result is no longer discarded. A prior
+  // version of this call site awaited runNativeAutonomousCycle directly and
+  // threw the result away — a "blocked" or otherwise silent outcome (sandbox
+  // block, policy block, catalog/model failure) left the customer with no
+  // reply and no fallback. ensureAutonomousSalesTurnContinuity captures that
+  // result, terminalizes a stuck action via CAS, dispatches an idempotent
+  // contextual fallback when a customer-facing response was owed but never
+  // delivered, and persists a terminal disposition for every turn.
   if (!result.duplicate && result.conversationId && result.conversationPublicId) {
     try {
-      await runNativeAutonomousCycle({
+      await ensureAutonomousSalesTurnContinuity({
         conversationId: result.conversationId,
         conversationPublicId: result.conversationPublicId as string,
         customerMasterId: result.customerId ?? null,

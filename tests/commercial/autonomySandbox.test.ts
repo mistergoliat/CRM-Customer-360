@@ -319,16 +319,146 @@ test("missing idempotency key blocks autonomy", () => {
   assert.ok(result.blockReasons.includes("missing_idempotency_key"));
 });
 
-test("unsafe message blocks autonomy", () => {
+test("ACS-R1-05-T06.2: legitimate commercial phrases are no longer lexically blocked", () => {
+  const legitimatePhrases = [
+    "¿Quieres que revise los precios?",
+    "Puedo confirmar el stock.",
+    "Voy a comparar las alternativas.",
+    "No puedo garantizarte disponibilidad sin revisarla.",
+    "Antes de confirmar el precio debo consultar el catálogo.",
+    "Hay stock asegurado para hoy."
+  ];
+
+  for (const draftMessage of legitimatePhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "eligible", `expected "${draftMessage}" to be eligible, got blocked by ${result.blockReasons.join(",")}`);
+    assert.ok(!result.blockReasons.includes("unsafe_message"));
+  }
+});
+
+test("ACS-R1-05-T06.2 (P1 correction): legitimate commercial questions and pending actions stay allowed", () => {
+  const allowedPhrases = [
+    "¿Quieres que revise el precio?",
+    "Voy a consultar el stock.",
+    "Necesito confirmar el despacho.",
+    "Dejaré el precio pendiente de validación.",
+    "Voy a consultar las condiciones de garantía.",
+    "Necesito verificar la garantía.",
+    "El precio informado por catálogo es $500.000.",
+    "El catálogo informa disponibilidad.",
+    "La ficha indica una garantía de 12 meses.",
+    "El producto soporta hasta 150 kg según su especificación."
+  ];
+
+  for (const draftMessage of allowedPhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "eligible", `expected "${draftMessage}" to be eligible, got blocked by ${result.blockReasons.join(",")}`);
+    assert.ok(!result.blockReasons.includes("unsupported_commercial_commitment"));
+  }
+});
+
+test("ACS-R1-05-T06.2 (P1 correction): unsupported commercial commitments are blocked, never a bare topic word", () => {
+  const blockedPhrases = [
+    "Te garantizo stock.",
+    "Llega mañana con seguridad.",
+    "Te mantengo ese precio.",
+    "Te confirmo un descuento.",
+    "El despacho está asegurado.",
+    "La garantía cubrirá cualquier falla.",
+    "No tendrás ningún problema con la garantía.",
+    "Este equipo te servirá con total seguridad.",
+    // conjugation / phrasing variants - must not pass just by dodging one exact wording
+    "Te garantizamos que habrá stock.",
+    "Aseguramos que no tendrás problemas.",
+    "Confirmamos el descuento para ti.",
+    "Te prometemos entrega mañana.",
+    "Sin duda alguna, tendrás el descuento.",
+    "Cien por ciento seguro que llega mañana.",
+    // Section 6 of the second correction task - explicit MVP block list.
+    "Te aseguramos disponibilidad.",
+    "Garantizamos entrega mañana.",
+    "La entrega está confirmada.",
+    "Ese precio está garantizado.",
+    "Con total seguridad llegará mañana."
+  ];
+
+  for (const draftMessage of blockedPhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "blocked", `expected "${draftMessage}" to be blocked, got ${result.status}`);
+    assert.ok(result.blockReasons.includes("unsupported_commercial_commitment"), `expected "${draftMessage}" to be blocked by unsupported_commercial_commitment, got ${result.blockReasons.join(",")}`);
+  }
+});
+
+test("ACS-R1-05-T06.2 (second correction, section 7): reservation-style commitments are treated as unsupported promises - no reservation capability exists", () => {
+  const reservationPhrases = ["Está reservado para ti.", "Queda apartado a tu nombre.", "Lo dejamos reservado."];
+
+  for (const draftMessage of reservationPhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "blocked", `expected "${draftMessage}" to be blocked, got ${result.status}`);
+    assert.ok(result.blockReasons.includes("unsupported_commercial_commitment"));
+  }
+});
+
+test("ACS-R1-05-T06.2 (second correction, section 6): additional MVP-required allowed phrases", () => {
+  const allowedPhrases = [
+    "Voy a revisar el stock.",
+    "Necesito confirmar la disponibilidad.",
+    "El plazo de despacho debe validarse.",
+    "No puedo garantizarte la entrega hasta confirmarla."
+  ];
+
+  for (const draftMessage of allowedPhrases) {
+    const result = evaluate({ action: { draftMessage, finalMessage: null } });
+    assert.equal(result.status, "eligible", `expected "${draftMessage}" to be eligible, got blocked by ${result.blockReasons.join(",")}`);
+  }
+});
+
+test("empty message still blocks autonomy on technical grounds", () => {
   const result = evaluate({
     action: {
-      draftMessage: "Hay stock asegurado para hoy.",
+      draftMessage: "",
       finalMessage: null
     }
   });
 
   assert.equal(result.status, "blocked");
   assert.ok(result.blockReasons.includes("unsafe_message"));
+});
+
+test("overlong message still blocks autonomy on technical grounds", () => {
+  const result = evaluate({
+    action: {
+      draftMessage: "x".repeat(801),
+      finalMessage: null
+    }
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.ok(result.blockReasons.includes("unsafe_message"));
+});
+
+test("credential marker still blocks autonomy", () => {
+  const result = evaluate({
+    action: {
+      draftMessage: "Authorization: Bearer sk-not-a-real-secret-fixture-000",
+      finalMessage: null
+    }
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.ok(result.blockReasons.includes("unsafe_payload"));
+});
+
+test("raw JSON payload still blocks autonomy", () => {
+  const result = evaluate({
+    action: {
+      draftMessage: JSON.stringify({ productId: "123", price: 79990 }),
+      finalMessage: null
+    }
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.ok(result.blockReasons.includes("unsafe_payload"));
 });
 
 test("unresolved placeholder blocks autonomy", () => {

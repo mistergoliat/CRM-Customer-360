@@ -455,8 +455,18 @@ function buildDefaultInputContext(
   commercialEvaluationResult: CommercialEvaluationResult | null;
 } {
   const commercialContext = input.commercialContext ?? shadowResult?.context?.commercialContext ?? null;
-  const salesAgentResult = input.salesAgentResult ?? shadowResult?.context?.runtimeResult?.result ?? null;
   const commercialPolicyResult = input.commercialPolicyResult ?? shadowResult?.context?.policyResult ?? null;
+  const rawSalesAgentResult = input.salesAgentResult ?? shadowResult?.context?.runtimeResult?.result ?? null;
+  /**
+   * ACS-R1-05-T06.2: once a commercial policy result exists, its
+   * `governedResult` is the SOLE authority for what the rest of the loop
+   * (state reduction, next-action selection, decision content) treats as the
+   * Sales Agent's proposal. The raw/ungoverned result must never be
+   * reintroduced downstream - it stays available only via
+   * `commercialPolicyResult.originalResultReference`/the raw shadow result
+   * for audit, telemetry and debug comparison.
+   */
+  const salesAgentResult = commercialPolicyResult?.governedResult ?? rawSalesAgentResult;
   const commercialEvaluationResult =
     input.commercialEvaluationResult ??
     (shadowResult

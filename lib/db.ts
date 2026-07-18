@@ -27,6 +27,24 @@ export function getPool() {
   return pool;
 }
 
+/**
+ * Test-only. Ends the current pool (if any) and clears the module-level
+ * singleton so the next getPool() call opens a genuinely new mysql2 Pool -
+ * used by restart-recovery tests (ACS-R1-05-T07) to simulate a process
+ * restart's "destroy the pool" boundary within a single Node process.
+ */
+export async function resetPoolForTests() {
+  const current = pool;
+  pool = null;
+  if (current) {
+    try {
+      await current.end();
+    } catch {
+      // ignore teardown failures - the pool is being discarded either way
+    }
+  }
+}
+
 export async function withConnection<T>(fn: (connection: PoolConnection) => Promise<T>) {
   const connection = await getPool().getConnection();
   try {

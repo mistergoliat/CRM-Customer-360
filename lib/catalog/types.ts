@@ -78,6 +78,22 @@ export type CatalogSearchResult = {
   provenance: CatalogProvenance;
 };
 
+/** Mirrors the real service's POST /v1/products/batch item input (max 20 items per call). */
+export type CatalogBatchItemInput = {
+  productId: string;
+  combinationId?: string;
+  quantity?: number;
+};
+
+export type CatalogBatchItemResult =
+  | { ok: true; input: CatalogBatchItemInput; product: CatalogProduct }
+  | { ok: false; input: CatalogBatchItemInput; error: CatalogPortError };
+
+export type CatalogBatchResult = {
+  items: CatalogBatchItemResult[];
+  provenance: CatalogProvenance;
+};
+
 export const CATALOG_PORT_ERROR_CODES = [
   "invalid_input",
   "unauthorized",
@@ -114,6 +130,16 @@ export type CatalogPort = {
     input: { productId: string; combinationId?: string },
     context: CatalogRequestContext
   ): Promise<CatalogPortResult<CatalogProduct | null>>;
+  /**
+   * ACS-R1-05-T06.2: hydrates up to 20 candidates in one call (real service
+   * contract: POST /v1/products/batch). Internal enrichment step for the
+   * search -> batch -> ranking pipeline - never exposed as a separate
+   * LLM-facing tool (the Sales Agent only ever requests `searchProducts`).
+   */
+  batchGetProducts(
+    input: { items: CatalogBatchItemInput[] },
+    context: CatalogRequestContext
+  ): Promise<CatalogPortResult<CatalogBatchResult>>;
 };
 
 export const CATALOG_ADAPTER_CONTRACT_VERSION = "catalog-service.v1" as const;

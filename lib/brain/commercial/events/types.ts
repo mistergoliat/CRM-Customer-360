@@ -18,7 +18,12 @@ export type CommercialEventType =
   | "customer_identity_resolution_recorded"
   | "customer_onboarding_transition_recorded"
   | "customer_identity_capability_outcome_recorded"
-  | "customer_session_warning_recorded";
+  | "customer_session_warning_recorded"
+  // ACS-R1-05-T06.2. Canonical terminal outcome of a sales turn - descriptive
+  // audit evidence, never authoritative (the durable state lives in
+  // crm_agent_actions/crm_agent_decisions/crm_opportunities).
+  | "autonomous_turn_disposition"
+  | "autonomous_turn_continuity_failed";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -86,6 +91,67 @@ export type CustomerSessionWarningRecordedPayload = {
   warningCode: string;
   phase: CustomerIdentityResolutionPhase;
   executionPublicId: string | null;
+};
+
+// ACS-R1-05-T06.2. Canonical vocabulary for the terminal outcome of a sales
+// turn (release spec section A2) - defined here (the leaf events module) and
+// re-exported by lib/brain/commercial/continuity/ so there is exactly one
+// definition, never a duplicate local union in the continuity layer.
+
+export type AutonomousTurnResponseOwner = "ai" | "human" | "none";
+
+// ACS-R1-05-T06.2 (second correction, section 9). Same rationale as
+// AutonomousTurnResponseOwner above - defined once here, re-exported by
+// continuity/salesTurnDisposition.ts.
+export type AutonomousTurnWaitingFor = "customer_response" | "human_response" | "none";
+
+export type AutonomousTurnCommercialObjective =
+  | "discover_need"
+  | "qualify"
+  | "recommend"
+  | "compare"
+  | "handle_objection"
+  | "prepare_quote"
+  | "advance_purchase"
+  | "retain_interest"
+  | "handoff"
+  | "none";
+
+export type AutonomousTurnTerminalOutcome =
+  | "commercial_response_planned"
+  | "catalog_recommendation_planned"
+  | "clarification_planned"
+  | "quote_progression_planned"
+  | "fallback_outbox_planned"
+  | "handoff_acknowledgement_planned"
+  | "human_response_required"
+  | "no_response_required"
+  | "channel_delivery_failed"
+  | "continuity_failed";
+
+export type AutonomousTurnDispositionRecordedPayload = {
+  inboundMessageId: string | null;
+  responseOwner: AutonomousTurnResponseOwner;
+  commercialObjective: AutonomousTurnCommercialObjective;
+  primaryActionId: string | null;
+  primaryDisposition: string | null;
+  primaryBlockReasons: string[];
+  fallbackActionId: string | null;
+  outboxId: string | null;
+  opportunityAdvanced: boolean;
+  nextBestAction: string | null;
+  followUpEligible: boolean;
+  followUpReason: string | null;
+  terminalOutcome: AutonomousTurnTerminalOutcome;
+  /** ACS-R1-05-T06.2 (second correction, section 9) - see SalesTurnDisposition for the field-level rationale. */
+  acknowledgementSender: AutonomousTurnResponseOwner | null;
+  waitingFor: AutonomousTurnWaitingFor;
+  handoffCreated: boolean;
+};
+
+export type AutonomousTurnContinuityFailedRecordedPayload = {
+  inboundMessageId: string | null;
+  reason: string;
 };
 
 export interface CommercialEventV1 {
