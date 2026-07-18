@@ -5,20 +5,20 @@ Object.assign(process.env, {
   NODE_ENV: "development",
   DB_HOST: "127.0.0.1",
   DB_PORT: "3306",
-  DB_NAME: "main_management",
+  DB_NAME: "crm_test",
   DB_USER: "crm_app",
   DB_PASSWORD: "una_clave_local",
   DB_URL: "",
   DATABASE_HOST: "127.0.0.1",
   DATABASE_PORT: "3306",
-  DATABASE_NAME: "main_management",
+  DATABASE_NAME: "crm_test",
   DATABASE_USER: "crm_app",
   DATABASE_PASSWORD: "una_clave_local",
   DATABASE_URL: "",
   DB_WRITE_ENABLED: "true"
 });
 
-import { getPool, queryRows } from "@/lib/db";
+import { getPool, queryRows, safeExecute } from "@/lib/db";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { ensureAutonomousSalesTurnContinuity } from "@/lib/brain/commercial/continuity";
 import type { NativeAutonomousCycleResult } from "@/lib/brain/commercial/native-cycle/runNativeAutonomousCycle";
@@ -63,6 +63,28 @@ async function seedConversation() {
   assert.ok(result.conversationId);
   assert.ok(result.conversationPublicId);
   return { ...result, waId, phoneNumberId };
+}
+
+/**
+ * ACS-R1-05-T07 fixture correction. runNativeAutonomousCycle's commercialNeed
+ * (runNativeAutonomousCycle.ts, "Fase 1") only ever READS a pre-existing
+ * crm_sales_need_profiles row for the conversation (never derives one from
+ * the current turn's entityProposals) - the real pilot incident this test
+ * reproduces was itself a second turn, where an earlier turn's real catalog
+ * search had already established the need profile. A single fake-provider
+ * call with decision "respond_now" never triggers a search, so without this
+ * seed the fallback message legitimately has no known need to ground on.
+ */
+async function seedNeedProfile(input: { conversationId: number; waId: string; useCase: string; budgetMax: number }) {
+  const key = uniqueSuffix("need-profile");
+  await safeExecute(
+    `INSERT INTO crm_sales_need_profiles (
+      profile_key, opportunity_key, conversation_case_id, wa_id, use_case,
+      goals_json, required_features_json, preferred_features_json, budget_max,
+      missing_information_json, profile_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, '[]', '[]', '[]', ?, '[]', '{}', NOW(3), NOW(3))`,
+    [key, key, String(input.conversationId), input.waId, input.useCase, input.budgetMax]
+  );
 }
 
 /** A provider whose draft carries an unresolved placeholder - a genuine technical sandbox block (unsafe_payload), never the removed lexical price/stock check. */
@@ -269,6 +291,7 @@ const CYCLE_ENV = {
 
 test("ACS-R1-05-T06.2: a technically-blocked draft (unresolved placeholder) is terminalized and reaches the customer through a fallback, never silence", async () => {
   const seeded = await seedConversation();
+  await seedNeedProfile({ conversationId: seeded.conversationId!, waId: seeded.waId, useCase: "entrenar en casa", budgetMax: 800000 });
   const previousEnv = { ...process.env };
   Object.assign(process.env, CYCLE_ENV, { BRAIN_AUTONOMOUS_TEST_WA_IDS: seeded.waId });
   resetCapabilityGatewayCatalogPortForTests();
@@ -319,7 +342,14 @@ test("ACS-R1-05-T06.2: a technically-blocked draft (unresolved placeholder) is t
       [seeded.waId]
     );
     assert.equal(outboxRows.length, 1);
-    assert.match(String(outboxRows[0].message_text), /jaula de potencia/);
+    // ACS-R1-05-T07 fixture correction: commercialNeed.productQuery only ever
+    // comes from an actual catalog search this turn (runNativeAutonomousCycle.ts
+    // "Fase 1" comment) - this scenario's fake provider responds directly
+    // (decision "respond_now") without requesting search_products, so there is
+    // no product name to ground on here even with a seeded need profile.
+    // usage/budgetMax come from the pre-existing crm_sales_need_profiles row
+    // seeded above and are the real, verifiable grounding signal for this path.
+    assert.match(String(outboxRows[0].message_text), /entrenar en casa/);
     assert.match(String(outboxRows[0].message_text), /800.000|800,000/);
 
     // A terminal disposition event was persisted.
@@ -463,7 +493,6 @@ test("real human ownership: AI never sends a fallback over a conversation a huma
 
   try {
     // Force real human ownership on the underlying conversation row.
-    const { safeExecute } = await import("@/lib/db");
     await safeExecute("UPDATE conversation SET human_owner_active = 1 WHERE id = ?", [seeded.conversationId]);
 
     const correlationId = uniqueSuffix("corr-human-owner");
