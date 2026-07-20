@@ -5,6 +5,7 @@ import { processInbound } from "../../lib/brain/processInbound";
 import { processSalesInbound } from "../../lib/brain/native-whatsapp";
 import { makeBrainActionResolveResponse, makeBrainContextResolveResponse, makeInboundRequest } from "./fixtures";
 import type { SalesConsultativeServiceResult } from "../../lib/brain/commercial/sales-consultative/service";
+import { LegacySalesConsultativeDisabledError } from "../../lib/brain/commercial/config/commercialCycleConfig";
 
 // ACS-R1-05.1-T01: single commercial runtime authority. WhatsApp real traffic
 // (processNativeWhatsAppInbound -> runNativeAutonomousCycle -> operational-loop
@@ -18,10 +19,6 @@ import type { SalesConsultativeServiceResult } from "../../lib/brain/commercial/
 //      integration route, docs/n8n-brain-integration.md line 44).
 //   2. native-whatsapp/service.ts's processSalesInbound (zero production
 //      callers today, guarded so a future accidental wire-up fails closed).
-
-function makeFakeSalesConsultativeHook(result: SalesConsultativeServiceResult) {
-  return async () => result;
-}
 
 const FAKE_SALES_CONSULTATIVE_RESULT: SalesConsultativeServiceResult = {
   result: {
@@ -41,12 +38,19 @@ const FAKE_SALES_CONSULTATIVE_RESULT: SalesConsultativeServiceResult = {
   dispatchWarnings: []
 };
 
-test("legacy sales consultative flow is disabled by default in processInbound", async () => {
+test("legacy sales consultative flow is disabled by default in processInbound, and the rest of the contract is unaffected", async () => {
   const previous = process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED;
   delete process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED;
 
   let hookCalls = 0;
   try {
+    // A rejected promise here would fail this test with an unhandled
+    // rejection - there is no try/catch around the gate itself. This is the
+    // "no 500 solely from the gate" proof at the function-contract level:
+    // the route (app/api/brain/process-inbound/route.ts) always responds
+    // Response.json(await processInbound(...)) with a 200, so a thrown
+    // exception here is the only way the gate could cause a 500, and it does
+    // not happen.
     const result = await processInbound(makeInboundRequest(), Date.parse("2026-06-17T12:00:00.000Z"), {
       resolveBackendBrainContext: async () => makeBrainContextResolveResponse(),
       resolveBrainAction: async () => makeBrainActionResolveResponse(),
@@ -58,10 +62,22 @@ test("legacy sales consultative flow is disabled by default in processInbound", 
       }
     });
 
+    // No legacy commercial writer ran.
     assert.equal(hookCalls, 0);
-    assert.equal(result.ok, true);
     assert.equal(result.adapters.salesConsultative, null);
     assert.ok(result.warnings.includes("legacy_sales_consultative_disabled"));
+
+    // The existing contract (non-commercial processing) is untouched by the
+    // gate: context resolution, action policy and instructions still run and
+    // populate the response exactly as they would without this task's change.
+    assert.equal(result.ok, true);
+    assert.ok(result.context_summary);
+    assert.equal(result.requestId, result.context_summary.requestId);
+    assert.equal(result.context_summary.primaryService, "sales");
+    assert.ok(result.action_policy);
+    assert.ok(result.instructions);
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.metadata.version, "brain.process-inbound.v2");
   } finally {
     if (typeof previous === "undefined") delete process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED;
     else process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED = previous;
@@ -111,16 +127,46 @@ test("legacy sales consultative flow runs only when explicitly enabled", async (
   assert.equal(result.ok, true);
   assert.equal(result.adapters.salesConsultative, FAKE_SALES_CONSULTATIVE_RESULT.result);
   assert.ok(!result.warnings.includes("legacy_sales_consultative_disabled"));
+  // Exceptional-enable compatibility: the rest of the contract still holds.
+  assert.ok(result.action_policy);
+  assert.ok(result.instructions);
 });
 
-test("processSalesInbound fails closed by default without touching the database", async () => {
+test("processSalesInbound fails closed by default with a named domain error, before any database access", async () => {
   const previous = process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED;
   delete process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED;
 
   try {
+    // conversationId/messageId below do not correspond to any real row. If
+    // the guard performed any database lookup before throwing, this would
+    // either hang/fail on a real DB or surface a completely different error
+    // (e.g. "conversation_not_found" from loadConversationById, or a
+    // connection error) - not LegacySalesConsultativeDisabledError. Getting
+    // exactly this error, synchronously on the first line, is the proof the
+    // guard runs before any DB access.
     await assert.rejects(
       () => processSalesInbound({ conversationId: 999999999, messageId: 999999999, correlationId: "corr-legacy-gate" }),
-      /legacy_sales_consultative_disabled/
+      (error: unknown) => {
+        assert.ok(error instanceof LegacySalesConsultativeDisabledError, `expected LegacySalesConsultativeDisabledError, got ${String(error)}`);
+        assert.equal(error.message, "legacy_sales_consultative_disabled");
+        assert.equal(error.name, "LegacySalesConsultativeDisabledError");
+        return true;
+      }
+    );
+  } finally {
+    if (typeof previous === "undefined") delete process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED;
+    else process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED = previous;
+  }
+});
+
+test("processSalesInbound stays fail-closed for non-'true' flag values too", async () => {
+  const previous = process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED;
+  process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED = "1";
+
+  try {
+    await assert.rejects(
+      () => processSalesInbound({ conversationId: 999999999, messageId: 999999999, correlationId: "corr-legacy-gate-invalid" }),
+      (error: unknown) => error instanceof LegacySalesConsultativeDisabledError
     );
   } finally {
     if (typeof previous === "undefined") delete process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED;

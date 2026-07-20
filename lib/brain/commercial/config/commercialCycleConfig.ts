@@ -144,12 +144,31 @@ export function buildCommercialSalesAgentDryRun(): boolean {
  * WhatsApp -> processNativeWhatsAppInbound -> runNativeAutonomousCycle ->
  * operational-loop -> persistCommercialState. This flag gates the two
  * remaining legacy call sites (processInbound.ts's process-inbound endpoint,
- * native-whatsapp/service.ts's unused processSalesInbound) fail-closed:
- * disabled unless explicitly turned on.
+ * and native-whatsapp/service.ts's unused legacy inbound entry point) fail-
+ * closed: disabled unless explicitly turned on.
  */
 export type CommercialLegacySalesConsultativeFeatureFlags = {
   legacySalesConsultativeEnabled: boolean;
 };
+
+/**
+ * Thrown by any legacy sales-consultative entry point that is gated by
+ * BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED when the flag is off (the default).
+ * A distinct class - never a generic Error - so a caller can `instanceof`
+ * check it instead of string-matching a message. The native-whatsapp legacy
+ * inbound entry point (its only throw site today) has zero production HTTP
+ * callers, verified by
+ * tests/commercial/legacySalesConsultativeRuntimeAuthority.test.ts, so this
+ * never surfaces as a 500 today. Any future caller MUST catch this explicitly
+ * and decide its own disabled-state contract (e.g. a skipped/disabled
+ * result) rather than letting it bubble into a generic failure response.
+ */
+export class LegacySalesConsultativeDisabledError extends Error {
+  constructor(message = "legacy_sales_consultative_disabled") {
+    super(message);
+    this.name = "LegacySalesConsultativeDisabledError";
+  }
+}
 
 export function buildLegacySalesConsultativeFeatureFlags(
   overrides?: Partial<CommercialLegacySalesConsultativeFeatureFlags>

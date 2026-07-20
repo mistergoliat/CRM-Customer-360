@@ -13,7 +13,7 @@ import {
 import { normalizeWhatsAppRecipientDigits } from "@/lib/brain/messaging/whatsapp-transport/constants";
 import { appendConversationMessage } from "@/lib/brain/local-ai-sdr/repository";
 import { createPrestashopProductRepository, createSalesConsultativeOperationsRepository, runSalesConsultativeService } from "@/lib/brain/commercial/sales-consultative";
-import { buildLegacySalesConsultativeFeatureFlags } from "@/lib/brain/commercial/config/commercialCycleConfig";
+import { buildLegacySalesConsultativeFeatureFlags, LegacySalesConsultativeDisabledError } from "@/lib/brain/commercial/config/commercialCycleConfig";
 import type {
   SalesConsultativeCustomerContext,
   SalesConsultativeInteraction,
@@ -914,7 +914,7 @@ export async function processSalesInbound(input: {
   correlationId: string;
 }, dependencies: NativeWhatsAppProcessDependencies = {}) {
   if (!buildLegacySalesConsultativeFeatureFlags().legacySalesConsultativeEnabled) {
-    throw new Error("legacy_sales_consultative_disabled");
+    throw new LegacySalesConsultativeDisabledError();
   }
   const conversation = await loadConversationById(input.conversationId);
   if (!conversation) {
