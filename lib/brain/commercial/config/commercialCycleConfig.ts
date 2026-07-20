@@ -135,3 +135,46 @@ export function buildCommercialSalesAgentDryRun(): boolean {
   if (raw === "false") return false;
   return SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN;
 }
+
+/**
+ * ACS-R1-05.1-T01: the legacy sales-consultative engine
+ * (lib/brain/commercial/sales-consultative) is a separate, non-canonical
+ * writer of crm_opportunities/crm_sales_need_profiles/crm_agent_actions.
+ * The only productive path allowed to write commercial state by default is
+ * WhatsApp -> processNativeWhatsAppInbound -> runNativeAutonomousCycle ->
+ * operational-loop -> persistCommercialState. This flag gates the two
+ * remaining legacy call sites (processInbound.ts's process-inbound endpoint,
+ * and native-whatsapp/service.ts's unused legacy inbound entry point) fail-
+ * closed: disabled unless explicitly turned on.
+ */
+export type CommercialLegacySalesConsultativeFeatureFlags = {
+  legacySalesConsultativeEnabled: boolean;
+};
+
+/**
+ * Thrown by any legacy sales-consultative entry point that is gated by
+ * BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED when the flag is off (the default).
+ * A distinct class - never a generic Error - so a caller can `instanceof`
+ * check it instead of string-matching a message. The native-whatsapp legacy
+ * inbound entry point (its only throw site today) has zero production HTTP
+ * callers, verified by
+ * tests/commercial/legacySalesConsultativeRuntimeAuthority.test.ts, so this
+ * never surfaces as a 500 today. Any future caller MUST catch this explicitly
+ * and decide its own disabled-state contract (e.g. a skipped/disabled
+ * result) rather than letting it bubble into a generic failure response.
+ */
+export class LegacySalesConsultativeDisabledError extends Error {
+  constructor(message = "legacy_sales_consultative_disabled") {
+    super(message);
+    this.name = "LegacySalesConsultativeDisabledError";
+  }
+}
+
+export function buildLegacySalesConsultativeFeatureFlags(
+  overrides?: Partial<CommercialLegacySalesConsultativeFeatureFlags>
+): CommercialLegacySalesConsultativeFeatureFlags {
+  return {
+    legacySalesConsultativeEnabled: readEnvFlag("BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
