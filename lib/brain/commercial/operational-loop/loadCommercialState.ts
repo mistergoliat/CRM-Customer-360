@@ -450,7 +450,16 @@ export async function loadCommercialState(input: CommercialOperationalLoadInput)
     // a single active candidate for this identity is always relevant,
     // regardless of intent drift across turns within the same purchase.
     const nonTerminalRelevant = selectActiveCandidatesForIdentity(candidates, hints.primaryIntent);
-    const activeState = nonTerminalRelevant.find((state) => !state.humanOwnerActive && !state.aiBlocked) ?? nonTerminalRelevant[0] ?? null;
+    // ACS-R1-05.1-T02 hardening: 2+ relevant candidates is a governed
+    // ambiguity, not a "pick the first/most-recent one" situation - an
+    // arbitrary activeState here would leak an unrelated candidate's
+    // summary/requirements/decision into a turn that has no business reading
+    // them (resolveOpportunityIdentity already ignores this fallback when
+    // ambiguous, but loadResult.activeState is also read directly as a
+    // previousState fallback in runCommercialOperationalLoop.ts, so it must
+    // be correctly null here too, not just downstream). commercial_state_conflict
+    // (existing warning enum) is the audit trail for this - no new one needed.
+    const activeState = nonTerminalRelevant.length === 1 ? nonTerminalRelevant[0] : null;
     const latestDecision = activeState ? await loadLatestDecision(activeState.opportunityId ?? activeState.opportunityKey) : null;
     const warnings = uniqueStrings([
       nonTerminalRelevant.length > 1 ? "commercial_state_conflict" : null,

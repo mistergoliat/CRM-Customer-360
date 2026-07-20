@@ -309,3 +309,69 @@ test("validateCommercialTransition blocks an ambiguous identity resolution on it
   assert.equal(validation.status, "blocked", "an ambiguous identity resolution must block the transition by itself");
   assert.ok(validation.blockedReasons.includes("identity_conflict"));
 });
+
+// --- Cross-domain (sales vs service/post-sale) hardening ---
+// Independent review finding: the fix above always reused a single active
+// candidate regardless of intent, which is correct within one commercial
+// family (a normal purchase conversation) but wrong across domains - an
+// active sales opportunity must never silently absorb a maintenance/
+// post-sale request, or vice versa. See commercialIntentFamily in
+// resolveOpportunityIdentity.ts for the classification and its rationale
+// (grounded in this repo's pre-existing postventa_queue/mantenciones_queue
+// routing distinction, not invented for this test).
+
+test("cross-domain: active product_inquiry (sales) + price_request (sales) - same opportunity", () => {
+  const opportunity = makeOperationalState({ opportunityId: 1, opportunityKey: "opp-sales-1", primaryIntent: "product_inquiry", status: "engaged" });
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "price", candidates: [opportunity] }));
+  assert.equal(result.status, "continue_existing");
+  assert.equal(result.selectedOpportunityId, 1);
+});
+
+test("cross-domain: active equipment_project (sales) + delivery_request (sales) - same opportunity", () => {
+  const opportunity = makeOperationalState({ opportunityId: 2, opportunityKey: "opp-sales-2", primaryIntent: "equipment_project", status: "engaged" });
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "delivery", candidates: [opportunity] }));
+  assert.equal(result.status, "continue_existing");
+  assert.equal(result.selectedOpportunityId, 2);
+});
+
+test("cross-domain: active product_inquiry (sales) + maintenance_request (service) - no silent reuse", () => {
+  const salesOpportunity = makeOperationalState({ opportunityId: 3, opportunityKey: "opp-sales-3", primaryIntent: "product_inquiry", status: "engaged" });
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "maintenance", candidates: [salesOpportunity] }));
+
+  assert.notEqual(result.status, "continue_existing", "a service-family turn must never silently reuse a sales-family opportunity");
+  assert.equal(result.selectedOpportunityId, null);
+  // Unambiguous per the pre-existing contract: with the sales candidate
+  // excluded as cross-domain, there is no other candidate to conflict with -
+  // create_new, never "mutating" the sales opportunity into a service one.
+  assert.equal(result.status, "create_new");
+  assert.equal(result.isAmbiguous, false);
+});
+
+test("cross-domain: active product_inquiry (sales) + post_sale_request (service) - no silent reuse", () => {
+  const salesOpportunity = makeOperationalState({ opportunityId: 4, opportunityKey: "opp-sales-4", primaryIntent: "product_inquiry", status: "engaged" });
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "post_sale", candidates: [salesOpportunity] }));
+
+  assert.notEqual(result.status, "continue_existing", "a service-family turn must never silently reuse a sales-family opportunity");
+  assert.equal(result.selectedOpportunityId, null);
+  assert.equal(result.status, "create_new");
+  assert.equal(result.isAmbiguous, false);
+});
+
+test("cross-domain: two sales-family candidates plus a service-family turn - the service turn never picks either sales candidate", () => {
+  const first = makeOperationalState({ opportunityId: 5, opportunityKey: "opp-sales-5", primaryIntent: "product_inquiry", status: "engaged" });
+  const second = makeOperationalState({ opportunityId: 6, opportunityKey: "opp-sales-6", primaryIntent: "quote_request", status: "engaged" });
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "maintenance", candidates: [first, second] }));
+
+  assert.equal(result.selectedOpportunityId, null);
+  assert.equal(result.status, "create_new");
+});
+
+test("cross-domain: a sales-family turn against two active candidates, one sales one service, narrows unambiguously to the sales one", () => {
+  const salesOpportunity = makeOperationalState({ opportunityId: 7, opportunityKey: "opp-sales-7", primaryIntent: "product_inquiry", status: "engaged" });
+  const serviceOpportunity = makeOperationalState({ opportunityId: 8, opportunityKey: "opp-service-8", primaryIntent: "maintenance_request", status: "engaged" });
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "price", candidates: [salesOpportunity, serviceOpportunity] }));
+
+  assert.equal(result.isAmbiguous, false, "family narrowing must resolve this to the single sales-compatible candidate, not fall back to full ambiguity");
+  assert.equal(result.status, "continue_existing");
+  assert.equal(result.selectedOpportunityId, 7);
+});

@@ -24,6 +24,7 @@ import { getPool, queryRows } from "@/lib/db";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { ensureAutonomousSalesTurnContinuity } from "@/lib/brain/commercial/continuity";
 import { resetCapabilityGatewayCatalogPortForTests } from "@/lib/brain/commercial/capability-gateway/registry";
+import { loadCommercialState } from "@/lib/brain/commercial/operational-loop/loadCommercialState";
 import type { SalesAgentProvider, SalesAgentProviderRequest } from "@/lib/brain/commercial/sales-agent/runtimeTypes";
 
 /**
@@ -51,11 +52,12 @@ async function countRows(sql: string, params: Array<string | number>) {
   return Number(rows[0]?.total ?? 0);
 }
 
-function noToolReplyProvider(): SalesAgentProvider {
+function noToolReplyProvider(onInvoke?: () => void): SalesAgentProvider {
   return {
     name: "t02-e2e-no-tool-provider",
     version: "t02.v1",
     async invoke(request: SalesAgentProviderRequest) {
+      onInvoke?.();
       const rawOutput = {
         runId: request.correlationId ?? "fake-run-id",
         contractVersion: request.contractVersion,
@@ -276,40 +278,63 @@ test("Caso 2: replay del mismo inbound - ninguna oportunidad adicional", async (
   assert.equal(after, before, "replay of the identical inbound must never create an additional opportunity");
 });
 
-test("Caso 3: same-inbound concurrency - una oportunidad efectiva", async () => {
+test("Caso 3: same-inbound concurrency - una oportunidad efectiva, cero posibilidad de proveedor real", async () => {
+  // Independent review finding: the previous version of this test called
+  // processNativeWhatsAppInbound directly with BRAIN_COMMERCIAL_SHADOW_ALLOW_REAL_PROVIDER
+  // set and no injected provider - processNativeWhatsAppInbound has no
+  // provider seam (documented limitation, see the T01/T02 acceptance
+  // evidence), so that path could reach the real configured LLM. Rewritten
+  // to go through ensureAutonomousSalesTurnContinuity directly (which DOES
+  // accept a provider) - no new productive seam added, this uses the
+  // existing test-only injection point.
   const seeded = await seedConversation("t02-case3");
-  await runTurn(seeded, "Busco una jaula para entrenar en casa");
   const before = await countOpportunities(seeded.conversationId!);
-  assert.equal(before, 1);
+  assert.equal(before, 0, "must start with zero opportunities");
 
-  const concurrentMessageId = `wamid.${uniqueSuffix("t02-case3-concurrent")}`;
-  const concurrentInput = {
-    providerMessageId: concurrentMessageId,
-    phoneNumberId: seeded.phoneNumberId,
-    externalSenderId: seeded.waId,
-    senderPhone: seeded.waId,
-    senderName: "Cliente T02 E2E",
-    messageType: "text" as const,
-    text: "Cuanto cuesta?",
-    occurredAt: new Date().toISOString(),
-    rawPayload: {}
-  };
+  let invocationCount = 0;
+  const trackedProvider = () => noToolReplyProvider(() => {
+    invocationCount += 1;
+  });
 
   const previousEnv = { ...process.env };
   Object.assign(process.env, CYCLE_ENV, { BRAIN_AUTONOMOUS_TEST_WA_IDS: seeded.waId });
   resetCapabilityGatewayCatalogPortForTests();
   try {
-    await Promise.all([processNativeWhatsAppInbound(concurrentInput), processNativeWhatsAppInbound(concurrentInput)]);
+    const correlationId = uniqueSuffix("corr-t02-case3");
+    const turnInput = {
+      conversationId: seeded.conversationId!,
+      conversationPublicId: seeded.conversationPublicId as string,
+      customerMasterId: seeded.customerId ?? null,
+      waId: seeded.waId,
+      phoneNumberId: seeded.phoneNumberId,
+      // Same conversationId, same messageId, same logical opportunity for
+      // both concurrent calls - simulating two workers/webhook retries
+      // racing on the exact same inbound turn.
+      messageId: seeded.messageId ?? null,
+      messageText: "Busco una jaula para entrenar en casa",
+      correlationId,
+      currentTime: new Date().toISOString()
+    };
+    await Promise.all([
+      ensureAutonomousSalesTurnContinuity({ ...turnInput, provider: trackedProvider() }),
+      ensureAutonomousSalesTurnContinuity({ ...turnInput, provider: trackedProvider() })
+    ]);
   } finally {
     process.env = previousEnv;
     resetCapabilityGatewayCatalogPortForTests();
   }
 
-  const messageRows = await countRows("SELECT COUNT(*) AS total FROM conversation_message WHERE provider_message_id = ?", [concurrentMessageId]);
-  assert.equal(messageRows, 1, "exactly one conversation_message row for the concurrently-delivered inbound");
+  // Proves the ONLY provider path taken was the local fake - shouldUseHttpProvider
+  // (runCommercialShadowEvaluation.ts) short-circuits to false whenever a
+  // provider is injected, unconditionally, before even checking
+  // commercialShadowAllowRealProvider - verified by direct code reading, and
+  // here by direct observation: both calls actually reached the fake.
+  assert.equal(invocationCount, 2, "both concurrent calls must have invoked the local fake provider - no other path exists to produce a result");
 
-  const after = await countOpportunities(seeded.conversationId!);
-  assert.equal(after, 1, "same-inbound concurrency must resolve to exactly one effective opportunity, never a duplicate");
+  const rows = await loadOpportunityRows(seeded.conversationId!);
+  assert.equal(rows.length, 1, "same-inbound concurrency must resolve to exactly one effective opportunity, never a duplicate");
+  const opportunityKeys = new Set(rows.map((row) => row.opportunity_key));
+  assert.equal(opportunityKeys.size, 1, "exactly one opportunity_key");
 });
 
 test("Caso 4: necesidad independiente (identidad distinta) - segunda oportunidad, nunca fusion silenciosa", async () => {
@@ -348,11 +373,88 @@ test("Caso 5: dos oportunidades activas para la misma identidad - ninguna fusion
   assert.equal(turn.cycle.ran, true);
   assert.equal(turn.cycle.loop?.identityResolution?.isAmbiguous, true, "two equally-relevant active opportunities must be governed-ambiguous, never silently picked");
   assert.equal(turn.cycle.loop?.identityResolution?.selectedOpportunityId, null);
+  assert.equal(turn.cycle.loop?.identityResolution?.selectedState, null, "no arbitrary candidate may be exposed as the selected state, even for downstream context");
+  assert.equal(turn.cycle.loop?.status, "blocked", "validateCommercialTransition must block the transition on ambiguity alone");
+  assert.equal(turn.cycle.loop?.resultingState?.opportunityId, null, "the in-memory resultingState must never inherit an arbitrary candidate's opportunityId");
+  assert.equal(turn.cycle.loop?.sideEffects.commercialOpportunityWritten, false, "an ambiguous turn must never write to crm_opportunities");
 
   const after = await loadOpportunityRows(seeded.conversationId!);
   assert.equal(after.length, 2, "no third opportunity, no merge, no mutation of either existing row's identity");
   assert.equal(after.find((row) => row.opportunity_key === keyA)?.version, 1, "ambiguous turns must not write to either candidate");
   assert.equal(after.find((row) => row.opportunity_key === keyB)?.version, 1);
+
+  // Observable output: the real, current contract for "the resolver cannot
+  // determine which opportunity this belongs to" is human handoff
+  // (nextActionType "escalate_to_operator", already wired before this task -
+  // not a new clarification UX built here). At most one outbound message,
+  // never attributed to either ambiguous candidate, never containing any
+  // candidate-specific memory (summary/requirements/product data) - a fully
+  // generic acknowledgement. This is NOT a customer-facing "which one did
+  // you mean?" clarification question (the product has no such flow yet) -
+  // documented here as a real gap, not silently declared solved.
+  assert.equal(turn.cycle.loop?.selectedNextAction?.type, "escalate_to_operator");
+  assert.equal(turn.disposition.responseOwner, "human", "ambiguity must hand off to a human, never let the AI answer from an arbitrary candidate's memory");
+  assert.equal(turn.disposition.handoffCreated, true);
+
+  const outboxRows = await queryRows<{ id: number; message_text: string }>("SELECT id, message_text FROM brain_message_outbox WHERE wa_id = ?", [seeded.waId]);
+  assert.equal(outboxRows.length, 1, "at most one observable outbound message for this ambiguous turn");
+  assert.doesNotMatch(outboxRows[0].message_text, /quote_request|opp-t02-case5/, "the outbound message must never leak an opportunity_key or intent from either ambiguous candidate");
+
+  const actionRows = await queryRows<{ id: number; opportunity_id: number | null }>("SELECT id, opportunity_id FROM crm_agent_actions WHERE conversation_case_id = ?", [String(seeded.conversationId)]);
+  assert.equal(actionRows.length, 1);
+  assert.equal(actionRows[0].opportunity_id, null, "the fallback action must never be attributed to either arbitrarily-chosen candidate");
+});
+
+test("Caso 5b: loadCommercialState directly - activeState y latestDecision son null con 2+ candidatas relevantes, no una arbitraria", async () => {
+  const seeded = await seedConversation("t02-case5b");
+  const keyA = `opp-t02-case5b-a-${uniqueSuffix("k")}`;
+  const keyB = `opp-t02-case5b-b-${uniqueSuffix("k")}`;
+  await seedOpportunityRow({ conversationCaseId: seeded.conversationId!, waId: seeded.waId, opportunityKey: keyA, primaryIntent: "quote_request", status: "engaged" });
+  await seedOpportunityRow({ conversationCaseId: seeded.conversationId!, waId: seeded.waId, opportunityKey: keyB, primaryIntent: "quote_request", status: "engaged" });
+
+  const result = await loadCommercialState({
+    inboundMessage: {
+      channel: "whatsapp",
+      source: "manual_test",
+      contextMode: "standard",
+      waId: seeded.waId,
+      phoneNumberId: seeded.phoneNumberId,
+      messageId: "loadCommercialState-e2e-message",
+      messageText: "Hola de nuevo",
+      conversationCaseId: seeded.conversationId!,
+      options: { dryRun: true, executeActions: false, returnInstructionsForN8n: false, debug: false },
+      metadata: {}
+    } as never,
+    brainContext: { case_context: { active_case: { conversation_case_id: seeded.conversationId, service_code: "unknown" } } } as never,
+    commercialContext: {
+      status: "complete",
+      sourceSummary: {
+        hasLatestCustomerMessage: true,
+        hasLatestOutboundMessage: false,
+        hasCustomerCandidate: false,
+        hasCustomerReference: true,
+        hasConversationHistory: true,
+        hasCommercialEntity: true,
+        orderContextAvailable: false,
+        productServiceContextAvailable: false,
+        humanOwnershipActive: false,
+        aiBlocked: false,
+        manualReplyActive: false,
+        channel: "whatsapp",
+        waId: seeded.waId,
+        conversationCaseId: seeded.conversationId
+      },
+      salesAgentInput: null
+    } as never,
+    currentTime: new Date().toISOString(),
+    correlationId: uniqueSuffix("corr-t02-case5b")
+  });
+
+  assert.equal(result.status, "loaded");
+  assert.equal(result.candidates.length, 2, "both rows are returned as raw candidates");
+  assert.equal(result.activeState, null, "2+ relevant candidates must never resolve to an arbitrary activeState");
+  assert.equal(result.latestDecision, null, "no decision may be loaded for an activeState that does not exist");
+  assert.ok(result.warnings.includes("commercial_state_conflict"), "the existing commercial_state_conflict warning is the audit trail for this ambiguity");
 });
 
 test("Caso 6: oportunidad terminal - sin reapertura automatica", async () => {
