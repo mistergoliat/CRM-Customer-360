@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
-import { getPool } from "../../lib/db";
+import test from "node:test";
 import { processInbound } from "../../lib/brain/processInbound";
 import { processSalesInbound } from "../../lib/brain/native-whatsapp";
 import { makeBrainActionResolveResponse, makeBrainContextResolveResponse, makeInboundRequest } from "./fixtures";
@@ -172,8 +171,4 @@ test("processSalesInbound stays fail-closed for non-'true' flag values too", asy
     if (typeof previous === "undefined") delete process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED;
     else process.env.BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED = previous;
   }
-});
-
-after(async () => {
-  await getPool().end();
 });
