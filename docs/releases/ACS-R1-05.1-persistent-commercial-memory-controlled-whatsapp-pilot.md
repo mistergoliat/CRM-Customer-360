@@ -4,10 +4,10 @@ title: Persistent Commercial Memory + Controlled WhatsApp Pilot
 doc_id: release-acs-r1-05-1-persistent-commercial-memory-controlled-whatsapp-pilot
 status: parallel_in_progress
 critical_path: true
-updated_at: 2026-07-19
-current_task: ACS-R1-05.1-T01
+updated_at: 2026-07-20
+current_task: ACS-R1-05.1-T02
 current_task_status: planned
-next_task: ACS-R1-05.1-T02
+next_task: ACS-R1-05.1-T03
 blocked: false
 owner: product
 source_of_truth_for:
@@ -39,7 +39,7 @@ tags:
 
 ## Estado
 
-`status: parallel_in_progress`, `critical_path: true`, `current_task: ACS-R1-05.1-T01`, `current_task_status: planned`. Ninguna tarea de esta release ha comenzado su implementacion; este documento es exclusivamente de planificacion. Ningun capability row de `CAPABILITY_MATRIX.md` cambia como resultado de este documento.
+`status: parallel_in_progress`, `critical_path: true`, `current_task: ACS-R1-05.1-T02`, `current_task_status: planned`. `ACS-R1-05.1-T01` (Single Commercial Runtime Authority) esta `accepted`: veredicto exacto `single_commercial_runtime_authority_accepted`. El runtime nativo (`processNativeWhatsAppInbound -> runNativeAutonomousCycle -> operational-loop -> persistCommercialState`) queda como unica autoridad comercial habilitada por defecto; el motor legacy `sales-consultative` queda deshabilitado por defecto (fail-closed) detras de `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED`. Ver "Evidencia de cierre - ACS-R1-05.1-T01" abajo para el detalle completo. Ninguna otra tarea de esta release ha comenzado su implementacion. Ningun capability row de `CAPABILITY_MATRIX.md` cambia como resultado de este documento.
 
 `parallel_in_progress` (release lifecycle) y `critical_path: true` son campos separados, no un status compuesto: `ACS-R1-05.1` no es una segunda release "activa" en el sentido secuencial de `AGENTS.md` compitiendo con `ACS-R1-04` (`active_blocked_external`, unica release activa en ese sentido). Es, igual que lo fue `ACS-R1-05`, un workstream autorizado a avanzar en paralelo porque no depende del Customer Service externo (`PAUSED_EXTERNAL`, ver `ROADMAP.md`) — con la diferencia de que, a partir de este documento, `critical_path: true` porque es explicitamente el camino hacia el piloto conversacional, no una excepcion acotada al follow-up.
 
@@ -126,7 +126,7 @@ La arquitectura de esta release no queda bloqueada por estas exclusiones: ningun
 
 | ID | Tarea | Estado | Dependencias | Gate |
 | -- | ----- | ------ | ------------ | ---- |
-| ACS-R1-05.1-T01 | Single Commercial Runtime Authority | planned | — | Solo un runtime productivo puede escribir estado comercial |
+| ACS-R1-05.1-T01 | Single Commercial Runtime Authority | accepted | — | Solo un runtime productivo puede escribir estado comercial |
 | ACS-R1-05.1-T02 | Stable Opportunity Continuity | planned | ACS-R1-05.1-T01 | Same commercial path reuses same opportunity |
 | ACS-R1-05.1-T03 | Governed Commercial Memory Proposals | planned | ACS-R1-05.1-T01 | El modelo propone, el backend valida, el dominio decide, la persistencia ejecuta |
 | ACS-R1-05.1-T04 | Atomic Commercial Memory Persistence | planned | ACS-R1-05.1-T02, ACS-R1-05.1-T03 | Se persiste todo el turno o no se persiste nada |
@@ -144,6 +144,8 @@ Detalle de cada tarea:
 Objetivo: garantizar que WhatsApp real utilice un unico runtime y un unico writer comercial (`WhatsApp -> runNativeAutonomousCycle -> operational-loop -> persistCommercialState`). Debe incluir: verificar callers reales de `process-inbound` (`app/api/brain/process-inbound/route.ts`); determinar si `n8n` u otro sistema sigue invocando el endpoint legacy; impedir que `sales-consultative` (`runSalesConsultativeService`) escriba en paralelo en `crm_opportunities`; congelar `opportunityKeyFor` del motor legacy; mantener aislado `runSalesConsultativeService` preservando solo helpers puros y seguros; agregar un test de regresion que impida reconectar el motor legacy al webhook nativo.
 
 Gate de cierre, no negociable: `not_verified`/`requires_host_verification` no cierran T01 por si solos si la escritura legacy sigue habilitada. Si el inventario de callers no puede confirmar de forma concluyente que ningun sistema externo (`n8n` u otro) invoca todavia el endpoint legacy, la tarea solo cierra cuando se cumple al menos una de: (a) el writer legacy queda tecnicamente deshabilitado para trafico productivo; (b) `process-inbound` redirige al runtime nativo (`runNativeAutonomousCycle`) en vez de invocar el motor legacy; (c) existe un flag fail-closed, deshabilitado por defecto, que bloquea sus escrituras comerciales hasta que se habilite explicitamente. Duda razonable sobre callers externos se resuelve deshabilitando el writer legacy, nunca dejandolo activo "por si acaso".
+
+`accepted` — cerro por la opcion (c): un flag fail-closed, deshabilitado por defecto (`BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED`, default `false`), bloquea las dos vias productivas restantes del motor legacy (`process-inbound` y `native-whatsapp/service.ts#processSalesInbound`). Ver "Evidencia de cierre - ACS-R1-05.1-T01" abajo.
 
 ### ACS-R1-05.1-T02 — Stable Opportunity Continuity
 
@@ -183,7 +185,7 @@ Debe producir: auditoria de aceptacion, evidencia E2E, evidencia del piloto real
 
 ## Tarea actual
 
-`ACS-R1-05.1-T01` — Single Commercial Runtime Authority. No iniciada.
+`ACS-R1-05.1-T02` — Stable Opportunity Continuity. No iniciada. (`ACS-R1-05.1-T01` aceptada — ver "Evidencia de cierre - ACS-R1-05.1-T01" abajo.)
 
 ## Definition of Done (release)
 
@@ -196,7 +198,9 @@ Debe producir: auditoria de aceptacion, evidencia E2E, evidencia del piloto real
 - Meta WhatsApp, proveedor LLM y Catalog Service en `verified_real` (ver "Operational evidence levels" en `ROADMAP.md`) para ese `wa_id` — esta release, a diferencia de `ACS-R1-05`, no cierra con esos tres ejes en `not_verified`;
 - `CAPABILITY_MATRIX.md`, `ROADMAP.md` y `ACTIVE_RELEASE.md` reconciliados con el resultado real, nunca con el resultado esperado.
 
-## Definition of Done de la tarea actual (T01)
+## Definition of Done de T01 (cerrada, cumplida)
+
+Cumplida en su totalidad — `ACS-R1-05.1-T01` aceptada (`single_commercial_runtime_authority_accepted`). Ver "Evidencia de cierre - ACS-R1-05.1-T01" abajo para el detalle completo.
 
 - inventario verificado de callers reales de `process-inbound` (query directa al codigo, no inferencia);
 - si ese inventario no puede confirmar de forma concluyente que ningun sistema externo (`n8n` u otro) invoca el endpoint legacy, el writer legacy queda deshabilitado por defecto para trafico productivo (fail-closed) antes de cerrar T01 — `not_verified`/`requires_host_verification` no son, por si solos, un cierre valido mientras la escritura legacy siga habilitada (ver gate de cierre en la seccion de tareas arriba);
@@ -204,9 +208,38 @@ Debe producir: auditoria de aceptacion, evidencia E2E, evidencia del piloto real
 - `opportunityKeyFor` del motor legacy queda congelado (sin nuevos callers productivos);
 - test de regresion que falla si el motor legacy vuelve a conectarse al webhook nativo.
 
+## Definition of Done de la tarea actual (T02)
+
+Ver el gate en la tabla de Tareas (`Same commercial path reuses same opportunity`) y el objetivo/escenario obligatorio en `### ACS-R1-05.1-T02` arriba. El desglose operativo detallado de Definition of Done se redacta al iniciar la implementacion de T02 — fuera de alcance de este cierre documental de T01.
+
 ## Siguiente tarea
 
-`ACS-R1-05.1-T02` — Stable Opportunity Continuity.
+`ACS-R1-05.1-T03` — Governed Commercial Memory Proposals.
+
+## Evidencia de cierre - ACS-R1-05.1-T01
+
+`accepted`. Veredicto exacto: `single_commercial_runtime_authority_accepted`. Rama `feat/acs-r1-05-1-t01-single-commercial-runtime-authority`. Commits (orden cronologico, sin squash): `b08e4d0` (gate del motor legacy sales-consultative detras de un flag fail-closed), `f2d1531` (aplicacion del gate en `process-inbound` y `processSalesInbound`), `439d1a3` (endurecimiento del test arquitectonico de callers para cubrir `middleware.ts`), `a8bdf14` (correccion de un defecto real encontrado durante la aceptacion, ver abajo).
+
+Evidencia verificada:
+
+- el runtime nativo (`processNativeWhatsAppInbound -> runNativeAutonomousCycle -> operational-loop -> persistCommercialState`) queda como unica autoridad comercial habilitada por defecto para trafico real de WhatsApp;
+- el motor legacy `sales-consultative` (`runSalesConsultativeService`) queda deshabilitado por defecto (`disabled by default`) en sus dos vias productivas restantes;
+- flag fail-closed `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED` (unico lector: `commercialCycleConfig.ts#buildLegacySalesConsultativeFeatureFlags`, misma convencion `readEnvFlag` que el resto del ciclo comercial — ausente/vacio/`"false"`/cualquier valor distinto de `"true"` resuelven a deshabilitado);
+- `process-inbound` conserva su contrato: con el flag ausente, `"false"` o invalido (`"yes"`), la respuesta sigue siendo `ok:true`, con warning estructurado `legacy_sales_consultative_disabled`, cero llamadas a `runSalesConsultativeService` y cero error 500 causado por el gate;
+- `processSalesInbound` falla antes de cualquier acceso a base de datos mediante un error de dominio nombrado (`LegacySalesConsultativeDisabledError`), nunca un `Error` generico;
+- test arquitectonico de callers (`tests/commercial/legacySalesConsultativeRuntimeAuthority.test.ts`): prueba por grep de todo el arbol de produccion (`app/lib/scripts/components` + archivos raiz, incluido `middleware.ts`) que `runSalesConsultativeService` no tiene referencias productivas fuera de su propia definicion y las dos vias flag-gated ya conocidas;
+- MariaDB E2E aprobado: suite completa 1414/1431 tests en verde sobre la rama (`crm_test`, migraciones limpias); los 17 fallos restantes son subconjunto estricto de los 26 fallos preexistentes en `develop` (comparado en worktree separado contra el merge `49f3a7b`) — cero regresiones nuevas;
+- replay aprobado: reentrega del mismo `providerMessageId` es reconocida como duplicado (`duplicate:true`), sin filas comerciales adicionales;
+- same-inbound concurrency aprobado a nivel de persistencia: dos llamadas concurrentes con el mismo `providerMessageId` nuevo colapsan a exactamente una fila en `conversation_message` y un unico par accion/outbox, aunque ambas llamadas computen `duplicate:false` a nivel de aplicacion (ver deuda registrada abajo);
+- cero regresiones nuevas respecto de `develop` (ver punto de MariaDB E2E arriba).
+
+Defecto real encontrado y corregido durante la aceptacion (commit `a8bdf14`, sin amend sobre `439d1a3`): `tests/commercial/legacySalesConsultativeAuthority.test.ts` tenia un `after(() => getPool().end())` sobrante — ninguno de sus 5 tests toca base de datos real (todo via DI), pero como cada archivo de `tsx --test` corre en su propio proceso aislado, `getPool()` lanzaba `Missing DATABASE_NAME` en cualquier proceso sin variables de entorno de DB, marcando el archivo completo como fallido pese a que las 5 aserciones reales pasaban. Se elimino el hook y el import `getPool` no usado; se re-ejecutaron todos los gates (`tsc`, `docs:validate`, `build`, suite completa) despues del fix.
+
+Deuda registrada (no bloquea el cierre de T01, no resuelta en este commit):
+
+1. checksum drift preexistente en `025_action_outcome_idempotency_and_opportunity_delivery_projection.sql` contra la base `main_management` (target por defecto de `npm run db:migrate`, hardcodeado en `scripts/db-utils.ts`) — confirmado no relacionado con T01 (la rama no toca ningun archivo bajo `database/`/`infra/`).
+2. `processNativeWhatsAppInbound` no ofrece una seam de proveedor (`provider`) para pruebas ad-hoc — a diferencia de `runNativeAutonomousCycle`/`ensureAutonomousSalesTurnContinuity`, que si la aceptan — por lo que una prueba manual contra ese punto de entrada con el operational-loop activo puede terminar ejecutando el proveedor LLM configurado en el entorno real.
+3. ambas llamadas concurrentes al mismo inbound pueden calcular `duplicate:false` en la capa de aplicacion antes de que la restriccion de base de datos consolide el inbound a una sola fila — la persistencia final es unica (verificado), pero la senal de aplicacion (`duplicate`) no es fiable bajo concurrencia real.
 
 ## Dependencias
 

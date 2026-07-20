@@ -64,9 +64,11 @@ Fuente normativa: [ROADMAP](ROADMAP.md#dependencias-externas-y-capacidades-en-pa
 - `ACS-R1-05.1` - Persistent Commercial Memory + Controlled WhatsApp Pilot
 - status: `parallel_in_progress`
 - critical_path: `true`
-- current_task: `ACS-R1-05.1-T01` (Single Commercial Runtime Authority)
+- current_task: `ACS-R1-05.1-T02` (Stable Opportunity Continuity)
 - current_task_status: `planned` (no iniciada)
 - ver [ACS-R1-05.1 spec](releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md) para alcance, tareas y Definition of Done completos
+
+`ACS-R1-05.1-T01` (Single Commercial Runtime Authority, `accepted` - veredicto `single_commercial_runtime_authority_accepted`; rama `feat/acs-r1-05-1-t01-single-commercial-runtime-authority`, commits `b08e4d0`/`f2d1531`/`439d1a3`/`a8bdf14`) deja el runtime nativo (`processNativeWhatsAppInbound -> runNativeAutonomousCycle -> operational-loop -> persistCommercialState`) como unica autoridad comercial habilitada por defecto: el motor legacy `sales-consultative` (`runSalesConsultativeService`) queda deshabilitado por defecto (fail-closed) en sus dos vias productivas restantes (`process-inbound` y `native-whatsapp/service.ts#processSalesInbound`) detras del flag `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED` (default `false`, unico lector `commercialCycleConfig.ts`). `process-inbound` conserva su contrato (`ok:true`, warning `legacy_sales_consultative_disabled`, cero 500 causado por el gate); `processSalesInbound` falla antes de DB con un error de dominio nombrado. Verificado con un test arquitectonico de callers sobre todo el arbol de produccion, MariaDB E2E real (`crm_test`, cero regresiones nuevas respecto de `develop`), replay y same-inbound concurrency a nivel de persistencia. Deuda registrada, no bloqueante: checksum drift preexistente en la migracion 025 contra `main_management`; `processNativeWhatsAppInbound` sin seam de proveedor para pruebas ad-hoc; la senal `duplicate` de aplicacion no es fiable bajo concurrencia real aunque la persistencia final si lo es. Detalle completo en "Evidencia de cierre - ACS-R1-05.1-T01" de la release spec.
 
 Ambos incrementos (`ACS-R1-05` y `ACS-R1-05.1`):
 
