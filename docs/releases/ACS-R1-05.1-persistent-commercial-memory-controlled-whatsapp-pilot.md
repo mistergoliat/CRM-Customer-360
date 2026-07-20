@@ -5,7 +5,7 @@ doc_id: release-acs-r1-05-1-persistent-commercial-memory-controlled-whatsapp-pil
 status: parallel_in_progress
 critical_path: true
 updated_at: 2026-07-20
-current_task: ACS-R1-05.1-T02
+current_task: ACS-R1-05.1-T02.1
 current_task_status: planned
 next_task: ACS-R1-05.1-T03
 blocked: false
@@ -39,7 +39,7 @@ tags:
 
 ## Estado
 
-`status: parallel_in_progress`, `critical_path: true`, `current_task: ACS-R1-05.1-T02`, `current_task_status: planned`. `ACS-R1-05.1-T01` (Single Commercial Runtime Authority) esta `accepted`: veredicto exacto `single_commercial_runtime_authority_accepted`. El runtime nativo (`processNativeWhatsAppInbound -> runNativeAutonomousCycle -> operational-loop -> persistCommercialState`) queda como unica autoridad comercial habilitada por defecto; el motor legacy `sales-consultative` queda deshabilitado por defecto (fail-closed) detras de `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED`. Ver "Evidencia de cierre - ACS-R1-05.1-T01" abajo para el detalle completo. Ninguna otra tarea de esta release ha comenzado su implementacion. Ningun capability row de `CAPABILITY_MATRIX.md` cambia como resultado de este documento.
+`status: parallel_in_progress`, `critical_path: true`, `current_task: ACS-R1-05.1-T02.1`, `current_task_status: planned`. `ACS-R1-05.1-T01` (Single Commercial Runtime Authority) esta `accepted`: veredicto exacto `single_commercial_runtime_authority_accepted`. El runtime nativo (`processNativeWhatsAppInbound -> runNativeAutonomousCycle -> operational-loop -> persistCommercialState`) queda como unica autoridad comercial habilitada por defecto; el motor legacy `sales-consultative` queda deshabilitado por defecto (fail-closed) detras de `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED`. Ver "Evidencia de cierre - ACS-R1-05.1-T01" abajo para el detalle completo. `ACS-R1-05.1-T02` (Stable Opportunity Continuity) esta `accepted`: veredicto exacto `stable_opportunity_continuity_accepted`. Ver "Evidencia de cierre - ACS-R1-05.1-T02" abajo. Ninguna otra tarea de esta release ha comenzado su implementacion. Ningun capability row de `CAPABILITY_MATRIX.md` cambia como resultado de este documento.
 
 `parallel_in_progress` (release lifecycle) y `critical_path: true` son campos separados, no un status compuesto: `ACS-R1-05.1` no es una segunda release "activa" en el sentido secuencial de `AGENTS.md` compitiendo con `ACS-R1-04` (`active_blocked_external`, unica release activa en ese sentido). Es, igual que lo fue `ACS-R1-05`, un workstream autorizado a avanzar en paralelo porque no depende del Customer Service externo (`PAUSED_EXTERNAL`, ver `ROADMAP.md`) — con la diferencia de que, a partir de este documento, `critical_path: true` porque es explicitamente el camino hacia el piloto conversacional, no una excepcion acotada al follow-up.
 
@@ -127,7 +127,7 @@ La arquitectura de esta release no queda bloqueada por estas exclusiones: ningun
 | ID | Tarea | Estado | Dependencias | Gate |
 | -- | ----- | ------ | ------------ | ---- |
 | ACS-R1-05.1-T01 | Single Commercial Runtime Authority | accepted | — | Solo un runtime productivo puede escribir estado comercial |
-| ACS-R1-05.1-T02 | Stable Opportunity Continuity | planned | ACS-R1-05.1-T01 | Same commercial path reuses same opportunity |
+| ACS-R1-05.1-T02 | Stable Opportunity Continuity | accepted | ACS-R1-05.1-T01 | Same commercial path reuses same opportunity |
 | ACS-R1-05.1-T03 | Governed Commercial Memory Proposals | planned | ACS-R1-05.1-T01 | El modelo propone, el backend valida, el dominio decide, la persistencia ejecuta |
 | ACS-R1-05.1-T04 | Atomic Commercial Memory Persistence | planned | ACS-R1-05.1-T02, ACS-R1-05.1-T03 | Se persiste todo el turno o no se persiste nada |
 | ACS-R1-05.1-T05 | Contextual Follow-up | planned | ACS-R1-05.1-T04 | El follow-up demuestra memoria comercial, no solo scheduling |
@@ -136,6 +136,7 @@ La arquitectura de esta release no queda bloqueada por estas exclusiones: ningun
 | ACS-R1-05.1-T08 | Controlled Pilot Deployment | planned | ACS-R1-05.1-T01 a T07 | El entorno piloto puede recrearse desde documentacion y configuracion versionada |
 | ACS-R1-05.1-T09 | Customer-visible UAT | planned | ACS-R1-05.1-T08 | Memoria durable, cero preguntas repetidas, recomendacion grounded, opt-out y handoff correctos, sin duplicados, sin turnos perdidos por fallos internos |
 | ACS-R1-05.1-T10 | Acceptance and Roadmap Reconciliation | planned | ACS-R1-05.1-T09 | Auditoria de aceptacion, evidencia real, roadmap/capability matrix/active release reconciliados |
+| ACS-R1-05.1-T02.1 | Grounded Catalog and Commercial Knowledge Readiness | planned | ACS-R1-05.1-T02 | por definir — registrada, no iniciada |
 
 Detalle de cada tarea:
 
@@ -149,7 +150,15 @@ Gate de cierre, no negociable: `not_verified`/`requires_host_verification` no ci
 
 ### ACS-R1-05.1-T02 — Stable Opportunity Continuity
 
-Objetivo: un cambio normal de intencion conversacional no debe fragmentar una misma compra. Escenario obligatorio: "Busco una jaula" (product inquiry) -> "Cuanto cuesta" (price request) -> "Tiene stock" (stock request) -> "Esta muy cara" (objection) -> "Cuanto sale el despacho" (delivery request) debe resultar en una oportunidad, un need profile, un historial comercial, una memoria y una proxima accion coherente. Una oportunidad nueva corresponde a una compra, necesidad o proyecto independiente, no a una etiqueta de intencion distinta.
+Objetivo: un cambio normal de intencion conversacional no debe fragmentar una misma compra. Escenario obligatorio: "Busco una jaula" (product inquiry) -> "Cuanto cuesta" (price request) -> "Tiene stock" (stock request) -> "Esta muy cara" (objection) -> "Cuanto sale el despacho" (delivery request) debe resultar en una unica oportunidad estable, con `opportunity_id`/`opportunity_key` continuos a traves de los cinco turnos. T02 garantiza esa oportunidad estable — no el need profile, el historial comercial completo, la memoria ni la proxima accion, que son la base sobre la que `T03` (Governed Commercial Memory Proposals) y `T04` (Atomic Commercial Memory Persistence) construyen need profile, memoria y proxima accion durable. Una oportunidad nueva corresponde a una compra, necesidad o proyecto independiente, no a una etiqueta de intencion distinta.
+
+Estado de implementacion (`planned` hasta su aceptacion independiente, no cerrada por este parrafo): la auditoria previa a cualquier cambio encontro que `resolveOpportunityIdentity.ts`/`loadCommercialState.ts` filtraban candidatas por igualdad exacta de `primaryIntent`, y que `primaryIntent` queda congelado en el momento de creacion (`reduceCommercialState.ts` nunca lo reescribe sobre una oportunidad existente) - un test escrito antes de tocar produccion (`tests/commercial/opportunityContinuity.test.ts`) reprodujo la fragmentacion exactamente en el segundo turno de la secuencia obligatoria. El mecanismo esta dormido en el runtime nativo hoy (`buildNativeBrainContextShim` fija `latestInboundMessage.intent = null` y no expone `service_code`, asi que `primaryIntent` normaliza siempre a `"unknown"` para WhatsApp real, que ya evitaba este filtro) pero es real y reproducible de forma directa contra el resolver. Corregido (Opcion B, minima): intent pasa a ser una senal de desempate entre 2+ candidatas activas para la misma identidad, nunca un filtro rigido que pueda excluir la unica oportunidad activa en curso - conserva intactos los 5 tests ya existentes que fijan la semantica de ambiguedad/terminal/unknown. La auditoria tambien encontro, y corrigio, un segundo defecto real en `validateCommercialTransition.ts`: `identityResolution.isAmbiguous` solo se anexaba a `blockedReasons` cuando alguna OTRA razon ya bloqueaba la transicion, nunca disparaba el bloqueo por si solo - un turno ambiguo sin ningun otro problema (policy, stage, human/ai) caia en `status: "allowed"` y el loop persistia una tercera oportunidad. Ambos hallazgos, verificados con MariaDB real (`tests/e2e/opportunityContinuity.e2e.test.ts`) y sin regresiones nuevas contra `develop`. `opportunity_key` no cambio de forma. No se implemento `need_profile`, catalogo, memoria comercial nueva, `entityProposals` ni vinculo explicito de follow-up/accion (deuda registrada, ver `ACS-R1-05.1-T02.1` abajo para el catalogo y la seccion "Deuda no cerrada" de este documento para el resto).
+
+Hardening posterior (misma tarea, revision independiente del diff, tres hallazgos reales adicionales, todos corregidos): (1) la reutilizacion de una unica candidata activa era incondicional - un turno de postventa/mantenimiento podia reutilizar silenciosamente una oportunidad de venta activa, o viceversa. `resolveOpportunityIdentity.ts` ahora clasifica cada `CommercialIntent` en familia `sales` (`product_inquiry`, `product_recommendation`, `price_request`, `stock_request`, `quote_request`, `delivery_request`, `discount_request`, `bulk_purchase`, `equipment_project`), `service` (`maintenance_request`, `assembly_request`, `post_sale_request`) o `neutral` (`unknown`, `general_information`) - clasificacion verificada contra el routing legado real del repositorio (`postventa_queue`/`mantenciones_queue` en `context/adapters.ts`, distinto de la cola general de ventas), no inventada. Una candidata cross-domain nunca se reutiliza en silencio: queda excluida del conjunto activo, y el contrato existente (`create_new` cuando no hay candidata, `ambiguous` cuando quedan 2+) decide sin necesidad de un estado nuevo. **Alcance real de este mecanismo**: esta separacion esta implementada y probada en el resolver (unitarios) contra un `primaryIntent` explicito, pero `buildNativeBrainContextShim` sigue fijando `latestInboundMessage.intent = null` y no expone `service_code`/`case_context.active_case` — por lo que en el camino nativo real de WhatsApp, `primaryIntent` normaliza siempre a `"unknown"` (ver "Estado de implementacion" arriba), y la clasificacion cross-domain no llega a activarse porque el turno nunca porta un intent confiable. No se conecta ahora un clasificador improvisado de intent al shim nativo — esa propagacion/clasificacion de intent real debe abordarse junto con la definicion de conocimiento, tools y senales estructuradas (probablemente `T03`/`T02.1`), no como un parche aislado aqui. Hasta entonces, `T02` garantiza el mecanismo de separacion cross-domain, no su operacion demostrada sobre WhatsApp real. (2) `loadCommercialState.ts` seguia asignando `activeState`/`latestDecision` de forma arbitraria (`.find() ?? [0]`) cuando existian 2+ candidatas relevantes, aunque el warning `commercial_state_conflict` ya se emitia - ahora `activeState`/`latestDecision` son `null` en ese caso, sin cambiar el comportamiento cuando existe exactamente una candidata. (3) hallazgo mas profundo, encontrado de forma empirica al construir la evidencia E2E de ambiguedad: `resolveOpportunityIdentity.ts#deriveSelectedState` calculaba `selectedState` de forma especulativa (mismo patron `.find() ?? [0]`) incluso cuando `relevantCount > 1`, y ese campo `identityResolution.selectedState` (no solo `loadResult.activeState`) es leido directamente por `runCommercialOperationalLoop.ts` como `previousState` de respaldo - un turno gobernado-ambiguo llegaba a despachar una accion de fallback (handoff a humano) con el `opportunity_id` de una candidata elegida arbitrariamente. Verificado con MariaDB real antes y despues del fix (Caso 5 del E2E): antes, `crm_agent_actions.opportunity_id` quedaba en una de las dos candidatas; despues, `null`, con el mensaje de fallback completamente generico (sin fuga de `opportunity_key`, intent ni resumen de ninguna candidata). La salida observable para ambiguedad hoy es handoff a humano (`escalate_to_operator`, ya conectado antes de esta tarea, no una funcionalidad nueva) - no existe todavia una pregunta de aclaracion dirigida al cliente ("¿te referis a X o a Y?"); esto queda documentado como hallazgo, no declarado resuelto. Evidencia completa: 16 tests en `tests/commercial/opportunityContinuity.test.ts` (10 originales + 6 cross-domain), 7 casos en `tests/e2e/opportunityContinuity.e2e.test.ts` (Caso 1-6 mas Caso 5b, `loadCommercialState` directo), concurrencia de Caso 3 corrida 5 veces sin fallos, comparacion de suite completa contra `develop` con cero diferencias en el conjunto de fallos (28 preexistentes identicos en ambos lados).
+
+`ACS-R1-05.1-T02` garantiza, verificado con evidencia real: continuidad de `opportunity_id`/`opportunity_key` a traves de un intent que cambia turno a turno dentro de la misma familia comercial; no fragmentacion por intent normal (venta-venta); ambiguedad fail-closed (sin mutacion, sin activeState/selectedState arbitrario, sin tercera oportunidad); terminales sin auto-reopen; el resolver garantiza separacion cross-domain (venta vs. postventa) cuando recibe un intent confiable — mecanismo implementado y probado, no todavia demostrado en el camino nativo real de WhatsApp (ver nota de alcance arriba).
+
+`ACS-R1-05.1-T02` no garantiza todavia: need profile; memoria comercial completa; distincion entre dos necesidades independientes dentro de la MISMA familia y la MISMA identidad (p. ej. dos proyectos de venta distintos del mismo contacto - deuda explicita para `T03`, cuando existan `entityProposals`/need-profile); vinculo explicito follow-up/accion -> oportunidad; catalogo ni grounding comercial; una pregunta de aclaracion dirigida al cliente para el caso ambiguo (hoy es handoff a humano, no una aclaracion conversacional); propagacion/clasificacion de intent confiable en el camino nativo de WhatsApp (`primaryIntent` sigue siendo `"unknown"` ahi hoy, por lo que la separacion cross-domain del resolver no se ejerce todavia en produccion real).
 
 ### ACS-R1-05.1-T03 — Governed Commercial Memory Proposals
 
@@ -183,9 +192,13 @@ Debe probarse con un numero real, tres conversaciones minimas: (1) conversacion 
 
 Debe producir: auditoria de aceptacion, evidencia E2E, evidencia del piloto real, SHA de cierre, deuda remanente, decision sobre la siguiente release, actualizacion final de `ROADMAP.md`, `CAPABILITY_MATRIX.md` y `ACTIVE_RELEASE.md`.
 
+### ACS-R1-05.1-T02.1 — Grounded Catalog and Commercial Knowledge Readiness
+
+Registrada como workstream separado durante `ACS-R1-05.1-T02` (no implementada, no iniciada). Cubre lo que `T02` deliberadamente dejo fuera de alcance para no mezclar continuidad de identidad con grounding comercial: catalogo, precios, stock, FAQ, y cualquier conocimiento de producto que el resolver de oportunidad pudiera necesitar en el futuro para distinguir "misma compra, pregunta nueva" de "necesidad genuinamente distinta en la misma identidad" (deuda documentada en "Deuda no cerrada" de este documento). Alcance, dependencias y gate por definir cuando esta tarea inicie su planificacion — este parrafo no anticipa ese alcance.
+
 ## Tarea actual
 
-`ACS-R1-05.1-T02` — Stable Opportunity Continuity. No iniciada. (`ACS-R1-05.1-T01` aceptada — ver "Evidencia de cierre - ACS-R1-05.1-T01" abajo.)
+`ACS-R1-05.1-T02.1` — Grounded Catalog and Commercial Knowledge Readiness. No iniciada, alcance por definir. (`ACS-R1-05.1-T01` aceptada — ver "Evidencia de cierre - ACS-R1-05.1-T01"; `ACS-R1-05.1-T02` aceptada — ver "Evidencia de cierre - ACS-R1-05.1-T02" abajo.)
 
 ## Definition of Done (release)
 
@@ -208,13 +221,17 @@ Cumplida en su totalidad — `ACS-R1-05.1-T01` aceptada (`single_commercial_runt
 - `opportunityKeyFor` del motor legacy queda congelado (sin nuevos callers productivos);
 - test de regresion que falla si el motor legacy vuelve a conectarse al webhook nativo.
 
-## Definition of Done de la tarea actual (T02)
+## Definition of Done de T02 (cerrada, cumplida)
 
-Ver el gate en la tabla de Tareas (`Same commercial path reuses same opportunity`) y el objetivo/escenario obligatorio en `### ACS-R1-05.1-T02` arriba. El desglose operativo detallado de Definition of Done se redacta al iniciar la implementacion de T02 — fuera de alcance de este cierre documental de T01.
+Cumplida — `ACS-R1-05.1-T02` aceptada (`stable_opportunity_continuity_accepted`). Ver "Evidencia de cierre - ACS-R1-05.1-T02" abajo para el detalle completo. Gate: `Same commercial path reuses same opportunity`, cumplido dentro de la misma familia comercial (venta-venta); separacion cross-domain (venta/postventa) implementada en el resolver, no todavia demostrada en el camino nativo real (ver nota de alcance en la seccion de tareas).
+
+## Definition of Done de la tarea actual (T02.1)
+
+`ACS-R1-05.1-T02.1` no tiene alcance, dependencias ni gate definidos todavia — ver `### ACS-R1-05.1-T02.1` arriba. Se redacta al iniciar su planificacion.
 
 ## Siguiente tarea
 
-`ACS-R1-05.1-T03` — Governed Commercial Memory Proposals.
+`ACS-R1-05.1-T03` — Governed Commercial Memory Proposals. No depende de que `T02.1` inicie o cierre (su dependencia declarada es `ACS-R1-05.1-T01`, ya aceptada); puede planificarse en paralelo a `T02.1`.
 
 ## Evidencia de cierre - ACS-R1-05.1-T01
 
@@ -240,6 +257,18 @@ Deuda registrada (no bloquea el cierre de T01, no resuelta en este commit):
 1. checksum drift preexistente en `025_action_outcome_idempotency_and_opportunity_delivery_projection.sql` contra la base `main_management` (target por defecto de `npm run db:migrate`, hardcodeado en `scripts/db-utils.ts`) — confirmado no relacionado con T01 (la rama no toca ningun archivo bajo `database/`/`infra/`).
 2. `processNativeWhatsAppInbound` no ofrece una seam de proveedor (`provider`) para pruebas ad-hoc — a diferencia de `runNativeAutonomousCycle`/`ensureAutonomousSalesTurnContinuity`, que si la aceptan — por lo que una prueba manual contra ese punto de entrada con el operational-loop activo puede terminar ejecutando el proveedor LLM configurado en el entorno real.
 3. ambas llamadas concurrentes al mismo inbound pueden calcular `duplicate:false` en la capa de aplicacion antes de que la restriccion de base de datos consolide el inbound a una sola fila — la persistencia final es unica (verificado), pero la senal de aplicacion (`duplicate`) no es fiable bajo concurrencia real.
+
+## Evidencia de cierre - ACS-R1-05.1-T02
+
+`accepted`. Veredicto exacto: `stable_opportunity_continuity_accepted`. Rama `feat/acs-r1-05-1-t02-stable-opportunity-continuity`. Commits (orden cronologico, sin squash): `4a35c41` (test que reproduce la fragmentacion antes de tocar produccion), `8055584` (fix minimo — intent como desempate, no filtro rigido; correccion del gate de ambiguedad en `validateCommercialTransition.ts`), `db49246` (docs), `a88ead2` (hardening — separacion cross-domain venta/postventa, `activeState`/`selectedState` arbitrario corregido en dos ubicaciones, Caso 3 reescrito sin riesgo de proveedor real), `6e60345` (docs del hardening), mas el commit final de aceptacion de esta seccion.
+
+Que garantiza T02, verificado con evidencia real (unitarios + MariaDB real, ver "Estado de implementacion"/"Hardening posterior" arriba para el detalle tecnico completo): continuidad de `opportunity_id`/`opportunity_key` a traves de un intent que cambia turno a turno dentro de la misma familia comercial; ambiguedad fail-closed (sin `activeState`/`selectedState` arbitrario en ninguna de las tres ubicaciones donde existia el patron, sin tercera oportunidad, sin mutacion de las candidatas existentes); terminales sin auto-reopen; el resolver separa venta de postventa cuando recibe un intent confiable.
+
+Que NO garantiza todavia (lista completa en "T02 no garantiza todavia" arriba, repetida aqui por ser parte del criterio de aceptacion): need profile; memoria comercial completa; distincion de dos necesidades independientes dentro de la MISMA familia y MISMA identidad; vinculo explicito follow-up/accion -> oportunidad; catalogo/grounding comercial; una pregunta de aclaracion real dirigida al cliente ante ambiguedad (hoy es handoff a humano generico); y, critico para el piloto, **propagacion de intent confiable en el camino nativo de WhatsApp** — `buildNativeBrainContextShim` sigue fijando `primaryIntent = "unknown"` para todo turno real, por lo que la separacion cross-domain esta probada en el resolver pero no demostrada operando sobre WhatsApp real. No se conecto un clasificador de intent improvisado para cerrar ese gap; se deja para cuando se defina conocimiento/tools/senales estructuradas (`T02.1`/`T03`).
+
+Deuda conservada (no bloquea el cierre de T02, no resuelta en este commit): `native intent propagation` (arriba); `same-family distinct-need disambiguation`; `explicit follow-up-to-opportunity linkage`; `customer-facing ambiguity clarification`. Mas la deuda heredada de T01 (checksum drift migracion 025, sin seam de proveedor en `processNativeWhatsAppInbound`, senal `duplicate` no fiable bajo concurrencia a nivel de aplicacion).
+
+Tests: 18/18 en `tests/commercial/opportunityContinuity.test.ts` (10 continuidad + 6 cross-domain + 2 simetria), 31/31 aserciones preexistentes intactas en `tests/commercial/runCommercialOperationalLoop.test.ts`, 7/7 casos MariaDB real en `tests/e2e/opportunityContinuity.e2e.test.ts`, concurrencia de Caso 3 verificada 5/5 sin fallos. Suite completa comparada contra `develop`: cero diferencias en el conjunto de fallos preexistentes. `npx tsc --noEmit`, `npm run build`, `npm run docs:validate` limpios en cada punto de control.
 
 ## Dependencias
 
@@ -288,6 +317,8 @@ Ver tambien la tabla "Carried release debt" en `docs/ROADMAP.md`, seccion "Camin
 - `resolve_customer`/`create_customer`/`link_external_identity` siguen `operational: not_verified` (heredado de `ACS-R1-04`, `PAUSED_EXTERNAL`) — `ACS-R1-05.1` no depende de ellos ni los desbloquea.
 - Frequency cap por customer sigue sin existir en ningun path (heredado de `ACS-R1-05`, deuda declarada P3, no bloqueante).
 - `metaSendAdapter.ts` permanece sin usar por ningun worker productivo hasta `T08` (heredado de `ACS-R1-05`, P3-1 de la auditoria original).
+- `ACS-R1-05.1-T02`: no existe vinculo explicito follow-up/accion -> oportunidad en el resolver; la continuidad de una respuesta a un follow-up depende enteramente de que la identidad (wa_id/conversation_case_id) tenga una unica oportunidad activa. Si el mismo contacto llegara a tener dos oportunidades activas simultaneas, el resolver no puede hoy determinar a cual pertenece una respuesta de follow-up (queda `ambiguous`, fail-closed, nunca elige mal - pero tampoco resuelve). Requeriria una senal explicita nueva (p. ej. `crm_agent_actions.opportunity_id` propagado al turno reactivo), fuera de alcance de T02.
+- `ACS-R1-05.1-T02`: el resolver no distingue "dos necesidades independientes en el mismo hilo/identidad" de "la misma compra con una pregunta nueva" - no existe hoy ninguna senal de "nueva necesidad comercial" en el codigo (`entityProposals`/need profile son `T03`+). Con una unica oportunidad activa por identidad, cualquier mensaje nuevo se asume parte de esa misma oportunidad; una necesidad genuinamente distinta en la MISMA identidad puede mezclarse silenciosamente hasta que exista esa senal.
 
 ## Secuencia posterior
 

@@ -148,12 +148,60 @@ function isTerminalOpportunityStatus(status: string) {
 }
 
 /**
+ * ACS-R1-05.1-T02 hardening. `CommercialIntent` (constants.ts) has no member
+ * for "new commercial need" or "terminal/exit" - every value except
+ * `"unknown"`/`"general_information"` describes either a pre-purchase
+ * acquisition move or a post-purchase service move. That split is real,
+ * independently confirmed by the legacy queue routing this repo already had
+ * before this task (`context/adapters.ts#commercialIntentLegacy`'s
+ * `postventa_queue`/`mantenciones_queue` sources, distinct from the general
+ * sales queue) - not invented for this fix. A sales opportunity and a
+ * service/post-sale request are functionally incompatible commercial paths:
+ * an active quote must never silently absorb a maintenance ticket, and a
+ * maintenance/post-sale action must never silently masquerade as a sale.
+ */
+type CommercialIntentFamily = "sales" | "service" | "neutral";
+
+const SALES_FAMILY_INTENTS: ReadonlySet<CommercialIntent> = new Set([
+  "product_inquiry",
+  "product_recommendation",
+  "price_request",
+  "stock_request",
+  "quote_request",
+  "delivery_request",
+  "discount_request",
+  "bulk_purchase",
+  "equipment_project"
+]);
+
+const SERVICE_FAMILY_INTENTS: ReadonlySet<CommercialIntent> = new Set([
+  "maintenance_request",
+  "assembly_request",
+  "post_sale_request"
+]);
+
+function commercialIntentFamily(intent: CommercialIntent): CommercialIntentFamily {
+  if (SALES_FAMILY_INTENTS.has(intent)) return "sales";
+  if (SERVICE_FAMILY_INTENTS.has(intent)) return "service";
+  // "unknown" (no restated topic) and "general_information" (not
+  // acquisition- or service-specific) never force a cross-domain exclusion.
+  return "neutral";
+}
+
+function areIntentFamiliesCompatible(a: CommercialIntentFamily, b: CommercialIntentFamily): boolean {
+  if (a === "neutral" || b === "neutral") return true;
+  return a === b;
+}
+
+/**
  * An "unknown" intent hint means this turn did not restate the topic (most
- * continuation messages) - any identity match stays relevant, same as before
- * this fix. A specific, known intent narrows relevance to opportunities that
- * share it, so an unrelated topic never bleeds into this turn's resolution or
- * counts toward ambiguity, and a terminal opportunity from a DIFFERENT topic
- * can never be reused just because it happens to be the most recent row.
+ * continuation messages) - any identity match stays relevant. A specific,
+ * known intent narrows relevance to opportunities that share it, so a
+ * terminal opportunity from a DIFFERENT topic can never be reused just
+ * because it happens to be the most recent row. Only used for TERMINAL
+ * candidates (reopen candidacy) - see selectActiveCandidatesForIdentity for
+ * non-terminal ("active") candidates, where intent is a tie-breaker, not a
+ * filter (ACS-R1-05.1-T02).
  */
 function selectRelevantCandidates(
   candidates: CommercialOperationalState[],
@@ -163,15 +211,70 @@ function selectRelevantCandidates(
   return candidates.filter((candidate) => candidate.primaryIntent === primaryIntent);
 }
 
+/**
+ * ACS-R1-05.1-T02: non-terminal candidates for this identity, i.e. the set a
+ * turn may continue. primaryIntent is frozen on an opportunity at creation
+ * (reduceCommercialState.ts never updates it again) and a normal
+ * within-purchase conversation naturally drifts across
+ * product_inquiry/price_request/stock_request/etc turn to turn - so intent
+ * can only ever act as a tie-breaker among two or more ACTIVE candidates for
+ * the same identity, never as a rigid filter that could exclude the only
+ * ongoing opportunity for this contact/project.
+ *
+ * Cross-domain (sales vs service/post-sale) is a harder boundary, checked
+ * first: a candidate whose family is incompatible with this turn's family is
+ * never eligible for silent reuse, even when it is the only active candidate
+ * - excluding it here lets the existing create_new/no-candidate path decide
+ * (never "mutating" a sales opportunity into a post-sale one, or vice versa).
+ * If every active candidate is cross-domain-incompatible, the result is an
+ * empty set (behaves exactly like no active history at all - unambiguous
+ * create_new via the pre-existing contract, not a new "ambiguous" case).
+ *
+ * Within a family-compatible set, intent narrows a 2+ candidate set as a
+ * tie-breaker only: narrows to exactly one -> unambiguous; narrows to zero or
+ * still leaves two or more -> ambiguity still applies - never guess between
+ * multiple live opportunities.
+ */
+export function selectActiveCandidatesForIdentity(
+  candidates: CommercialOperationalState[],
+  primaryIntent: CommercialIntent
+): CommercialOperationalState[] {
+  const nonTerminal = candidates.filter((candidate) => !isTerminalOpportunityStatus(candidate.status));
+  if (nonTerminal.length === 0) return nonTerminal;
+
+  const turnFamily = commercialIntentFamily(primaryIntent);
+  const familyCompatible = nonTerminal.filter((candidate) => areIntentFamiliesCompatible(turnFamily, commercialIntentFamily(candidate.primaryIntent)));
+  if (familyCompatible.length <= 1 || primaryIntent === "unknown") return familyCompatible;
+
+  const matched = familyCompatible.filter((candidate) => candidate.primaryIntent === primaryIntent);
+  return matched.length > 0 ? matched : familyCompatible;
+}
+
 function deriveSelectedState(loadResult: CommercialOperationalLoadStateResult | null, hints: CommercialOperationalIdentityHints) {
   if (!loadResult) return { selectedState: null as CommercialOperationalState | null, reopenCandidate: null as CommercialOperationalState | null, relevantCount: 0 };
-  const relevant = selectRelevantCandidates(loadResult.candidates, hints.primaryIntent);
-  const nonTerminalRelevant = relevant.filter((candidate) => !isTerminalOpportunityStatus(candidate.status));
-  const selectedState = nonTerminalRelevant.find((candidate) => !candidate.humanOwnerActive && !candidate.aiBlocked) ?? nonTerminalRelevant[0] ?? null;
-  // A candidate only counts as a reopen prospect when no non-terminal candidate
+  const activeCandidates = selectActiveCandidatesForIdentity(loadResult.candidates, hints.primaryIntent);
+  // ACS-R1-05.1-T02 hardening: 2+ active candidates is a governed ambiguity,
+  // never a "pick one anyway" situation. The previous version fell back to
+  // .find(...) ?? activeCandidates[0], which - since isAmbiguous only gates
+  // resolveOpportunityIdentity's OWN early return - still leaked an
+  // arbitrarily-chosen candidate into `selectedState` on the ambiguous
+  // response object. That field is not just informational:
+  // runCommercialOperationalLoop.ts reads identityResolution.selectedState
+  // directly as its `previousState` fallback, so an arbitrary candidate's
+  // summary/requirements/opportunityId could bleed into the turn even though
+  // the identity itself was never resolved. Verified end-to-end against real
+  // MariaDB (Caso 5 in tests/e2e/opportunityContinuity.e2e.test.ts): before
+  // this fix, a governed-ambiguous turn's fallback handoff action still
+  // carried one of the two candidates' opportunity_id.
+  const selectedState = activeCandidates.length === 1 ? activeCandidates[0] : null;
+  // A candidate only counts as a reopen prospect when no active candidate
   // was found for this intent - it must never override a live opportunity.
-  const reopenCandidate = selectedState ? null : relevant.find((candidate) => isTerminalOpportunityStatus(candidate.status)) ?? null;
-  return { selectedState, reopenCandidate, relevantCount: nonTerminalRelevant.length };
+  // (Never reached when ambiguous: resolveOpportunityIdentity returns at the
+  // isAmbiguous branch first, before any reopenCandidate check.)
+  const reopenCandidate = selectedState
+    ? null
+    : selectRelevantCandidates(loadResult.candidates, hints.primaryIntent).find((candidate) => isTerminalOpportunityStatus(candidate.status)) ?? null;
+  return { selectedState, reopenCandidate, relevantCount: activeCandidates.length };
 }
 
 export function resolveOpportunityIdentity(input: CommercialOperationalIdentityResolutionInput): CommercialOperationalOpportunityIdentityResolution {
