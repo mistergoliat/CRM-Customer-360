@@ -136,6 +136,7 @@ La arquitectura de esta release no queda bloqueada por estas exclusiones: ningun
 | ACS-R1-05.1-T08 | Controlled Pilot Deployment | planned | ACS-R1-05.1-T01 a T07 | El entorno piloto puede recrearse desde documentacion y configuracion versionada |
 | ACS-R1-05.1-T09 | Customer-visible UAT | planned | ACS-R1-05.1-T08 | Memoria durable, cero preguntas repetidas, recomendacion grounded, opt-out y handoff correctos, sin duplicados, sin turnos perdidos por fallos internos |
 | ACS-R1-05.1-T10 | Acceptance and Roadmap Reconciliation | planned | ACS-R1-05.1-T09 | Auditoria de aceptacion, evidencia real, roadmap/capability matrix/active release reconciliados |
+| ACS-R1-05.1-T02.1 | Grounded Catalog and Commercial Knowledge Readiness | planned | ACS-R1-05.1-T02 | por definir — registrada, no iniciada |
 
 Detalle de cada tarea:
 
@@ -150,6 +151,8 @@ Gate de cierre, no negociable: `not_verified`/`requires_host_verification` no ci
 ### ACS-R1-05.1-T02 — Stable Opportunity Continuity
 
 Objetivo: un cambio normal de intencion conversacional no debe fragmentar una misma compra. Escenario obligatorio: "Busco una jaula" (product inquiry) -> "Cuanto cuesta" (price request) -> "Tiene stock" (stock request) -> "Esta muy cara" (objection) -> "Cuanto sale el despacho" (delivery request) debe resultar en una oportunidad, un need profile, un historial comercial, una memoria y una proxima accion coherente. Una oportunidad nueva corresponde a una compra, necesidad o proyecto independiente, no a una etiqueta de intencion distinta.
+
+Estado de implementacion (`planned` hasta su aceptacion independiente, no cerrada por este parrafo): la auditoria previa a cualquier cambio encontro que `resolveOpportunityIdentity.ts`/`loadCommercialState.ts` filtraban candidatas por igualdad exacta de `primaryIntent`, y que `primaryIntent` queda congelado en el momento de creacion (`reduceCommercialState.ts` nunca lo reescribe sobre una oportunidad existente) - un test escrito antes de tocar produccion (`tests/commercial/opportunityContinuity.test.ts`) reprodujo la fragmentacion exactamente en el segundo turno de la secuencia obligatoria. El mecanismo esta dormido en el runtime nativo hoy (`buildNativeBrainContextShim` fija `latestInboundMessage.intent = null` y no expone `service_code`, asi que `primaryIntent` normaliza siempre a `"unknown"` para WhatsApp real, que ya evitaba este filtro) pero es real y reproducible de forma directa contra el resolver. Corregido (Opcion B, minima): intent pasa a ser una senal de desempate entre 2+ candidatas activas para la misma identidad, nunca un filtro rigido que pueda excluir la unica oportunidad activa en curso - conserva intactos los 5 tests ya existentes que fijan la semantica de ambiguedad/terminal/unknown. La auditoria tambien encontro, y corrigio, un segundo defecto real en `validateCommercialTransition.ts`: `identityResolution.isAmbiguous` solo se anexaba a `blockedReasons` cuando alguna OTRA razon ya bloqueaba la transicion, nunca disparaba el bloqueo por si solo - un turno ambiguo sin ningun otro problema (policy, stage, human/ai) caia en `status: "allowed"` y el loop persistia una tercera oportunidad. Ambos hallazgos, verificados con MariaDB real (`tests/e2e/opportunityContinuity.e2e.test.ts`, 6/6 casos) y sin regresiones nuevas contra `develop`. `opportunity_key` no cambio de forma. No se implemento `need_profile`, catalogo, memoria comercial nueva, `entityProposals` ni vinculo explicito de follow-up/accion (deuda registrada, ver `ACS-R1-05.1-T02.1` abajo para el catalogo y la seccion "Deuda no cerrada" de este documento para el resto).
 
 ### ACS-R1-05.1-T03 — Governed Commercial Memory Proposals
 
@@ -182,6 +185,10 @@ Debe probarse con un numero real, tres conversaciones minimas: (1) conversacion 
 ### ACS-R1-05.1-T10 — Acceptance and Roadmap Reconciliation
 
 Debe producir: auditoria de aceptacion, evidencia E2E, evidencia del piloto real, SHA de cierre, deuda remanente, decision sobre la siguiente release, actualizacion final de `ROADMAP.md`, `CAPABILITY_MATRIX.md` y `ACTIVE_RELEASE.md`.
+
+### ACS-R1-05.1-T02.1 — Grounded Catalog and Commercial Knowledge Readiness
+
+Registrada como workstream separado durante `ACS-R1-05.1-T02` (no implementada, no iniciada). Cubre lo que `T02` deliberadamente dejo fuera de alcance para no mezclar continuidad de identidad con grounding comercial: catalogo, precios, stock, FAQ, y cualquier conocimiento de producto que el resolver de oportunidad pudiera necesitar en el futuro para distinguir "misma compra, pregunta nueva" de "necesidad genuinamente distinta en la misma identidad" (deuda documentada en "Deuda no cerrada" de este documento). Alcance, dependencias y gate por definir cuando esta tarea inicie su planificacion — este parrafo no anticipa ese alcance.
 
 ## Tarea actual
 
@@ -288,6 +295,8 @@ Ver tambien la tabla "Carried release debt" en `docs/ROADMAP.md`, seccion "Camin
 - `resolve_customer`/`create_customer`/`link_external_identity` siguen `operational: not_verified` (heredado de `ACS-R1-04`, `PAUSED_EXTERNAL`) — `ACS-R1-05.1` no depende de ellos ni los desbloquea.
 - Frequency cap por customer sigue sin existir en ningun path (heredado de `ACS-R1-05`, deuda declarada P3, no bloqueante).
 - `metaSendAdapter.ts` permanece sin usar por ningun worker productivo hasta `T08` (heredado de `ACS-R1-05`, P3-1 de la auditoria original).
+- `ACS-R1-05.1-T02`: no existe vinculo explicito follow-up/accion -> oportunidad en el resolver; la continuidad de una respuesta a un follow-up depende enteramente de que la identidad (wa_id/conversation_case_id) tenga una unica oportunidad activa. Si el mismo contacto llegara a tener dos oportunidades activas simultaneas, el resolver no puede hoy determinar a cual pertenece una respuesta de follow-up (queda `ambiguous`, fail-closed, nunca elige mal - pero tampoco resuelve). Requeriria una senal explicita nueva (p. ej. `crm_agent_actions.opportunity_id` propagado al turno reactivo), fuera de alcance de T02.
+- `ACS-R1-05.1-T02`: el resolver no distingue "dos necesidades independientes en el mismo hilo/identidad" de "la misma compra con una pregunta nueva" - no existe hoy ninguna senal de "nueva necesidad comercial" en el codigo (`entityProposals`/need profile son `T03`+). Con una unica oportunidad activa por identidad, cualquier mensaje nuevo se asume parte de esa misma oportunidad; una necesidad genuinamente distinta en la MISMA identidad puede mezclarse silenciosamente hasta que exista esa senal.
 
 ## Secuencia posterior
 
