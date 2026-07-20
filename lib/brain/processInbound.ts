@@ -19,8 +19,10 @@ import {
   buildCommercialBridgeFeatureFlags,
   buildCommercialCyclePolicyFlags,
   buildCommercialCycleTimeouts,
-  buildCommercialSalesAgentDryRun
+  buildCommercialSalesAgentDryRun,
+  buildLegacySalesConsultativeFeatureFlags
 } from "./commercial/config/commercialCycleConfig";
+import type { CommercialLegacySalesConsultativeFeatureFlags } from "./commercial/config/commercialCycleConfig";
 import { createCommercialShadowFailedSafe } from "./commercial/shadow/createCommercialShadowFailedSafe";
 import { runCommercialShadowEvaluation } from "./commercial/shadow/runCommercialShadowEvaluation";
 import { evaluateCommercialShadowResult } from "./commercial/evaluation";
@@ -63,12 +65,18 @@ type BrainProcessInboundCommercialExecutionBridgeDependencies = {
   commercialExecutionBridgeFlags?: Partial<CommercialExecutionBridgeFeatureFlags>;
 };
 
+type BrainProcessInboundLegacySalesConsultativeDependencies = {
+  legacySalesConsultativeHook?: typeof runSalesConsultativeService;
+  legacySalesConsultativeFlags?: Partial<CommercialLegacySalesConsultativeFeatureFlags>;
+};
+
 export type BrainProcessInboundDependencies = {
   resolveBackendBrainContext?: typeof resolveBackendBrainContext;
   resolveBrainAction?: typeof resolveBrainAction;
   commercialShadow?: BrainProcessInboundCommercialShadowDependencies;
   commercialOperationalLoop?: BrainProcessInboundCommercialOperationalLoopDependencies;
   commercialExecutionBridge?: BrainProcessInboundCommercialExecutionBridgeDependencies;
+  legacySalesConsultative?: BrainProcessInboundLegacySalesConsultativeDependencies;
   abortSignal?: AbortSignal | null;
 };
 
@@ -1177,6 +1185,11 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
   const commercialExecutionBridgeHook =
     dependencies.commercialExecutionBridge?.commercialExecutionBridgeHook ?? runCommercialExecutionBridge;
   const commercialExecutionBridgeFlags = buildCommercialExecutionBridgeFlags(dependencies.commercialExecutionBridge);
+  const legacySalesConsultativeHook =
+    dependencies.legacySalesConsultative?.legacySalesConsultativeHook ?? runSalesConsultativeService;
+  const legacySalesConsultativeFlags = buildLegacySalesConsultativeFeatureFlags(
+    dependencies.legacySalesConsultative?.legacySalesConsultativeFlags
+  );
 
   if (request.options.executeActions) {
     return buildFailClosedResponse(
@@ -1274,49 +1287,60 @@ export async function processInbound(input: unknown, startedAt = Date.now(), dep
   }
 
   if (shouldRunSalesConsultativeFlow(request, contextResponse)) {
-    try {
-      const consultativeOpportunity = await loadConsultativeOpportunity(request, contextResponse);
-      const existingProfile = await loadExistingSalesNeedProfile(request, contextResponse, consultativeOpportunity?.opportunityKey ?? null);
-      const consultativeRun = await runSalesConsultativeService(
-        {
-        currentTime: new Date(startedAt).toISOString(),
-        messageText: request.messageText,
-        customerContext: {
-          waId: request.waId ?? contextResponse.customer_context.wa_id ?? null,
-          phoneNumberId: request.phoneNumberId ?? contextResponse.input_event.phone_number_id ?? null,
-          email: request.customerRef?.email ?? contextResponse.customer_context.email ?? null,
-          phone: request.customerRef?.phone ?? null,
-          idCustomer: request.customerRef?.idCustomer ?? contextResponse.customer_context.id_customer ?? null,
-          idOrder: request.customerRef?.idOrder ?? contextResponse.customer_context.id_order ?? null,
-          invoiceNumber: request.customerRef?.invoiceNumber ?? contextResponse.customer_context.invoice_number ?? null,
-          contactId: request.customerRef?.contactId ?? contextResponse.customer_context.contact_id ?? null
-        },
-        opportunity: consultativeOpportunity,
-        existingProfile,
-        recentInteractions: contextResponse.conversation_context.recent_messages.map((message) => ({
-          id: message.message_id ?? null,
-          direction: message.direction ?? "unknown",
-          text: message.message_text ?? null,
-          occurredAt: message.occurred_at ?? message.created_at ?? null,
-          source: message.source_table ?? null
-        })),
-        productRepository: createPrestashopProductRepository(),
-        operationsRepository: createSalesConsultativeOperationsRepository(),
-        currentStageHint: null,
-        metadata: request.metadata ?? null
-        },
-        {
-          requestId
+    if (!legacySalesConsultativeFlags.legacySalesConsultativeEnabled) {
+      // ACS-R1-05.1-T01: the legacy sales-consultative engine is no longer a
+      // productive writer by default - runNativeAutonomousCycle (via the real
+      // WhatsApp webhook) is the single commercial runtime authority. This
+      // endpoint (n8n's process-inbound integration, docs/n8n-brain-integration.md)
+      // still resolves context/action for observability, it just no longer
+      // writes crm_opportunities/crm_sales_need_profiles/crm_agent_actions
+      // through this path unless BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED=true.
+      actionResponse.warnings.push("legacy_sales_consultative_disabled");
+    } else {
+      try {
+        const consultativeOpportunity = await loadConsultativeOpportunity(request, contextResponse);
+        const existingProfile = await loadExistingSalesNeedProfile(request, contextResponse, consultativeOpportunity?.opportunityKey ?? null);
+        const consultativeRun = await legacySalesConsultativeHook(
+          {
+          currentTime: new Date(startedAt).toISOString(),
+          messageText: request.messageText,
+          customerContext: {
+            waId: request.waId ?? contextResponse.customer_context.wa_id ?? null,
+            phoneNumberId: request.phoneNumberId ?? contextResponse.input_event.phone_number_id ?? null,
+            email: request.customerRef?.email ?? contextResponse.customer_context.email ?? null,
+            phone: request.customerRef?.phone ?? null,
+            idCustomer: request.customerRef?.idCustomer ?? contextResponse.customer_context.id_customer ?? null,
+            idOrder: request.customerRef?.idOrder ?? contextResponse.customer_context.id_order ?? null,
+            invoiceNumber: request.customerRef?.invoiceNumber ?? contextResponse.customer_context.invoice_number ?? null,
+            contactId: request.customerRef?.contactId ?? contextResponse.customer_context.contact_id ?? null
+          },
+          opportunity: consultativeOpportunity,
+          existingProfile,
+          recentInteractions: contextResponse.conversation_context.recent_messages.map((message) => ({
+            id: message.message_id ?? null,
+            direction: message.direction ?? "unknown",
+            text: message.message_text ?? null,
+            occurredAt: message.occurred_at ?? message.created_at ?? null,
+            source: message.source_table ?? null
+          })),
+          productRepository: createPrestashopProductRepository(),
+          operationsRepository: createSalesConsultativeOperationsRepository(),
+          currentStageHint: null,
+          metadata: request.metadata ?? null
+          },
+          {
+            requestId
+          }
+        );
+        salesConsultativeResult = consultativeRun.result;
+        if (consultativeRun.dispatchWarnings.length > 0) {
+          actionResponse.warnings.push(...consultativeRun.dispatchWarnings);
         }
-      );
-      salesConsultativeResult = consultativeRun.result;
-      if (consultativeRun.dispatchWarnings.length > 0) {
-        actionResponse.warnings.push(...consultativeRun.dispatchWarnings);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Sales consultative flow failed.";
+        actionResponse.warnings.push(message);
+        salesConsultativeResult = null;
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Sales consultative flow failed.";
-      actionResponse.warnings.push(message);
-      salesConsultativeResult = null;
     }
   }
 

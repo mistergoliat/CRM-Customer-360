@@ -13,6 +13,7 @@ import {
 import { normalizeWhatsAppRecipientDigits } from "@/lib/brain/messaging/whatsapp-transport/constants";
 import { appendConversationMessage } from "@/lib/brain/local-ai-sdr/repository";
 import { createPrestashopProductRepository, createSalesConsultativeOperationsRepository, runSalesConsultativeService } from "@/lib/brain/commercial/sales-consultative";
+import { buildLegacySalesConsultativeFeatureFlags } from "@/lib/brain/commercial/config/commercialCycleConfig";
 import type {
   SalesConsultativeCustomerContext,
   SalesConsultativeInteraction,
@@ -901,11 +902,20 @@ async function buildRecentInteractions(conversationId: number): Promise<SalesCon
   }));
 }
 
+// ACS-R1-05.1-T01: dead code as of this task (zero production callers,
+// verified by grep - only tests/native/native-whatsapp.test.ts asserting it
+// stays unreferenced from the native webhook). Kept guarded rather than
+// deleted because it is still exported; fails closed by default so a future
+// accidental wire-up cannot reintroduce a second commercial writer alongside
+// processNativeWhatsAppInbound -> runNativeAutonomousCycle.
 export async function processSalesInbound(input: {
   conversationId: number;
   messageId: number;
   correlationId: string;
 }, dependencies: NativeWhatsAppProcessDependencies = {}) {
+  if (!buildLegacySalesConsultativeFeatureFlags().legacySalesConsultativeEnabled) {
+    throw new Error("legacy_sales_consultative_disabled");
+  }
   const conversation = await loadConversationById(input.conversationId);
   if (!conversation) {
     throw new Error("conversation_not_found");

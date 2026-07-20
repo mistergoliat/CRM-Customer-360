@@ -135,3 +135,27 @@ export function buildCommercialSalesAgentDryRun(): boolean {
   if (raw === "false") return false;
   return SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN;
 }
+
+/**
+ * ACS-R1-05.1-T01: the legacy sales-consultative engine
+ * (lib/brain/commercial/sales-consultative) is a separate, non-canonical
+ * writer of crm_opportunities/crm_sales_need_profiles/crm_agent_actions.
+ * The only productive path allowed to write commercial state by default is
+ * WhatsApp -> processNativeWhatsAppInbound -> runNativeAutonomousCycle ->
+ * operational-loop -> persistCommercialState. This flag gates the two
+ * remaining legacy call sites (processInbound.ts's process-inbound endpoint,
+ * native-whatsapp/service.ts's unused processSalesInbound) fail-closed:
+ * disabled unless explicitly turned on.
+ */
+export type CommercialLegacySalesConsultativeFeatureFlags = {
+  legacySalesConsultativeEnabled: boolean;
+};
+
+export function buildLegacySalesConsultativeFeatureFlags(
+  overrides?: Partial<CommercialLegacySalesConsultativeFeatureFlags>
+): CommercialLegacySalesConsultativeFeatureFlags {
+  return {
+    legacySalesConsultativeEnabled: readEnvFlag("BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
