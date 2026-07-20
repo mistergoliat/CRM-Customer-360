@@ -375,3 +375,27 @@ test("cross-domain: a sales-family turn against two active candidates, one sales
   assert.equal(result.status, "continue_existing");
   assert.equal(result.selectedOpportunityId, 7);
 });
+
+// Symmetry: the cross-domain checks above all start from an active SALES
+// candidate. These two pin the mirror direction - starting from an active
+// SERVICE candidate - so the family boundary is proven both ways, not just
+// sales-protects-itself-from-service.
+
+test("cross-domain symmetry: active maintenance_request (service) + price_request (sales) - no silent reuse of the service opportunity", () => {
+  const serviceOpportunity = makeOperationalState({ opportunityId: 9, opportunityKey: "opp-service-9", primaryIntent: "maintenance_request", status: "engaged" });
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "price", candidates: [serviceOpportunity] }));
+
+  assert.notEqual(result.status, "continue_existing", "a sales-family turn must never silently reuse a service-family opportunity");
+  assert.equal(result.selectedOpportunityId, null);
+  assert.equal(result.status, "create_new");
+  assert.equal(result.isAmbiguous, false);
+});
+
+test("cross-domain symmetry: active maintenance_request (service) + post_sale_request (service) - reuses the same service opportunity", () => {
+  const serviceOpportunity = makeOperationalState({ opportunityId: 10, opportunityKey: "opp-service-10", primaryIntent: "maintenance_request", status: "engaged" });
+  const result = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "post_sale", candidates: [serviceOpportunity] }));
+
+  assert.equal(result.status, "continue_existing");
+  assert.equal(result.selectedOpportunityId, 10);
+  assert.equal(result.opportunityKey, "opp-service-10");
+});
