@@ -2,9 +2,9 @@
 title: MVP Execution Map
 doc_id: product-mvp-execution-map
 status: approved
-version: "1.1.0"
+version: "1.2.0"
 owner: architecture
-last_reviewed: 2026-07-14
+last_reviewed: 2026-07-19
 source_of_truth_for:
   - MVP execution map
   - workstreams
@@ -26,6 +26,7 @@ depends_on:
   - ../data/customer-lifecycle-event-contract.md
   - ../capabilities/customer-service-capability.md
   - ../integrations/customer-service-http-contract.md
+  - ../releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md
 supersedes: []
 tags:
   - product
@@ -263,3 +264,7 @@ Estado real de cada gate (que esta enforced-at-dispatch vs. solo tipo/planner/sh
 ## 6.8 Dependencias externas en pausa
 
 Fuente normativa de `PAUSED_EXTERNAL`/`DEFERRED`: [../ROADMAP.md](../ROADMAP.md#dependencias-externas-y-capacidades-en-pausa). Resumen: el workstream `Customer & Identity` depende de un Customer Service externo en `PAUSED_EXTERNAL`; Address Book (sin release ACS asignada, ver "Deferred capabilities" en ROADMAP) y Voice (`ACS-R1-09`, `deferred`) permanecen `DEFERRED`, sin bloquear `Commercial Runtime` ni `ACS-R1-05` (Autonomous Follow-up Runtime). Estado tecnico real del runtime de follow-up: [../audits/follow-up-runtime-reconciliation.md](../audits/follow-up-runtime-reconciliation.md).
+
+## 6.9 Camino critico al piloto controlado (`ACS-R1-05.1`)
+
+`ACS-R1-05` cerro `accepted` (`ACS-R1-05-T07`). El workstream `Commercial Runtime` continua ahora bajo `ACS-R1-05.1` - Persistent Commercial Memory + Controlled WhatsApp Pilot, el camino critico activo hacia el primer vertical conversacional operativo (ver "Camino critico al piloto controlado" en [../ROADMAP.md](../ROADMAP.md)). Este incremento sigue sin depender del Customer Service externo (`PAUSED_EXTERNAL`, workstream `Customer & Identity`) ni de que `ACS-R1-04-T08`/`T09` cierren. Especificacion completa: [../releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md](../releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md).

@@ -2,7 +2,7 @@
 release: ACS-R1-04
 title: Customer Identity Resolution + Onboarding
 status: active_blocked_external
-updated_at: 2026-07-17
+updated_at: 2026-07-19
 current_task: ACS-R1-04-T08
 next_task: ACS-R1-04-T09
 blocked: true
@@ -23,6 +23,7 @@ depends_on:
   - ./releases/README.md
   - ./releases/ACS-R1-04-customer-identity-onboarding.md
   - ./releases/ACS-R1-05-autonomous-follow-up-runtime.md
+  - ./releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md
   - ./product/MVP_EXECUTION_MAP.md
   - ./CAPABILITY_MATRIX.md
 tags:
@@ -58,14 +59,23 @@ Fuente normativa: [ROADMAP](ROADMAP.md#dependencias-externas-y-capacidades-en-pa
 
 - `ACS-R1-05` - Autonomous Follow-up Runtime
 - current task: none (`ACS-R1-05-T07` closed the release)
-- status: `accepted` (rama `acs-r1-05-t07-e2e-restart-recovery`, sin merge a `develop` todavia - fuera de alcance de T07)
+- status: `accepted`, mergeada en `develop` (PR #57, commit de merge `a2754e2`, confirmado con `git rev-parse develop`/`origin/develop` y `git log --oneline --decorate --graph`). Al momento en que `ACS-R1-05-T07` cerro funcionalmente (ver "Evidencia de cierre - ACS-R1-05-T07" en la release spec) esa rama no estaba mergeada todavia - el merge via PR #57 ocurrio en un paso posterior, fuera de alcance de T07; ese texto historico no se reescribe aqui.
 
-Este workstream:
+- `ACS-R1-05.1` - Persistent Commercial Memory + Controlled WhatsApp Pilot
+- status: `parallel_in_progress`
+- critical_path: `true`
+- current_task: `ACS-R1-05.1-T01` (Single Commercial Runtime Authority)
+- current_task_status: `planned` (no iniciada)
+- ver [ACS-R1-05.1 spec](releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md) para alcance, tareas y Definition of Done completos
 
-- no cierra `ACS-R1-04`;
-- no altera el bloqueo de `ACS-R1-04-T08`;
-- no activa `ACS-R1-04-T09`;
-- puede avanzar porque no depende del Customer Service externo (`PAUSED_EXTERNAL`).
+Ambos incrementos (`ACS-R1-05` y `ACS-R1-05.1`):
+
+- no cierran `ACS-R1-04`;
+- no alteran el bloqueo de `ACS-R1-04-T08`;
+- no activan `ACS-R1-04-T09`;
+- pueden avanzar porque no dependen del Customer Service externo (`PAUSED_EXTERNAL`).
+
+`ACS-R1-05.1` es, ademas, el camino critico activo hacia el primer vertical conversacional operativo (ver "Camino critico al piloto controlado" en `ROADMAP.md`); no reabre ni reescribe el cierre de `ACS-R1-05` — lo extiende con memoria comercial persistente y lo valida contra un piloto real con un unico `wa_id` allowlisted.
 
 `ACS-R1-05-T01` (cerrada, commit `d3b07ca`; primer intento `ef9c5ca` fue rechazado por semantica incorrecta de historial/intentos/idempotencia) consolido `sales-consultative/repository.ts` sobre `follow-up-planner/planFollowUp.ts` como unica fuente de calculo de `attemptNumber`/`maxAttempts`/`scheduledFor` para filas `schedule_followup` (antes hardcodeadas `1`/`1`/`"allowed"`). El historial durable (`loadFollowUpActionHistory`) queda escopado estrictamente por `opportunity_id` cuando existe (nunca cae a `wa_id` compartido entre oportunidades distintas), o por `conversation_case_id` exacto cuando no; solo estados explicitos (`planned`/`requires_review`/`executing`) cuentan como activos, y solo `executing`/`executed`/`failed` consumen un intento comercial (`rejected`/`blocked`/`cancelled`/`expired` no agotan `maxAttempts`). Un retry exacto (mismo `planId`/`intent`/`attemptNumber`) reutiliza la fila activa; un plan distinto mientras una fila sigue activa devuelve `active_followup_exists` sin sobrescribir (T01 no implementa supersession); sin fila activa, un intento terminal habilita el siguiente legitimo. `policy_status` y `action.status` son mapeos independientes de `plan.status` (nunca se persiste crudo), y `maxAttempts` viene de una constante canonica nombrada (`COMMERCIAL_FOLLOW_UP_DEFAULT_MAX_ATTEMPTS`). Otros tipos de accion (`send_whatsapp_reply`, `prepare_quote_draft`, `take_over_case`, `pause_ai`, `mark_lost_candidate`, `create_internal_task`) conservan exactamente su persistencia previa. Probado con MariaDB real contra `crm_test` (`tests/commercial/salesConsultativeFollowUpRepository.test.ts`, 19/19) mas tests puros de planner/adapter (`followUpPlanAdapter.test.ts` 12/12, `followUpPlanner.test.ts` +1 regresion). Detalle completo, incluidos dos bugs pre-existentes de escritura real corregidos de paso, en la seccion "Evidencia de cierre" de la release spec.
 
@@ -84,6 +94,8 @@ Este workstream:
 `ACS-R1-05-T07` (`done, accepted`, rama `acs-r1-05-t07-e2e-restart-recovery`, HEAD inicial `25f15ce`, creada desde `develop` con `T05` ya aceptada, merge `--no-ff` de la rama congelada `acs-r1-05-t06-2-sales-turn-continuity` como linea base) cierra `ACS-R1-05`. Levanto MariaDB real desechable (contenedor Docker local, `crm_test`, 24/24 migraciones desde cero, segunda pasada 24/24 skip sin conflicto de checksum) y ejecuto los 6 archivos DB-backed que T06.2 dejo pendientes: 17/17 tests en verde, tras corregir un fixture invalido y un bug real de proceso (un `await import` dinamico colgaba el proceso al final del archivo) en `ensureAutonomousSalesTurnContinuity.test.ts`. Agrego 17 tests E2E nuevos contra MariaDB real en 4 archivos (5+4+5+3, verificado por conteo de bloques `test()`, no por estimacion) (`tests/e2e/reactiveTurnRestartRecovery.e2e.test.ts`, `reactiveTurnFallbacks.e2e.test.ts`, `followUpRestartRecovery.e2e.test.ts`, `outboxDeliveryRestartRecovery.e2e.test.ts`) cubriendo turno reactivo normal/replay/concurrencia real (10 iteraciones)/restart entre accion y outbox/restart entre outbox y disposition/draft inseguro/proveedor LLM caido/catalogo caido/resultado de modelo invalido/follow-up normal/stale/agotado/cancelado por respuesta del cliente/bloqueado por ownership humano/delivery de outbox con sender fake y restart tras el claim. Estos escenarios encontraron y corrigieron dos defectos reales previamente invisibles sin MariaDB: (1) `persistAgentAction.ts` re-seleccionaba la fila ganadora de una carrera de `ER_DUP_ENTRY` *antes* de hacer rollback, lo que bajo REPEATABLE READ le impedia ver el commit ganador y resolvia incorrectamente a `"failed"`; (2) dos ejecuciones concurrentes del ciclo reactivo para el mismo inbound podian crear dos acciones con dos mensajes de outbox identicos (duplicado real), corregido con un match secundario opt-in por `(conversation_case_id, message_id, action_type)` protegido por un lock consultivo de MariaDB, activado unicamente en la ruta de respuesta primaria; (3) un fallo tecnico del proveedor LLM que hacia fallar el operational loop por completo (nunca seleccionaba `nextAction`) dejaba al cliente sin ninguna respuesta - `ensureAutonomousSalesTurnContinuity` no reconocia esa señal como merecedora de fallback. Regresion completa comparada contra el baseline real `25f15ce` (worktree separado, MariaDB real disponible en ambos lados, no solo documental): cero regresiones funcionales nuevas (el unico test que aparece solo en la rama final es una flakiness de aislamiento entre archivos preexistente en el repo, confirmada pasando 5/5 en ejecucion aislada); 5 fallos que existian en baseline quedan corregidos. `npx tsc --noEmit`, `npm run build` y `npm run e2e:autonomous -- --skip-llm` (9/10, el fallo restante es el escenario `[H]` ya documentado como preexistente en la evidencia de T04) limpios. `followUpRuntimeAuthority.test.ts` sigue 5/5 en verde: ningun writer/outbox/planner paralelo introducido. La rama local esta adelantada respecto de `origin/acs-r1-05-t07-e2e-restart-recovery` (que permanece en `25f15ce`, el merge base) - sin push, sin PR, sin merge a `develop` (fuera de alcance de esta tarea). Detalle completo, incluido el conteo exacto de commits locales pendientes de push, en la seccion "Evidencia de cierre - ACS-R1-05-T07" de la release spec.
 
 Detalle de alcance, tareas y Definition of Done: [ACS-R1-05 - Autonomous Follow-up Runtime](releases/ACS-R1-05-autonomous-follow-up-runtime.md). Estado tecnico real del runtime (que existe, que esta conectado, gaps): [Follow-up runtime reconciliation](audits/follow-up-runtime-reconciliation.md).
+
+Detalle de alcance, tareas y Definition of Done del siguiente incremento (camino critico activo): [ACS-R1-05.1 - Persistent Commercial Memory + Controlled WhatsApp Pilot](releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md).
 
 ## Commit aceptado
 
@@ -109,6 +121,7 @@ Detalle de alcance, tareas y Definition of Done: [ACS-R1-05 - Autonomous Follow-
 - [Customer Service HTTP contract](integrations/customer-service-http-contract.md)
 - [CAPABILITY_MATRIX](CAPABILITY_MATRIX.md)
 - [Follow-up runtime reconciliation](audits/follow-up-runtime-reconciliation.md)
+- [ACS-R1-05.1 release spec](releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md)
 
 ## Nota operativa
 
