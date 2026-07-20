@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveOpportunityIdentity } from "../../lib/brain/commercial/operational-loop/resolveOpportunityIdentity";
+import { validateCommercialTransition } from "../../lib/brain/commercial/operational-loop/validateCommercialTransition";
 import type { CommercialOperationalState } from "../../lib/brain/commercial/operational-loop/types";
 import { makeBrainContextResolveResponse, makeNormalizedInboundMessage, FIXED_TIME } from "./fixtures";
 
@@ -267,4 +268,44 @@ test("follow-up response: a generic reply reuses the single active opportunity f
   assert.equal(result.status, "continue_existing");
   assert.equal(result.selectedOpportunityId, 3);
   assert.equal(result.opportunityKey, "opp-followup-3");
+});
+
+test("validateCommercialTransition blocks an ambiguous identity resolution on its own, even when nothing else about the turn is wrong", () => {
+  // Audit finding (ACS-R1-05.1-T02): identityResolution.isAmbiguous was only
+  // ever appended to blockedReasons AFTER something else already set
+  // reasons.length > 0 - a "clean" ambiguous turn (allowed status
+  // transition, no policy block, no human/ai flags) fell through to
+  // "allowed" and let the operational loop persist a brand new opportunity
+  // despite two equally-relevant active candidates. Verified end-to-end
+  // against real MariaDB (Caso 5 in tests/e2e/opportunityContinuity.e2e.test.ts).
+  const first = makeOperationalState({ opportunityId: 1, opportunityKey: "opp-tv-1", primaryIntent: "quote_request", status: "engaged" });
+  const second = makeOperationalState({ opportunityId: 2, opportunityKey: "opp-tv-2", primaryIntent: "quote_request", status: "engaged" });
+  const identityResolution = resolveOpportunityIdentity(buildIdentityInput({ serviceCode: "quote_requested", candidates: [first, second] }));
+  assert.equal(identityResolution.isAmbiguous, true, "test setup must actually be ambiguous");
+
+  const resultingState = makeOperationalState({ opportunityId: null, opportunityKey: identityResolution.opportunityKey, status: "new", stage: "discovery" });
+
+  const validation = validateCommercialTransition({
+    previousState: null,
+    resultingState,
+    nextAction: {
+      type: "respond",
+      reason: "test",
+      confidence: "medium",
+      riskLevel: "low",
+      approvalRequirement: "none",
+      recommendedChannel: "whatsapp",
+      draftMessage: "test",
+      requiredInformation: [],
+      blockedReasons: [],
+      executable: false
+    },
+    identityResolution,
+    commercialPolicyResult: null,
+    commercialEvaluationResult: null,
+    featureFlags: { commercialOperationalLoopEnabled: true, commercialStatePersistenceEnabled: true }
+  });
+
+  assert.equal(validation.status, "blocked", "an ambiguous identity resolution must block the transition by itself");
+  assert.ok(validation.blockedReasons.includes("identity_conflict"));
 });

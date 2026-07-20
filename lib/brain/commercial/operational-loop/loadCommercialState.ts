@@ -13,7 +13,7 @@ import type {
   OpportunityStatus
 } from "../types";
 import { queryRows } from "../../../db";
-import { buildCommercialIdentityHints } from "./resolveOpportunityIdentity";
+import { buildCommercialIdentityHints, selectActiveCandidatesForIdentity } from "./resolveOpportunityIdentity";
 import type {
   CommercialOperationalIdentityHints,
   CommercialOperationalLoadInput,
@@ -111,10 +111,6 @@ function normalizeNextActionType(value: unknown): CommercialOperationalDecisionR
     return text as CommercialOperationalDecisionRecord["nextAction"]["type"];
   }
   return "no_action";
-}
-
-function isTerminalStatus(status: OpportunityStatus) {
-  return status === "won" || status === "lost" || status === "cancelled" || status === "archived";
 }
 
 function normalizeOpportunityStatus(value: unknown): OpportunityStatus {
@@ -446,16 +442,14 @@ export async function loadCommercialState(input: CommercialOperationalLoadInput)
     );
 
     const candidates = rows.map((row) => normalizeState(row));
-    // Bugfix: an "unknown" intent hint (most continuation turns that don't
-    // restate the topic) keeps the legacy behavior of considering every
-    // identity-matched candidate. A specific, known intent narrows relevance to
-    // opportunities that share it, so a candidate about a different topic never
-    // gets reused or counted as a conflict just for existing. In both cases,
-    // terminal candidates are excluded from "active" and from the conflict
-    // count - a closed opportunity (even a very recent one) must never be
-    // silently reused, nor make an unrelated new topic look ambiguous.
-    const relevantCandidates = hints.primaryIntent === "unknown" ? candidates : candidates.filter((state) => state.primaryIntent === hints.primaryIntent);
-    const nonTerminalRelevant = relevantCandidates.filter((state) => !isTerminalStatus(state.status));
+    // ACS-R1-05.1-T02: terminal candidates are always excluded from "active"
+    // and from the conflict count - a closed opportunity (even a very recent
+    // one) must never be silently reused, nor make an unrelated new topic
+    // look ambiguous. Among the remaining active candidates, intent is a
+    // tie-breaker (selectActiveCandidatesForIdentity), never a rigid filter -
+    // a single active candidate for this identity is always relevant,
+    // regardless of intent drift across turns within the same purchase.
+    const nonTerminalRelevant = selectActiveCandidatesForIdentity(candidates, hints.primaryIntent);
     const activeState = nonTerminalRelevant.find((state) => !state.humanOwnerActive && !state.aiBlocked) ?? nonTerminalRelevant[0] ?? null;
     const latestDecision = activeState ? await loadLatestDecision(activeState.opportunityId ?? activeState.opportunityKey) : null;
     const warnings = uniqueStrings([

@@ -149,11 +149,13 @@ function isTerminalOpportunityStatus(status: string) {
 
 /**
  * An "unknown" intent hint means this turn did not restate the topic (most
- * continuation messages) - any identity match stays relevant, same as before
- * this fix. A specific, known intent narrows relevance to opportunities that
- * share it, so an unrelated topic never bleeds into this turn's resolution or
- * counts toward ambiguity, and a terminal opportunity from a DIFFERENT topic
- * can never be reused just because it happens to be the most recent row.
+ * continuation messages) - any identity match stays relevant. A specific,
+ * known intent narrows relevance to opportunities that share it, so a
+ * terminal opportunity from a DIFFERENT topic can never be reused just
+ * because it happens to be the most recent row. Only used for TERMINAL
+ * candidates (reopen candidacy) - see selectActiveCandidatesForIdentity for
+ * non-terminal ("active") candidates, where intent is a tie-breaker, not a
+ * filter (ACS-R1-05.1-T02).
  */
 function selectRelevantCandidates(
   candidates: CommercialOperationalState[],
@@ -163,15 +165,40 @@ function selectRelevantCandidates(
   return candidates.filter((candidate) => candidate.primaryIntent === primaryIntent);
 }
 
+/**
+ * ACS-R1-05.1-T02: non-terminal candidates for this identity, i.e. the set a
+ * turn may continue. primaryIntent is frozen on an opportunity at creation
+ * (reduceCommercialState.ts never updates it again) and a normal
+ * within-purchase conversation naturally drifts across
+ * product_inquiry/price_request/stock_request/etc turn to turn - so intent
+ * can only ever act as a tie-breaker among two or more ACTIVE candidates for
+ * the same identity, never as a rigid filter that could exclude the only
+ * ongoing opportunity for this contact/project. When intent narrows a
+ * multi-candidate set down to exactly one, that one is unambiguous; when it
+ * narrows to zero or still leaves two or more, the full active set is kept
+ * and ambiguity still applies - never guess between multiple live
+ * opportunities.
+ */
+export function selectActiveCandidatesForIdentity(
+  candidates: CommercialOperationalState[],
+  primaryIntent: CommercialIntent
+): CommercialOperationalState[] {
+  const nonTerminal = candidates.filter((candidate) => !isTerminalOpportunityStatus(candidate.status));
+  if (nonTerminal.length <= 1 || primaryIntent === "unknown") return nonTerminal;
+  const matched = nonTerminal.filter((candidate) => candidate.primaryIntent === primaryIntent);
+  return matched.length > 0 ? matched : nonTerminal;
+}
+
 function deriveSelectedState(loadResult: CommercialOperationalLoadStateResult | null, hints: CommercialOperationalIdentityHints) {
   if (!loadResult) return { selectedState: null as CommercialOperationalState | null, reopenCandidate: null as CommercialOperationalState | null, relevantCount: 0 };
-  const relevant = selectRelevantCandidates(loadResult.candidates, hints.primaryIntent);
-  const nonTerminalRelevant = relevant.filter((candidate) => !isTerminalOpportunityStatus(candidate.status));
-  const selectedState = nonTerminalRelevant.find((candidate) => !candidate.humanOwnerActive && !candidate.aiBlocked) ?? nonTerminalRelevant[0] ?? null;
-  // A candidate only counts as a reopen prospect when no non-terminal candidate
+  const activeCandidates = selectActiveCandidatesForIdentity(loadResult.candidates, hints.primaryIntent);
+  const selectedState = activeCandidates.find((candidate) => !candidate.humanOwnerActive && !candidate.aiBlocked) ?? activeCandidates[0] ?? null;
+  // A candidate only counts as a reopen prospect when no active candidate
   // was found for this intent - it must never override a live opportunity.
-  const reopenCandidate = selectedState ? null : relevant.find((candidate) => isTerminalOpportunityStatus(candidate.status)) ?? null;
-  return { selectedState, reopenCandidate, relevantCount: nonTerminalRelevant.length };
+  const reopenCandidate = selectedState
+    ? null
+    : selectRelevantCandidates(loadResult.candidates, hints.primaryIntent).find((candidate) => isTerminalOpportunityStatus(candidate.status)) ?? null;
+  return { selectedState, reopenCandidate, relevantCount: activeCandidates.length };
 }
 
 export function resolveOpportunityIdentity(input: CommercialOperationalIdentityResolutionInput): CommercialOperationalOpportunityIdentityResolution {

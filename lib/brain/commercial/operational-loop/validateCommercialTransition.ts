@@ -55,7 +55,6 @@ function blockedReasonList(
   approvalRequirement: CommercialPolicyApprovalRequirement
 ) {
   const output = [...reasons];
-  if (input.identityResolution.isAmbiguous) output.push("identity_conflict");
   if (input.identityResolution.isTerminal && input.previousState && input.previousState.status !== input.resultingState.status) output.push("terminal_state");
   if (input.resultingState.aiBlocked) output.push("ai_blocked");
   if (input.resultingState.humanOwnerActive) output.push("human_owner_active");
@@ -72,7 +71,12 @@ export function validateCommercialTransition(input: CommercialOperationalTransit
   const approvalRequirement = input.nextAction.approvalRequirement;
   const reasons: string[] = [];
 
-  if (input.identityResolution.status === "blocked") {
+  if (input.identityResolution.status === "blocked" || input.identityResolution.isAmbiguous) {
+    // ACS-R1-05.1-T02: an ambiguous identity resolution must fail closed on
+    // its own - it must never rely on some OTHER unrelated reason (a policy
+    // block, a bad stage transition) to happen to also trip this turn, or a
+    // "clean" ambiguous turn (nothing else wrong with it) silently falls
+    // through to persistence and creates a third opportunity.
     reasons.push("identity_conflict");
   }
   if (!allowedNextStatuses.includes(nextStatus)) {
