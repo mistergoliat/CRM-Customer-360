@@ -19,9 +19,18 @@ import test from "node:test";
 
 const ROOT = resolve(process.cwd());
 
+// Production runtime in this repo (a non-`src` Next.js app) is formally
+// limited to these four directories - the same premise
+// followUpRuntimeAuthority.test.ts (ACS-R1-05-T05) uses - plus any
+// standalone .ts/.tsx file sitting directly at the repo root, since a
+// directory-only walk cannot see those. middleware.ts is the concrete case:
+// it runs on every matched request but lives outside app/lib/scripts/
+// components, so it would otherwise be silently excluded from this scan.
+// database/ and infra/ contain only .sql/.sh files (checked: no .ts/.tsx),
+// so they carry nothing this scan's extensions would match.
 const SCAN_ROOTS = ["app", "lib", "scripts", "components"];
 const SCAN_EXTENSIONS = [".ts", ".tsx"];
-const EXCLUDED_DIR_NAMES = new Set(["node_modules", ".next", ".tmp-commercial-tests-cjs", ".git"]);
+const EXCLUDED_DIR_NAMES = new Set(["node_modules", ".next", ".tmp-commercial-tests-cjs", ".git", "coverage"]);
 
 function toPosix(path: string): string {
   return path.split("\\").join("/");
@@ -45,8 +54,23 @@ function walk(dir: string, out: string[]): void {
   }
 }
 
-function listProductionSourceFiles(): string[] {
+function listRootLevelSourceFiles(): string[] {
   const files: string[] = [];
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(ROOT, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (SCAN_EXTENSIONS.some((ext) => entry.name.endsWith(ext))) files.push(join(ROOT, entry.name));
+  }
+  return files;
+}
+
+function listProductionSourceFiles(): string[] {
+  const files: string[] = listRootLevelSourceFiles();
   for (const root of SCAN_ROOTS) {
     const abs = resolve(ROOT, root);
     if (existsSync(abs)) walk(abs, files);
@@ -133,6 +157,13 @@ test("app/api/integrations/whatsapp/webhook does not import the sales-consultati
 
 test("runNativeAutonomousCycle does not reference the legacy sales-consultative engine", () => {
   const source = readFileSync(resolve(ROOT, "lib/brain/commercial/native-cycle/runNativeAutonomousCycle.ts"), "utf8");
+  assert.doesNotMatch(source, /sales-consultative/);
+  assert.doesNotMatch(source, /runSalesConsultativeService/);
+  assert.doesNotMatch(source, /processSalesInbound/);
+});
+
+test("middleware.ts (root-level request runtime, outside app/lib/scripts/components) does not reference the legacy sales-consultative engine", () => {
+  const source = readFileSync(resolve(ROOT, "middleware.ts"), "utf8");
   assert.doesNotMatch(source, /sales-consultative/);
   assert.doesNotMatch(source, /runSalesConsultativeService/);
   assert.doesNotMatch(source, /processSalesInbound/);
