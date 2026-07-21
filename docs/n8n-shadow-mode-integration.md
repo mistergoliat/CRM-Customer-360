@@ -1,4 +1,21 @@
+---
+title: n8n Shadow Mode Integration
+doc_id: n8n-shadow-mode-integration
+status: superseded
+superseded_by: docs/ACTIVE_RELEASE.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # n8n Shadow Mode Integration
+
+> **SUPERSEDED (2026-07-21).** Esta guia operativa conecta n8n al endpoint `POST /api/ai/orchestrate`, marcado `superseded` en `docs/ai-orchestration-contract.md`. Sin evidencia de que este camino de integracion siga vivo en ninguna release ACS. La integracion real vigente de WhatsApp/n8n hacia el runtime nativo se describe en `docs/ACTIVE_RELEASE.md` y `docs/n8n-brain-integration.md` (que a su vez documenta, en su seccion de correccion, el incidente real de doble autoridad de escritura que este patron de "shadow mode" permitio sin que nadie lo supiera). No usar esta guia como instructivo operativo para nueva integracion n8n.
 
 Guia operativa para que n8n llame `POST /api/ai/orchestrate` en paralelo al flujo productivo actual, sin cambiar respuesta al cliente ni estado de caso.
 

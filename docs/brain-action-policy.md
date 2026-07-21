@@ -1,4 +1,21 @@
+---
+title: Brain Action Policy
+doc_id: brain-action-policy
+status: superseded
+superseded_by: docs/architecture/adr/ADR-001-commercial-vs-ai-decisions.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Brain Action Policy
+
+> **SUPERSEDED (2026-07-21).** Describe un router deterministico de policy (P1D) sobre `POST /api/brain/actions/resolve`, anterior al modelo de gobernanza vigente. La politica comercial real hoy vive en `evaluateCommercialPolicy.ts` (`follow_up_dispatch_policy`, ver `docs/product/follow-up-decision-policy.md` y la evidencia de `ACS-R1-05-T02` en `docs/ACTIVE_RELEASE.md`), gobernada por ADR-001 y ADR-006, no por este router. Sin evidencia de que este endpoint siga conectado en ninguna release ACS. No usar como referencia para nueva logica de politica comercial.
 
 `Brain Action Policy` es la capa deterministica que resuelve si un inbound puede seguir por legacy, si requiere revision humana o si debe quedar bloqueado. No llama LLM, no escribe DB y no ejecuta WhatsApp.
 

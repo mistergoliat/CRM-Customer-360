@@ -1,21 +1,22 @@
 ﻿---
 title: Persistence architecture decision
 doc_id: data-persistence-architecture-decision
-status: approved
-version: "1.0.0"
+status: superseded
+superseded_by: docs/CAPABILITY_MATRIX.md
+version: "2.0.0"
 owner: architecture
-last_reviewed: 2026-07-08
-source_of_truth_for:
-  - persistence architecture
-  - storage boundary
+last_reviewed: 2026-07-21
+source_of_truth_for: []
 depends_on:
   - product/autonomous-commerce-prd
 supersedes: []
 tags:
   - data-contract
-  - adr
+  - historical
 ---
 # Persistence Architecture Decision
+
+> **SUPERSEDED (2026-07-21).** La decision descrita en este documento (Opcion B: PostgreSQL/Supabase como destino del dominio "brain" - opportunities/decisions/actions/outbox) nunca se ejecuto. Toda la evidencia real de las releases ACS (`ACS-R1-04`, `ACS-R1-05`, `ACS-R1-05.1`) confirma que `crm_opportunities`, `crm_agent_decisions`, `crm_agent_actions` y `brain_message_outbox` corren sobre **MariaDB real** (`crm_test`, `main_management`, contenedor `mariadb:11.4`), sin excepcion, en decenas de tests E2E citados en `docs/ACTIVE_RELEASE.md`. No existe adapter, migracion ni evidencia de PostgreSQL/Supabase en ningun cierre de tarea ACS. `docs/CAPABILITY_MATRIX.md` es la fuente de verdad del estado tecnico real de persistencia. Este documento se conserva como registro del analisis y de por que la Opcion B no se ejecuto (nunca fue necesaria: MariaDB probo sostener los patrones de idempotencia, claim/lock y append-only que motivaban la comparacion). **No usar como referencia para decisiones de persistencia nuevas** ni como evidencia de que existe una migracion a Postgres pendiente.
 
 ## 1. Executive summary
 
@@ -426,37 +427,37 @@ For P1, the safe rule is simple:
 
 - one entity, one authoritative store, one writer path.
 
-## 14. Final decision
+## 14. Final decision (superseded — see banner)
 
-Decision:
+Original decision (never executed):
 
 - MariaDB remains the source of truth for legacy case and message data in P1.
 - PostgreSQL/Supabase becomes the source of truth for the new brain domain.
 
-Chosen architecture:
+Original chosen architecture (not what actually shipped):
 
 ```text
 MariaDB for legacy
 PostgreSQL/Supabase for new brain
 ```
 
-Why:
+Why Option B was chosen on paper:
 
 - access patterns for opportunities, decisions, actions, outbox, and execution results are transactional and queue-heavy;
 - PostgreSQL gives cleaner locking, constraints, JSONB, and idempotent worker semantics;
 - the legacy timeline is high-volume and already integrated, so moving it now adds risk without helping the brain;
 - this split minimizes blast radius while keeping the future brain coherent.
 
-Rejected alternatives:
+**What actually happened**: the PostgreSQL/Supabase adapter work below was never started. Every brain entity (`crm_opportunities`, `crm_agent_decisions`, `crm_agent_actions`, `brain_message_outbox`) was implemented, hardened and verified end-to-end against **MariaDB** across `ACS-R1-04`/`ACS-R1-05`/`ACS-R1-05.1` (see `docs/ACTIVE_RELEASE.md` for the MariaDB-backed evidence of every task). MariaDB's `mysql2` transactions, row locking and unique-constraint idempotency proved sufficient for the claim/lock and append-only patterns this document worried about. The comparison in sections 11-12 remains useful as a record of the tradeoff analysis; the decision itself is reversed by observed reality.
+
+Rejected alternatives (kept for historical record; MariaDB-only, i.e. the rejected "Option A", is what actually runs today):
 
 - MariaDB only;
 - full PostgreSQL migration of cases/messages in P1.
 
-Immediate next adapter:
+Next adapter: none. There is no PostgreSQL/Supabase migration in flight or planned. Any future persistence change must be proposed as a new decision against `docs/CAPABILITY_MATRIX.md`'s real state, not resumed from this document.
 
-- `P1K-012D-C - PostgreSQL/Supabase Repository Adapters`
-
-Migration boundary:
+Migration boundary (historical, describes the unexecuted plan):
 
 - legacy cases/messages stay in MariaDB for P1;
 - brain entities move by explicit adapter cutover only;
@@ -517,13 +518,7 @@ If a real integration check is needed, use a disposable local environment with o
 - adapter implementation delay;
 - accidental dual-write if boundaries are not enforced.
 
-## 18. Next milestone
+## 18. Next milestone (superseded — see banner)
 
-Recommended next milestone:
-
-```text
-P1K-012D-C - PostgreSQL/Supabase Repository Adapters
-```
-
-This is the next step because the decision now exists and the core is already storage-agnostic.
+This section originally recommended `P1K-012D-C - PostgreSQL/Supabase Repository Adapters` as the next step. That milestone was never started and is not planned. The brain domain's actual persistence layer is MariaDB; see `docs/CAPABILITY_MATRIX.md` for its real, current state.
 

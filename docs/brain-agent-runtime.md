@@ -1,4 +1,21 @@
+---
+title: Brain Agent Runtime
+doc_id: brain-agent-runtime
+status: superseded
+superseded_by: docs/product/sales-agent-contract.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Brain Agent Runtime
+
+> **SUPERSEDED (2026-07-21).** Describe un registro de multiples agentes por departamento (P1D: `sales`, `sac`, `postventa`, `campaign`, `supervisor`, cada uno un `AgentDefinition` separado). Ese patron -un bot por vertical de negocio- fue reemplazado por diseno: un unico Sales Agent que solicita capabilities a traves del Capability Gateway (ver `docs/product/sales-agent-contract.md`, ADR-006). `docs/product/agent-capability-matrix.md` documenta el mismo patron multi-agente y ya esta correctamente marcado `historical`/`superseded_by: docs/product/MVP_EXECUTION_MAP.md`; este documento es su contraparte de runtime y se marca igual. No usar como referencia para nuevo trabajo de agentes: no crear un `AgentDefinition` por departamento.
 
 `Brain Agent Runtime` es la base comun para agentes vivos del backend. Se construye sobre el contexto, policy y action router ya existentes, pero no ejecuta side effects ni llama LLM real por defecto.
 
