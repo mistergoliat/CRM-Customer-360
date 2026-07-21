@@ -42,7 +42,7 @@ The detailed Lead and Opportunity contract lives in `docs/product/lead-opportuni
 
 This document is the conceptual operating model. The current technical identity contract lives in `docs/data/customer-onboarding-identity-contract.md` and `docs/data/customer-creation-linking-authority-contract.md` (the P1J-era spec/resolver/source-mapping trio this paragraph used to cite is superseded and archived under `docs/legacy/`).
 
-The AI SDR commercial operating model lives in `docs/product/ai-sdr-operating-model.md`.
+The current commercial operating model lives in `docs/PRODUCT_NORTH_STAR.md` and `docs/product/sales-agent-contract.md` (the original `ai-sdr-operating-model.md` this pointed to is now historical, in `docs/archive/`).
 
 ## Identity rule
 

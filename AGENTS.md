@@ -34,6 +34,8 @@ Segun la tarea:
 
 Detalle completo del orden condicional y del vocabulario de estados documentales: `docs/00-START-HERE.md`.
 
+`docs/legacy/` y `docs/archive/` no son fuentes normativas y no forman parte de la lectura obligatoria bajo ninguna circunstancia. Contienen diseños abandonados y snapshots historicos con `status: superseded`/`historical`/`dev-only` movidos ahi explicitamente para sacarlos del camino de lectura por defecto. Solo se citan como evidencia forense puntual (por ejemplo, desde una auditoria o un release spec explicando un incidente cerrado), nunca como referencia para decidir arquitectura nueva.
+
 ## Estado actual
 
 1. `P1`, `P1K`, `P1L`, `P1M`, `P2` y `P3` son nomenclatura historica.

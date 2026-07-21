@@ -201,7 +201,7 @@ PR 4:
 - `n8n_*` sigue funcionando como fuente de compatibilidad durante la transicion.
 - No se cambia schema DB ni se rompe la preview del HUB.
 - La logica de casos queda preparada para migrar a backend propio sin reescribir todo de golpe.
-- `docs/backlog.md` queda alineado con el estado real del trabajo de diseno.
+- `docs/ROADMAP.md` queda alineado con el estado real del trabajo de diseno (el `docs/backlog.md` original de este criterio quedo historico en `docs/archive/`).
 
 ## 13. Design Review Findings
 
