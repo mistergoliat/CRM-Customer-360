@@ -1,4 +1,21 @@
+---
+title: AI Orchestration Contract
+doc_id: ai-orchestration-contract
+status: superseded
+superseded_by: docs/product/sales-agent-contract.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # AI Orchestration Contract
+
+> **SUPERSEDED (2026-07-21).** Este documento define un endpoint P1C (`POST /api/ai/orchestrate`) que decide con un unico envelope JSON monolitico (`intent`/`department`/`finalAction` como enums cerrados en una sola llamada), sin evidencia de que siga conectado en ninguna release ACS. La arquitectura vigente reemplaza este patron de clasificacion monolitica por un ciclo agentico gobernado por Capability Gateway: ver `docs/product/sales-agent-contract.md`, `docs/architecture/adr/ADR-001-commercial-vs-ai-decisions.md` y `docs/architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md`. No usar este contrato como referencia para nuevo trabajo de routing/clasificacion de intencion: el patron "un LLM completa un JSON de clasificacion por turno" es exactamente lo que la arquitectura ACS evita.
 
 Contrato P1C para el futuro endpoint `POST /api/ai/orchestrate`.
 

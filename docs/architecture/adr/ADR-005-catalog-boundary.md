@@ -1,4 +1,4 @@
-﻿---
+---
 title: ADR-005 - Catalog Boundary
 doc_id: adr-005-catalog-boundary
 status: approved

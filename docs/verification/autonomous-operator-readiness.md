@@ -1,4 +1,4 @@
-﻿---
+---
 title: Autonomous Operator Readiness Verification
 doc_id: audit-autonomous-operator-readiness
 status: historical

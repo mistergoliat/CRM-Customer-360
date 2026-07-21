@@ -1,4 +1,4 @@
-﻿---
+---
 title: Capability - Customer 360 read model
 doc_id: capability-customer-360-read-model
 status: approved

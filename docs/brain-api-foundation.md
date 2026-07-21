@@ -1,4 +1,21 @@
+---
+title: Brain API Foundation
+doc_id: brain-api-foundation
+status: superseded
+superseded_by: docs/ACTIVE_RELEASE.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Brain API Foundation
+
+> **SUPERSEDED (2026-07-21).** Describe `POST /api/brain/process-inbound` en su estado P1D/P1F original: adaptador puro, sin runtime real, sin ejecutar side effects, orientado a devolver instrucciones estructuradas para que n8n las interprete. El endpoint con el mismo nombre existe hoy, pero su comportamiento real (`processInbound -> processNativeWhatsAppInbound -> runNativeAutonomousCycle -> operational-loop -> persistCommercialState`, unica autoridad comercial desde `ACS-R1-05.1-T01`) es sustancialmente distinto del descrito aqui. Ver `docs/ACTIVE_RELEASE.md` para el comportamiento real vigente. No usar este documento como referencia del contrato actual de `process-inbound`.
 
 `Brain API` es la base del backend que recibira el inbound conversacional normalizado desde n8n y, mas adelante, desde Meta directo.
 

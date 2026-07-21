@@ -1,4 +1,20 @@
+---
+title: AI SDR Autonomous Commercial Loop
+doc_id: ai-sdr-autonomous-commercial-loop
+status: dev-only
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - dev-only
+---
+
 # AI SDR Autonomous Commercial Loop
+
+> **DEV-ONLY (2026-07-21).** `P1K-012G` es un orquestador puramente in-memory (sin DB real, sin HTTP real, sin Meta real) alcanzable solo desde `app/(hub)/dev/ai-sdr-simulator`. No es ni fue nunca el runtime productivo: el ciclo comercial real es `runNativeAutonomousCycle` (ver `docs/ACTIVE_RELEASE.md`). Util como herramienta de simulacion/escenarios de desarrollo, no como referencia de arquitectura productiva.
 
 ## Objetivo
 

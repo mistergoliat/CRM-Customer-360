@@ -18,6 +18,7 @@ tags:
 
 This file is a pointer only.
 
+- Product vision, condensed and normative: [PRODUCT_NORTH_STAR.md](PRODUCT_NORTH_STAR.md)
 - Canonical entry point: [00-START-HERE.md](00-START-HERE.md)
 - Active release board: [ACTIVE_RELEASE.md](ACTIVE_RELEASE.md)
 - Release index: [releases/README.md](releases/README.md)

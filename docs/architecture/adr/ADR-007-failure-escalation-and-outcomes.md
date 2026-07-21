@@ -1,4 +1,4 @@
-﻿---
+---
 title: ADR-007 - Failure Escalation and Outcomes
 doc_id: adr-007-failure-escalation-and-outcomes
 status: approved

@@ -1,4 +1,4 @@
-﻿---
+---
 title: Capability - Customer addresses
 doc_id: capability-customer-addresses
 status: approved

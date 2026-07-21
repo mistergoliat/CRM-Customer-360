@@ -1,4 +1,4 @@
-﻿---
+---
 title: ADR-002 - AI Runtime Observability Boundary
 doc_id: adr-002-ai-runtime-observability-boundary
 status: approved

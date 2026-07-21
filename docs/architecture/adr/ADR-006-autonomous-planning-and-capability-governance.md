@@ -1,4 +1,4 @@
-﻿---
+---
 title: ADR-006 - Autonomous Planning and Capability Governance
 doc_id: adr-006-autonomous-planning-and-capability-governance
 status: approved

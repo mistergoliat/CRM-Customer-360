@@ -1,4 +1,4 @@
-﻿---
+---
 title: ADR-001 - Commercial Decisions vs AI Decisions
 doc_id: adr-001-commercial-vs-ai-decisions
 status: approved

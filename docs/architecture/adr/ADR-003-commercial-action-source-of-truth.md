@@ -1,4 +1,4 @@
-﻿---
+---
 title: ADR-003 - Commercial Action Source of Truth
 doc_id: adr-003-commercial-action-source-of-truth
 status: approved

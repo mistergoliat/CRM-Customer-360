@@ -1,4 +1,4 @@
-﻿---
+---
 title: ADR-004 - Next Best Action Ownership
 doc_id: adr-004-next-best-action-ownership
 status: approved

@@ -1,4 +1,21 @@
+---
+title: AI SDR Execution Gate
+doc_id: ai-sdr-execution-gate
+status: historical
+superseded_by: docs/product/ai-sdr-action-lifecycle-contract.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # AI SDR Execution Gate
+
+> **HISTORICAL (2026-07-21).** Describe el milestone P1K-012D-A. Su lista de "Action types soportados" (solo `send_whatsapp_reply`/`request_more_context`) esta desactualizada: `docs/product/ai-sdr-action-lifecycle-contract.md` (vigente, citado en "Required reading" de `ACS-R1-05`) documenta 9 tipos, y `docs/ACTIVE_RELEASE.md` confirma varios de ellos (`schedule_followup`, entre otros) endurecidos en produccion desde `ACS-R1-05-T01` a `T07`. Tambien conserva la referencia a "P1K-012D-C - PostgreSQL/Supabase Repository Adapters" que `docs/data/persistence-architecture-decision.md` ya marca superseded. Para el estado real de cada capability, ver `docs/CAPABILITY_MATRIX.md`. Los principios generales de gobernanza (gate decide, no ejecuta; Meta fuera del gate; idempotencia por accion) siguen siendo consistentes con la arquitectura vigente, pero el detalle operativo de este documento no debe usarse como referencia actual.
 
 ## Objetivo
 

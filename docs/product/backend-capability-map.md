@@ -1,4 +1,21 @@
+---
+title: Backend Capability Map
+doc_id: backend-capability-map
+status: historical
+superseded_by: docs/CAPABILITY_MATRIX.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Backend Capability Map
+
+> **HISTORICAL (2026-07-21).** Snapshot de modulos del HUB en P1M. Declara `opportunities`/`actions` como `fixture`, pero ambos son hoy tablas reales con escritura gobernada (`crm_opportunities`, `crm_agent_actions`) segun `docs/CAPABILITY_MATRIX.md`, que es la fuente de verdad vigente del estado tecnico real. Este documento describe el estado de la UI del HUB en un momento pasado, no el dominio comercial actual.
 
 | Module | Capability | Source | Adapter | Mode | Status |
 | ------ | ---------- | ------ | ------- | ---- | ------ |

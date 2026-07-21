@@ -1,4 +1,4 @@
-﻿---
+---
 title: Customer lifecycle event contract
 doc_id: data-customer-lifecycle-event-contract
 status: approved
