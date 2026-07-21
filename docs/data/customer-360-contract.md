@@ -1,4 +1,4 @@
-﻿---
+---
 title: Customer 360 contract
 doc_id: data-customer-360-contract
 status: approved

@@ -1,4 +1,4 @@
-﻿---
+---
 title: Customer address contract
 doc_id: data-customer-address-contract
 status: approved

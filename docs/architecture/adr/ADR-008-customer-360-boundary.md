@@ -1,4 +1,4 @@
-﻿---
+---
 title: ADR-008 - Customer 360 boundary and read-model ownership
 doc_id: adr-008-customer-360-boundary
 status: approved
