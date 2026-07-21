@@ -86,7 +86,7 @@ Current gaps:
   - `lib/brain/native-whatsapp/service.ts` (`resolveOrPersistNativeExternalIdentity`)
 - Status:
   - identity resolution and unresolved-contact handling productively implemented (`ACS-R1-04-T06.2`)
-  - still requires legacy remediation for existing provisional `wa-*@local.invalid` rows (see [provisional-customer-remediation](provisional-customer-remediation.md))
+  - still requires legacy remediation for existing provisional `wa-*@local.invalid` rows (see [provisional-customer-remediation](../product/provisional-customer-remediation.md))
 
 ### 3. Conversations and messages
 

@@ -39,7 +39,7 @@ Harden del capability gateway y del catalog boundary sin confundir implementacio
 4. [Releases index](../releases/README.md)
 5. [ACS-R1-01 evidence](../audits/acs-r1-01-capability-gateway-evidence.md)
 6. [Autonomous Commerce PRD](../product/autonomous-commerce-prd.md)
-7. [Autonomous Commerce current state](../product/autonomous-commerce-current-state.md)
+7. [Autonomous Commerce current state](../archive/autonomous-commerce-current-state.md) (movido a `docs/archive/` en la consolidacion documental)
 8. [ADR-005 Catalog boundary](../architecture/adr/ADR-005-catalog-boundary.md)
 9. [ADR-006 Autonomous planning and capability governance](../architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md)
 10. [ADR-007 Failure escalation and outcomes](../architecture/adr/ADR-007-failure-escalation-and-outcomes.md)

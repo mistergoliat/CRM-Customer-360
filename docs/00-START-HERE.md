@@ -94,19 +94,19 @@ Este vocabulario gobierna los documentos creados o migrados a partir de `docs/do
 No usar estos documentos como referencia de arquitectura vigente. Cada uno declara su propio `superseded_by` en su frontmatter.
 
 - `docs/audits/*.md`: evidencia historica inmutable.
-- `docs/product/autonomous-commerce-current-state.md`: snapshot historico del estado.
-- `docs/product/autonomous-commerce-capability-map.md`: snapshot historico de capacidades.
-- `docs/product/autonomous-commerce-roadmap.md`: snapshot historico de la secuencia previa.
-- `docs/product/mvp-roadmap.md`: snapshot historico de labels P1/P2/P3.
-- `docs/product/agent-capability-matrix.md`: snapshot historico de reparto multi-agente por departamento (`superseded_by: docs/product/MVP_EXECUTION_MAP.md`).
+- `docs/archive/autonomous-commerce-current-state.md`: snapshot historico del estado.
+- `docs/archive/autonomous-commerce-capability-map.md`: snapshot historico de capacidades.
+- `docs/archive/autonomous-commerce-roadmap.md`: snapshot historico de la secuencia previa.
+- `docs/archive/mvp-roadmap.md`: snapshot historico de labels P1/P2/P3.
+- `docs/archive/agent-capability-matrix.md`: snapshot historico de reparto multi-agente por departamento (`superseded_by: docs/product/MVP_EXECUTION_MAP.md`).
+- `docs/archive/backend-capability-map.md`: snapshot historico de modulos UI P1M.
 - `docs/verification/*.md`: evidencia historica o de verificacion.
 - `docs/data/persistence-architecture-decision.md`: decision de persistencia (PostgreSQL/Supabase para el brain) nunca ejecutada; la realidad es MariaDB, ver `docs/CAPABILITY_MATRIX.md`.
-- `docs/ai-orchestration-contract.md`, `docs/n8n-shadow-mode-integration.md`: contrato de envelope JSON monolitico y su guia de integracion, sin evidencia de uso en ninguna release ACS.
-- `docs/brain-action-policy.md`, `docs/brain-agent-runtime.md`, `docs/brain-api-foundation.md`: router deterministico de policy y registro multi-agente por departamento (P1D/P1F), reemplazados por el Sales Agent + Capability Gateway.
-- `docs/product/ai-sdr-execution-gate.md`, `docs/product/ai-sdr-operational-loop.md`: milestones P1K con listas de action types y semantica de ejecucion desactualizadas frente a `docs/CAPABILITY_MATRIX.md`.
-- `docs/product/ai-sdr-autonomous-commercial-loop.md`: simulador in-memory de desarrollo (`dev-only`), nunca runtime productivo.
-- Familia de identidad P1J/PR-43 (superseded, ver `superseded_by` de cada uno): `docs/customer-identity-contract.md`, `docs/customer-identity-source-mapping.md`, `docs/customer-identity-spec.md`, `docs/customer-identity-validation.md`, `docs/architecture/customer-identity-onboarding.md`, `docs/product/customer-identity-onboarding.md` - todos reemplazados por `docs/data/customer-onboarding-identity-contract.md` y `docs/data/customer-creation-linking-authority-contract.md`.
-- Familia P1K descubierta por el gate de `docs/documentation-consolidation` (historical, ver `superseded_by` de cada uno): `docs/backlog.md`, `docs/data/agentic-crm-data-model-audit.md`, `docs/product/ai-sdr-action-queue-ui.md`, `docs/product/ai-sdr-operating-model.md`, `docs/product/ai-sdr-operator-pilot.md`, `docs/product/ai-sdr-implementation-blueprint.md`, `docs/product/ai-sdr-autonomy-sandbox.md`, `docs/product/autonomous-commerce-integration-handoff.md`, `docs/product/p1k-final-acceptance-report.md`.
+- `docs/legacy/ai-orchestration-contract.md`, `docs/legacy/n8n-shadow-mode-integration.md`: contrato de envelope JSON monolitico y su guia de integracion, sin evidencia de uso en ninguna release ACS.
+- `docs/legacy/brain-action-policy.md`, `docs/legacy/brain-agent-runtime.md`, `docs/legacy/brain-api-foundation.md`: router deterministico de policy y registro multi-agente por departamento (P1D/P1F), reemplazados por el Sales Agent + Capability Gateway.
+- `docs/legacy/`: diseños abandonados con evidencia historica unica (Postgres/Supabase, orquestador P1C, identidad P1J/PR-43). `docs/archive/`: snapshots y milestones cerrados sin autoridad (roadmaps previos, capability maps previos, reportes de aceptacion). Ninguno de los dos directorios es fuente normativa ni forma parte de la lectura obligatoria - ver `AGENTS.md`.
+- Familia de identidad P1J/PR-43 (superseded, en `docs/legacy/`, ver `superseded_by` de cada uno): `customer-identity-contract.md`, `customer-identity-source-mapping.md`, `customer-identity-spec.md`, `customer-identity-validation.md`, `architecture-customer-identity-onboarding.md`, `product-customer-identity-onboarding.md` - todos reemplazados por `docs/data/customer-onboarding-identity-contract.md` y `docs/data/customer-creation-linking-authority-contract.md`.
+- Familia P1K descubierta por el gate de `docs/documentation-consolidation` (historical/dev-only, ver `superseded_by` de cada uno, todos en `docs/archive/`): `ai-sdr-action-queue-ui.md`, `ai-sdr-operator-pilot.md`, `backlog.md`, `agentic-crm-data-model-audit.md`, `ai-sdr-operating-model.md`, `ai-sdr-operational-loop.md`, `ai-sdr-execution-gate.md`, `ai-sdr-autonomous-commercial-loop.md`, `ai-sdr-autonomy-sandbox.md`, `ai-sdr-implementation-blueprint.md`, `autonomous-commerce-integration-handoff.md`, `p1k-final-acceptance-report.md`.
 
 Esta lista deja de ser exhaustiva a partir de aqui: el frontmatter de cada documento (`status`, `superseded_by`) es la fuente de verdad real; `npm run docs:validate` reporta cualquier `status` fuera del vocabulario de 8 estados como warning legacy, sea o no que este indice lo mencione.
 
@@ -118,5 +118,6 @@ Esta lista deja de ser exhaustiva a partir de aqui: el frontmatter de cada docum
 - El MVP execution map describe paralelizacion y ownership, y solo se lee cuando la tarea lo requiere.
 - La capability matrix describe el estado tecnico real.
 - Las auditorias historicas no se usan como fuente normativa.
+- `docs/legacy/` y `docs/archive/` quedan fuera de la lectura normal y de la autoridad documental: no citar un documento de esos directorios como base para una decision de arquitectura nueva, solo como evidencia historica puntual.
 - Un documento `approved`/`accepted` en su frontmatter no es automaticamente vigente: verificar contra `docs/CAPABILITY_MATRIX.md` y la evidencia real antes de confiar en el.
 - P1/P2/P3 son etiquetas historicas y no gobiernan ejecucion.

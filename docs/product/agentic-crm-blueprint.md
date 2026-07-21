@@ -53,7 +53,7 @@ AI SDR debe cubrir:
 - propuesta: sugerir cotizacion, agenda, follow-up o derivacion,
 - supervision: pedir aprobacion cuando el riesgo operativo lo exija.
 
-El detalle operativo del AI SDR MVP vive en `docs/product/ai-sdr-operating-model.md`.
+El detalle operativo vigente vive en `docs/PRODUCT_NORTH_STAR.md` y `docs/product/sales-agent-contract.md` (el modelo original de este parrafo, `ai-sdr-operating-model.md`, quedo historico en `docs/archive/`).
 
 ## Base paralela necesaria
 
@@ -105,9 +105,7 @@ El Customer 360 definitivo depende de `customer_master`. Antes de eso, el sistem
 
 Durante P1M, el Customer 360 provisional puede construirse como experiencia visual read-only para descubrir gaps de identidad, timeline y relaciones comerciales sin fingir un master persistente.
 
-La secuencia runtime concreta para activar el AI SDR MVP vive en `docs/product/ai-sdr-implementation-blueprint.md`.
-
-Ese blueprint separa shadow mode, approval mode y controlled execution para que el sistema arranque fail-closed y avance por capas.
+La secuencia real de activacion vive en `docs/ROADMAP.md` y `docs/ACTIVE_RELEASE.md` (el blueprint original de este parrafo, `ai-sdr-implementation-blueprint.md`, quedo historico en `docs/archive/` - su secuencia P1K no gobierna la activacion real).
 
 ## Canales iniciales
 

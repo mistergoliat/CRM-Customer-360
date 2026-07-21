@@ -23,7 +23,7 @@ tags:
 - Depende de: [ACTIVE_RELEASE](../../ACTIVE_RELEASE.md)
 - Implementa: limite de persistencia para el dominio comercial y el runtime Brain
 - Evidencia: [CAPABILITY_MATRIX](../../CAPABILITY_MATRIX.md)
-- Reemplaza: [Persistence architecture decision](../../data/persistence-architecture-decision.md) (historico, ver banner en ese documento)
+- Reemplaza: [Persistence architecture decision](../../legacy/persistence-architecture-decision.md) (historico, ver banner en ese documento)
 
 ## Estado
 
