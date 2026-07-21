@@ -129,6 +129,21 @@ export function buildCommercialCycleTimeouts(): CommercialCycleTimeouts {
   };
 }
 
+/**
+ * ACS-R1-05.1-T02.1. Fail-closed (default false) toggle for the native
+ * read-only agent tool loop. When true, runNativeAutonomousCycle runs the
+ * new AgentStep loop instead of runCommercialShadowEvaluation ->
+ * runCommercialOperationalLoop -> runCapabilityExecutionStage for real
+ * WhatsApp traffic - the two paths are mutually exclusive per turn, same
+ * pattern as the existing multi-request/legacy toggle in that file.
+ */
+export function buildAgentToolLoopFeatureFlags(overrides?: Partial<{ agentToolLoopEnabled: boolean }>) {
+  return {
+    agentToolLoopEnabled: readEnvFlag("BRAIN_AGENT_TOOL_LOOP_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
+
 export function buildCommercialSalesAgentDryRun(): boolean {
   const raw = process.env.BRAIN_SALES_AGENT_DRY_RUN?.trim().toLowerCase();
   if (raw === "true") return true;

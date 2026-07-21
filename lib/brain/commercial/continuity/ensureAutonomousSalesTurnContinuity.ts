@@ -190,6 +190,88 @@ export async function ensureAutonomousSalesTurnContinuity(
     return { cycle, disposition };
   }
 
+  // ACS-R1-05.1-T02.1: the native agent tool loop owns its own dispatch
+  // (runNativeAgentToolLoopCycle already called dispatchAgentLoopResponse)
+  // - this branch only derives the terminal disposition/audit trail, it
+  // never dispatches a second time.
+  if (cycle.agentLoop) {
+    const { loop: agentLoop, dispatch } = cycle.agentLoop;
+
+    if (!agentLoop.ran) {
+      // Skipped before ever calling the model - human owner active or AI blocked.
+      const disposition = baseDisposition({
+        terminalOutcome: "human_response_required",
+        responseOwner: "human",
+        waitingFor: "human_response",
+        handoffCreated: true
+      });
+      await persistDisposition({
+        inboundMessageId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        opportunityId: null,
+        disposition,
+        primaryActionId: null,
+        primaryDisposition: null,
+        primaryBlockReasons: [],
+        fallbackActionId: null,
+        outboxId: null
+      });
+      return { cycle, disposition };
+    }
+
+    const toolUsed = agentLoop.steps.some((record) => record.step.type === "use_tool" && record.governance === "authorized");
+    const commercialObjective: AutonomousTurnCommercialObjective =
+      agentLoop.terminalReason === "handoff" ? "handoff" : toolUsed ? "recommend" : agentLoop.terminalReason === "responded" ? "discover_need" : "none";
+    const terminalOutcome =
+      agentLoop.terminalReason === "responded"
+        ? toolUsed
+          ? "catalog_recommendation_planned"
+          : "commercial_response_planned"
+        : agentLoop.terminalReason === "handoff"
+          ? dispatch.outboxWritten
+            ? "handoff_acknowledgement_planned"
+            : "human_response_required"
+          : dispatch.outboxWritten
+            ? "fallback_outbox_planned"
+            : "continuity_failed";
+
+    const disposition = baseDisposition({
+      terminalOutcome,
+      responseOwner: agentLoop.terminalReason === "handoff" ? "human" : "ai",
+      acknowledgementSender: agentLoop.terminalReason === "handoff" && dispatch.outboxWritten ? "ai" : null,
+      waitingFor: agentLoop.terminalReason === "handoff" ? "human_response" : "none",
+      handoffCreated: agentLoop.terminalReason === "handoff",
+      commercialObjective,
+      responsePlanned: dispatch.outboxWritten,
+      nextBestActionDefined: Boolean(agentLoop.finalMessage || agentLoop.handoffReason)
+    });
+
+    if (dispatch.outboxWritten) {
+      await persistDisposition({
+        inboundMessageId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        opportunityId: dispatch.action?.opportunityId ?? null,
+        disposition,
+        primaryActionId: dispatch.action?.actionId ?? null,
+        primaryDisposition: dispatch.executionGate?.status ?? null,
+        primaryBlockReasons: [],
+        fallbackActionId: null,
+        outboxId: dispatch.outboxId === null ? null : String(dispatch.outboxId)
+      });
+    } else {
+      await persistContinuityFailed({
+        inboundMessageId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        reason: `agent_tool_loop_dispatch_failed:${agentLoop.terminalReason}:${dispatch.warnings.join(",")}`
+      });
+    }
+
+    return { cycle, disposition };
+  }
+
   const loop = cycle.loop;
   const bridge = cycle.bridge;
   const resultingState = loop?.resultingState ?? null;

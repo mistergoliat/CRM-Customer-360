@@ -44,5 +44,7 @@ export function buildContinuityFallbackMessage(fallbackClass: ContinuityFallback
       return `${knownNeed}Mi primera respuesta no pasó un control interno antes de enviarse, así que la reemplacé por esta. Sigo con tu consulta con la información que ya me diste.`;
     case "handoff_acknowledgement":
       return `${knownNeed}Voy a conectar tu conversación con alguien del equipo para que te ayude directamente con esto.`;
+    case "max_steps_exceeded":
+      return `${knownNeed}Necesito revisar esto con más calma antes de responderte con seguridad. Mantengo el contexto que ya tengo y sigo apenas pueda.`;
   }
 }

@@ -1,4 +1,6 @@
 import type {
+  AgentToolLoopCompletedRecordedPayload,
+  AgentToolLoopTerminalReason,
   AutonomousTurnContinuityFailedRecordedPayload,
   AutonomousTurnDispositionRecordedPayload,
   CommercialEventSource,
@@ -19,6 +21,7 @@ import {
   COMMERCIAL_EVENT_SCHEMA_VERSION
 } from "./types";
 import {
+  buildAgentToolLoopCompletedDedupeKey,
   buildAutonomousTurnContinuityFailedDedupeKey,
   buildAutonomousTurnDispositionDedupeKey,
   buildCommercialEventCorrelationId,
@@ -552,5 +555,52 @@ export function normalizeAutonomousTurnContinuityFailedCommercialEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "autonomous_turn_continuity_failed" }
+  });
+}
+
+// ACS-R1-05.1-T02.1. One event per inbound message, same dedupe rationale as
+// autonomous_turn_disposition above - a retry/replay resolves to the same row.
+
+export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
+  inboundMessageId: string | null;
+  terminalReason: AgentToolLoopTerminalReason;
+  decisionCount: number;
+  toolExecutionCount: number;
+  toolsUsed: string[];
+  finalMessagePresent: boolean;
+  handoffReasonPresent: boolean;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = (input.inboundMessageId ?? input.correlationId ?? "").trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  const payload: AgentToolLoopCompletedRecordedPayload = {
+    inboundMessageId: input.inboundMessageId,
+    terminalReason: input.terminalReason,
+    decisionCount: input.decisionCount,
+    toolExecutionCount: input.toolExecutionCount,
+    toolsUsed: [...input.toolsUsed],
+    finalMessagePresent: input.finalMessagePresent,
+    handoffReasonPresent: input.handoffReasonPresent
+  };
+  return buildBaseEvent({
+    eventType: "agent_tool_loop_completed",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildAgentToolLoopCompletedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "agent_tool_loop_completed" }
   });
 }
