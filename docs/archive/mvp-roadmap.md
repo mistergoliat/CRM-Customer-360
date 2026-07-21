@@ -9,7 +9,7 @@ source_of_truth_for:
   - historical P1/P2/P3 phase snapshot
 depends_on:
   - ../ROADMAP.md
-  - ./MVP_EXECUTION_MAP.md
+  - ../product/MVP_EXECUTION_MAP.md
 superseded_by: docs/ROADMAP.md
 supersedes: []
 tags:
@@ -24,7 +24,7 @@ Este documento es historico. P1, P1K, P1L, P1M, P2 y P3 ya no son fases activas.
 ## Canonicos actuales
 
 - [ROADMAP](../ROADMAP.md)
-- [MVP execution map](MVP_EXECUTION_MAP.md)
+- [MVP execution map](../product/MVP_EXECUTION_MAP.md)
 
 ## Historial
 

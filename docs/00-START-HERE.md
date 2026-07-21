@@ -94,11 +94,12 @@ Este vocabulario gobierna los documentos creados o migrados a partir de `docs/do
 No usar estos documentos como referencia de arquitectura vigente. Cada uno declara su propio `superseded_by` en su frontmatter.
 
 - `docs/audits/*.md`: evidencia historica inmutable.
-- `docs/product/autonomous-commerce-current-state.md`: snapshot historico del estado.
-- `docs/product/autonomous-commerce-capability-map.md`: snapshot historico de capacidades.
-- `docs/product/autonomous-commerce-roadmap.md`: snapshot historico de la secuencia previa.
-- `docs/product/mvp-roadmap.md`: snapshot historico de labels P1/P2/P3.
-- `docs/product/agent-capability-matrix.md`: snapshot historico de reparto multi-agente por departamento (`superseded_by: docs/product/MVP_EXECUTION_MAP.md`).
+- `docs/archive/autonomous-commerce-current-state.md`: snapshot historico del estado.
+- `docs/archive/autonomous-commerce-capability-map.md`: snapshot historico de capacidades.
+- `docs/archive/autonomous-commerce-roadmap.md`: snapshot historico de la secuencia previa.
+- `docs/archive/mvp-roadmap.md`: snapshot historico de labels P1/P2/P3.
+- `docs/archive/agent-capability-matrix.md`: snapshot historico de reparto multi-agente por departamento (`superseded_by: docs/product/MVP_EXECUTION_MAP.md`).
+- `docs/archive/backend-capability-map.md`: snapshot historico de modulos UI P1M.
 - `docs/verification/*.md`: evidencia historica o de verificacion.
 - `docs/data/persistence-architecture-decision.md`: decision de persistencia (PostgreSQL/Supabase para el brain) nunca ejecutada; la realidad es MariaDB, ver `docs/CAPABILITY_MATRIX.md`.
 - `docs/legacy/ai-orchestration-contract.md`, `docs/legacy/n8n-shadow-mode-integration.md`: contrato de envelope JSON monolitico y su guia de integracion, sin evidencia de uso en ninguna release ACS.

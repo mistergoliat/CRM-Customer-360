@@ -250,7 +250,7 @@ La pagina muestra claramente la metadata de frescura y completitud en [app/(hub)
 
 La matriz de capacidad de negocio si quedo alineada, pero con un matiz importante:
 
-- `Project Customer 360` aparece como capacidad de producto read-only e implementada en [docs/product/autonomous-commerce-capability-map.md](../product/autonomous-commerce-capability-map.md).
+- `Project Customer 360` aparece como capacidad de producto read-only e implementada en [docs/product/autonomous-commerce-capability-map.md](../archive/autonomous-commerce-capability-map.md) (movido a `docs/archive/` en la consolidacion documental).
 - `Manage customer addresses` tambien aparece como capacidad de producto, no como tool del agente.
 - Customer 360 **no** debe tratarse como capability ejecutable del agente ni como entrada del Capability Gateway.
 - En el runtime, las capabilities registradas siguen siendo las del gateway (por ejemplo `search_products` / `get_product_details`); Customer 360 no esta registrada como capability ejecutable por el agente.

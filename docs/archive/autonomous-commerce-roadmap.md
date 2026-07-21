@@ -9,7 +9,7 @@ source_of_truth_for:
   - historical capability sequence snapshot
 depends_on:
   - ../ROADMAP.md
-  - ./MVP_EXECUTION_MAP.md
+  - ../product/MVP_EXECUTION_MAP.md
 superseded_by: docs/ROADMAP.md
 supersedes: []
 tags:
@@ -24,7 +24,7 @@ Esta pagina conserva la secuencia historica previa a ACS. No es un roadmap activ
 ## Canonicos actuales
 
 - [ROADMAP](../ROADMAP.md)
-- [MVP execution map](MVP_EXECUTION_MAP.md)
+- [MVP execution map](../product/MVP_EXECUTION_MAP.md)
 
 ## Estado
 
