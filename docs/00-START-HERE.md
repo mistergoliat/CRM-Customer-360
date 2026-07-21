@@ -72,6 +72,8 @@ Vocabulario unico. No usar categorias ambiguas ni mezclar dos estados en el mism
 
 Un documento `superseded` o legacy P1/P2/P3 debe declarar `superseded_by` apuntando a un archivo real (`npm run docs:validate` lo exige para los snapshots P1/P2/P3 y es la convencion esperada para el resto).
 
+Este vocabulario gobierna los documentos creados o migrados a partir de `docs/documentation-authority-cleanup` (2026-07-21) en adelante. La mayoria de los documentos del repositorio (ADR con `status: approved`, release specs con su propio vocabulario de lifecycle en `docs/ROADMAP.md`, contratos con `status: active`/`non-normative`, etc.) todavia usa vocabularios anteriores y no ha sido migrada. `npm run docs:validate` reporta esos valores como warnings informativos, no como errores - la reconciliacion completa es alcance de `docs/documentation-consolidation`, no de este documento. No leer esta seccion como si la migracion ya hubiera terminado.
+
 ## Documentos canonicos
 
 - `AGENTS.md` y `CLAUDE.md`: reglas generales de agente.

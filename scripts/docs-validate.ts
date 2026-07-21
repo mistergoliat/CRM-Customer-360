@@ -15,14 +15,22 @@
 
 import fs from "node:fs";
 import path from "node:path";
-
-type Frontmatter = Record<string, string[]>;
+import {
+  checkDocumentStatus,
+  hasUtf8Bom,
+  looksLikeMisplacedFrontmatter,
+  stripUtf8Bom,
+  type Frontmatter,
+} from "./docs-validate-rules";
 
 const root = process.cwd();
 const docsRoot = path.join(root, "docs");
 
-function readText(relPath: string): string {
-  return fs.readFileSync(path.join(root, relPath), "utf8").replace(/\r\n/g, "\n");
+function readText(relPath: string): { text: string; hadBom: boolean } {
+  const buf = fs.readFileSync(path.join(root, relPath));
+  const hadBom = hasUtf8Bom(buf);
+  const text = stripUtf8Bom(buf).toString("utf8").replace(/\r\n/g, "\n");
+  return { text, hadBom };
 }
 
 function walk(dir: string): string[] {
@@ -114,18 +122,35 @@ function fail(messages: string[]): never {
 const files = walk(docsRoot);
 const fileText = new Map<string, string>();
 const frontmatter = new Map<string, Frontmatter | null>();
+const bomFiles: string[] = [];
+const misplacedFrontmatterFiles: string[] = [];
 for (const rel of files) {
-  const fileContent = readText(rel);
+  const { text: fileContent, hadBom } = readText(rel);
+  if (hadBom) bomFiles.push(rel);
   fileText.set(rel, fileContent);
-  frontmatter.set(rel, parseFrontmatter(fileContent));
+  const parsed = parseFrontmatter(fileContent);
+  frontmatter.set(rel, parsed);
+  if (looksLikeMisplacedFrontmatter(fileContent, parsed)) misplacedFrontmatterFiles.push(rel);
 }
 for (const rel of ["AGENTS.md", "CLAUDE.md"]) {
   if (fs.existsSync(path.join(root, rel))) {
-    fileText.set(rel, readText(rel));
+    const { text: fileContent, hadBom } = readText(rel);
+    if (hadBom) bomFiles.push(rel);
+    fileText.set(rel, fileContent);
   }
 }
 
 const errors: string[] = [];
+const warnings: string[] = [];
+
+for (const rel of bomFiles) {
+  errors.push(`${rel} starts with a UTF-8 BOM, which breaks frontmatter parsing (text.startsWith("---\\n") fails) - remove it`);
+}
+for (const rel of misplacedFrontmatterFiles) {
+  errors.push(
+    `${rel} has a 'doc_id:' frontmatter key but the frontmatter block does not start at byte 0 - check for a heading or other content before the opening ---`,
+  );
+}
 
 function text(rel: string): string {
   const value = fileText.get(rel);
@@ -412,10 +437,38 @@ if (roadmapTable && releaseIndexTable) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 17. Generic document status vocabulary (docs/00-START-HERE.md "Estados
+// documentales"): superseded/deprecated need a resolvable pointer, canonical
+// needs minimal metadata, any other status value is a legacy-vocabulary
+// warning (not an error) until docs/documentation-consolidation migrates it.
+// Applies to every file with frontmatter, not a hardcoded list - see
+// scripts/docs-validate-rules.ts for the pure rule and its tests.
+// ---------------------------------------------------------------------------
+function resolveDocPath(fromRel: string, target: string): string {
+  return target.startsWith("docs/") || target.startsWith("AGENTS.md") || target.startsWith("CLAUDE.md")
+    ? path.join(root, target)
+    : path.resolve(path.dirname(path.join(root, fromRel)), target);
+}
+for (const rel of files) {
+  const fmData = frontmatter.get(rel);
+  if (!fmData) continue;
+  const result = checkDocumentStatus(rel, fmData, (target) => fs.existsSync(resolveDocPath(rel, target)));
+  errors.push(...result.errors);
+  warnings.push(...result.warnings);
+}
+
 if (errors.length > 0) {
   fail(errors);
 }
 
+if (warnings.length > 0) {
+  console.warn(`docs:validate: ${warnings.length} legacy status warning(s) (informational, not migrated by this task):`);
+  for (const warning of warnings) {
+    console.warn(`docs:validate:   ${warning}`);
+  }
+}
+
 console.log(
-  `docs:validate ok (${files.length} markdown files checked, document structural validation only - no runtime verification performed)`,
+  `docs:validate ok (${files.length} markdown files checked, ${warnings.length} legacy status warning(s), document structural validation only - no runtime verification performed)`,
 );

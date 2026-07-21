@@ -1,9 +1,9 @@
-﻿---
+---
 title: Persistence architecture decision
 doc_id: data-persistence-architecture-decision
 status: superseded
-superseded_by: docs/CAPABILITY_MATRIX.md
-version: "2.0.0"
+superseded_by: docs/architecture/adr/ADR-009-persistence-boundary.md
+version: "2.1.0"
 owner: architecture
 last_reviewed: 2026-07-21
 source_of_truth_for: []
@@ -16,7 +16,7 @@ tags:
 ---
 # Persistence Architecture Decision
 
-> **SUPERSEDED (2026-07-21).** La decision descrita en este documento (Opcion B: PostgreSQL/Supabase como destino del dominio "brain" - opportunities/decisions/actions/outbox) nunca se ejecuto. Toda la evidencia real de las releases ACS (`ACS-R1-04`, `ACS-R1-05`, `ACS-R1-05.1`) confirma que `crm_opportunities`, `crm_agent_decisions`, `crm_agent_actions` y `brain_message_outbox` corren sobre **MariaDB real** (`crm_test`, `main_management`, contenedor `mariadb:11.4`), sin excepcion, en decenas de tests E2E citados en `docs/ACTIVE_RELEASE.md`. No existe adapter, migracion ni evidencia de PostgreSQL/Supabase en ningun cierre de tarea ACS. `docs/CAPABILITY_MATRIX.md` es la fuente de verdad del estado tecnico real de persistencia. Este documento se conserva como registro del analisis y de por que la Opcion B no se ejecuto (nunca fue necesaria: MariaDB probo sostener los patrones de idempotencia, claim/lock y append-only que motivaban la comparacion). **No usar como referencia para decisiones de persistencia nuevas** ni como evidencia de que existe una migracion a Postgres pendiente.
+> **SUPERSEDED (2026-07-21) by [ADR-009 - Persistence Boundary](../architecture/adr/ADR-009-persistence-boundary.md).** La decision descrita en este documento (Opcion B: PostgreSQL/Supabase como destino del dominio "brain" - opportunities/decisions/actions/outbox) nunca se ejecuto. Toda la evidencia real de las releases ACS (`ACS-R1-04`, `ACS-R1-05`, `ACS-R1-05.1`) confirma que `crm_opportunities`, `crm_agent_decisions`, `crm_agent_actions` y `brain_message_outbox` corren sobre **MariaDB real** (`crm_test`, `main_management`, contenedor `mariadb:11.4`), sin excepcion, en decenas de tests E2E citados en `docs/ACTIVE_RELEASE.md`. `ADR-009` es ahora la decision de persistencia vigente; `docs/CAPABILITY_MATRIX.md` es evidencia de que esa decision se cumple, no la decision misma. Este documento se conserva integro como registro historico del analisis original y de por que la Opcion B no se ejecuto (nunca fue necesaria: MariaDB probo sostener los patrones de idempotencia, claim/lock y append-only que motivaban la comparacion) - su contenido no fue reescrito para simular que siempre dijo MariaDB. **No usar como referencia para decisiones de persistencia nuevas**: cualquier cambio de motor requiere un ADR nuevo, ver ADR-009.
 
 ## 1. Executive summary
 
@@ -455,7 +455,7 @@ Rejected alternatives (kept for historical record; MariaDB-only, i.e. the reject
 - MariaDB only;
 - full PostgreSQL migration of cases/messages in P1.
 
-Next adapter: none. There is no PostgreSQL/Supabase migration in flight or planned. Any future persistence change must be proposed as a new decision against `docs/CAPABILITY_MATRIX.md`'s real state, not resumed from this document.
+Next adapter: none. There is no PostgreSQL/Supabase migration in flight or planned. The current decision lives in [ADR-009 - Persistence Boundary](../architecture/adr/ADR-009-persistence-boundary.md); any future persistence change requires a new ADR, not a resumption of this document.
 
 Migration boundary (historical, describes the unexecuted plan):
 
@@ -520,5 +520,5 @@ If a real integration check is needed, use a disposable local environment with o
 
 ## 18. Next milestone (superseded — see banner)
 
-This section originally recommended `P1K-012D-C - PostgreSQL/Supabase Repository Adapters` as the next step. That milestone was never started and is not planned. The brain domain's actual persistence layer is MariaDB; see `docs/CAPABILITY_MATRIX.md` for its real, current state.
+This section originally recommended `P1K-012D-C - PostgreSQL/Supabase Repository Adapters` as the next step. That milestone was never started and is not planned. The persistence decision now lives in [ADR-009](../architecture/adr/ADR-009-persistence-boundary.md); `docs/CAPABILITY_MATRIX.md` shows its real, current compliance state.
 

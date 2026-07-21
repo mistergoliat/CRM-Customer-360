@@ -1,5 +1,3 @@
-# Backend Capability Map
-
 ---
 title: Backend Capability Map
 doc_id: backend-capability-map
