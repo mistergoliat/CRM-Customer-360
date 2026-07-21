@@ -46,7 +46,10 @@ export const CONTINUITY_FALLBACK_CLASSES = [
   "model_unavailable",
   "invalid_model_result",
   "unsafe_primary_draft",
-  "handoff_acknowledgement"
+  "handoff_acknowledgement",
+  // ACS-R1-05.1-T02.1: the native agent tool loop exhausted its decision
+  // budget (spec section 11) without reaching respond/handoff.
+  "max_steps_exceeded"
 ] as const;
 export type ContinuityFallbackClass = (typeof CONTINUITY_FALLBACK_CLASSES)[number];
 

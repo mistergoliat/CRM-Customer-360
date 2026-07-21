@@ -76,6 +76,12 @@ export function buildAutonomousTurnContinuityFailedDedupeKey(inboundMessageId: s
   return `autonomous-turn-continuity-failed:${inboundMessageId.trim()}`;
 }
 
+// ACS-R1-05.1-T02.1. One canonical loop-completion event per inbound
+// message, same rationale as the disposition key above.
+export function buildAgentToolLoopCompletedDedupeKey(inboundMessageId: string) {
+  return `agent-tool-loop-completed:${inboundMessageId.trim()}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

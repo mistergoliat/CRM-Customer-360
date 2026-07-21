@@ -13,6 +13,7 @@ import { evaluateCommercialShadowResult } from "../evaluation";
 import { SALES_AGENT_CONTRACT_VERSION, SALES_AGENT_PROMPT_VERSION } from "../sales-agent/runtimeTypes";
 import { COMMERCIAL_POLICY_VERSION } from "../policy/policyConstants";
 import {
+  buildAgentToolLoopFeatureFlags,
   buildCommercialShadowFeatureFlags,
   buildCommercialLoopFeatureFlags,
   buildCommercialBridgeFeatureFlags,
@@ -21,6 +22,10 @@ import {
   buildCommercialSalesAgentDryRun,
   readEnvFlag
 } from "../config/commercialCycleConfig";
+import { runNativeAgentToolLoopCycle } from "../agent-loop";
+import type { NativeAgentToolLoopCycleResult } from "../agent-loop";
+import { createHttpAgentLoopProvider } from "../agent-loop/providers/httpAgentLoopProvider";
+import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
 import { buildNativeBrainContextShim } from "./buildNativeBrainContextShim";
 import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
 import { isMultiRequestRuntimeEnabled, runMultiRequestAutonomousCycle } from "../multi-request";
@@ -70,6 +75,8 @@ export type NativeAutonomousCycleInput = {
   loadCustomer360?: LoadCustomer360Fn | null;
   /** Test-only injection point; production callers never set this (defaults to the real identity/onboarding/Gateway services). */
   customerSessionDependencies?: ResolveNativeCustomerSessionDependencies | null;
+  /** Test-only injection point for the agent-loop path (ACS-R1-05.1-T02.1); production callers never set this (defaults to the real HTTP provider). */
+  agentLoopProvider?: AgentLoopProvider | null;
 };
 
 /** ACS-R1-05-T06.2 (C2): the commercial need for this turn, read from already-loaded, persisted sources - never re-derived from free text, never invented. */
@@ -87,6 +94,8 @@ export type NativeAutonomousCycleResult = {
   loop: CommercialOperationalLoopResult | null;
   bridge: CommercialExecutionBridgeResult | null;
   multiRequest?: MultiRequestCycleResult | null;
+  /** ACS-R1-05.1-T02.1: set only when BRAIN_AGENT_TOOL_LOOP_ENABLED is on for this turn - mutually exclusive with shadow/loop/bridge. */
+  agentLoop?: NativeAgentToolLoopCycleResult | null;
   catalogCapability?: CatalogGroundingResult | null;
   /** ACS-R1-04-T05: state of the single Customer 360 load for this turn ("not_requested" when there was no customerMasterId to load). */
   customerContextState?: AutonomousCustomerContextLoadState;
@@ -149,8 +158,13 @@ export async function runNativeAutonomousCycle(
   // authoritative when on - the legacy pipeline below never runs the same
   // turn (checked first, same priority as before ACS-R1-04-T05).
   const multiRequestEnabled = isMultiRequestRuntimeEnabled();
+  // ACS-R1-05.1-T02.1: the native agent tool loop has its own enablement
+  // flag and does not depend on the legacy shadow/operational-loop flags
+  // below - checked before those legacy-specific gates so it is never
+  // accidentally disabled by a flag that has nothing to do with it.
+  const agentToolLoopEnabled = buildAgentToolLoopFeatureFlags().agentToolLoopEnabled;
 
-  if (!multiRequestEnabled) {
+  if (!multiRequestEnabled && !agentToolLoopEnabled) {
     if (!isAutonomyCycleEnabled()) {
       // Step 2: nothing will run this turn - Customer 360 is never loaded.
       return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
@@ -215,6 +229,69 @@ export async function runNativeAutonomousCycle(
       commercialNeed: null,
       // Step 6: structured Customer 360 + session warnings, merged with the runtime's own.
       warnings: dedupeWarnings([...multiRequest.warnings, ...customer360.warnings, ...session.warnings])
+    };
+  }
+
+  if (agentToolLoopEnabled) {
+    // Step 4/5 (ACS-R1-05.1-T02.1): same read-only CommercialContextSnapshot
+    // source as the legacy path below, but this branch stops here - no
+    // brainContextShim, no shadow evaluation, no old operational loop, no
+    // legacy capability-execution stage. runNativeAgentToolLoopCycle owns
+    // the whole turn from here (loop, dispatch, audit event).
+    const rawSnapshot = await buildNativeCommercialContext({
+      conversationPublicId: input.conversationPublicId,
+      currentTime: input.currentTime
+    });
+    const snapshot = { ...rawSnapshot, customer360: customer360.context, customer360State: customer360.state, customerSession: session.decision };
+
+    if (snapshot.status === "not_found") {
+      return {
+        ran: false,
+        reason: "conversation_not_found",
+        shadow: null,
+        loop: null,
+        bridge: null,
+        agentLoop: null,
+        catalogCapability: null,
+        customerContextState: customer360.state,
+        customerSession: session.decision,
+        commercialNeed: null,
+        warnings: dedupeWarnings([...customer360.warnings, ...session.warnings])
+      };
+    }
+
+    const agentLoopResult = await runNativeAgentToolLoopCycle({
+      conversationId: input.conversationId,
+      waId: input.waId,
+      inboundMessageId: String(input.messageId ?? input.correlationId),
+      correlationId: input.correlationId,
+      currentTime: input.currentTime,
+      customerMessage: input.messageText,
+      snapshot,
+      provider: input.agentLoopProvider ?? createHttpAgentLoopProvider(),
+      trustedCustomerSession: session.execution,
+      abortSignal: input.abortSignal ?? null
+    });
+
+    const commercialNeed: NativeAutonomousCycleCommercialNeed = {
+      productQuery: null,
+      usage: snapshot.needProfile?.useCase ?? null,
+      budgetMax: snapshot.needProfile?.budgetMax ?? null,
+      currency: null
+    };
+
+    return {
+      ran: true,
+      reason: "agent_tool_loop",
+      shadow: null,
+      loop: null,
+      bridge: null,
+      agentLoop: agentLoopResult,
+      catalogCapability: null,
+      customerContextState: customer360.state,
+      customerSession: session.decision,
+      commercialNeed,
+      warnings: dedupeWarnings([...customer360.warnings, ...session.warnings, ...agentLoopResult.loop.warnings, ...agentLoopResult.dispatch.warnings])
     };
   }
 

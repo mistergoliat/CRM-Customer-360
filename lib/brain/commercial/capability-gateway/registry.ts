@@ -2,6 +2,7 @@ import { createCatalogPort } from "@/lib/catalog";
 import type { CatalogBatchItemInput, CatalogBatchResult, CatalogPort, CatalogProduct, CatalogSearchResult } from "@/lib/catalog";
 import type { CapabilityGatewayContext, CapabilityGatewayDefinition, CapabilityGovernanceMetadata } from "./types";
 import { CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS } from "./customerIdentityCapabilities";
+import { companyKnowledgeCapability } from "./companyKnowledgeCapability";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -211,6 +212,10 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   searchProductsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   getProductDetailsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   batchGetProductsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
+  // ACS-R1-05.1-T02.1. Lexical fixture search, no external service - see
+  // companyKnowledgeCapability.ts. Non-productive fixture content until the
+  // business supplies verified copy (companyKnowledgeFixtures.ts).
+  companyKnowledgeCapability() as CapabilityGatewayDefinition,
   // ACS-R1-04-T06. record_customer_interest is deliberately not registered:
   // no operational persistence exists yet (docs/CAPABILITY_MATRIX.md).
   ...CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS

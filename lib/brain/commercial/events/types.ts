@@ -23,7 +23,13 @@ export type CommercialEventType =
   // audit evidence, never authoritative (the durable state lives in
   // crm_agent_actions/crm_agent_decisions/crm_opportunities).
   | "autonomous_turn_disposition"
-  | "autonomous_turn_continuity_failed";
+  | "autonomous_turn_continuity_failed"
+  // ACS-R1-05.1-T02.1. Native read-only agent tool loop - one event per
+  // turn, descriptive only. Per-tool-call evidence already lives in
+  // crm_capability_executions (via executeGovernedCapability); this event
+  // records the loop's own shape (decision/tool counts, terminal reason),
+  // never duplicating that per-call detail.
+  | "agent_tool_loop_completed";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -152,6 +158,28 @@ export type AutonomousTurnDispositionRecordedPayload = {
 export type AutonomousTurnContinuityFailedRecordedPayload = {
   inboundMessageId: string | null;
   reason: string;
+};
+
+// ACS-R1-05.1-T02.1. Local literal union mirroring
+// lib/brain/commercial/agent-loop/agentStepTypes.ts#AgentLoopTerminalReason -
+// this leaf module never imports from agent-loop/ (same rationale as the
+// identity/onboarding unions above).
+export type AgentToolLoopTerminalReason =
+  | "responded"
+  | "handoff"
+  | "max_steps_exceeded"
+  | "invalid_output"
+  | "provider_unavailable"
+  | "timeout";
+
+export type AgentToolLoopCompletedRecordedPayload = {
+  inboundMessageId: string | null;
+  terminalReason: AgentToolLoopTerminalReason;
+  decisionCount: number;
+  toolExecutionCount: number;
+  toolsUsed: string[];
+  finalMessagePresent: boolean;
+  handoffReasonPresent: boolean;
 };
 
 export interface CommercialEventV1 {
