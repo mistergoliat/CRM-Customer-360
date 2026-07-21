@@ -100,7 +100,7 @@ Este flag existe por un incidente real: ver [keyword-routing dual-authority inci
 
 ## Relacion con documentos existentes
 
-Este documento complementa `docs/ACTIVE_RELEASE.md` (evidencia real de integracion) y `docs/audits/acs-r1-05-1-t01-keyword-routing-authority-incident.md` (historial del flag de autoridad unica). `docs/ai-orchestration-contract.md`, `docs/n8n-shadow-mode-integration.md`, `docs/brain-api-foundation.md` y `docs/brain-action-policy.md` describian una generacion anterior de esta integracion y estan marcados `status: superseded` - no son referencia vigente.
+Este documento complementa `docs/ACTIVE_RELEASE.md` (evidencia real de integracion) y `docs/audits/acs-r1-05-1-t01-keyword-routing-authority-incident.md` (historial del flag de autoridad unica). `docs/legacy/ai-orchestration-contract.md`, `docs/legacy/n8n-shadow-mode-integration.md`, `docs/legacy/brain-api-foundation.md` y `docs/legacy/brain-action-policy.md` describian una generacion anterior de esta integracion y estan marcados `status: superseded` - no son referencia vigente.
 
 ## Migration guidance
 
