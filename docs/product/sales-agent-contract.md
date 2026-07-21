@@ -1,3 +1,24 @@
+---
+title: Sales Agent Contract
+doc_id: product-sales-agent-contract
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - Sales Agent input/output contract
+  - Sales Agent decision model
+  - evidence rule for sensitive claims
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ../architecture/adr/ADR-001-commercial-vs-ai-decisions.md
+  - ../architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # Sales Agent Contract
 
 ## Purpose

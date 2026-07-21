@@ -1,3 +1,20 @@
+---
+title: P1J-001 Contract - Customer Identity Read Model + Resolver Contract
+doc_id: customer-identity-contract
+status: superseded
+superseded_by: docs/data/customer-onboarding-identity-contract.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
+> **SUPERSEDED (2026-07-21).** P1J-era single-resolver design (`resolveCustomerCandidate`, direct `customer_master_id` output) that predates the ACS identity model. The canonical model splits identity resolution across `customer_external_identity` + `crm_customer_onboarding_state`/`CustomerOnboardingService` + the external Customer Service boundary - see `docs/data/customer-onboarding-identity-contract.md` and `docs/data/customer-creation-linking-authority-contract.md`. Kept as historical record of the earlier design; not a reference for new work.
+
 # P1J-001 Contract - Customer Identity Read Model + Resolver Contract
 
 ## Purpose

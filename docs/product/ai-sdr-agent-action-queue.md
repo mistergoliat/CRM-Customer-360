@@ -1,3 +1,24 @@
+---
+title: AI SDR Agent Action Queue
+doc_id: product-ai-sdr-agent-action-queue
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - crm_agent_actions schema and lifecycle contract
+  - action queue idempotency rules
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./ai-sdr-action-lifecycle-contract.md
+  - ../architecture/adr/ADR-003-commercial-action-source-of-truth.md
+  - ../architecture/adr/ADR-009-persistence-boundary.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # AI SDR Agent Action Queue
 
 ## Purpose
@@ -38,7 +59,7 @@ Follow-up is an action type, not a separate table yet.
 - expiry,
 - executor semantics.
 
-P1K-012A keeps follow-up inside `crm_agent_actions` so the lifecycle stays unified.
+Follow-up stays inside `crm_agent_actions` so the lifecycle stays unified.
 
 ## Schema
 
@@ -104,15 +125,10 @@ Queue rows can represent:
 - reviewable actions,
 - blocked actions,
 - cancelled actions,
-- scheduled actions that are still non-executable.
+- scheduled actions,
+- executed actions.
 
-In P1K-012A:
-
-- `executable` remains `false`,
-- `persisted` remains `false` at the planning layer,
-- `canExecute` remains `false` at the command preview layer,
-- outbox is not written,
-- nothing is sent.
+An action only reaches `executing`/`executed` after passing policy (`follow_up_dispatch_policy` or the equivalent gate for its action type) and the execution gate. See `ai-sdr-action-lifecycle-contract.md` for the full status/transition list and `docs/ACTIVE_RELEASE.md` for the evidence of which action types are hardened in production today.
 
 ## Idempotency
 
@@ -132,16 +148,7 @@ Since ACS-R1-05-T02, reaching this point in the flow (no active row, no existing
 
 ## Flags
 
-Defaults remain off:
-
-- `BRAIN_AGENT_ACTION_QUEUE_ENABLED=false`
-- `BRAIN_AGENT_ACTION_PERSISTENCE_ENABLED=false`
-
-Behavior:
-
-- queue disabled -> no runtime creation/persistence,
-- persistence disabled -> dry-run only,
-- enabled with persistence -> durable queue writes are allowed, but still no execution.
+The queue and its execution path are flag-gated. Current flag names and defaults are not duplicated here to avoid drift - see `docs/ACTIVE_RELEASE.md` for the live, evidenced set (operational loop enable, legacy engine gate, outbox/follow-up worker enable, real-send gate).
 
 ## Persistence safety
 
@@ -164,14 +171,9 @@ Future chain:
 
 No non-approved action may write directly to outbox.
 
-## Persistence decision
+## Persistence
 
-P1K-012D-B defines the storage boundary for the queue and the outbox:
-
-- legacy cases and messages stay in MariaDB for P1;
-- the new brain domain, including `crm_agent_actions` and `brain_message_outbox`, targets PostgreSQL/Supabase;
-- the queue contract itself remains storage-agnostic until `P1K-012D-C` ships;
-- no same-entity dual-write is allowed.
+`crm_agent_actions` and `brain_message_outbox` live in MariaDB, the sole authorized store for the commercial domain - see [ADR-009](../architecture/adr/ADR-009-persistence-boundary.md). No same-entity dual-write is allowed.
 
 ## Relation to scheduler
 
@@ -195,23 +197,4 @@ It gives the backend a durable action queue that can later be gated by:
 - scheduler,
 - whitelist/autonomy controls.
 
-P1K-012C introduces the sandbox-only eligibility contract that reads from this queue and marks eligible actions read-only.
-That sandbox whitelist is temporary and must not be treated as permanent production logic.
-P1K-012D-A introduces the storage-agnostic execution gate that turns an eligible action into a canonical outbox command without sending anything yet.
-P1K-012F-A defines the outbox worker contract that later consumes that canonical outbox row without collapsing the queue, the gate and the transport into one layer.
-P1K-012F-B defines the WhatsApp transport adapter contract that maps the canonical message command into a provider request via an injected HTTP client.
-
-## Future milestones
-
-- `P1K-012B` exposes the queue in the read-only operator surface.
-- `P1K-012C` will define the execution gate and the whitelisted sandbox reply contract.
-- `P1K-012D-A` defines the storage-agnostic execution gate contract and the canonical outbox bridge.
-- `P1K-012F-A` defines the outbox worker contract after the bridge, before any live send.
-- `P1K-012F-B` defines the WhatsApp transport adapter under the worker, before any real Meta integration.
-## P1K-012G
-
-The autonomous commercial loop consumes action queue items and routes them to sandbox, execution gate, transport and follow-up stages. It does not redefine queue semantics or persistence rules.
-
-## P1K-012H
-
-The scenario simulator can seed queue-like synthetic states to replay complete flows. It does not mutate the real queue model and keeps the action queue contract read-only.
+A sandbox eligibility contract reads from this queue and marks eligible actions; that allowlist gate is a pilot control, not permanent production logic (see `docs/ACTIVE_RELEASE.md`'s controlled-pilot allowlist). The storage-agnostic execution gate turns an eligible action into a canonical outbox command without sending anything by itself. The outbox worker contract consumes that canonical outbox row without collapsing queue, gate and transport into one layer. The WhatsApp transport contract maps the canonical message command into a provider request via an injected HTTP client.

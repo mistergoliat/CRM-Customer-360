@@ -1,3 +1,21 @@
+---
+title: Autonomous Commerce First Vertical
+doc_id: product-autonomous-commerce-first-vertical
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - first vertical scope and acceptance criteria
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ../product/autonomous-commerce-prd.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # Autonomous Commerce First Vertical
 
 ## Target slice

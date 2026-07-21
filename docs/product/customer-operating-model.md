@@ -1,10 +1,26 @@
+---
+title: Customer Operating Model
+doc_id: product-customer-operating-model
+status: supporting
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - conceptual customer-centric operating model
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./lead-opportunity-contract.md
+supersedes: []
+tags:
+  - product
+  - conceptual
+---
+
 # Customer Operating Model
 
 ## Core principle
 
 Customer is the central entity of the operating model.
-
-P1K is already closed; this model now guides the P1M CRM product experience and the P1L production foundation.
 
 Everything important must hang off Customer:
 
@@ -20,7 +36,7 @@ Everything important must hang off Customer:
 - approved actions
 - timeline events
 
-In the P1K stage, Customer must already support the AI SDR commercial model: lead, opportunity, conversation, follow-up, and quote draft. The system can operate with provisional identity while Customer Master is still pending.
+Customer already supports the AI SDR commercial model: lead, opportunity, conversation, follow-up, and quote draft. The system can operate with provisional identity while Customer Master is still pending.
 
 The detailed Lead and Opportunity contract lives in `docs/product/lead-opportunity-contract.md`.
 

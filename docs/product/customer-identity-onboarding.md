@@ -1,3 +1,18 @@
+---
+title: Customer Identity Onboarding
+doc_id: product-customer-identity-onboarding
+status: superseded
+superseded_by: docs/data/customer-onboarding-identity-contract.md
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Customer Identity Onboarding
 
 > **superseded_by**: [customer-onboarding-identity-contract](../data/customer-onboarding-identity-contract.md) and [ACS-R1-04 release spec](../releases/ACS-R1-04-customer-identity-onboarding.md) (`ACS-R1-04-T06.2`). This doc predates T06.2's reconciliation and is inaccurate: `crm_customer_onboarding` is legacy (P1M/local-ai-sdr), never canonical; `crm_customer_onboarding_state` (via `CustomerOnboardingService`) is the only canonical onboarding persistence for ACS. `find_customer_by_email`, `get_identity_status` and `BRAIN_IDENTITY_ONBOARDING_ENABLED` described below were removed - they never had a runtime flag and duplicated Customer Service/`resolve_customer`. Kept only as a historical record of PR #43's original (unreconciled) intent.

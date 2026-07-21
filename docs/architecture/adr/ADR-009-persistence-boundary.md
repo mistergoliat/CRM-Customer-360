@@ -54,7 +54,7 @@ Esto no reabre la comparacion tecnica del documento original (secciones 11-12 de
 
 - No dual-write: ninguna entidad del dominio comercial escribe en dos motores al mismo tiempo. Un writer canonico por entidad, como ya establecen ADR-003 y la evidencia de `ACS-R1-05-T04`/`ACS-R1-05.1-T01`.
 - No PostgreSQL ni Supabase productivo: no existe hoy ningun adapter, pool de conexion ni tabla productiva sobre esos motores para el dominio comercial.
-- No migracion activa: no hay trabajo en curso ni planificado hacia otro motor. `P1K-012D-C - PostgreSQL/Supabase Repository Adapters`, mencionado en el documento historico, no se ejecuta.
+- No migracion activa: no hay trabajo en curso ni planificado hacia otro motor. El adapter de repositorio hacia otro motor mencionado en el documento historico nunca se implemento y no esta en progreso.
 - Cualquier motor adicional o migracion futura requiere un ADR nuevo, con su propia comparacion, evidencia y criterio de reversion - nunca la reactivacion del documento superseded ni un cambio silencioso de `CAPABILITY_MATRIX.md`.
 - `docs/CAPABILITY_MATRIX.md` es evidencia de que esta decision se cumple (que motor corre realmente, capability por capability), no el registro de la decision misma. Si diverge de este ADR, el ADR manda y la divergencia es un hallazgo a corregir, no una decision tacita nueva.
 - Esta decision no afirma que MariaDB sea necesariamente la solucion definitiva para siempre. Es la decision vigente mientras no exista un ADR posterior que la reemplace con evidencia de que un motor distinto resuelve una limitacion real y medida.

@@ -1,6 +1,21 @@
+---
+title: Brain Outbox Worker
+doc_id: brain-outbox-worker
+status: superseded
+superseded_by: docs/product/ai-sdr-outbox-worker-contract.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Brain Outbox Worker
 
-`Brain Outbox Worker` toma registros `brain_message_outbox` en estado `planned` para bloquearlos de forma segura, y en P1I-006 puede enviar de forma controlada desde registros `locked` cuando se habilitan flags explicitos. P1I-007 agrega persistencia canónica opcional despues de un `sent` confirmado. P1I-008 agrega un refresh mínimo del caso, sin tocar lifecycle. Sigue siendo manual, fail-closed y sin automatizacion.
+`Brain Outbox Worker` toma registros `brain_message_outbox` en estado `planned` para bloquearlos de forma segura. Version P1I anterior al outbox worker contract y al canonical outbox writer actuales.es de un `sent` confirmado. P1I-008 agrega un refresh mínimo del caso, sin tocar lifecycle. Sigue siendo manual, fail-closed y sin automatizacion.
 
 ## Objetivo
 

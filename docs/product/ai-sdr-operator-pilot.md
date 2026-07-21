@@ -1,7 +1,21 @@
+---
+title: AI SDR Operator Pilot
+doc_id: product-ai-sdr-operator-pilot
+status: historical
+superseded_by: docs/product/operator-copilot-contract.md
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # AI SDR Operator Pilot
 
-P1K-010 adds the first operational shell for the AI SDR inside `/cases/[id]`.
-P1K-012B-UI2 moves that shell into the right-side AI SDR Copilot so the chat becomes the primary working surface.
+The operational shell for the AI SDR inside `/cases/[id]` moved into the right-side AI SDR Copilot so the chat is the primary working surface.
 
 ## Purpose
 

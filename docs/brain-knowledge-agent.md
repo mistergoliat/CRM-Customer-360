@@ -1,3 +1,18 @@
+---
+title: Brain Knowledge Agent
+doc_id: brain-knowledge-agent
+status: superseded
+superseded_by: docs/product/sales-agent-contract.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Brain Knowledge Agent
 
 `Knowledge Agent` es el primer agente backend real/controlado de PesasChile AI Hub.

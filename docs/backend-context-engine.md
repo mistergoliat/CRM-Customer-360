@@ -1,3 +1,18 @@
+---
+title: Backend Context Engine
+doc_id: backend-context-engine
+status: superseded
+superseded_by: docs/ACTIVE_RELEASE.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Backend Context Engine
 
 ## Objetivo

@@ -1,3 +1,18 @@
+---
+title: AI SDR Implementation Blueprint
+doc_id: product-ai-sdr-implementation-blueprint
+status: historical
+superseded_by: docs/ROADMAP.md
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # AI SDR Implementation Blueprint
 
 Este documento fija el tramo comercial del backend IA para P1K. No introduce runtime, prompts, endpoints ni writes.

@@ -1,3 +1,21 @@
+---
+title: Autonomous Commerce Tool Catalog
+doc_id: product-autonomous-commerce-tool-catalog
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - tool/capability classification (implemented vs planned vs prohibited)
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ../CAPABILITY_MATRIX.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # Autonomous Commerce Tool Catalog
 
 This catalog separates capability classes from implementation status.

@@ -48,8 +48,6 @@ The layout does not:
 - change n8n;
 - persist approvals or queue actions.
 
-## P1K-012C boundary
+## Sandbox eligibility boundary
 
-P1K-012C will define the whitelisted autonomous reply sandbox contract.
-This layout only prepares the shell around that future boundary.
-When the sandbox contract is active, the Action Queue may surface read-only eligibility details for each action, but the layout still does not execute anything.
+The whitelisted autonomous reply sandbox contract (see `docs/audits/` and `docs/ACTIVE_RELEASE.md` for its current, superseded status) governs autonomous eligibility. This layout only prepares the shell around that boundary: the Action Queue may surface read-only eligibility details for each action, but the layout itself does not execute anything.

@@ -1,3 +1,23 @@
+---
+title: AI SDR Action Lifecycle Contract
+doc_id: product-ai-sdr-action-lifecycle-contract
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - action lifecycle boundary (decision to executable command)
+  - action type / status / approval / risk vocabulary
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./ai-sdr-agent-action-queue.md
+  - ../architecture/adr/ADR-003-commercial-action-source-of-truth.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # AI SDR Action Lifecycle Contract
 
 This document defines the lifecycle boundary between a commercial decision and a future executable command.
@@ -34,7 +54,7 @@ The agent never executes directly. The operator or policy authorizes. The execut
 - avoid outbox writes,
 - avoid execution.
 
-That is the current P1K-011A boundary.
+That remains the read-only boundary for `next_action_json` alone.
 
 ## 3. When a durable action entity is needed
 
@@ -48,8 +68,7 @@ A future durable action entity becomes necessary when the product must:
 - audit the full action lifecycle,
 - guarantee idempotency at the action level.
 
-That durable entity is introduced in P1K-012A, after the dry-run planning milestones establish the read-only boundary.
-P1K-011B is now the dry-run follow-up planning milestone that can recommend follow-up without making it durable yet.
+That durable entity now exists as `crm_agent_actions` (see section 8).
 
 ## 4. Type contract
 
@@ -135,12 +154,12 @@ The risk boundary recognizes:
 
 ## 5. Non-negotiable invariants
 
-- `executable` is always `false` in P1K-011A.
+- `executable` is always `false` at this contract layer.
 - `persisted` is always `false` in the human review draft.
 - `canExecute` is always `false` in the command preview.
 - Direct execution from `proposed` or `requires_review` is blocked.
 - Terminal states are protected.
-- Execution remains disabled in this phase.
+- This layer never executes; execution happens downstream, through the execution gate and outbox, after policy accepts an action (see `ai-sdr-agent-action-queue.md`).
 
 Allowed conceptual transitions include:
 
@@ -156,7 +175,7 @@ Allowed conceptual transitions include:
 - `scheduled -> cancelled`
 - `scheduled -> expired`
 
-Any transition into execution remains blocked with the P1K-011A execution reason.
+Any transition into execution remains blocked at this contract layer.
 
 ## 6. Relation to outbox and follow-up
 
@@ -170,14 +189,11 @@ Follow-up may eventually start as `schedule_followup`, but only after a durable 
 
 ## 7. Relation to the operator shell
 
-`P1K-010` shows the read-only recommendation surface.
-`P1K-011A` defines the action lifecycle contract that supports that shell.
-`P1K-011B` adds the dry-run follow-up planner on top of that shell.
-`P1K-012A` introduces the durable agent action queue schema once the DB permissions and persistence model are ready.
+The operator shell (`operator-copilot-contract.md`) shows the read-only recommendation surface; this document defines the action lifecycle contract that supports it. The follow-up planner (`ai-sdr-follow-up-planner.md`) sits on top of that shell. `crm_agent_actions` (`ai-sdr-agent-action-queue.md`) is the durable agent action queue.
 
 ## 8. Decision on `crm_agent_actions`
 
-`crm_agent_actions` is now the durable queue boundary introduced by `P1K-012A`.
+`crm_agent_actions` is now the durable queue boundary (see `ai-sdr-agent-action-queue.md`).
 
 It should be used when the repository has a real need for:
 

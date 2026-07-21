@@ -1,3 +1,22 @@
+---
+title: Lead and Opportunity Model Contract
+doc_id: product-lead-opportunity-contract
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - Lead/Opportunity domain contract
+  - opportunity status and stage vocabulary
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ../architecture/adr/ADR-004-next-best-action-ownership.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # Lead and Opportunity Model Contract
 
 ## Purpose
@@ -123,7 +142,7 @@ Ambos no deben usarse como sinonimos. Si el estado ya expresa suficiente informa
 
 ## Operational loop contract
 
-P1K-009 introduces a durable operational loop around `Opportunity`.
+A durable operational loop governs `Opportunity`.
 
 Rules:
 

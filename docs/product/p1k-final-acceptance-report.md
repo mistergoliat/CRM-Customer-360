@@ -1,3 +1,18 @@
+---
+title: P1K Final Acceptance Report
+doc_id: product-p1k-final-acceptance-report
+status: historical
+superseded_by: docs/ACTIVE_RELEASE.md
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # P1K Final Acceptance Report
 
 ## Executive verdict

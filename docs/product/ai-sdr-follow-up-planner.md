@@ -1,3 +1,22 @@
+---
+title: AI SDR Follow-up Planner
+doc_id: product-ai-sdr-follow-up-planner
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - follow-up planning contract (pure, dry-run decision surface)
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ../product/follow-up-decision-policy.md
+  - ./ai-sdr-agent-action-queue.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # AI SDR Follow-up Planner
 
 ## Purpose
@@ -12,7 +31,7 @@ It does not persist anything and it does not execute anything.
 - Persistence: store a durable action or task in DB.
 - Execution: send a message, schedule a worker, or touch outbox.
 
-P1K-011B covers only planning.
+This document covers planning only.
 
 ## Input
 
@@ -118,7 +137,7 @@ The queue is the correct destination when the product must:
 - cancel or reschedule actions,
 - audit the lifecycle of an action.
 
-P1K-012A creates that table for the action queue. P1K-011B remains read-only planning only.
+`crm_agent_actions` (`ai-sdr-agent-action-queue.md`) is that table for the action queue. This planner remains read-only planning only.
 
 ## Relation to `brain_message_outbox`
 

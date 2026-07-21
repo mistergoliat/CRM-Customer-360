@@ -1,3 +1,20 @@
+---
+title: P1J-001 Spec - Customer Identity / Customer Master Minimum
+doc_id: customer-identity-spec
+status: superseded
+superseded_by: docs/data/customer-onboarding-identity-contract.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
+> **SUPERSEDED (2026-07-21).** Companion to `docs/customer-identity-contract.md` (P1J-era resolver), same superseding chain. Kept as historical record; not a reference for new work.
+
 # P1J-001 Spec - Customer Identity / Customer Master Minimum
 
 ## Purpose

@@ -1,3 +1,18 @@
+---
+title: Brain Response Executor
+doc_id: brain-response-executor
+status: superseded
+superseded_by: docs/architecture/adr/ADR-001-commercial-vs-ai-decisions.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Brain Response Executor
 
 `Brain Response Executor` es la base backend, en modo dry-run/no-op, para decidir si una respuesta conversacional podria ejecutarse y para construir previews auditables sin side effects.
