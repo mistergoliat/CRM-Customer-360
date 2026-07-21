@@ -1,10 +1,27 @@
+---
+title: AI SDR Outbox Worker Contract
+doc_id: product-ai-sdr-outbox-worker-contract
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - outbox worker contract (claim, lease, retry, delivery classification)
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./ai-sdr-whatsapp-transport-contract.md
+  - ../architecture/adr/ADR-009-persistence-boundary.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # AI SDR Outbox Worker Contract
 
 ## 1. Goal
 
-This contract defines the pure worker layer that claims an outbox row, applies lease semantics, invokes a transport abstraction, and returns a deterministic mutation plan.
-
-It is the `P1K-012F-A` milestone: outbox worker contract, fake transport, retry classification, and in-memory runtime only.
+This contract defines the pure worker layer that claims an outbox row, applies lease semantics, invokes a transport abstraction, and returns a deterministic mutation plan: outbox worker contract, fake transport, retry classification, and in-memory runtime only.
 
 It answers one question only:
 
@@ -219,17 +236,15 @@ All time arithmetic depends on explicit timestamps.
 
 Current limits are explicit:
 
-- no PostgreSQL repository;
+- no repository wiring at this contract layer;
 - no real worker runtime;
 - no real WhatsApp transport;
 - no Meta;
 - no live send.
 
-## 21. Relation to PostgreSQL future
+## 21. Relation to persistence
 
-The same worker contract can later be backed by PostgreSQL repositories without changing the worker behavior or plan shape.
-
-The repository layer will provide the durable storage. The worker contract stays storage agnostic.
+The worker contract is storage agnostic at the type level. The authorized store for the real worker's persistence, when wired, is MariaDB (see [ADR-009](../architecture/adr/ADR-009-persistence-boundary.md)) - the worker behavior and plan shape do not change based on storage engine.
 
 ## 22. Relation to a future Meta adapter
 
@@ -241,13 +256,4 @@ That adapter must remain behind the transport boundary and must not leak provide
 
 This milestone already includes the fake transport needed for deterministic tests and in-memory processing.
 
-`P1K-012F-B` adds the WhatsApp transport adapter contract below this worker. It keeps provider mapping, validation and HTTP abstraction out of the worker while preserving the same worker shape.
-
-A later milestone can extend that adapter with a real Meta client, but the pure worker shape should remain stable.
-## P1K-012G
-
-The autonomous commercial loop invokes the outbox worker contract only in `execute_fake`. The worker remains provider-agnostic and still owns retry and delivery classification.
-
-## P1K-012H
-
-The scenario simulator can replay worker outcomes in memory to prove full-loop behavior. It does not introduce a live worker or persistent queue changes.
+The WhatsApp transport contract (`ai-sdr-whatsapp-transport-contract.md`) adds the provider adapter below this worker. It keeps provider mapping, validation and HTTP abstraction out of the worker while preserving the same worker shape. A later integration can extend that adapter with a real Meta client, but the pure worker shape should remain stable.

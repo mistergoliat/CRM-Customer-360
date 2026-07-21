@@ -1,4 +1,21 @@
+---
+title: Agentic CRM Data Model Audit
+doc_id: data-agentic-crm-data-model-audit
+status: historical
+superseded_by: docs/architecture/adr/ADR-009-persistence-boundary.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Agentic CRM Data Model Audit
+
+> **HISTORICAL (2026-07-21).** Analisis companero de `docs/data/persistence-architecture-decision.md`, cuya recomendacion (PostgreSQL/Supabase para el dominio brain) nunca se ejecuto - ver [ADR-009](../architecture/adr/ADR-009-persistence-boundary.md) para la decision vigente (MariaDB unico). Conservado como registro del analisis original.
 
 ## Scope
 

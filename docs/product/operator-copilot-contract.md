@@ -1,3 +1,23 @@
+---
+title: Operator Copilot Contract
+doc_id: product-operator-copilot-contract
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - Operator Copilot contract (modes, invariants, hard blocks)
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./sales-agent-contract.md
+  - ./follow-up-decision-policy.md
+  - ../architecture/adr/ADR-009-persistence-boundary.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # Operator Copilot Contract
 
 ## Purpose
@@ -16,9 +36,9 @@ It helps the operator:
 
 It is not an execution engine and it is not an approval engine.
 
-## P1K-010 shell
+## Operator shell
 
-P1K-010 adds a compact operator shell inside case detail for the AI SDR loop.
+A compact operator shell lives inside case detail for the commercial loop.
 
 The shell:
 
@@ -29,10 +49,7 @@ The shell:
 - does not execute tools or outbound,
 - does not mutate Case or Opportunity.
 
-P1K-011A defines the action lifecycle contract behind that shell.
-The shell continues to consume `next_action_json` as a read-only recommendation surface until a durable action entity is justified and available.
-P1K-011B adds a dry-run follow-up planner on top of that read-only recommendation surface, but it still does not persist or execute anything.
-P1K-012A introduces `crm_agent_actions` as the durable action queue boundary, and P1K-012B exposes it in a read-only queue surface. The copilot still treats it as reviewable and non-executable until the execution gate exists.
+The action lifecycle contract (`ai-sdr-action-lifecycle-contract.md`) defines the boundary behind the shell. `crm_agent_actions` is the durable action queue; the copilot treats it as reviewable and non-executable, and the execution gate governs when an action actually sends.
 
 ## What it is
 
@@ -270,13 +287,7 @@ All command proposals must pass through governance outside the copilot.
 
 The copilot cannot override hard blocks or approval requirements.
 
-P1K-011A clarifies the boundary between a proposed next action, a human review draft and any future executable command. The copilot may present the lifecycle, but it does not persist approvals or execute commands.
-P1K-011B keeps follow-up planning in dry-run only, so the copilot can explain a plan without turning it into a durable action yet.
-P1K-012A adds the durable queue that can later hold approved, blocked or scheduled actions, but the copilot still cannot execute them.
-P1K-012B-UI2 places the copilot in a right-side case detail panel, with chat as the main surface and diagnostics collapsed below the operational cards.
-P1K-012C adds a sandbox-only autonomy preview for whitelisted test identities. The copilot may show the eligibility result, but it still cannot execute the reply or treat the whitelist as permanent production logic.
-P1K-012D-A adds the storage-agnostic execution gate contract that can link an allowed action to an outbox command, but the copilot still cannot trigger the send itself.
-P1K-012D-B fixes the persistence split: legacy case/message data stays in MariaDB, and the new brain domain moves to PostgreSQL/Supabase. The copilot must continue to treat that as a storage boundary, not an execution shortcut.
+The action lifecycle contract clarifies the boundary between a proposed next action, a human review draft and any executable command - the copilot may present the lifecycle, but it does not persist approvals or execute commands. Follow-up planning stays dry-run only, so the copilot can explain a plan without turning it into a durable action by itself. `crm_agent_actions` is the durable queue that can hold approved, blocked or scheduled actions, but the copilot still cannot execute them. The copilot lives in a right-side case detail panel, with chat as the main surface and diagnostics collapsed below the operational cards. A sandbox-only autonomy preview exists for allowlisted test identities - the copilot may show the eligibility result, but it still cannot execute the reply or treat the allowlist as permanent production logic. The execution gate contract can link an allowed action to an outbox command, but the copilot still cannot trigger the send itself. Persistence for the whole commercial domain is MariaDB (see [ADR-009](../architecture/adr/ADR-009-persistence-boundary.md)) - the copilot must continue to treat that as a storage boundary, not an execution shortcut.
 
 ## Relationship with Agent Runtime
 

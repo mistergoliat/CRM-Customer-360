@@ -1,6 +1,21 @@
+---
+title: PesasChile AI Hub - Backlog Operativo
+doc_id: backlog
+status: historical
+superseded_by: docs/ROADMAP.md
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # PesasChile AI Hub - Backlog Operativo
 
-Este documento es backlog de trabajo, no arquitectura completa ni brief de producto.
+Este documento es backlog de trabajo P1I/P1K/P1L/P1M/P2/P3, historico. No es arquitectura completa ni brief de producto ni roadmap vigente - ver `docs/ROADMAP.md`.
 
 ## Direccion actual
 

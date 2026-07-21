@@ -1,3 +1,18 @@
+---
+title: AI SDR Operating Model
+doc_id: product-ai-sdr-operating-model
+status: historical
+superseded_by: docs/PRODUCT_NORTH_STAR.md
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # AI SDR Operating Model
 
 ## Purpose

@@ -404,7 +404,7 @@ Customer 360 no es Customer Master
 
 ## Notes
 
-- Este contrato define identidad y onboarding provisionales. No reemplaza un futuro `customer_master`; ver [persistence-architecture-decision](./persistence-architecture-decision.md) y ADR-008 para la frontera de Customer 360.
+- Este contrato define identidad y onboarding provisionales. No reemplaza un futuro `customer_master`; ver [ADR-009](../architecture/adr/ADR-009-persistence-boundary.md) y ADR-008 para la frontera de Customer 360.
 - `Customer360Snapshot` (ver [customer-360-contract](./customer-360-contract.md)) solo se consume una vez que `CustomerSessionIdentityStatus` es `identified`.
 - La implementacion de `resolve_customer`, `create_customer` y `link_external_identity` se aborda en tareas posteriores de ACS-R1-04 (T02-T04), no en este contrato.
 - `ACS-R1-04-T08.1` (v1.1.0): un `customerId` que llega desde Customer Service (seccion 5, resolucion externa) nunca se trata como `identified` hasta que ACS verifica que corresponde a una fila real en la proyeccion local `master_customer` - ver [customer-creation-linking-authority-contract](./customer-creation-linking-authority-contract.md) seccion 1.1 para el detalle del gate (`customerMasterId`, `CustomerMasterProjectionReader`). Mientras la proyeccion no exista, la identidad permanece `temporarily_unavailable` (nunca `identified` con un id no verificado) - esto no cambia el orden de resolucion de la seccion 5 ni introduce una quinta fuente.

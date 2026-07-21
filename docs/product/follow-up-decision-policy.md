@@ -1,3 +1,22 @@
+---
+title: Follow-up Decision Policy
+doc_id: product-follow-up-decision-policy
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - follow-up policy vocabulary
+  - follow-up eligibility and decision types
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./sales-agent-contract.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # Follow-up Decision Policy
 
 ## Purpose

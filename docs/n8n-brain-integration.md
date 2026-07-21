@@ -1,3 +1,20 @@
+---
+title: n8n Brain Integration
+doc_id: n8n-brain-integration
+status: active
+version: "1.2.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - role boundary between n8n, Brain API, and the HUB
+depends_on:
+  - ./ACTIVE_RELEASE.md
+  - ./audits/acs-r1-05-1-t01-keyword-routing-authority-incident.md
+supersedes: []
+tags:
+  - architecture
+---
+
 # n8n Brain Integration
 
 ## Principio
@@ -37,77 +54,17 @@ n8n no debe usarse para:
 - motor de Customer 360,
 - definicion de autonomy level.
 
-## Integracion inmediata recomendada
+## Integracion actual del webhook de WhatsApp
 
-Ruta recomendada para el webhook de WhatsApp:
+Ruta real: `WA_00_Webhook_Master -> HTTP Request /api/brain/process-inbound`.
 
-`WA_00_Webhook_Master -> HTTP Request /api/brain/process-inbound -> shadow mode -> legacy continues`
-
-`/api/brain/process-inbound` permanece disponible para esta ruta. Sigue
-resolviendo contexto, policy y recomendaciones en cada llamada de n8n.
-
-### Intencion de esta ruta
-
-1. Brain API recibe el evento minimo.
-2. Brain devuelve decision, policy y recomendaciones.
-3. n8n sigue ejecutando el camino legacy mientras se compara.
-4. El producto gana observabilidad sin romper la operacion actual.
-
-### Correccion (ACS-R1-05.1-T01): el rotulo "shadow mode" no era read-only
-
-El texto original de esta seccion (arriba) llamaba "shadow mode" a este
-camino y lo describia como observacional. Eso era impreciso: hasta
-`ACS-R1-05.1-T01`, `processInbound` (el codigo detras de este endpoint)
-ejecutaba sin ningun feature flag el motor legacy `sales-consultative`
-(`runSalesConsultativeService`) cada vez que el mensaje traia palabras clave
-comerciales (precio, stock, cotizar, etc.) o el contexto resolvia
-`primary_service = "sales"`. Ese motor persiste realmente en
-`crm_opportunities`, `crm_sales_need_profiles` y `crm_agent_actions`, y puede
-despachar un envio real por outbox. No era una comparacion inocua: era una
-segunda autoridad de escritura comercial corriendo en paralelo a la autoridad
-canonica (`processNativeWhatsAppInbound -> runNativeAutonomousCycle ->
-operational-loop -> persistCommercialState`, la unica ruta real de WhatsApp).
-Ningun texto de este documento, pasado o futuro, debe volver a describir esta
-ruta o su motor legacy como read-only o inocuo solo por el nombre "shadow".
+`/api/brain/process-inbound` resuelve contexto, policy y recomendaciones en cada llamada de n8n y devuelve una decision estructurada. No ejecuta el motor comercial legacy por defecto.
 
 ### Flag de autoridad unica: `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED`
 
-Desde `ACS-R1-05.1-T01`, el motor legacy `sales-consultative` esta
-deshabilitado por defecto en este endpoint (y en
-`native-whatsapp/service.ts::processSalesInbound`, que no tiene caller
-productivo hoy) detras de `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED`
-(`lib/brain/commercial/config/commercialCycleConfig.ts`, unico lector de esta
-variable de entorno).
+El motor legacy `sales-consultative` esta deshabilitado por defecto (fail-closed) en `process-inbound` y en `native-whatsapp/service.ts::processSalesInbound`, detras de `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED` (default `false`; unico lector `lib/brain/commercial/config/commercialCycleConfig.ts`). Habilitarlo reintroduce una segunda autoridad de escritura comercial en paralelo a `runNativeAutonomousCycle` - **no debe habilitarse durante `ACS-R1-05.1`**.
 
-Semantica fail-closed (identica a `readEnvFlag` en el resto del ciclo
-comercial):
-
-| Valor de `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED` | Resultado |
-|---|---|
-| no definido (ausente) | deshabilitado |
-| `""` (vacio) | deshabilitado |
-| `"false"` | deshabilitado |
-| cualquier valor distinto de `"true"` (typo, `"1"`, `"yes"`, etc.) | deshabilitado |
-| `"true"` (exacto) | habilitado |
-
-Con el flag deshabilitado (el default):
-
-- `processInbound` sigue resolviendo contexto, policy y recomendaciones sin
-  error 500 causado por el gate;
-- no se llama a `runSalesConsultativeService`;
-- no se escribe en `crm_opportunities`, `crm_sales_need_profiles` ni
-  `crm_agent_actions` a traves de este endpoint;
-- la respuesta incluye la advertencia estructurada
-  `legacy_sales_consultative_disabled`.
-
-`BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED=true` es una habilitacion
-excepcional, no un modo productivo recomendado. Habilitarlo reintroduce el
-riesgo de doble autoridad de escritura sobre `crm_opportunities`,
-`crm_sales_need_profiles` y `crm_agent_actions` (el motor legacy volviendo a
-escribir en paralelo a `runNativeAutonomousCycle`). **No debe habilitarse
-durante `ACS-R1-05.1`** - el piloto controlado depende de que exista una unica
-autoridad de escritura comercial (ver "Camino critico al piloto controlado" en
-`docs/ROADMAP.md` y la release spec de `ACS-R1-05.1`).
+Este flag existe por un incidente real: ver [keyword-routing dual-authority incident](audits/acs-r1-05-1-t01-keyword-routing-authority-incident.md) para el historial completo. La evidencia de cierre y verificacion vive en `docs/ACTIVE_RELEASE.md` ("Evidencia de cierre - ACS-R1-05.1-T01"), no duplicada aqui.
 
 ## Roles de cada capa
 
@@ -143,12 +100,7 @@ autoridad de escritura comercial (ver "Camino critico al piloto controlado" en
 
 ## Relacion con documentos existentes
 
-Este documento complementa:
-
-- `docs/ai-orchestration-contract.md`
-- `docs/n8n-shadow-mode-integration.md`
-- `docs/brain-api-foundation.md`
-- `docs/brain-action-policy.md`
+Este documento complementa `docs/ACTIVE_RELEASE.md` (evidencia real de integracion) y `docs/audits/acs-r1-05-1-t01-keyword-routing-authority-incident.md` (historial del flag de autoridad unica). `docs/ai-orchestration-contract.md`, `docs/n8n-shadow-mode-integration.md`, `docs/brain-api-foundation.md` y `docs/brain-action-policy.md` describian una generacion anterior de esta integracion y estan marcados `status: superseded` - no son referencia vigente.
 
 ## Migration guidance
 

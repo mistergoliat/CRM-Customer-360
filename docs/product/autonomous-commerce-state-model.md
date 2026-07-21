@@ -1,3 +1,21 @@
+---
+title: Autonomous Commerce State Model
+doc_id: product-autonomous-commerce-state-model
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - durable state domain boundaries and table ownership
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ../architecture/adr/ADR-003-commercial-action-source-of-truth.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # Autonomous Commerce State Model
 
 ## Goal

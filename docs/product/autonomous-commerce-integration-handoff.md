@@ -1,3 +1,18 @@
+---
+title: Integration Handoff - INFRA-01, PR-02A, PR-02B, PR-03A
+doc_id: product-autonomous-commerce-integration-handoff
+status: historical
+superseded_by: docs/ACTIVE_RELEASE.md
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Integration Handoff — INFRA-01, PR-02A, PR-02B, PR-03A
 
 Role: architecture owner / integrator for the Autonomous Commerce System.

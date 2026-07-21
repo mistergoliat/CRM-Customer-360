@@ -1,3 +1,22 @@
+---
+title: Autonomous Commerce Authority Matrix
+doc_id: product-autonomous-commerce-authority-matrix
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - autonomy levels
+  - IA-decides / backend-validates / system-executes matrix
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ../architecture/adr/ADR-006-autonomous-planning-and-capability-governance.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # Autonomous Commerce Authority Matrix
 
 ## Autonomy levels

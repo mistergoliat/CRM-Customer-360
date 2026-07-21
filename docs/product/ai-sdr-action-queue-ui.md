@@ -1,3 +1,18 @@
+---
+title: AI SDR Action Queue UI
+doc_id: product-ai-sdr-action-queue-ui
+status: historical
+superseded_by: docs/product/ai-sdr-agent-action-queue.md
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # AI SDR Action Queue UI
 
 ## Purpose

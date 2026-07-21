@@ -1,3 +1,22 @@
+---
+title: AI SDR Follow-up Scheduling Decision Engine
+doc_id: product-ai-sdr-follow-up-scheduling-engine
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - follow-up scheduling decision contract (ready/wait/cancel/expire/replan/block/invalid)
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./ai-sdr-follow-up-planner.md
+  - ./ai-sdr-follow-up-cancellation-replanning.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # AI SDR Follow-up Scheduling Decision Engine
 
 ## 1. Goal
@@ -76,7 +95,7 @@ Reason:
 
 - `customer_replied_after_action_created`
 
-This engine does not replan automatically after a new customer reply. That belongs to `P1K-012E-B`.
+This engine does not replan automatically after a new customer reply. That belongs to the cancellation and replanning contract (`ai-sdr-follow-up-cancellation-replanning.md`).
 
 ## 6. Human takeover
 
@@ -193,11 +212,11 @@ The module does not use:
 
 The same input must always produce the same output.
 
-## 16. Relation to `P1K-012E-B`
+## 16. Relation to the cancellation and replanning contract
 
-`P1K-012E-B` owns the pure mutation contract that consumes `FollowUpSchedulingResult` and turns it into cancellation, expiration, blocking, replanning, superseding, or replacement plans.
+The cancellation and replanning contract (`ai-sdr-follow-up-cancellation-replanning.md`) owns the pure mutation contract that consumes `FollowUpSchedulingResult` and turns it into cancellation, expiration, blocking, replanning, superseding, or replacement plans.
 
-This milestone only decides what happens to a candidate action.
+This engine only decides what happens to a candidate action.
 
 It does not mutate the durable action row and it does not create the next one.
 
@@ -224,10 +243,3 @@ Current limits are explicit:
 - no Meta;
 - no worker;
 - no persistence mutation.
-## P1K-012G
-
-The autonomous commercial loop consumes follow-up scheduling results as-is. It does not recalculate cooldown, expiry or business-hour rules.
-
-## P1K-012H
-
-The scenario simulator reuses the scheduling result verbatim as part of synthetic runs. It does not recalculate time rules or alter the scheduling contract.

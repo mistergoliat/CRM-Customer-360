@@ -1,3 +1,18 @@
+---
+title: AI SDR Autonomy Sandbox
+doc_id: product-ai-sdr-autonomy-sandbox
+status: historical
+superseded_by: docs/ACTIVE_RELEASE.md
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # AI SDR Autonomy Sandbox
 
 ## Objetivo

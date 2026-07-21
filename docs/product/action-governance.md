@@ -1,9 +1,25 @@
+---
+title: Action Governance
+doc_id: product-action-governance
+status: active
+version: "1.2.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - action governance rules (execution modes, approval requirements, forbidden actions)
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./sales-agent-contract.md
+  - ../architecture/adr/ADR-009-persistence-boundary.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # Action Governance
 
-P1Ka
 Este documento describe la capa deterministica de Commercial Policy que opera sobre una salida del Sales Agent ya validada.
-
-P1K is already accepted and closed. The roadmap markers below are kept for historical traceability and do not mean P1K is still active.
 
 ## Boundary
 
@@ -45,21 +61,6 @@ El resultado puede quedar en:
 - `blocked`
 - `failed_safe`
 
-## Estado del roadmap
-
-- `P1K-007A` DONE
-- `P1K-007B` DONE
-- `P1K-007C` DONE
-- `P1K-007D` ACTIVE
-- `P1K-007E` NEXT
-- `P1K-007F` PENDING
-- `P1K-011A` DONE
-- `P1K-011B` DONE
-- `P1K-012A` DONE
-- `P1K-012B` NEXT
-- `P1K-012D-B` DONE
-- `P1K-012D-A` NEXT
-- `P1K-012D-C` NEXT
 ## Action lifecycle contract
 
 La decision comercial valida vive primero como `next_action_json` dentro de `crm_agent_decisions`.
@@ -84,9 +85,7 @@ La secuencia conceptual es:
 
 `Decision -> NextAction -> ProposedAction -> OperatorReview -> ApprovedAction -> ExecutableCommand -> ExecutionResult`
 
-En `P1K-011A` no se implementa persistencia de acciones ni ejecucion.
-En `P1K-011B` se agrega el planner puro de follow-up en dry-run, que puede sugerir seguimiento sin crear una accion durable.
-En `P1K-012A` aparece `crm_agent_actions` como cola durable de acciones gobernadas, sin habilitar ejecucion ni outbox.
+El planner puro de follow-up (dry-run) puede sugerir seguimiento sin crear una accion durable. `crm_agent_actions` es la cola durable de acciones gobernadas real (ver `ai-sdr-agent-action-queue.md`).
 
 ## Objetivo
 
@@ -266,11 +265,7 @@ Toda recomendacion comercial debe poder explicarse con:
 
 ## Sandbox autonomy boundary
 
-P1K-012C introduces a sandbox-only eligibility gate for autonomous WhatsApp replies.
-P1K-012D-A defines the storage-agnostic execution gate that takes that sandbox preview and persists a canonical outbox command without calling Meta.
-P1K-012D-B closes the persistence decision: MariaDB stays as the legacy surface for cases and messages, while PostgreSQL/Supabase becomes the brain store for opportunities, decisions, actions and outbox. No uncontrolled dual-write is allowed.
-P1K-012F-A defines the pure outbox worker contract that will consume that outbox row later, classify delivery outcomes and keep Meta outside the core.
-P1K-012F-B defines the WhatsApp transport adapter contract that translates the canonical command into a provider request through an injected HTTP client.
+A sandbox-only eligibility gate governs autonomous WhatsApp replies. The storage-agnostic execution gate takes that sandbox preview and persists a canonical outbox command without calling Meta. Persistence for the whole commercial domain is MariaDB (see [ADR-009](../architecture/adr/ADR-009-persistence-boundary.md)); no uncontrolled dual-write is allowed. The outbox worker contract consumes that outbox row, classifies delivery outcomes and keeps Meta outside the core. The WhatsApp transport contract translates the canonical command into a provider request through an injected HTTP client.
 
 That gate:
 
@@ -303,10 +298,3 @@ Future production autonomy must not depend on whitelist. It must depend on polic
 9. Operator Copilot consume salidas ya validadas; no aprueba ni ejecuta.
 10. Execution Engine permanece deshabilitado hasta que governance, audit e idempotencia esten probados.
 11. WhatsApp outbound no es el primer modo de ejecucion; primero van analysis, proposals, scheduling decisions, mutation plans, outbox worker contract, transport adapter y tareas internas reversibles.
-## P1K-012G
-
-The autonomous commercial loop orchestrator composes sandbox, execution gate, outbox, worker, transport and follow-up contracts in a deterministic in-memory pipeline. Governance rules stay centralized in the specialized modules.
-
-## P1K-012H
-
-The scenario simulator exercises governance end to end using synthetic scenarios only. It is read-only, deterministic and intended for acceptance evidence, not for live operator writes.

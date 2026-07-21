@@ -1,3 +1,21 @@
+---
+title: AI SDR WhatsApp Transport Contract
+doc_id: product-ai-sdr-whatsapp-transport-contract
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - WhatsApp transport adapter contract (request build, response classification, sanitization)
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./ai-sdr-outbox-worker-contract.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # AI SDR WhatsApp Transport Contract
 
 ## 1. Objective
@@ -80,7 +98,7 @@ The adapter fails closed when configuration is incomplete or when sandbox is not
 
 ## 6. Whitelist sandbox
 
-P1K only allows sandbox usage.
+This contract only allows sandbox usage; live send belongs to the outbox worker's own real-send gate (see `docs/ACTIVE_RELEASE.md` for the controlled-pilot allowlist).
 
 Recipient validation is exact-match only after normalization to digits. Partial prefixes, wildcard matches and implicit number fixing are rejected.
 
@@ -180,21 +198,14 @@ Current limits are explicit:
 - no DB;
 - no SQL.
 
-## 15. Relation to P1K-012F-A
+## 15. Relation to the outbox worker
 
-`P1K-012F-A` owns worker lifecycle and transport-agnostic delivery classification.
+The outbox worker contract (`ai-sdr-outbox-worker-contract.md`) owns worker lifecycle and transport-agnostic delivery classification.
 
-`P1K-012F-B` is the provider adapter below it, so the worker never needs to know Meta-specific request details.
+This document is the provider adapter below it, so the worker never needs to know Meta-specific request details.
 
 ## 16. Relation to future Meta integration
 
-A later milestone can replace the fake HTTP client with a real Meta client without changing the worker contract.
+A later integration can replace the fake HTTP client with a real Meta client without changing the worker contract.
 
 That future client must keep credentials and raw provider payloads behind the same sanitization boundary.
-## P1K-012G
-
-The autonomous commercial loop reaches WhatsApp transport only through the outbox worker and the fake HTTP client. It does not call Meta directly and does not extend the transport contract.
-
-## P1K-012H
-
-The scenario simulator can include fake transport outcomes as part of a synthetic run. It keeps sanitization, masking and provider boundaries intact.

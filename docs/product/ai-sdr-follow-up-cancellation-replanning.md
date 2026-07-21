@@ -1,3 +1,22 @@
+---
+title: AI SDR Follow-up Cancellation and Replanning Contract
+doc_id: product-ai-sdr-follow-up-cancellation-replanning
+status: active
+version: "1.1.0"
+owner: product
+last_reviewed: 2026-07-21
+source_of_truth_for:
+  - follow-up mutation contract (cancel/expire/block/replan/supersede/replace)
+depends_on:
+  - ../PRODUCT_NORTH_STAR.md
+  - ./ai-sdr-follow-up-scheduling-engine.md
+  - ../architecture/adr/ADR-009-persistence-boundary.md
+supersedes: []
+tags:
+  - product
+  - contract
+---
+
 # AI SDR Follow-up Cancellation and Replanning Contract
 
 ## 1. Goal
@@ -12,7 +31,7 @@ It does not persist changes and it does not execute them.
 
 ## 2. Scheduling vs mutation
 
-`P1K-012E-A` decides the operational state of a candidate action:
+The follow-up scheduling decision engine (`ai-sdr-follow-up-scheduling-engine.md`) decides the operational state of a candidate action:
 
 - `ready`
 - `wait`
@@ -22,7 +41,7 @@ It does not persist changes and it does not execute them.
 - `block`
 - `invalid`
 
-`P1K-012E-B` consumes that decision and produces a deterministic mutation plan.
+This contract consumes that decision and produces a deterministic mutation plan.
 
 The split is intentional:
 
@@ -206,16 +225,16 @@ It applies the operations in order, validates expected statuses, simulates rollb
 
 This is useful for contract tests before any repository implementation exists.
 
-## 17. Relation to `P1K-012E-A`
+## 17. Relation to the scheduling decision engine
 
-`P1K-012E-A` produces `FollowUpSchedulingResult`.
+The scheduling decision engine produces `FollowUpSchedulingResult`.
 
-`P1K-012E-B` consumes that result directly and never recalculates cooldown, business hours, or expiry.
+This contract consumes that result directly and never recalculates cooldown, business hours, or expiry.
 
 That keeps the responsibility split clean:
 
-- `P1K-012E-A`: decide what should happen;
-- `P1K-012E-B`: describe how the logical action state should mutate.
+- scheduling decision engine: decide what should happen;
+- this contract: describe how the logical action state should mutate.
 
 ## 18. Relation to future runtime
 
@@ -230,11 +249,9 @@ A future repository/runtime may use this contract to:
 It still must not send WhatsApp, call Meta, or activate a scheduler on its own.
 The downstream outbox worker and execution gate remain separate layers that consume these plans later.
 
-## 19. Relation to future PostgreSQL persistence
+## 19. Relation to persistence
 
-The mutation contract is storage agnostic.
-
-It can later be implemented over PostgreSQL, MariaDB, or an in-memory repository without changing the plan shape.
+The mutation contract is storage agnostic at the type level, but the authorized store today is MariaDB (see [ADR-009](../architecture/adr/ADR-009-persistence-boundary.md)) - a different engine would require a new ADR, not a change to this contract's plan shape.
 
 The storage layer is responsible for writes. This contract is only responsible for describing them.
 
@@ -248,10 +265,3 @@ Current limits are explicit:
 - no outbox worker;
 - no Meta;
 - no live follow-up.
-## P1K-012G
-
-The autonomous commercial loop turns scheduling results into mutation plans, but the mutation logic itself remains inside this contract.
-
-## P1K-012H
-
-The scenario simulator can replay cancellation and replanning branches across steps. It consumes the existing mutation contract without adding persistence or a live scheduler.
