@@ -1,3 +1,20 @@
+---
+title: Customer Identity Validation
+doc_id: customer-identity-validation
+status: superseded
+superseded_by: docs/data/customer-onboarding-identity-contract.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
+> **SUPERSEDED (2026-07-21).** Validation harness for `resolveCustomerCandidate()`, the P1J-era resolver superseded by the ACS identity model (`docs/data/customer-onboarding-identity-contract.md`). Kept as historical record; not a reference for new work.
+
 # Customer Identity Validation
 
 ## Purpose

@@ -1,3 +1,18 @@
+---
+title: P1C - n8n Load Shedding & AI Runtime Extraction Plan
+doc_id: n8n-load-shedding-plan
+status: superseded
+superseded_by: docs/n8n-brain-integration.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # P1C - n8n Load Shedding & AI Runtime Extraction Plan
 
 Documento tecnico para descargar n8n y mover ejecucion pesada de IA, routing y context building hacia backend propio sin romper la operacion actual del HUB.

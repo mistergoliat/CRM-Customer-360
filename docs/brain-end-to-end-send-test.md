@@ -1,3 +1,18 @@
+---
+title: Brain End-to-End Manual Backend Send Test
+doc_id: brain-end-to-end-send-test
+status: superseded
+superseded_by: docs/ACTIVE_RELEASE.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # Brain End-to-End Manual Backend Send Test
 
 Esta guia documenta la prueba operacional manual de extremo a extremo para el flujo backend de envio.
