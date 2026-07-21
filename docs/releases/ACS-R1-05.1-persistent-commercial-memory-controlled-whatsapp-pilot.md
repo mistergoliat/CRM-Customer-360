@@ -4,9 +4,9 @@ title: Persistent Commercial Memory + Controlled WhatsApp Pilot
 doc_id: release-acs-r1-05-1-persistent-commercial-memory-controlled-whatsapp-pilot
 status: parallel_in_progress
 critical_path: true
-updated_at: 2026-07-20
+updated_at: 2026-07-21
 current_task: ACS-R1-05.1-T02.1
-current_task_status: planned
+current_task_status: implemented_pending_real_smoke
 next_task: ACS-R1-05.1-T03
 blocked: false
 owner: product
@@ -39,7 +39,7 @@ tags:
 
 ## Estado
 
-`status: parallel_in_progress`, `critical_path: true`, `current_task: ACS-R1-05.1-T02.1`, `current_task_status: planned`. `ACS-R1-05.1-T01` (Single Commercial Runtime Authority) esta `accepted`: veredicto exacto `single_commercial_runtime_authority_accepted`. El runtime nativo (`processNativeWhatsAppInbound -> runNativeAutonomousCycle -> operational-loop -> persistCommercialState`) queda como unica autoridad comercial habilitada por defecto; el motor legacy `sales-consultative` queda deshabilitado por defecto (fail-closed) detras de `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED`. Ver "Evidencia de cierre - ACS-R1-05.1-T01" abajo para el detalle completo. `ACS-R1-05.1-T02` (Stable Opportunity Continuity) esta `accepted`: veredicto exacto `stable_opportunity_continuity_accepted`. Ver "Evidencia de cierre - ACS-R1-05.1-T02" abajo. Ninguna otra tarea de esta release ha comenzado su implementacion. Ningun capability row de `CAPABILITY_MATRIX.md` cambia como resultado de este documento.
+`status: parallel_in_progress`, `critical_path: true`, `current_task: ACS-R1-05.1-T02.1`, `current_task_status: implemented_pending_real_smoke` (codigo, wiring y tests completos; smoke real contra `wa_id` allowlisted + LLM real + Catalog Service real pendiente por falta de credenciales/red en este entorno de implementacion, ver "Evidencia de cierre - ACS-R1-05.1-T02.1"). `ACS-R1-05.1-T01` (Single Commercial Runtime Authority) esta `accepted`: veredicto exacto `single_commercial_runtime_authority_accepted`. El runtime nativo (`processNativeWhatsAppInbound -> runNativeAutonomousCycle -> operational-loop -> persistCommercialState`) queda como unica autoridad comercial habilitada por defecto; el motor legacy `sales-consultative` queda deshabilitado por defecto (fail-closed) detras de `BRAIN_LEGACY_SALES_CONSULTATIVE_ENABLED`. Ver "Evidencia de cierre - ACS-R1-05.1-T01" abajo para el detalle completo. `ACS-R1-05.1-T02` (Stable Opportunity Continuity) esta `accepted`: veredicto exacto `stable_opportunity_continuity_accepted`. Ver "Evidencia de cierre - ACS-R1-05.1-T02" abajo. Ninguna otra tarea de esta release ha comenzado su implementacion. Ningun capability row de `CAPABILITY_MATRIX.md` cambia como resultado de este documento.
 
 `parallel_in_progress` (release lifecycle) y `critical_path: true` son campos separados, no un status compuesto: `ACS-R1-05.1` no es una segunda release "activa" en el sentido secuencial de `AGENTS.md` compitiendo con `ACS-R1-04` (`active_blocked_external`, unica release activa en ese sentido). Es, igual que lo fue `ACS-R1-05`, un workstream autorizado a avanzar en paralelo porque no depende del Customer Service externo (`PAUSED_EXTERNAL`, ver `ROADMAP.md`) — con la diferencia de que, a partir de este documento, `critical_path: true` porque es explicitamente el camino hacia el piloto conversacional, no una excepcion acotada al follow-up.
 
@@ -136,7 +136,7 @@ La arquitectura de esta release no queda bloqueada por estas exclusiones: ningun
 | ACS-R1-05.1-T08 | Controlled Pilot Deployment | planned | ACS-R1-05.1-T01 a T07 | El entorno piloto puede recrearse desde documentacion y configuracion versionada |
 | ACS-R1-05.1-T09 | Customer-visible UAT | planned | ACS-R1-05.1-T08 | Memoria durable, cero preguntas repetidas, recomendacion grounded, opt-out y handoff correctos, sin duplicados, sin turnos perdidos por fallos internos |
 | ACS-R1-05.1-T10 | Acceptance and Roadmap Reconciliation | planned | ACS-R1-05.1-T09 | Auditoria de aceptacion, evidencia real, roadmap/capability matrix/active release reconciliados |
-| ACS-R1-05.1-T02.1 | Grounded Catalog and Commercial Knowledge Readiness | planned | ACS-R1-05.1-T02 | por definir — registrada, no iniciada |
+| ACS-R1-05.1-T02.1 | Native Read-Only Agent Tool Loop | implemented | ACS-R1-05.1-T02 | The model selects a tool from the real Capability Gateway registry (no keyword routing); the observation returns to the model; a second real decision happens; the loop terminates in respond or handoff |
 
 Detalle de cada tarea:
 
@@ -192,13 +192,29 @@ Debe probarse con un numero real, tres conversaciones minimas: (1) conversacion 
 
 Debe producir: auditoria de aceptacion, evidencia E2E, evidencia del piloto real, SHA de cierre, deuda remanente, decision sobre la siguiente release, actualizacion final de `ROADMAP.md`, `CAPABILITY_MATRIX.md` y `ACTIVE_RELEASE.md`.
 
-### ACS-R1-05.1-T02.1 — Grounded Catalog and Commercial Knowledge Readiness
+### ACS-R1-05.1-T02.1 — Native Read-Only Agent Tool Loop
 
-Registrada como workstream separado durante `ACS-R1-05.1-T02` (no implementada, no iniciada). Cubre lo que `T02` deliberadamente dejo fuera de alcance para no mezclar continuidad de identidad con grounding comercial: catalogo, precios, stock, FAQ, y cualquier conocimiento de producto que el resolver de oportunidad pudiera necesitar en el futuro para distinguir "misma compra, pregunta nueva" de "necesidad genuinamente distinta en la misma identidad" (deuda documentada en "Deuda no cerrada" de este documento). Alcance, dependencias y gate por definir cuando esta tarea inicie su planificacion — este parrafo no anticipa ese alcance.
+Registrada originalmente como "Grounded Catalog and Commercial Knowledge Readiness" durante `ACS-R1-05.1-T02`; redefinida antes de iniciar implementacion porque el riesgo real no era arquitectonico sino de producto: exigir una arquitectura de grounding perfecta antes de probar si el agente puede vender. El alcance final es un ciclo agente-herramienta minimo, no un sistema de grounding completo:
+
+cliente -> agente comprende -> agente decide responder o usar una herramienta -> plataforma valida y ejecuta -> resultado vuelve al agente -> agente toma una segunda decision -> responde al cliente.
+
+Contrato nuevo, deliberadamente pequeno (`lib/brain/commercial/agent-loop/agentStepTypes.ts`): `AgentStep` es una union discriminada de tres variantes (`use_tool`, `respond`, `handoff`), cada una validada de forma independiente (`validateAgentStep.ts`) - nunca un documento monolitico donde una seccion no relacionada puede descartar una tool request valida (ver la investigacion previa de esta misma tarea sobre `validateSalesAgentOutput.ts`). El modelo responde una sola pregunta por invocacion ("cual es el siguiente paso?"), nunca analysis/policy assessment/rationale/toolRequests multiples en la misma llamada.
+
+Pool de tools fijo, backend-owned (`runAgentToolLoop.ts#AGENT_LOOP_TOOL_POOL`): `search_products`, `get_product_details`, `search_company_knowledge` - las dos primeras ya registradas en el Capability Gateway real desde `ACS-R1-01.1`; la tercera es nueva (`companyKnowledgeCapability.ts`), lexical, sin embeddings, sin vector DB, sin microservicio nuevo, con contenido fixture explicitamente no productivo (`companyKnowledgeFixtures.ts`) hasta que el negocio confirme copy real. `batch_get_products` queda deliberadamente fuera del pool: sigue siendo hidratacion interna determinista, nunca una decision del agente.
+
+Loop nativo (`runAgentToolLoop.ts`): maximo 3 decisiones, maximo 2 ejecuciones de tools, deduplicacion por `tool+arguments` (una tool repetida con los mismos argumentos nunca se re-ejecuta - obtiene una observacion `blocked` y el agente puede replantear), un tool no registrado en el Capability Gateway se bloquea igual (observacion `blocked`, `capability_not_registered`, cero side effect), un reintento de formato como maximo ante salida invalida del modelo, timeout total explicito. Cada ejecucion de tool pasa por `executeGovernedCapability` real (mismo registry, mismo `crm_capability_executions`, cero registry nueva). La observacion que vuelve al modelo (`buildToolObservation.ts`) es una proyeccion allowlisted (nunca el resultado crudo del Gateway): ids/nombre/precio/stock/disponibilidad para catalogo, topic/answer/source para company knowledge - nunca credenciales, payload interno completo, error crudo o SQL.
+
+Wireado al camino nativo de WhatsApp detras de un flag fail-closed nuevo (`BRAIN_AGENT_TOOL_LOOP_ENABLED`, default `false`, unico lector `commercialCycleConfig.ts#buildAgentToolLoopFeatureFlags`) en `runNativeAutonomousCycle.ts`: cuando esta activo, reemplaza `runCommercialShadowEvaluation -> runCommercialOperationalLoop -> runCapabilityExecutionStage` para ese turno (mutuamente excluyente, nunca ambos caminos a la vez, mismo patron ya usado para el toggle multi-request/legacy existente); cuando esta apagado (default), el comportamiento actual de esa funcion queda exactamente igual. Reutiliza el mismo `CommercialContextSnapshot` (`buildNativeCommercialContext.ts`) que el camino legacy para leer `human_owner_active`/`ai_blocked` directamente - una conversacion que un humano ya posee, o AI-blocked, nunca llega al modelo (mismo invariante A4 de `ACS-R1-05-T06.2`, verificado sin volver a pasar por el operational loop viejo). `ensureAutonomousSalesTurnContinuity.ts` gano una rama nueva, aditiva, que deriva la disposicion final desde `cycle.agentLoop` sin tocar la rama existente basada en `cycle.loop`.
+
+Persistencia: sin migraciones nuevas. Cada ejecucion de tool ya se audita en `crm_capability_executions` via el Capability Gateway existente; la respuesta final o el handoff se despachan por el mismo pipeline real que usa `dispatchFallbackAction.ts` (`persistAgentAction -> sandbox -> execution gate -> outbox canonico`) via una funcion nueva y dedicada (`dispatchAgentLoopResponse.ts`, deliberadamente no una reutilizacion directa de `dispatchFallbackAction.ts` para no acoplar la semantica de "respuesta primaria del agente" a la de "fallback de continuidad" ni arriesgar sus tests existentes); un evento nuevo sobre `commercial_event` existente (`agent_tool_loop_completed`) resume el turno (razon terminal, cantidad de decisiones/tools, tools usadas) sin duplicar el detalle por-tool que `crm_capability_executions` ya tiene.
+
+Probado (29 tests puros, sin MariaDB, contra el Capability Gateway real con un catalog HTTP double local): `tests/agent-loop/validateAgentStep.test.ts` (11), `tests/agent-loop/companyKnowledgeCapability.test.ts` (5), `tests/agent-loop/runAgentToolLoop.test.ts` (13, incluye los 8 escenarios funcionales A-H del contrato mas limites de decisiones/tools/reintento-de-formato/proveedor-ausente). `npx tsc --noEmit` y `npm run build` limpios. Regresion dirigida sobre archivos compartidos editados (`httpSalesAgentProvider.ts`, `events/*`, `continuity/salesTurnDisposition.ts`, `continuity/buildContinuityFallbackMessage.ts`, `capability-gateway/registry.ts`) comparada contra un baseline limpio (mismo commit sin esta rama, via `git stash`): identicos 8 pass / 12 fail en el subconjunto de tests DB-dependientes tocados (mismos `ECONNREFUSED 127.0.0.1:3306`, cero fallos nuevos).
+
+No se ejecuto un smoke real contra `wa_id` allowlisted + LLM real + Catalog Service real: este entorno de implementacion no tiene credenciales ni red hacia esos servicios (misma limitacion documentada en cada tarea previa de esta release). `search_products`/`get_product_details` siguen `operational: verified`/`accepted_with_debt` (heredado, sin cambio); `search_company_knowledge` queda `not_verified`/`designed_partial` explicitamente por contenido fixture no productivo. Por lo tanto esta tarea NO se declara `accepted`: el codigo, los tests y el wiring estan completos y en verde, pero el gate de "smoke real" del punto 13 de su propia definicion permanece bloqueado por falta de entorno, no por un hallazgo de logica abierto.
 
 ## Tarea actual
 
-`ACS-R1-05.1-T02.1` — Grounded Catalog and Commercial Knowledge Readiness. No iniciada, alcance por definir. (`ACS-R1-05.1-T01` aceptada — ver "Evidencia de cierre - ACS-R1-05.1-T01"; `ACS-R1-05.1-T02` aceptada — ver "Evidencia de cierre - ACS-R1-05.1-T02" abajo.)
+`ACS-R1-05.1-T02.1` — Native Read-Only Agent Tool Loop. Implementada, probada (29 tests, sin MariaDB) y wireada al camino nativo de WhatsApp detras de `BRAIN_AGENT_TOOL_LOOP_ENABLED` (fail-closed, default apagado); pendiente unicamente el smoke real (ver "Evidencia de cierre - ACS-R1-05.1-T02.1" arriba). (`ACS-R1-05.1-T01` aceptada — ver "Evidencia de cierre - ACS-R1-05.1-T01"; `ACS-R1-05.1-T02` aceptada — ver "Evidencia de cierre - ACS-R1-05.1-T02" abajo.)
 
 ## Definition of Done (release)
 
@@ -227,7 +243,21 @@ Cumplida — `ACS-R1-05.1-T02` aceptada (`stable_opportunity_continuity_accepted
 
 ## Definition of Done de la tarea actual (T02.1)
 
-`ACS-R1-05.1-T02.1` no tiene alcance, dependencias ni gate definidos todavia — ver `### ACS-R1-05.1-T02.1` arriba. Se redacta al iniciar su planificacion.
+Cumplida en implementacion, codigo y tests; no cumplida en verificacion operacional real (ver "Evidencia de cierre" abajo y el parrafo de `### ACS-R1-05.1-T02.1` arriba para el detalle completo):
+
+- existe `AgentStep` minimo (`use_tool`/`respond`/`handoff`), cada variante validada de forma independiente;
+- el modelo selecciona tools desde el registry real del Capability Gateway, sin routing por keywords;
+- `search_products` y `get_product_details` funcionan dentro del loop; `search_company_knowledge` funciona en su version MVP (fixture, no productivo);
+- las observaciones vuelven al agente y existe al menos una segunda decision real dentro del mismo turno;
+- maximo de decisiones (3), maximo de tools (2) y deduplicacion por `tool+arguments` funcionan; cero side effects mutantes;
+- el camino nativo de WhatsApp usa el loop detras de `BRAIN_AGENT_TOOL_LOOP_ENABLED` (fail-closed, default apagado);
+- decisiones, tools y respuesta quedan auditables (`crm_capability_executions`, `commercial_event.agent_tool_loop_completed`, `crm_agent_actions`);
+- tests funcionales cubren los ocho escenarios (A-H) del contrato; `npx tsc --noEmit` y `npm run build` limpios; cero runtimes paralelos nuevos (mutuamente excluyente con el camino legacy via el mismo flag);
+- pendiente, no cumplido: smoke real contra `wa_id` allowlisted + LLM real + Catalog Service real (bloqueado por falta de credenciales/red en este entorno de implementacion) — sin ese smoke, esta tarea no declara ninguna capability nueva `operational: verified`.
+
+## Definition of Done de T02.1 — veredicto
+
+`changes_required` unicamente por el smoke real pendiente (bloqueo de entorno, no de logica). Ver "Evidencia de cierre - ACS-R1-05.1-T02.1" arriba para el detalle completo de que se probo y como.
 
 ## Siguiente tarea
 
