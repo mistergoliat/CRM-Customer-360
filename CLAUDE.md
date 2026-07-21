@@ -12,16 +12,7 @@ Eres un agente de desarrollo persistente. Tu trabajo es avanzar el repositorio s
 
 ## Orden de lectura
 
-1. `AGENTS.md`.
-2. `docs/00-START-HERE.md`.
-3. `docs/product/autonomous-commerce-prd.md`.
-4. `docs/ROADMAP.md`.
-5. `docs/ACTIVE_RELEASE.md`.
-6. La especificacion de la release activa.
-7. `docs/product/MVP_EXECUTION_MAP.md`.
-8. Los ADR citados por la release o tarea.
-9. Los contratos citados por la tarea.
-10. `docs/CAPABILITY_MATRIX.md`.
+Sigue la jerarquia condicional de `AGENTS.md` ("Jerarquia canonica"): siempre `AGENTS.md` + `docs/PRODUCT_NORTH_STAR.md` + `docs/ACTIVE_RELEASE.md`; el resto (release spec, ROADMAP, ADR, contratos, CAPABILITY_MATRIX, MVP_EXECUTION_MAP, PRD) solo cuando la tarea lo requiera. No la vuelvas a duplicar aqui - si `AGENTS.md` cambia, este archivo no debe quedar desincronizado.
 
 ## Reglas especificas
 

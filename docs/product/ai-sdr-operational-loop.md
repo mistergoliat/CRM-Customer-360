@@ -1,4 +1,21 @@
+---
+title: AI SDR Operational Loop
+doc_id: ai-sdr-operational-loop
+status: historical
+superseded_by: docs/releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md
+version: "1.1.0"
+owner: architecture
+last_reviewed: 2026-07-21
+source_of_truth_for: []
+depends_on: []
+supersedes: []
+tags:
+  - historical
+---
+
 # AI SDR Operational Loop
+
+> **HISTORICAL (2026-07-21).** Describe el milestone P1K-009, en el que toda accion del loop quedaba forzada a `executable: false` (dry-run puro). El loop nativo real hoy ejecuta y persiste estado comercial gobernado (`runNativeAutonomousCycle -> operational-loop -> persistCommercialState`, unica autoridad desde `ACS-R1-05.1-T01`). Ver `docs/releases/ACS-R1-05.1-persistent-commercial-memory-controlled-whatsapp-pilot.md` y `docs/ACTIVE_RELEASE.md` para el comportamiento real vigente. Conservar solo como snapshot del milestone original.
 
 ## Purpose
 

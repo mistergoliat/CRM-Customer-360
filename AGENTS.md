@@ -14,20 +14,25 @@ La meta estrategica es:
 
 ## Jerarquia canonica
 
-Orden obligatorio de lectura antes de modificar el repositorio:
+Lectura obligatoria antes de modificar el repositorio. No leas todo el vault documental: lee lo que gobierna la tarea actual.
+
+Siempre:
 
 1. `AGENTS.md`.
-2. `docs/00-START-HERE.md`.
-3. `docs/product/autonomous-commerce-prd.md`.
-4. `docs/ROADMAP.md`.
-5. `docs/ACTIVE_RELEASE.md`.
-6. La especificacion de la release activa.
-7. `docs/product/MVP_EXECUTION_MAP.md`.
-8. Los ADR citados por la release o tarea.
-9. Los contratos citados por la tarea.
-10. `docs/CAPABILITY_MATRIX.md`.
+2. `docs/PRODUCT_NORTH_STAR.md`.
+3. `docs/ACTIVE_RELEASE.md`.
 
-No hace falta leer todo el vault documental. Lee solo lo que gobierna la tarea actual.
+Segun la tarea:
+
+- La especificacion de la release activa.
+- `docs/ROADMAP.md`, si la tarea toca secuenciacion de releases o una dependencia externa en pausa.
+- Los ADR y los contratos citados por la release o la tarea.
+- `docs/CAPABILITY_MATRIX.md`, si la tarea cambia el estado tecnico real de una capability.
+- `docs/product/MVP_EXECUTION_MAP.md`, solo si la tarea afecta ownership, dependencias o paralelizacion entre workstreams.
+- `docs/product/autonomous-commerce-prd.md`, solo si la tarea cambia alcance o comportamiento de producto.
+- `docs/00-START-HERE.md`, como mapa de navegacion completo del vault cuando la tarea lo requiera (lista extendida de documentos canonicos, historicos, superseded y estados documentales).
+
+Detalle completo del orden condicional y del vocabulario de estados documentales: `docs/00-START-HERE.md`.
 
 ## Estado actual
 
