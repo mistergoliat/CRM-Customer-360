@@ -1,12 +1,12 @@
-import type {
-  SalesAgentProvider,
-  SalesAgentProviderInvokeOptions,
-  SalesAgentProviderRequest,
-  SalesAgentProviderResponse
-} from "../runtimeTypes";
 import { parseModelJson } from "../../shared/parseModelJsonOutput";
+import type {
+  AgentLoopProvider,
+  AgentLoopProviderInvokeOptions,
+  AgentLoopProviderRequest,
+  AgentLoopProviderResponse
+} from "../agentLoopProviderTypes";
 
-type HttpSalesAgentProviderConfig = {
+type HttpAgentLoopProviderConfig = {
   endpoint?: string | null;
   apiKey?: string | null;
   model?: string | null;
@@ -19,14 +19,9 @@ type OpenAiChatCompletionResponse = {
   model?: string;
   choices?: Array<{
     finish_reason?: string | null;
-    message?: {
-      content?: string | null;
-    } | null;
+    message?: { content?: string | null } | null;
   }>;
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-  };
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
 };
 
 function getConfigValue(value: string | null | undefined, fallback: string | undefined) {
@@ -35,19 +30,25 @@ function getConfigValue(value: string | null | undefined, fallback: string | und
   return fallback?.trim() || null;
 }
 
-export function createHttpSalesAgentProvider(config: HttpSalesAgentProviderConfig = {}): SalesAgentProvider {
+/**
+ * Same OpenAI-compatible calling convention as httpSalesAgentProvider.ts,
+ * reused deliberately (shared JSON-extraction helpers) rather than
+ * duplicated end to end - but a distinct, lighter request shape (see
+ * agentLoopProviderTypes.ts) so this loop never depends on SalesAgentInput.
+ */
+export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig = {}): AgentLoopProvider {
   const endpoint = getConfigValue(config.endpoint, process.env.BRAIN_MODEL_API_URL);
   const apiKey = getConfigValue(config.apiKey, process.env.BRAIN_MODEL_API_KEY);
-  const model = getConfigValue(config.model, process.env.BRAIN_MODEL_NAME) ?? "brain-sales-agent";
+  const model = getConfigValue(config.model, process.env.BRAIN_MODEL_NAME) ?? "brain-agent-loop";
   const fetchImpl = config.fetchImpl ?? fetch;
   const temperature = config.temperature ?? 0;
 
   return {
-    name: "http-sales-agent-provider",
+    name: "http-agent-loop-provider",
     version: "http-openai-compatible.v1",
-    async invoke(request: SalesAgentProviderRequest, options: SalesAgentProviderInvokeOptions): Promise<SalesAgentProviderResponse> {
+    async invoke(request: AgentLoopProviderRequest, options: AgentLoopProviderInvokeOptions): Promise<AgentLoopProviderResponse> {
       if (!endpoint || !apiKey) {
-        throw new Error("Sales Agent HTTP provider unavailable: missing endpoint or API key.");
+        throw new Error("Agent loop HTTP provider unavailable: missing endpoint or API key.");
       }
 
       const response = await fetchImpl(endpoint, {
@@ -61,19 +62,19 @@ export function createHttpSalesAgentProvider(config: HttpSalesAgentProviderConfi
           model,
           temperature,
           response_format: { type: "json_object" },
-          messages: request.promptPackage.messages
+          messages: request.messages
         })
       });
 
       if (!response.ok) {
-        throw new Error(`Sales Agent HTTP provider failed with status ${response.status}.`);
+        throw new Error(`Agent loop HTTP provider failed with status ${response.status}.`);
       }
 
       const data = (await response.json()) as OpenAiChatCompletionResponse;
       const choice = data.choices?.[0];
       const content = choice?.message?.content;
       if (!content) {
-        throw new Error("Sales Agent HTTP provider returned an empty response.");
+        throw new Error("Agent loop HTTP provider returned an empty response.");
       }
 
       return {
@@ -81,17 +82,9 @@ export function createHttpSalesAgentProvider(config: HttpSalesAgentProviderConfi
         model: data.model ?? model,
         inputTokens: data.usage?.prompt_tokens ?? null,
         outputTokens: data.usage?.completion_tokens ?? null,
-        estimatedCost: null,
         providerRequestId: data.id ?? response.headers.get("x-request-id"),
-        finishReason: choice?.finish_reason ?? null,
-        metadata: {
-          endpointHost: new URL(endpoint).host,
-          runtimeMode: request.runtimeMode,
-          dryRun: options.dryRun
-        }
+        finishReason: choice?.finish_reason ?? null
       };
     }
   };
 }
-
-export type { HttpSalesAgentProviderConfig };
