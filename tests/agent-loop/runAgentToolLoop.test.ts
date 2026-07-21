@@ -182,6 +182,22 @@ test("G - loop repetido: duplicate tool+arguments is deduplicated, never execute
   assert.equal(result.terminalReason, "responded");
 });
 
+test("G2 - loop repetido con argumentos en distinto orden de claves: sigue siendo deduplicado", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "jaula", limit: 5 } },
+      { type: "use_tool", tool: "search_products", arguments: { limit: 5, query: "jaula" } },
+      { type: "respond", message: "Esto es lo que encontre." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Busco una jaula.", commercialContextSummary: {}, provider });
+
+  assert.equal(result.steps[1].governance, "blocked_duplicate");
+  assert.equal(result.toolExecutionCount, 1);
+});
+
 test("H - falla del catalogo: failed observation, agent responds without inventing data", async () => {
   catalogDown();
   const provider = createFakeAgentLoopProvider({

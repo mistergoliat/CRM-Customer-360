@@ -73,8 +73,21 @@ async function invokeProviderWithDeadline(
   }
 }
 
+/** Recursively sorts object keys so two semantically identical argument sets (keys in a different order) always produce the same dedupe key. */
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((key) => [key, canonicalJson((value as Record<string, unknown>)[key])])
+    );
+  }
+  return value;
+}
+
 function buildDedupeKey(tool: string, args: Record<string, unknown>) {
-  return `${tool}:${JSON.stringify(args)}`;
+  return `${tool}:${JSON.stringify(canonicalJson(args))}`;
 }
 
 /**
