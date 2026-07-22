@@ -569,6 +569,7 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
   toolsUsed: string[];
   finalMessagePresent: boolean;
   handoffReasonPresent: boolean;
+  stepsSummary: AgentToolLoopCompletedRecordedPayload["stepsSummary"];
   correlationId?: string | null;
   customerId?: string | number | null;
   conversationId?: string | number | null;
@@ -585,7 +586,8 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
     toolExecutionCount: input.toolExecutionCount,
     toolsUsed: [...input.toolsUsed],
     finalMessagePresent: input.finalMessagePresent,
-    handoffReasonPresent: input.handoffReasonPresent
+    handoffReasonPresent: input.handoffReasonPresent,
+    stepsSummary: input.stepsSummary.map((entry) => ({ ...entry }))
   };
   return buildBaseEvent({
     eventType: "agent_tool_loop_completed",

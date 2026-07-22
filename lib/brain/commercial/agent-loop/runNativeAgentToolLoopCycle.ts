@@ -1,6 +1,7 @@
 import { runAgentToolLoop } from "./runAgentToolLoop";
 import { dispatchAgentLoopResponse, type DispatchAgentLoopResponseResult } from "./dispatchAgentLoopResponse";
 import { recordAgentToolLoopCompletedCommercialEvent } from "../events/service";
+import type { AgentToolLoopStepSummary } from "../events/types";
 import type { ContinuityFallbackContext } from "../continuity/buildContinuityFallbackMessage";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
 import type { AgentLoopResult } from "./agentStepTypes";
@@ -40,6 +41,18 @@ function buildCommercialContextSummary(snapshot: CommercialContextSnapshot): Rec
       : null,
     recentMessages: snapshot.recentMessages.slice(-5).map((message) => ({ direction: message.direction, body: message.body }))
   };
+}
+
+/** ACS-R1-05.1-T02.1 (post-smoke fix, point 8). Bounded structural summary only - never raw arguments or observation data. */
+function buildStepsSummary(loop: AgentLoopResult): AgentToolLoopStepSummary[] {
+  return loop.steps.map((record) => ({
+    stepIndex: record.stepIndex,
+    type: record.step.type,
+    phase: record.phase,
+    tool: record.step.type === "use_tool" ? record.step.tool : undefined,
+    governance: record.governance ?? undefined,
+    observationStatus: record.observation?.status ?? undefined
+  }));
 }
 
 function buildCommercialNeed(snapshot: CommercialContextSnapshot): ContinuityFallbackContext {
@@ -125,7 +138,8 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     toolExecutionCount: loop.toolExecutionCount,
     toolsUsed: [...new Set(loop.steps.filter((record) => record.step.type === "use_tool").map((record) => (record.step as { tool: string }).tool))],
     finalMessagePresent: loop.finalMessage !== null,
-    handoffReasonPresent: loop.handoffReason !== null
+    handoffReasonPresent: loop.handoffReason !== null,
+    stepsSummary: buildStepsSummary(loop)
   }).catch(() => void 0);
 
   return { loop, dispatch, humanOwnerActive, aiBlocked };
