@@ -20,7 +20,7 @@ import {
   type SalesAgentConfigurationScope,
   type SalesAgentConfigurationStatus
 } from "./types";
-import { isSupportedSalesAgentConfigurationSchemaVersion, validateSalesAgentPromptConfiguration } from "./validation";
+import { isSupportedSalesAgentConfigurationSchemaVersion, validateSalesAgentConfigurationDocument } from "./validation";
 
 type ExecuteValues = Parameters<SalesAgentConfigurationConnection["execute"]>[1];
 
@@ -60,8 +60,12 @@ export function deserializeConfigurationRow(row: Record<string, unknown>): Sales
     throw new SalesAgentConfigurationIntegrityError(`sales_agent_configuration_unsupported_schema_version:${id}:${String(schemaVersionRaw)}`);
   }
 
+  // enforceRange: false - a value that was in range when written can end up
+  // outside a platform limit tightened later. Reading it must still succeed
+  // (shape/type errors still reject) - the resolver is the one place that
+  // clamps to the current limits, never a hard read failure.
   const rawConfiguration = parseConfigurationJsonColumn(row.configuration_json);
-  const validation = validateSalesAgentPromptConfiguration(rawConfiguration);
+  const validation = validateSalesAgentConfigurationDocument(rawConfiguration, { enforceRange: false });
   if (!validation.valid) {
     throw new SalesAgentConfigurationIntegrityError(`sales_agent_configuration_stored_invalid:${id}:${validation.code}`);
   }
@@ -198,7 +202,7 @@ export type CreateDraftConfigurationInput = {
  * -> COMMIT/ROLLBACK -> RELEASE_LOCK (finally) -> release connection.
  */
 export async function createDraftConfiguration(input: CreateDraftConfigurationInput): Promise<SalesAgentConfigurationRecord> {
-  const validation = validateSalesAgentPromptConfiguration(input.configuration);
+  const validation = validateSalesAgentConfigurationDocument(input.configuration);
   if (!validation.valid) {
     throw new SalesAgentConfigurationInvalidError(`sales_agent_configuration_invalid:${validation.code}`);
   }
@@ -264,7 +268,7 @@ export type UpdateDraftConfigurationInput = {
  * named domain error (not-found vs not-draft), never a silent no-op.
  */
 export async function updateDraftConfiguration(input: UpdateDraftConfigurationInput): Promise<SalesAgentConfigurationRecord> {
-  const validation = validateSalesAgentPromptConfiguration(input.configuration);
+  const validation = validateSalesAgentConfigurationDocument(input.configuration);
   if (!validation.valid) {
     throw new SalesAgentConfigurationInvalidError(`sales_agent_configuration_invalid:${validation.code}`);
   }
@@ -273,8 +277,14 @@ export async function updateDraftConfiguration(input: UpdateDraftConfigurationIn
 
   return withConnection((connection) =>
     runInTransaction(connection, async () => {
-      const assignments = ["configuration_json = ?", "configuration_hash = ?"];
-      const params: unknown[] = [JSON.stringify(validation.configuration), configurationHash];
+      // Every rewrite of a draft's content is stamped with the current
+      // schema version, regardless of what it was tagged before - a draft
+      // is mutable, so there is no historical value in preserving a stale
+      // schema_version once its content has actually been re-validated and
+      // re-written under the current code (unlike published/archived rows,
+      // which are immutable history and never touched here).
+      const assignments = ["configuration_json = ?", "configuration_hash = ?", "schema_version = ?"];
+      const params: unknown[] = [JSON.stringify(validation.configuration), configurationHash, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION];
       if (trimmedName) {
         assignments.push("name = ?");
         params.push(trimmedName);

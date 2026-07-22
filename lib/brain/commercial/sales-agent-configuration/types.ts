@@ -1,8 +1,13 @@
 import type { PoolConnection } from "mysql2/promise";
-import type { SALES_AGENT_CONFIGURATION_SCHEMA_VERSION, SALES_AGENT_CONFIGURATION_SCOPE, SALES_AGENT_CONFIGURATION_STATUSES } from "./constants";
+import type {
+  SALES_AGENT_CONFIGURATION_SCOPE,
+  SALES_AGENT_CONFIGURATION_STATUSES,
+  SALES_AGENT_CONFIGURATION_SUPPORTED_SCHEMA_VERSIONS
+} from "./constants";
 
 export type SalesAgentConfigurationScope = typeof SALES_AGENT_CONFIGURATION_SCOPE;
-export type SalesAgentConfigurationSchemaVersion = typeof SALES_AGENT_CONFIGURATION_SCHEMA_VERSION;
+/** A loaded record can be either supported version - only new writes are pinned to the current one. */
+export type SalesAgentConfigurationSchemaVersion = (typeof SALES_AGENT_CONFIGURATION_SUPPORTED_SCHEMA_VERSIONS)[number];
 export type SalesAgentConfigurationStatus = (typeof SALES_AGENT_CONFIGURATION_STATUSES)[number];
 
 /**
@@ -29,6 +34,36 @@ export const SALES_AGENT_PROMPT_CONFIGURATION_FIELDS = [
   "prohibitedPhrases"
 ] as const satisfies readonly (keyof SalesAgentPromptConfiguration)[];
 
+/**
+ * ACS-R1-05.1-T02.3B. No `provider` field: the runtime only calls one
+ * OpenAI-compatible chat-completions endpoint (httpAgentLoopProvider.ts) and
+ * there is no real multi-provider abstraction to select between - adding an
+ * editable provider field here would be speculative, not a real need.
+ */
+export type SalesAgentModelConfiguration = {
+  model: string;
+  temperature: number;
+  maxOutputTokens: number;
+  timeoutMs: number;
+  maxModelRetries: number;
+};
+
+export type SalesAgentLoopConfiguration = {
+  maxAgentStepsPerTurn: number;
+  maxToolCallsPerTurn: number;
+};
+
+/**
+ * The stored document shape: the six required v1 prompt fields, plus two
+ * optional v2 sections. A plain `SalesAgentPromptConfiguration` (no
+ * model/loop keys at all) is structurally a valid `SalesAgentConfigurationDocument`
+ * - this is what keeps every v1 row valid, unmigrated, forever.
+ */
+export type SalesAgentConfigurationDocument = SalesAgentPromptConfiguration & {
+  modelConfiguration?: SalesAgentModelConfiguration;
+  loopConfiguration?: SalesAgentLoopConfiguration;
+};
+
 export type SalesAgentConfigurationRecord = {
   id: number;
   scopeKey: SalesAgentConfigurationScope;
@@ -36,7 +71,7 @@ export type SalesAgentConfigurationRecord = {
   version: number;
   status: SalesAgentConfigurationStatus;
   schemaVersion: SalesAgentConfigurationSchemaVersion;
-  configuration: SalesAgentPromptConfiguration;
+  configuration: SalesAgentConfigurationDocument;
   configurationHash: string;
   parentConfigurationId: number | null;
   createdBy: string;
@@ -55,6 +90,13 @@ export type ResolvedSalesAgentConfiguration = {
   version: number | null;
   configurationHash: string | null;
   configuration: SalesAgentPromptConfiguration;
+  /**
+   * Always fully resolved and clamped to platform limits, regardless of
+   * source - consumers (runNativeAgentToolLoopCycle, httpAgentLoopProvider)
+   * never see a partial value or apply their own fallback/clamp again.
+   */
+  effectiveModelConfiguration: SalesAgentModelConfiguration;
+  effectiveLoopConfiguration: SalesAgentLoopConfiguration;
 };
 
 /**

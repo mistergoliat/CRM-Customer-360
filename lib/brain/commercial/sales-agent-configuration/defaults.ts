@@ -1,5 +1,5 @@
 import { validateSalesAgentPromptConfiguration } from "./validation";
-import type { SalesAgentPromptConfiguration } from "./types";
+import type { SalesAgentLoopConfiguration, SalesAgentModelConfiguration, SalesAgentPromptConfiguration } from "./types";
 
 /**
  * Never depends on the database - the last fallback the resolver reaches
@@ -14,6 +14,27 @@ export const SALES_AGENT_CONFIGURATION_SAFE_DEFAULT: SalesAgentPromptConfigurati
   companyDescription: "Empresa dedicada a la venta de productos y servicios.",
   customInstructions: "",
   prohibitedPhrases: []
+};
+
+/**
+ * ACS-R1-05.1-T02.3B. Deliberately equal to the hardcoded values
+ * runAgentToolLoop.ts/httpAgentLoopProvider.ts already used before this
+ * task (DEFAULT_TIMEOUT_MS=20000, model fallback "brain-agent-loop",
+ * temperature 0) - resolving to the safe default (no publication yet)
+ * reproduces today's exact runtime behavior, never a surprise change.
+ */
+export const SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT: SalesAgentModelConfiguration = {
+  model: "brain-agent-loop",
+  temperature: 0,
+  maxOutputTokens: 1024,
+  timeoutMs: 20000,
+  maxModelRetries: 2
+};
+
+/** Equal to runAgentToolLoop.ts's pre-existing DEFAULT_MAX_DECISIONS/DEFAULT_MAX_TOOL_EXECUTIONS - same no-surprise rationale as the model default above. */
+export const SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT: SalesAgentLoopConfiguration = {
+  maxAgentStepsPerTurn: 3,
+  maxToolCallsPerTurn: 2
 };
 
 const DEPLOYMENT_DEFAULT_ENV_VAR = "SALES_AGENT_CONFIGURATION_DEPLOYMENT_DEFAULT_JSON";

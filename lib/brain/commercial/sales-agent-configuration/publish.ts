@@ -17,7 +17,7 @@ import {
   type SalesAgentConfigurationConnection,
   type SalesAgentConfigurationRecord
 } from "./types";
-import { validateSalesAgentPromptConfiguration } from "./validation";
+import { validateSalesAgentConfigurationDocument } from "./validation";
 
 type ExecuteValues = Parameters<SalesAgentConfigurationConnection["execute"]>[1];
 
@@ -73,7 +73,11 @@ export async function publishDraftConfiguration(input: PublishDraftConfiguration
           throw new SalesAgentConfigurationNotDraftError(`sales_agent_configuration_not_draft:${input.id}:${draft.status}`);
         }
 
-        const validation = validateSalesAgentPromptConfiguration(draft.configuration);
+        // enforceRange: false - publish re-validates shape/type, but never
+        // rejects a draft solely because a platform limit tightened after
+        // it was authored (same rationale as deserializeConfigurationRow);
+        // the resolver clamps the effective value at read time regardless.
+        const validation = validateSalesAgentConfigurationDocument(draft.configuration, { enforceRange: false });
         if (!validation.valid) {
           throw new SalesAgentConfigurationInvalidError(`sales_agent_configuration_invalid:${validation.code}`);
         }
