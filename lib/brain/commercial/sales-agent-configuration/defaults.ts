@@ -1,3 +1,4 @@
+import { SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL } from "./constants";
 import { validateSalesAgentPromptConfiguration } from "./validation";
 import type { SalesAgentLoopConfiguration, SalesAgentModelConfiguration, SalesAgentPromptConfiguration } from "./types";
 
@@ -17,18 +18,25 @@ export const SALES_AGENT_CONFIGURATION_SAFE_DEFAULT: SalesAgentPromptConfigurati
 };
 
 /**
- * ACS-R1-05.1-T02.3B. Deliberately equal to the hardcoded values
- * runAgentToolLoop.ts/httpAgentLoopProvider.ts already used before this
- * task (DEFAULT_TIMEOUT_MS=20000, model fallback "brain-agent-loop",
- * temperature 0) - resolving to the safe default (no publication yet)
- * reproduces today's exact runtime behavior, never a surprise change.
+ * ACS-R1-05.1-T02.3B (corrected). Deliberately equal to the hardcoded
+ * values runAgentToolLoop.ts/httpAgentLoopProvider.ts already used before
+ * this task - resolving to the safe default (no publication yet)
+ * reproduces today's exact runtime behavior, never a surprise change:
+ * DEFAULT_TIMEOUT_MS=20000, temperature 0. `model` here is only the last
+ * resort - resolver.ts's resolveEffectiveModelConfiguration prefers a
+ * published model, then BRAIN_MODEL_NAME, before ever falling through to
+ * this literal. `maxOutputTokens` is likewise never sent as a default -
+ * see EffectiveSalesAgentModelConfiguration. `maxModelRetries` is 0: the
+ * pre-T02.3B provider never retried at all, so 0 (not some invented
+ * "helpful" retry count) is the only value that reproduces prior behavior
+ * without deciding, unasked, that automatic model retries are now policy.
  */
 export const SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT: SalesAgentModelConfiguration = {
-  model: "brain-agent-loop",
+  model: SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL,
   temperature: 0,
   maxOutputTokens: 1024,
   timeoutMs: 20000,
-  maxModelRetries: 2
+  maxModelRetries: 0
 };
 
 /** Equal to runAgentToolLoop.ts's pre-existing DEFAULT_MAX_DECISIONS/DEFAULT_MAX_TOOL_EXECUTIONS - same no-surprise rationale as the model default above. */

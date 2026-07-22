@@ -6,6 +6,8 @@ import {
   SALES_AGENT_CONFIGURATION_LIMITS,
   SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_CONFIGURATION_SCHEMA_VERSION,
+  SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1,
+  SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2,
   SALES_AGENT_CONFIGURATION_SCOPE,
   SALES_AGENT_CONFIGURATION_TABLE,
   SALES_AGENT_PROMPT_CONFIGURATION_FIELDS,
@@ -83,7 +85,7 @@ async function restoreConfigurationJson(id: number) {
   const configuration = buildValidConfiguration();
   await queryRows(`UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET configuration_json = ?, configuration_hash = ? WHERE id = ?`, [
     JSON.stringify(configuration),
-    computeSalesAgentConfigurationHash(configuration),
+    computeSalesAgentConfigurationHash(configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION),
     id
   ]);
 }
@@ -202,25 +204,60 @@ test("[H8] hash is stable for equivalent configurations (phrase order, extra whi
   const base = buildValidConfiguration({ prohibitedPhrases: ["precio final", "garantia"] });
   const reorderedPhrases = { ...base, prohibitedPhrases: ["garantia", "precio final"] };
   const extraWhitespace = { ...base, agentName: `  ${base.agentName}  ` };
-  assert.equal(computeSalesAgentConfigurationHash(base), computeSalesAgentConfigurationHash(reorderedPhrases));
-  assert.equal(computeSalesAgentConfigurationHash(base), computeSalesAgentConfigurationHash(extraWhitespace));
+  assert.equal(
+    computeSalesAgentConfigurationHash(base, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION),
+    computeSalesAgentConfigurationHash(reorderedPhrases, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION)
+  );
+  assert.equal(
+    computeSalesAgentConfigurationHash(base, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION),
+    computeSalesAgentConfigurationHash(extraWhitespace, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION)
+  );
 });
 
 test("[H9] hash changes when relevant content changes", () => {
   const base = buildValidConfiguration();
   const changed = { ...base, role: "Jefa de ventas" };
-  assert.notEqual(computeSalesAgentConfigurationHash(base), computeSalesAgentConfigurationHash(changed));
+  assert.notEqual(
+    computeSalesAgentConfigurationHash(base, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION),
+    computeSalesAgentConfigurationHash(changed, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION)
+  );
 });
 
 test("[H10] hash depends only on configuration content, never on version/status/metadata", () => {
-  // computeSalesAgentConfigurationHash's signature only accepts
-  // SalesAgentPromptConfiguration - id/scope/version/status/timestamps/
-  // createdBy/parentId cannot influence it even if the caller has them at
-  // hand, since there is no parameter to pass them through.
+  // id/scope/version/status/timestamps/createdBy/parentId cannot influence
+  // the hash even if the caller has them at hand, since there is no
+  // parameter to pass them through - only the configuration content and the
+  // explicit, real schemaVersion (never record metadata) matter.
   const configuration = buildValidConfiguration();
-  const hashA = computeSalesAgentConfigurationHash(configuration);
-  const hashB = computeSalesAgentConfigurationHash({ ...configuration });
+  const hashA = computeSalesAgentConfigurationHash(configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION);
+  const hashB = computeSalesAgentConfigurationHash({ ...configuration }, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION);
   assert.equal(hashA, hashB);
+});
+
+test("[H11] hash uses the explicit schemaVersion argument, never inferred from record metadata or shape", () => {
+  // ACS-R1-05.1-T02.3B (correction). The same content must hash differently
+  // under a different explicit schemaVersion - schemaVersion is always the
+  // caller's real, already-decided value (what a record is/will be stamped
+  // with), never something this function infers on its own.
+  const configuration = buildValidConfiguration();
+  const hashV1 = computeSalesAgentConfigurationHash(configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1);
+  const hashV2 = computeSalesAgentConfigurationHash(configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2);
+  assert.notEqual(hashV1, hashV2, "identical content, different real schemaVersion, must hash differently");
+  assert.equal(
+    computeSalesAgentConfigurationHash(configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1),
+    hashV1,
+    "stable for a fixed, explicit schemaVersion"
+  );
+});
+
+test("[H12] a plain v1 document hashed with the real v1 schemaVersion reproduces the original T02.3A canonical form (golden hash)", () => {
+  // Computed independently from the original, pre-T02.3B algorithm
+  // (git show 735ac9a:.../hash.ts) for this exact fixture - the strongest
+  // possible guard that removing schemaVersion inference never silently
+  // changed the historical hash for a genuine v1 row.
+  const configuration = buildValidConfiguration();
+  const hash = computeSalesAgentConfigurationHash(configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1);
+  assert.equal(hash, "53df48d34f43dbe68a91e24140c1c6743c125c465fda23bd3a59038c14e7a5d2");
 });
 
 // ---------------------------------------------------------------------------
@@ -410,7 +447,13 @@ test("[P24] publishing a row from a different scope is refused", async () => {
     `INSERT INTO ${SALES_AGENT_CONFIGURATION_TABLE}
        (scope_key, name, version, status, schema_version, configuration_json, configuration_hash, created_by)
      VALUES ('other_tenant', ?, ?, 'draft', ?, ?, ?, 'test-suite')`,
-    [name, foreignVersion, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION, JSON.stringify(configuration), computeSalesAgentConfigurationHash(configuration)]
+    [
+      name,
+      foreignVersion,
+      SALES_AGENT_CONFIGURATION_SCHEMA_VERSION,
+      JSON.stringify(configuration),
+      computeSalesAgentConfigurationHash(configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION)
+    ]
   );
   const rows = await queryRows<{ id: number }>(
     `SELECT id FROM ${SALES_AGENT_CONFIGURATION_TABLE} WHERE scope_key = 'other_tenant' AND name = ? LIMIT 1`,

@@ -211,7 +211,8 @@ export type AgentToolLoopCompletedRecordedPayload = {
   configurationHash: string | null;
   effectiveModel: string;
   effectiveTemperature: number;
-  effectiveMaxOutputSize: number;
+  /** null when no real maxOutputTokens was configured - never defaulted, see EffectiveSalesAgentModelConfiguration. */
+  effectiveMaxOutputSize: number | null;
   effectiveTimeoutMs: number;
   effectiveMaxAgentStepsPerTurn: number;
   effectiveMaxToolCallsPerTurn: number;

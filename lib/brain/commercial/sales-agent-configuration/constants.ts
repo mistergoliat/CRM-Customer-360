@@ -60,6 +60,15 @@ export const SALES_AGENT_CONFIGURATION_LIMITS = {
 
 export const SALES_AGENT_MODEL_CONFIGURATION_FIELDS = ["model", "temperature", "maxOutputTokens", "timeoutMs", "maxModelRetries"] as const;
 
+/**
+ * The one model name this module ever assumes without asking the
+ * deployment - never a real product default, just the generic literal used
+ * when no deployment (BRAIN_MODEL_NAME) or published value exists. Shared by
+ * defaults.ts (safe default) and validation.ts (the model allowlist) so
+ * both always agree on the same single fallback string.
+ */
+export const SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL = "brain-agent-loop" as const;
+
 export const SALES_AGENT_LOOP_CONFIGURATION_FIELDS = ["maxAgentStepsPerTurn", "maxToolCallsPerTurn"] as const;
 
 /**

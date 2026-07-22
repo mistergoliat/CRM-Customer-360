@@ -128,3 +128,24 @@ test("[AE27] never records the full prompt text, customInstructions, or any secr
   assert.ok(!serialized.toLowerCase().includes("authorization"));
   assert.ok(!serialized.toLowerCase().includes("bearer"));
 });
+
+test("[AE28] effectiveMaxOutputSize is recorded as null when no real maxOutputTokens was configured, never an invented number", () => {
+  // ACS-R1-05.1-T02.3B (correction). Mirrors EffectiveSalesAgentModelConfiguration:
+  // maxOutputTokens stays absent (undefined at the resolver, null once it
+  // reaches this JSON-serializable audit payload) rather than defaulting to
+  // 1024 for an unconfigured deployment.
+  const event = normalizeAgentToolLoopCompletedCommercialEvent({
+    ...baseInput,
+    configurationSource: "safe_default",
+    configurationRecordId: null,
+    configurationVersion: null,
+    configurationHash: null,
+    effectiveModel: "brain-agent-loop",
+    effectiveTemperature: 0,
+    effectiveMaxOutputSize: null,
+    effectiveTimeoutMs: 20000,
+    effectiveMaxAgentStepsPerTurn: 3,
+    effectiveMaxToolCallsPerTurn: 2
+  });
+  assert.equal(event.payload.effectiveMaxOutputSize, null);
+});

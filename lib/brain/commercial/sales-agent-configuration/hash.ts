@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
-import { SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2 } from "./constants";
 import { normalizeConfigurationText } from "./validation";
-import type { SalesAgentConfigurationDocument, SalesAgentLoopConfiguration, SalesAgentModelConfiguration } from "./types";
+import type {
+  SalesAgentConfigurationDocument,
+  SalesAgentConfigurationSchemaVersion,
+  SalesAgentLoopConfiguration,
+  SalesAgentModelConfiguration
+} from "./types";
 
 function canonicalModelConfiguration(configuration: SalesAgentModelConfiguration) {
   return {
@@ -43,12 +47,17 @@ function canonicalStringify(value: unknown): string {
  * parentId are always excluded - they are record metadata, not
  * configuration content).
  *
- * schemaVersion embedded in the payload reflects this document's own shape,
- * not a global "current version" constant: a document with neither
- * modelConfiguration nor loopConfiguration hashes exactly as it would have
- * under the original T02.3A code (v1) - byte-for-byte reproducible for
- * every pre-T02.3B row, never silently changed by a later schema bump. Only
- * a document that actually carries model/loop config hashes as v2.
+ * schemaVersion is always the caller's explicit, real value - the actual
+ * schema_version already stamped (or about to be stamped) on the record -
+ * never inferred from whether modelConfiguration/loopConfiguration happen
+ * to be present. Shape and schema_version can legitimately diverge (a v2
+ * document with neither runtime section is still a real v2 row, since
+ * every new write is stamped the current version regardless of content),
+ * so inferring one from the other silently mismatches the hash against
+ * what is actually stored. Callers: createDraftConfiguration/
+ * updateDraftConfiguration pass the current SALES_AGENT_CONFIGURATION_SCHEMA_VERSION
+ * (what they are about to stamp); publishDraftConfiguration passes the
+ * draft's own already-stored schemaVersion (never assumed to be current).
  *
  * Decision on prohibitedPhrases order: sorted alphabetically before
  * hashing. A prohibited-phrase set has no meaningful order - two drafts
@@ -59,9 +68,10 @@ function canonicalStringify(value: unknown): string {
  * function stays correct even if ever called with a not-yet-normalized
  * object - defense in depth, not a second divergent normalization rule.
  */
-export function computeSalesAgentConfigurationHash(configuration: SalesAgentConfigurationDocument): string {
-  const hasRuntimeConfiguration = configuration.modelConfiguration !== undefined || configuration.loopConfiguration !== undefined;
-
+export function computeSalesAgentConfigurationHash(
+  configuration: SalesAgentConfigurationDocument,
+  schemaVersion: SalesAgentConfigurationSchemaVersion
+): string {
   const canonicalConfiguration = {
     agentName: normalizeConfigurationText(configuration.agentName),
     companyName: normalizeConfigurationText(configuration.companyName),
@@ -74,7 +84,7 @@ export function computeSalesAgentConfigurationHash(configuration: SalesAgentConf
   };
 
   const payload = canonicalStringify({
-    schemaVersion: hasRuntimeConfiguration ? SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2 : SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1,
+    schemaVersion,
     configuration: canonicalConfiguration
   });
 

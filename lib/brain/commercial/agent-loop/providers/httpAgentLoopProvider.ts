@@ -1,4 +1,7 @@
-import { SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT } from "../../sales-agent-configuration";
+import {
+  SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL,
+  SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT
+} from "../../sales-agent-configuration";
 import { parseModelJson } from "../../shared/parseModelJsonOutput";
 import type {
   AgentLoopProvider,
@@ -49,8 +52,39 @@ function computeBackoffMs(attemptIndex: number): number {
   return Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** attemptIndex);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function buildAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+/**
+ * ACS-R1-05.1-T02.3B (correction). The backoff wait between retries must be
+ * cancelable by the caller's own external (turn-level) deadline signal - a
+ * bare setTimeout previously let a retry sleep run to completion even after
+ * the whole turn had already been aborted, wasting the rest of the budget
+ * doing nothing useful before finally giving up.
+ */
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(buildAbortError("Agent loop HTTP provider backoff aborted."));
+    };
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
 }
 
 function isAbortError(error: unknown): boolean {
@@ -96,10 +130,14 @@ function buildAttemptSignal(externalSignal: AbortSignal | null | undefined, time
 export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig = {}): AgentLoopProvider {
   const endpoint = getConfigValue(config.endpoint, process.env.BRAIN_MODEL_API_URL);
   const apiKey = getConfigValue(config.apiKey, process.env.BRAIN_MODEL_API_KEY);
-  const model = getConfigValue(config.model, process.env.BRAIN_MODEL_NAME) ?? "brain-agent-loop";
+  const model = getConfigValue(config.model, process.env.BRAIN_MODEL_NAME) ?? SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL;
   const fetchImpl = config.fetchImpl ?? fetch;
   const temperature = config.temperature ?? 0;
-  const maxOutputTokens = config.maxOutputTokens ?? SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.maxOutputTokens;
+  // ACS-R1-05.1-T02.3B (correction). Never defaulted - an unconfigured
+  // deployment (no published maxOutputTokens) omits max_tokens from the
+  // request entirely below, exactly like the pre-T02.3B provider did,
+  // instead of silently capping every call at an invented number.
+  const maxOutputTokens = config.maxOutputTokens;
   const maxModelRetries = config.maxModelRetries ?? SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.maxModelRetries;
 
   return {
@@ -113,7 +151,16 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
       const deadline = Date.now() + options.timeoutMs;
 
       for (let attempt = 0; ; attempt += 1) {
-        const remainingMs = Math.max(1, deadline - Date.now());
+        // ACS-R1-05.1-T02.3B (correction). Never start a new attempt once
+        // the deadline has already passed - the old Math.max(1, ...) clamp
+        // forced at least a 1ms budget and silently made one more network
+        // call anyway, even with zero real time left.
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          throw options.signal?.aborted
+            ? buildAbortError("Agent loop HTTP provider aborted before starting an attempt.")
+            : new Error("Agent loop HTTP provider deadline exceeded before starting an attempt.");
+        }
         const attemptSignal = buildAttemptSignal(options.signal, remainingMs);
 
         let response: Response;
@@ -128,7 +175,7 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
             body: JSON.stringify({
               model,
               temperature,
-              max_tokens: maxOutputTokens,
+              ...(maxOutputTokens !== undefined ? { max_tokens: maxOutputTokens } : {}),
               response_format: { type: "json_object" },
               messages: request.messages
             })
@@ -144,7 +191,7 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
           }
           const remainingBudget = deadline - Date.now();
           if (attempt < maxModelRetries && remainingBudget > 0) {
-            await sleep(Math.min(computeBackoffMs(attempt), remainingBudget));
+            await sleep(Math.min(computeBackoffMs(attempt), remainingBudget), options.signal);
             continue;
           }
           throw error;
@@ -155,7 +202,7 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
           const statusError = new Error(`Agent loop HTTP provider failed with status ${response.status}.`);
           const remainingBudget = deadline - Date.now();
           if (RETRYABLE_HTTP_STATUSES.has(response.status) && attempt < maxModelRetries && remainingBudget > 0) {
-            await sleep(Math.min(computeBackoffMs(attempt), remainingBudget));
+            await sleep(Math.min(computeBackoffMs(attempt), remainingBudget), options.signal);
             continue;
           }
           throw statusError;

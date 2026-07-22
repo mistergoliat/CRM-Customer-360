@@ -4,6 +4,7 @@ import {
   SALES_AGENT_LOOP_CONFIGURATION_FIELDS,
   SALES_AGENT_LOOP_CONFIGURATION_LIMITS,
   SALES_AGENT_MODEL_CONFIGURATION_FIELDS,
+  SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL,
   SALES_AGENT_MODEL_CONFIGURATION_LIMITS
 } from "./constants";
 import {
@@ -28,7 +29,8 @@ export type SalesAgentConfigurationValidationErrorCode =
   | "prohibited_phrase_invalid_type"
   | "prohibited_phrase_empty"
   | "prohibited_phrase_too_long"
-  | "out_of_range";
+  | "out_of_range"
+  | "model_not_allowed";
 
 export type SalesAgentConfigurationValidationFailure = {
   valid: false;
@@ -219,9 +221,37 @@ function validateNumberField(
 }
 
 export type SalesAgentConfigurationValidationOptions = {
-  /** Default true. Set false for read paths (deserializing a stored row, re-validating on publish) - see validateNumberField above. */
+  /**
+   * Default true. Set false for read paths (deserializing a stored row,
+   * re-validating on publish) - see validateNumberField above. Also gates
+   * the model allowlist below, for the identical reason: a model that
+   * matched BRAIN_MODEL_NAME (or the generic fallback) when a row was
+   * written can stop matching if the deployment's BRAIN_MODEL_NAME changes
+   * afterward - reading/publishing that row must not start failing just
+   * because deployment config moved on; the resolver is what re-checks the
+   * allowlist at use time (resolver.ts) and falls through if it no longer
+   * matches.
+   */
   enforceRange?: boolean;
+  env?: NodeJS.ProcessEnv;
 };
+
+/**
+ * The only two model values this deployment actually knows about: whatever
+ * it configured via BRAIN_MODEL_NAME, and the generic fallback every
+ * unconfigured deployment already resolves to. Never an invented catalog of
+ * "supported models" - this system is provider-agnostic (any OpenAI-
+ * compatible endpoint), so the one real source of truth for "is this model
+ * legitimate" is the deployment's own configuration, not a guessed list.
+ */
+export function buildAllowedSalesAgentModelValues(env: NodeJS.ProcessEnv = process.env): string[] {
+  const candidates = [env.BRAIN_MODEL_NAME?.trim(), SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL];
+  return [...new Set(candidates.filter((value): value is string => Boolean(value)))];
+}
+
+export function isSalesAgentModelAllowed(model: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return buildAllowedSalesAgentModelValues(env).includes(model);
+}
 
 /**
  * ACS-R1-05.1-T02.3B. Format-only, same conventions as the prompt
@@ -234,6 +264,7 @@ export function validateSalesAgentModelConfiguration(
   options: SalesAgentConfigurationValidationOptions = {}
 ): SalesAgentModelConfigurationValidationResult {
   const enforceRange = options.enforceRange ?? true;
+  const env = options.env ?? process.env;
   if (!isPlainObject(raw)) {
     return fail("invalid_root", "modelConfiguration must be a plain object");
   }
@@ -248,6 +279,9 @@ export function validateSalesAgentModelConfiguration(
 
   const model = validateRequiredTextField(raw.model, "model", SALES_AGENT_MODEL_CONFIGURATION_LIMITS.modelMaxLength, false);
   if (!model.ok) return model.result;
+  if (enforceRange && !isSalesAgentModelAllowed(model.value, env)) {
+    return fail("model_not_allowed", `model must be one of: ${buildAllowedSalesAgentModelValues(env).join(", ")}`, "model");
+  }
 
   const temperature = validateNumberField(raw.temperature, "temperature", {
     min: SALES_AGENT_MODEL_CONFIGURATION_LIMITS.temperatureMin,

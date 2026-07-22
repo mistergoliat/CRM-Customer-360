@@ -3,9 +3,11 @@ import test, { after } from "node:test";
 import { getPool, queryRows } from "@/lib/db";
 import {
   SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1,
+  SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2,
   SALES_AGENT_CONFIGURATION_SCOPE,
   SALES_AGENT_CONFIGURATION_TABLE,
   SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
+  SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL,
   SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT,
   archiveConfiguration,
   computeSalesAgentConfigurationHash,
@@ -15,6 +17,7 @@ import {
   loadPublishedPesasChileConfiguration,
   publishDraftConfiguration,
   resolveSalesAgentConfiguration,
+  SalesAgentConfigurationIntegrityError,
   SalesAgentConfigurationNotDraftError,
   SalesAgentConfigurationNotFoundError,
   validateSalesAgentConfigurationDocument,
@@ -26,7 +29,11 @@ import {
 } from "@/lib/brain/commercial/sales-agent-configuration";
 
 // Real MariaDB, real crm_test database - same convention as
-// tests/commercial/salesAgentConfiguration.test.ts.
+// tests/commercial/salesAgentConfiguration.test.ts. BRAIN_MODEL_NAME is set
+// to match every buildValidModelConfiguration() fixture below ("deepseek-
+// v4-flash") - ACS-R1-05.1-T02.3B (correction) added a real model allowlist
+// (deployment's own BRAIN_MODEL_NAME + the generic fallback), so a fixture
+// model value that is not this deployment's configured model is rejected.
 Object.assign(process.env, {
   NODE_ENV: "development",
   DB_HOST: "127.0.0.1",
@@ -36,7 +43,8 @@ Object.assign(process.env, {
   DB_PASSWORD: "una_clave_local",
   DB_URL: "",
   DATABASE_URL: "",
-  DB_WRITE_ENABLED: "true"
+  DB_WRITE_ENABLED: "true",
+  BRAIN_MODEL_NAME: "deepseek-v4-flash"
 });
 
 after(async () => {
@@ -90,15 +98,32 @@ function buildValidLoopConfiguration(overrides: Partial<SalesAgentLoopConfigurat
  * already satisfies this helper's actual goal ("nothing of ours is left
  * dangling as published"), so both are swallowed - only a genuine,
  * unrelated failure propagates.
+ *
+ * archiveConfiguration() (unlike publishDraftConfiguration()) does not take
+ * the scope advisory lock - it is keyed by id, for standalone
+ * draft-abandonment/archival outside the publish flow. Racing it against a
+ * concurrent publish for the same currently-published row can therefore
+ * produce a genuine, raw InnoDB deadlock (ER_LOCK_DEADLOCK) on the
+ * published_scope_key unique index, not just a domain-level "already
+ * archived" error - this is a real administration-layer concurrency gap,
+ * documented as known technical debt in the audit closure report, not
+ * something to silently paper over here. What IS this helper's job is to
+ * not let that raw deadlock flake an unrelated test: retrying re-evaluates
+ * from scratch (re-reads whatever is active now), which converges once the
+ * colliding transaction has committed.
  */
 async function clearActivePublication() {
-  const active = await loadPublishedPesasChileConfiguration();
-  if (!active) return;
-  try {
-    await archiveConfiguration(active.id);
-  } catch (error) {
-    if (error instanceof SalesAgentConfigurationNotDraftError || error instanceof SalesAgentConfigurationNotFoundError) return;
-    throw error;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const active = await loadPublishedPesasChileConfiguration();
+    if (!active) return;
+    try {
+      await archiveConfiguration(active.id);
+      return;
+    } catch (error) {
+      if (error instanceof SalesAgentConfigurationNotDraftError || error instanceof SalesAgentConfigurationNotFoundError) return;
+      if (error instanceof Error && (error as { code?: string }).code === "ER_LOCK_DEADLOCK") continue;
+      throw error;
+    }
   }
 }
 
@@ -153,6 +178,35 @@ test("[M5] validateSalesAgentModelConfiguration rejects a non-integer where an i
   const result = validateSalesAgentModelConfiguration(buildValidModelConfiguration({ maxOutputTokens: 900.5 }));
   assert.equal(result.valid, false);
   if (!result.valid) assert.equal(result.code, "invalid_type");
+});
+
+test("[M6] validateSalesAgentModelConfiguration rejects a model that is neither BRAIN_MODEL_NAME nor the generic fallback", () => {
+  // ACS-R1-05.1-T02.3B (correction). No invented catalog of "supported
+  // models" - the real allowlist is exactly this deployment's own
+  // BRAIN_MODEL_NAME (set to "deepseek-v4-flash" for this test file) plus
+  // the generic fallback literal. Anything else must be rejected at
+  // create/update time, never silently accepted and trusted at runtime.
+  const result = validateSalesAgentModelConfiguration(buildValidModelConfiguration({ model: "some-other-unlisted-model" }));
+  assert.equal(result.valid, false);
+  if (!result.valid) assert.equal(result.code, "model_not_allowed");
+});
+
+test("[M7] validateSalesAgentModelConfiguration accepts the generic fallback model even when BRAIN_MODEL_NAME is set to something else", () => {
+  const result = validateSalesAgentModelConfiguration(
+    buildValidModelConfiguration({ model: SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL })
+  );
+  assert.equal(result.valid, true);
+});
+
+test("[M8] validateSalesAgentModelConfiguration's allowlist is skipped on read paths (enforceRange: false), same as numeric ranges", () => {
+  // A model that matched BRAIN_MODEL_NAME when a row was written must stay
+  // readable even if the deployment's BRAIN_MODEL_NAME changes afterward -
+  // exactly the same "never let deployment drift break reading historical
+  // data" rationale as the numeric enforceRange flag.
+  const result = validateSalesAgentModelConfiguration(buildValidModelConfiguration({ model: "some-other-unlisted-model" }), {
+    enforceRange: false
+  });
+  assert.equal(result.valid, true);
 });
 
 test("[L1] validateSalesAgentLoopConfiguration accepts a valid configuration and enforces bounds", () => {
@@ -219,28 +273,40 @@ test("[D4] an unknown top-level field is still rejected at the document level", 
 // Hash: v1 compatibility + v2 content sensitivity
 // ---------------------------------------------------------------------------
 
-test("[H1] a document with no model/loop config hashes identically to the plain v1 prompt configuration (reproducible historical hash)", () => {
+test("[H1] hash uses the explicit schemaVersion argument, never inferred from whether modelConfiguration/loopConfiguration is present", () => {
+  // ACS-R1-05.1-T02.3B (correction). Every new write is stamped the current
+  // (v2) schema_version regardless of whether the document actually
+  // carries a modelConfiguration/loopConfiguration - inferring v1 from
+  // shape alone (the old behavior) mismatched the hash against what
+  // createDraftConfiguration/updateDraftConfiguration actually stamp.
   const prompt = buildValidPromptConfiguration();
-  const hashFromPlainPrompt = computeSalesAgentConfigurationHash(prompt);
-  const hashFromDocumentWithoutRuntimeConfig = computeSalesAgentConfigurationHash({ ...prompt });
-  assert.equal(hashFromPlainPrompt, hashFromDocumentWithoutRuntimeConfig);
+  const hashV1 = computeSalesAgentConfigurationHash(prompt, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1);
+  const hashV2 = computeSalesAgentConfigurationHash(prompt, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2);
+  assert.notEqual(hashV1, hashV2, "identical shape, different real schemaVersion, must hash differently");
+  assert.equal(computeSalesAgentConfigurationHash(prompt, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1), hashV1, "stable for a fixed schemaVersion");
 });
 
-test("[H2] adding model/loop configuration changes the hash even if the prompt fields are unchanged", () => {
+test("[H2] adding model/loop configuration changes the hash even if the prompt fields and schemaVersion are unchanged", () => {
   const prompt = buildValidPromptConfiguration();
-  const withoutRuntimeConfig = computeSalesAgentConfigurationHash(prompt);
-  const withRuntimeConfig = computeSalesAgentConfigurationHash({
-    ...prompt,
-    modelConfiguration: buildValidModelConfiguration(),
-    loopConfiguration: buildValidLoopConfiguration()
-  });
+  const withoutRuntimeConfig = computeSalesAgentConfigurationHash(prompt, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2);
+  const withRuntimeConfig = computeSalesAgentConfigurationHash(
+    {
+      ...prompt,
+      modelConfiguration: buildValidModelConfiguration(),
+      loopConfiguration: buildValidLoopConfiguration()
+    },
+    SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2
+  );
   assert.notEqual(withoutRuntimeConfig, withRuntimeConfig);
 });
 
 test("[H3] hash changes when only the model configuration changes", () => {
   const document = { ...buildValidPromptConfiguration(), modelConfiguration: buildValidModelConfiguration() };
   const changed = { ...document, modelConfiguration: buildValidModelConfiguration({ temperature: 0.9 }) };
-  assert.notEqual(computeSalesAgentConfigurationHash(document), computeSalesAgentConfigurationHash(changed));
+  assert.notEqual(
+    computeSalesAgentConfigurationHash(document, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2),
+    computeSalesAgentConfigurationHash(changed, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2)
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -283,7 +349,7 @@ test("[R2] deserializing a real pre-T02.3B v1 row (schema_version v1, no model/l
     status: "published",
     schema_version: SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1,
     configuration_json: JSON.stringify(prompt),
-    configuration_hash: computeSalesAgentConfigurationHash(prompt),
+    configuration_hash: computeSalesAgentConfigurationHash(prompt, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1),
     parent_configuration_id: null,
     created_by: "legacy",
     created_at: new Date("2026-01-01T00:00:00.000Z"),
@@ -312,7 +378,18 @@ test("[R3] resolver falls back to the safe model/loop defaults for a published r
   const resolved = await resolveSalesAgentConfiguration();
   assert.equal(resolved.source, "published");
   assert.equal(resolved.recordId, published.id);
-  assert.deepEqual(resolved.effectiveModelConfiguration, SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT);
+  // ACS-R1-05.1-T02.3B (correction): no published modelConfiguration means
+  // no candidate model/maxOutputTokens - model falls through to
+  // BRAIN_MODEL_NAME (set to "deepseek-v4-flash" for this test file, see
+  // the top-of-file env block), never the raw safe-default document, and
+  // maxOutputTokens stays absent rather than an invented 1024.
+  assert.deepEqual(resolved.effectiveModelConfiguration, {
+    model: "deepseek-v4-flash",
+    temperature: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.temperature,
+    maxOutputTokens: undefined,
+    timeoutMs: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.timeoutMs,
+    maxModelRetries: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.maxModelRetries
+  });
   assert.deepEqual(resolved.effectiveLoopConfiguration, SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT);
 });
 
@@ -360,7 +437,14 @@ test("[E2] resolver falls back to the safe model/loop defaults when nothing is p
   })();
 
   assert.equal(resolved.source, "safe_default");
-  assert.deepEqual(resolved.effectiveModelConfiguration, SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT);
+  // Same corrected shape as [R3]: model from BRAIN_MODEL_NAME, maxOutputTokens absent.
+  assert.deepEqual(resolved.effectiveModelConfiguration, {
+    model: "deepseek-v4-flash",
+    temperature: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.temperature,
+    maxOutputTokens: undefined,
+    timeoutMs: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.timeoutMs,
+    maxModelRetries: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.maxModelRetries
+  });
   assert.deepEqual(resolved.effectiveLoopConfiguration, SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT);
 });
 
@@ -394,4 +478,133 @@ test("[E3] resolver clamps an out-of-range persisted value to platform limits (d
   assert.equal(resolved.effectiveModelConfiguration.timeoutMs, 60000, "timeoutMs must be clamped to the platform max");
   assert.equal(resolved.effectiveModelConfiguration.maxModelRetries, 5, "maxModelRetries must be clamped to the platform max");
   assert.equal(resolved.effectiveLoopConfiguration.maxToolCallsPerTurn, 12, "maxToolCallsPerTurn must be clamped to the platform max");
+});
+
+test("[E6] model precedence: a published (and still-allowed) model wins over BRAIN_MODEL_NAME", async () => {
+  // ACS-R1-05.1-T02.3B (correction). BRAIN_MODEL_NAME is "deepseek-v4-flash"
+  // for this whole test file - publishing the OTHER allowed value (the
+  // generic fallback) proves the published value wins the precedence, not
+  // just that both happen to agree.
+  await clearActivePublication();
+  const draft = await createDraftConfiguration({
+    name: uniqueName("model-precedence-published"),
+    configuration: {
+      ...buildValidPromptConfiguration(),
+      modelConfiguration: buildValidModelConfiguration({ model: SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL })
+    },
+    createdBy: "test-suite"
+  });
+  await publishDraftConfiguration({ id: draft.id });
+
+  const resolved = await resolveSalesAgentConfiguration();
+  assert.equal(resolved.effectiveModelConfiguration.model, SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL);
+});
+
+test("[E7] model precedence: a published model that no longer passes today's allowlist falls through to BRAIN_MODEL_NAME, never trusted blindly", async () => {
+  // Simulates the deployment's BRAIN_MODEL_NAME having changed after this
+  // row was published (or a corrupted row) - bypasses validation directly,
+  // same technique as [E3]'s numeric clamp test.
+  await clearActivePublication();
+  const draft = await createDraftConfiguration({
+    name: uniqueName("model-precedence-stale"),
+    configuration: { ...buildValidPromptConfiguration(), modelConfiguration: buildValidModelConfiguration() },
+    createdBy: "test-suite"
+  });
+  const published = await publishDraftConfiguration({ id: draft.id });
+
+  const staleConfiguration = {
+    ...published.configuration,
+    modelConfiguration: { ...published.configuration.modelConfiguration, model: "a-model-this-deployment-no-longer-configures" }
+  };
+  await queryRows(`UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET configuration_json = ? WHERE id = ?`, [
+    JSON.stringify(staleConfiguration),
+    published.id
+  ]);
+
+  const resolved = await resolveSalesAgentConfiguration();
+  assert.equal(
+    resolved.effectiveModelConfiguration.model,
+    "deepseek-v4-flash",
+    "a published model outside today's allowlist must fall through to BRAIN_MODEL_NAME, never be used as-is"
+  );
+});
+
+test("[E4] a structurally corrupted published row (unparseable JSON, or missing a required field) makes resolveSalesAgentConfiguration() throw - it must never be mistaken for 'nothing published' and silently resolve to a default", () => {
+  // Pure, in-memory - same reasoning as [R2]: fabricates the exact row
+  // shape deserializeConfigurationRow reads (status: "published"), so this
+  // proves the guarantee at the one function every read path
+  // (loadPublishedPesasChileConfiguration -> resolveSalesAgentConfiguration)
+  // funnels through, without contending for a real row in the shared, live
+  // 'pesas_chile' scope. This is deliberately NOT the same thing [E3]
+  // covers: [E3] is an out-of-range numeric value (validation.valid: true,
+  // tolerated by enforceRange:false, clamped by the resolver by design);
+  // this is validation.valid: false - genuine structural corruption, which
+  // must throw, never clamp or fall back.
+  const baseRow = {
+    id: 999999002,
+    scope_key: SALES_AGENT_CONFIGURATION_SCOPE,
+    name: "corrupted-published-row-fixture",
+    version: 1,
+    status: "published",
+    schema_version: SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1,
+    configuration_hash: "irrelevant-for-this-check",
+    parent_configuration_id: null,
+    created_by: "test-suite",
+    created_at: new Date("2026-01-01T00:00:00.000Z"),
+    updated_at: new Date("2026-01-01T00:00:00.000Z"),
+    published_at: new Date("2026-01-01T00:00:00.000Z"),
+    archived_at: null
+  };
+
+  assert.throws(
+    () => deserializeConfigurationRow({ ...baseRow, configuration_json: "not valid json {{{" }),
+    (error: unknown) => error instanceof SalesAgentConfigurationIntegrityError,
+    "unparseable configuration_json on a published row must throw"
+  );
+
+  assert.throws(
+    () => deserializeConfigurationRow({ ...baseRow, configuration_json: JSON.stringify({}) }),
+    (error: unknown) => error instanceof SalesAgentConfigurationIntegrityError,
+    "a published row missing required fields must throw"
+  );
+});
+
+test("[E5] end-to-end: resolveSalesAgentConfiguration() throws on a genuinely (not just out-of-range) corrupted published row, never falls back to safe_default", async () => {
+  await clearActivePublication();
+  const draft = await createDraftConfiguration({
+    name: uniqueName("e2e-structurally-corrupt"),
+    configuration: buildValidPromptConfiguration({ agentName: uniqueName("e2e-corrupt-agent") }),
+    createdBy: "test-suite"
+  });
+  const published = await publishDraftConfiguration({ id: draft.id });
+
+  try {
+    // MariaDB's native JSON column type carries its own built-in
+    // json_valid() CHECK constraint - genuinely unparseable JSON can never
+    // physically land in this column through any path, not even this raw
+    // UPDATE (confirmed: it errors with ER_INNODB_AUTOEXTEND_SIZE_OUT_OF_RANGE
+    // / CONSTRAINT ... configuration_json failed). That is real, free
+    // defense-in-depth at the storage layer. What it does NOT catch is
+    // syntactically valid JSON with the wrong shape (missing a required
+    // field) - that is exactly what application-level validation in
+    // deserializeConfigurationRow exists to catch, and is what this
+    // end-to-end case corrupts with.
+    await queryRows(`UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET configuration_json = ? WHERE id = ?`, [
+      JSON.stringify({}),
+      published.id
+    ]);
+    await assert.rejects(
+      () => resolveSalesAgentConfiguration(),
+      (error: unknown) => error instanceof SalesAgentConfigurationIntegrityError,
+      "a real DB read of a published row missing required fields must throw, never resolve to safe_default"
+    );
+  } finally {
+    // Restore - crm_test is shared, live state across concurrently-running
+    // test files; a permanently corrupted row would break every other test
+    // that resolves this scope's published configuration afterwards.
+    await queryRows(`UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET configuration_json = ? WHERE id = ?`, [
+      JSON.stringify(published.configuration),
+      published.id
+    ]);
+  }
 });

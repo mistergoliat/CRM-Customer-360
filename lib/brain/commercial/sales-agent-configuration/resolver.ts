@@ -1,4 +1,9 @@
-import { SALES_AGENT_CONFIGURATION_SCOPE, SALES_AGENT_LOOP_CONFIGURATION_LIMITS, SALES_AGENT_MODEL_CONFIGURATION_LIMITS } from "./constants";
+import {
+  SALES_AGENT_CONFIGURATION_SCOPE,
+  SALES_AGENT_LOOP_CONFIGURATION_LIMITS,
+  SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL,
+  SALES_AGENT_MODEL_CONFIGURATION_LIMITS
+} from "./constants";
 import {
   readDeploymentDefaultSalesAgentConfiguration,
   SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
@@ -6,7 +11,8 @@ import {
   SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT
 } from "./defaults";
 import { loadPublishedPesasChileConfiguration } from "./repository";
-import type { ResolvedSalesAgentConfiguration, SalesAgentLoopConfiguration, SalesAgentModelConfiguration } from "./types";
+import type { EffectiveSalesAgentModelConfiguration, ResolvedSalesAgentConfiguration, SalesAgentLoopConfiguration, SalesAgentModelConfiguration } from "./types";
+import { isSalesAgentModelAllowed } from "./validation";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -17,14 +23,32 @@ function clamp(value: number, min: number, max: number): number {
  * valid value - a value that satisfied the limits at write time can still
  * exceed a limit tightened afterward, and this is the one place that must
  * never let that through uncapped.
+ *
+ * model precedence: a published model (only if it still passes today's
+ * allowlist - isSalesAgentModelAllowed, ACS-R1-05.1-T02.3B correction) ->
+ * BRAIN_MODEL_NAME -> the generic fallback. A published model that no
+ * longer matches the allowlist (e.g. the deployment's BRAIN_MODEL_NAME
+ * changed after that row was published) is never blindly trusted - it
+ * falls through exactly like an absent one, the same "never let a stale
+ * value through uncapped" principle as the numeric clamps below.
+ *
+ * maxOutputTokens is deliberately NOT defaulted when absent: only a real
+ * published value is ever surfaced, so httpAgentLoopProvider.ts can omit
+ * `max_tokens` entirely instead of silently capping an unconfigured
+ * deployment at an invented number.
  */
-function resolveEffectiveModelConfiguration(candidate: SalesAgentModelConfiguration | undefined): SalesAgentModelConfiguration {
+function resolveEffectiveModelConfiguration(
+  candidate: SalesAgentModelConfiguration | undefined,
+  env: NodeJS.ProcessEnv
+): EffectiveSalesAgentModelConfiguration {
   const base = candidate ?? SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT;
   const limits = SALES_AGENT_MODEL_CONFIGURATION_LIMITS;
+  const publishedModel = candidate && isSalesAgentModelAllowed(candidate.model, env) ? candidate.model : undefined;
+  const model = publishedModel ?? (env.BRAIN_MODEL_NAME?.trim() || SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL);
   return {
-    model: base.model,
+    model,
     temperature: clamp(base.temperature, limits.temperatureMin, limits.temperatureMax),
-    maxOutputTokens: clamp(Math.round(base.maxOutputTokens), limits.maxOutputTokensMin, limits.maxOutputTokensMax),
+    maxOutputTokens: candidate ? clamp(Math.round(candidate.maxOutputTokens), limits.maxOutputTokensMin, limits.maxOutputTokensMax) : undefined,
     timeoutMs: clamp(Math.round(base.timeoutMs), limits.timeoutMsMin, limits.timeoutMsMax),
     maxModelRetries: clamp(Math.round(base.maxModelRetries), limits.maxModelRetriesMin, limits.maxModelRetriesMax)
   };
@@ -65,7 +89,7 @@ export async function resolveSalesAgentConfiguration(env: NodeJS.ProcessEnv = pr
       version: published.version,
       configurationHash: published.configurationHash,
       configuration: published.configuration,
-      effectiveModelConfiguration: resolveEffectiveModelConfiguration(published.configuration.modelConfiguration),
+      effectiveModelConfiguration: resolveEffectiveModelConfiguration(published.configuration.modelConfiguration, env),
       effectiveLoopConfiguration: resolveEffectiveLoopConfiguration(published.configuration.loopConfiguration)
     };
   }
@@ -79,7 +103,7 @@ export async function resolveSalesAgentConfiguration(env: NodeJS.ProcessEnv = pr
       version: null,
       configurationHash: null,
       configuration: deploymentDefault.configuration,
-      effectiveModelConfiguration: resolveEffectiveModelConfiguration(undefined),
+      effectiveModelConfiguration: resolveEffectiveModelConfiguration(undefined, env),
       effectiveLoopConfiguration: resolveEffectiveLoopConfiguration(undefined)
     };
   }
@@ -91,7 +115,7 @@ export async function resolveSalesAgentConfiguration(env: NodeJS.ProcessEnv = pr
     version: null,
     configurationHash: null,
     configuration: SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
-    effectiveModelConfiguration: resolveEffectiveModelConfiguration(undefined),
+    effectiveModelConfiguration: resolveEffectiveModelConfiguration(undefined, env),
     effectiveLoopConfiguration: resolveEffectiveLoopConfiguration(undefined)
   };
 }

@@ -54,6 +54,24 @@ export type SalesAgentLoopConfiguration = {
 };
 
 /**
+ * The resolved, effective model configuration actually handed to the
+ * provider (resolver.ts). `model` is always resolved - published (if it
+ * still passes today's allowlist) -> BRAIN_MODEL_NAME -> the generic
+ * fallback - never absent. `maxOutputTokens` is deliberately NOT defaulted:
+ * it stays absent unless a real published document set it, so
+ * httpAgentLoopProvider.ts can omit `max_tokens` entirely for an
+ * unconfigured deployment instead of silently capping it at an invented
+ * number.
+ */
+export type EffectiveSalesAgentModelConfiguration = {
+  model: string;
+  temperature: number;
+  maxOutputTokens?: number;
+  timeoutMs: number;
+  maxModelRetries: number;
+};
+
+/**
  * The stored document shape: the six required v1 prompt fields, plus two
  * optional v2 sections. A plain `SalesAgentPromptConfiguration` (no
  * model/loop keys at all) is structurally a valid `SalesAgentConfigurationDocument`
@@ -91,11 +109,13 @@ export type ResolvedSalesAgentConfiguration = {
   configurationHash: string | null;
   configuration: SalesAgentPromptConfiguration;
   /**
-   * Always fully resolved and clamped to platform limits, regardless of
-   * source - consumers (runNativeAgentToolLoopCycle, httpAgentLoopProvider)
-   * never see a partial value or apply their own fallback/clamp again.
+   * Fully resolved and clamped to platform limits, regardless of source -
+   * consumers (runNativeAgentToolLoopCycle, httpAgentLoopProvider) never
+   * apply their own clamp again. The one exception is maxOutputTokens,
+   * which stays absent rather than defaulted - see
+   * EffectiveSalesAgentModelConfiguration.
    */
-  effectiveModelConfiguration: SalesAgentModelConfiguration;
+  effectiveModelConfiguration: EffectiveSalesAgentModelConfiguration;
   effectiveLoopConfiguration: SalesAgentLoopConfiguration;
 };
 

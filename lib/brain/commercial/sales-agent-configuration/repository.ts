@@ -214,7 +214,7 @@ export async function createDraftConfiguration(input: CreateDraftConfigurationIn
   if (!createdBy) {
     throw new SalesAgentConfigurationInvalidError("sales_agent_configuration_invalid:missing_created_by");
   }
-  const configurationHash = computeSalesAgentConfigurationHash(validation.configuration);
+  const configurationHash = computeSalesAgentConfigurationHash(validation.configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION);
   const parentConfigurationId = input.parentConfigurationId ?? null;
 
   return withConnection((connection) =>
@@ -272,7 +272,7 @@ export async function updateDraftConfiguration(input: UpdateDraftConfigurationIn
   if (!validation.valid) {
     throw new SalesAgentConfigurationInvalidError(`sales_agent_configuration_invalid:${validation.code}`);
   }
-  const configurationHash = computeSalesAgentConfigurationHash(validation.configuration);
+  const configurationHash = computeSalesAgentConfigurationHash(validation.configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION);
   const trimmedName = input.name?.trim();
 
   return withConnection((connection) =>

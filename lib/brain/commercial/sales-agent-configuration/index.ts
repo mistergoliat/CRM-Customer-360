@@ -12,7 +12,8 @@ export {
   SALES_AGENT_MODEL_CONFIGURATION_FIELDS,
   SALES_AGENT_LOOP_CONFIGURATION_FIELDS,
   SALES_AGENT_MODEL_CONFIGURATION_LIMITS,
-  SALES_AGENT_LOOP_CONFIGURATION_LIMITS
+  SALES_AGENT_LOOP_CONFIGURATION_LIMITS,
+  SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL
 } from "./constants";
 
 export {
@@ -31,6 +32,7 @@ export {
   type SalesAgentLoopConfiguration,
   type SalesAgentConfigurationDocument,
   type SalesAgentConfigurationRecord,
+  type EffectiveSalesAgentModelConfiguration,
   type ResolvedSalesAgentConfigurationSource,
   type ResolvedSalesAgentConfiguration,
   type SalesAgentConfigurationConnection
@@ -43,6 +45,8 @@ export {
   validateSalesAgentModelConfiguration,
   validateSalesAgentLoopConfiguration,
   validateSalesAgentConfigurationDocument,
+  buildAllowedSalesAgentModelValues,
+  isSalesAgentModelAllowed,
   type SalesAgentConfigurationValidationErrorCode,
   type SalesAgentConfigurationValidationFailure,
   type SalesAgentConfigurationValidationResult,

@@ -577,7 +577,7 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
   configurationHash: string | null;
   effectiveModel: string;
   effectiveTemperature: number;
-  effectiveMaxOutputSize: number;
+  effectiveMaxOutputSize: number | null;
   effectiveTimeoutMs: number;
   effectiveMaxAgentStepsPerTurn: number;
   effectiveMaxToolCallsPerTurn: number;

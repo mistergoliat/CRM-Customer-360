@@ -81,7 +81,11 @@ export async function publishDraftConfiguration(input: PublishDraftConfiguration
         if (!validation.valid) {
           throw new SalesAgentConfigurationInvalidError(`sales_agent_configuration_invalid:${validation.code}`);
         }
-        const recomputedHash = computeSalesAgentConfigurationHash(validation.configuration);
+        // The draft's own already-stored schemaVersion, never assumed to be
+        // today's current constant - a draft is immutable content-wise once
+        // recomputing its hash for publish, so the version tag it was
+        // stamped with must be preserved exactly.
+        const recomputedHash = computeSalesAgentConfigurationHash(validation.configuration, draft.schemaVersion);
 
         const currentPublishedId = await loadCurrentPublishedIdForUpdate(connection);
         if (currentPublishedId !== null && currentPublishedId !== input.id) {

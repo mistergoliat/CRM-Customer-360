@@ -225,33 +225,44 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     commercialNeed: buildCommercialNeed(input.snapshot)
   });
 
-  await recordAgentToolLoopCompletedCommercialEvent({
-    inboundMessageId: input.inboundMessageId,
-    correlationId: input.correlationId,
-    conversationId: input.conversationId,
-    opportunityId,
-    terminalReason: loop.terminalReason,
-    decisionCount: loop.steps.length,
-    toolExecutionCount: loop.toolExecutionCount,
-    toolsUsed: [...new Set(loop.steps.filter((record) => record.step.type === "use_tool").map((record) => (record.step as { tool: string }).tool))],
-    finalMessagePresent: loop.finalMessage !== null,
-    handoffReasonPresent: loop.handoffReason !== null,
-    stepsSummary: buildStepsSummary(loop),
-    // ACS-R1-05.1-T02.3B: which configuration produced this turn's prompt/
-    // model/loop parameters, and the effective (already-clamped) values
-    // actually used - never just what was requested. No prompt text, no
-    // secrets - see the events/normalize.ts payload comment.
-    configurationSource: input.resolvedSalesAgentConfiguration.source,
-    configurationRecordId: input.resolvedSalesAgentConfiguration.recordId,
-    configurationVersion: input.resolvedSalesAgentConfiguration.version,
-    configurationHash: input.resolvedSalesAgentConfiguration.configurationHash,
-    effectiveModel: effectiveModelConfiguration.model,
-    effectiveTemperature: effectiveModelConfiguration.temperature,
-    effectiveMaxOutputSize: effectiveModelConfiguration.maxOutputTokens,
-    effectiveTimeoutMs: effectiveModelConfiguration.timeoutMs,
-    effectiveMaxAgentStepsPerTurn: effectiveLoopConfiguration.maxAgentStepsPerTurn,
-    effectiveMaxToolCallsPerTurn: effectiveLoopConfiguration.maxToolCallsPerTurn
-  }).catch(() => void 0);
+  try {
+    await recordAgentToolLoopCompletedCommercialEvent({
+      inboundMessageId: input.inboundMessageId,
+      correlationId: input.correlationId,
+      conversationId: input.conversationId,
+      opportunityId,
+      terminalReason: loop.terminalReason,
+      decisionCount: loop.steps.length,
+      toolExecutionCount: loop.toolExecutionCount,
+      toolsUsed: [...new Set(loop.steps.filter((record) => record.step.type === "use_tool").map((record) => (record.step as { tool: string }).tool))],
+      finalMessagePresent: loop.finalMessage !== null,
+      handoffReasonPresent: loop.handoffReason !== null,
+      stepsSummary: buildStepsSummary(loop),
+      // ACS-R1-05.1-T02.3B: which configuration produced this turn's prompt/
+      // model/loop parameters, and the effective (already-clamped) values
+      // actually used - never just what was requested. No prompt text, no
+      // secrets - see the events/normalize.ts payload comment.
+      configurationSource: input.resolvedSalesAgentConfiguration.source,
+      configurationRecordId: input.resolvedSalesAgentConfiguration.recordId,
+      configurationVersion: input.resolvedSalesAgentConfiguration.version,
+      configurationHash: input.resolvedSalesAgentConfiguration.configurationHash,
+      effectiveModel: effectiveModelConfiguration.model,
+      effectiveTemperature: effectiveModelConfiguration.temperature,
+      effectiveMaxOutputSize: effectiveModelConfiguration.maxOutputTokens ?? null,
+      effectiveTimeoutMs: effectiveModelConfiguration.timeoutMs,
+      effectiveMaxAgentStepsPerTurn: effectiveLoopConfiguration.maxAgentStepsPerTurn,
+      effectiveMaxToolCallsPerTurn: effectiveLoopConfiguration.maxToolCallsPerTurn
+    });
+  } catch (error) {
+    // ACS-R1-05.1-T02.3B (correction). Never blocks the turn - the customer
+    // already has their dispatched response - but a failure to record this
+    // audit event must stay observable, not vanish into a swallowed catch.
+    // loop.warnings is the same internal-only channel every other
+    // technical, non-customer-facing signal in this cycle already surfaces
+    // through (see runNativeAgentToolLoopCycleConfigurationFailure above).
+    const message = error instanceof Error ? error.message : "unknown";
+    loop.warnings.push(`agent_tool_loop_completed_event_write_failed:${message}`);
+  }
 
   return { loop, dispatch, humanOwnerActive, aiBlocked };
 }
