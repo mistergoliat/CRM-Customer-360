@@ -172,6 +172,19 @@ export type AgentToolLoopTerminalReason =
   | "provider_unavailable"
   | "timeout";
 
+// ACS-R1-05.1-T02.1 (post-smoke fix, point 8). Bounded, structural summary
+// per step - never raw tool arguments, never observation data/PII. Mirrors
+// agent-loop/agentStepTypes.ts#AgentLoopStepRecord shape, same
+// no-cross-module-import rationale as the rest of this file.
+export type AgentToolLoopStepSummary = {
+  stepIndex: number;
+  type: "use_tool" | "respond" | "handoff";
+  phase: "gathering" | "finalization";
+  tool?: string;
+  governance?: "authorized" | "blocked_unregistered" | "blocked_duplicate";
+  observationStatus?: "completed" | "failed" | "blocked";
+};
+
 export type AgentToolLoopCompletedRecordedPayload = {
   inboundMessageId: string | null;
   terminalReason: AgentToolLoopTerminalReason;
@@ -180,6 +193,7 @@ export type AgentToolLoopCompletedRecordedPayload = {
   toolsUsed: string[];
   finalMessagePresent: boolean;
   handoffReasonPresent: boolean;
+  stepsSummary: AgentToolLoopStepSummary[];
 };
 
 export interface CommercialEventV1 {

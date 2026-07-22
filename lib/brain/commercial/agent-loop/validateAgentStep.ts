@@ -1,4 +1,4 @@
-import type { AgentStep } from "./agentStepTypes";
+import { AGENT_STEP_TYPES, type AgentStep, type AgentStepType } from "./agentStepTypes";
 
 const MAX_MESSAGE_LENGTH = 2000;
 const MAX_REASON_LENGTH = 500;
@@ -36,8 +36,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * an unregistered tool gets a `blocked` observation the model can replan
  * from, never the "invalid output" format-retry path). See
  * runAgentToolLoop.ts for where that check happens.
+ *
+ * `allowedTypes` restricts which of the three variants are acceptable for
+ * this call - used by the loop's finalization phase (tools exhausted) to
+ * require `respond`/`handoff` only. A `use_tool` step is then rejected here,
+ * as an ordinary format/shape problem consuming the finalization retry -
+ * never a separate governance concept.
  */
-export function validateAgentStep(raw: unknown): AgentStepValidationResult {
+export function validateAgentStep(raw: unknown, allowedTypes: readonly AgentStepType[] = AGENT_STEP_TYPES): AgentStepValidationResult {
   if (!isRecord(raw)) {
     return { status: "invalid", reason: "AgentStep root must be a plain object." };
   }
@@ -45,6 +51,9 @@ export function validateAgentStep(raw: unknown): AgentStepValidationResult {
   const type = raw.type;
   if (type !== "use_tool" && type !== "respond" && type !== "handoff") {
     return { status: "invalid", reason: "AgentStep.type must be use_tool, respond, or handoff." };
+  }
+  if (!allowedTypes.includes(type)) {
+    return { status: "invalid", reason: `AgentStep.type "${type}" is not allowed in this context (allowed: ${allowedTypes.join(", ")}).` };
   }
 
   if (type === "use_tool") {

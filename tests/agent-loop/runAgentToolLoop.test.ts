@@ -213,38 +213,169 @@ test("H - falla del catalogo: failed observation, agent responds without inventi
   assert.equal(result.terminalReason, "responded");
 });
 
-test("max decisions exceeded: three tool-seeking steps without respond/handoff terminates safely", async () => {
+test("presupuesto de tools y presupuesto de cierre estan separados: agotar tools entra en finalization, nunca max_steps_exceeded directo", async () => {
   catalogUp(1);
   const provider = createFakeAgentLoopProvider({
     script: [
       { type: "use_tool", tool: "search_products", arguments: { query: "a" } },
       { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
-      { type: "use_tool", tool: "search_company_knowledge", arguments: { query: "horario" } }
+      { type: "respond", message: "Esto es lo que encontre dentro de tu presupuesto." }
     ]
   });
 
   const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
 
-  assert.equal(result.terminalReason, "max_steps_exceeded");
+  assert.equal(result.toolExecutionCount, 2);
+  assert.equal(result.steps.filter((s) => s.phase === "gathering").length, 2);
+  assert.equal(result.steps.filter((s) => s.phase === "finalization").length, 1);
+  assert.equal(result.terminalReason, "responded");
+});
+
+// --- Los 7 escenarios pedidos tras el smoke real (post-smoke fix) ---
+
+test("1. search -> respond", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell 16 kg" } },
+      { type: "respond", message: "Tenemos una Kettlebell de 16kg disponible." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "¿Tienen una kettlebell de 16 kg?", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 1);
+});
+
+test("2. search -> reformulate search -> respond", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "jaula grande" } },
+      { type: "use_tool", tool: "search_products", arguments: { query: "jaula compacta" } },
+      { type: "respond", message: "Encontre una jaula compacta dentro de lo que buscas." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Busco una jaula.", commercialContextSummary: {}, provider });
+
+  assert.equal(result.toolExecutionCount, 2);
+  assert.equal(result.steps[0].governance, "authorized");
+  assert.equal(result.steps[1].governance, "authorized");
+  assert.equal(result.terminalReason, "responded");
+});
+
+test("3. search -> detail -> respond", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "jaula" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "La jaula esta dentro de tu presupuesto." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Busco una jaula y tengo hasta $500.000.", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 2);
   assert.equal(result.steps.length, 3);
 });
 
-test("max tool executions exceeded: a third tool call this turn is blocked, not executed", async () => {
+test("4. tools agotadas -> respuesta obligatoria (un intento ilegal de use_tool en finalization se rechaza y se fuerza el cierre)", async () => {
   catalogUp(1);
   const provider = createFakeAgentLoopProvider({
     script: [
       { type: "use_tool", tool: "search_products", arguments: { query: "a" } },
       { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
-      { type: "use_tool", tool: "search_company_knowledge", arguments: { query: "horario" } }
-    ],
-    version: "test.v2"
+      { type: "use_tool", tool: "search_company_knowledge", arguments: { query: "horario" } }, // ilegal en finalization
+      { type: "respond", message: "Con lo que ya tengo, esto es lo que te recomiendo." }
+    ]
   });
 
-  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider, maxDecisions: 3, maxToolExecutions: 2 });
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
 
   assert.equal(result.toolExecutionCount, 2);
-  assert.equal(result.steps[2].governance, "blocked_unauthorized");
-  assert.equal(result.steps[2].observation?.errorCode, "max_tool_executions_exceeded");
+  assert.equal(result.terminalReason, "responded");
+  assert.ok(result.warnings.some((w) => w.startsWith("agent_step_invalid:")));
+  assert.equal(result.steps[result.steps.length - 1].phase, "finalization");
+});
+
+test("5. finalizacion invalida -> retry (salida malformada en el primer intento, valida en el segundo)", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "a" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      "not an object", // primer intento de finalization: invalido
+      { type: "respond", message: "Retomo con lo que ya se de tu consulta." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.steps[result.steps.length - 1].phase, "finalization");
+});
+
+test("6. finalizacion falla dos veces -> fallback (invalid_output, nunca max_steps_exceeded)", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "a" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      "not an object",
+      "still not an object"
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.toolExecutionCount, 2);
+  assert.equal(result.terminalReason, "invalid_output");
+  assert.ok(result.warnings.includes("agent_loop_finalization_failed"));
+});
+
+test("7. presupuesto se proyecta a search_products cuando el modelo no lo incluye", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "jaula" } },
+      { type: "respond", message: "Esto es lo que encontre dentro de tu presupuesto." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "Busco una jaula y tengo hasta $400.000.",
+    commercialContextSummary: { needProfile: { useCase: "full_body", budgetMax: 400000, requiredFeatures: [] } },
+    provider
+  });
+
+  const step = result.steps[0].step;
+  assert.equal(step.type, "use_tool");
+  assert.equal(step.type === "use_tool" ? step.arguments.budgetMax : undefined, 400000);
+});
+
+test("7b. presupuesto no sobreescribe un budgetMax que el modelo ya incluyo", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "jaula", budgetMax: 250000 } },
+      { type: "respond", message: "Esto es lo que encontre." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "Busco una jaula.",
+    commercialContextSummary: { needProfile: { useCase: "full_body", budgetMax: 400000, requiredFeatures: [] } },
+    provider
+  });
+
+  const step = result.steps[0].step;
+  assert.equal(step.type === "use_tool" ? step.arguments.budgetMax : undefined, 250000);
 });
 
 test("invalid model output gets exactly one format retry, then fails safe", async () => {

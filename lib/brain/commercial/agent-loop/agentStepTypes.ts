@@ -53,12 +53,24 @@ export const AGENT_LOOP_TERMINAL_REASONS = [
 ] as const;
 export type AgentLoopTerminalReason = (typeof AGENT_LOOP_TERMINAL_REASONS)[number];
 
+export const AGENT_LOOP_STEP_PHASES = ["gathering", "finalization"] as const;
+export type AgentLoopStepPhase = (typeof AGENT_LOOP_STEP_PHASES)[number];
+
 export type AgentLoopStepRecord = {
   stepIndex: number;
   step: AgentStep;
-  /** Governance verdict for use_tool steps only; null for respond/handoff. */
-  governance: "authorized" | "blocked_unregistered" | "blocked_unauthorized" | "blocked_duplicate" | null;
+  /**
+   * Governance verdict for use_tool steps only; null for respond/handoff.
+   * "blocked_unauthorized" (tool budget already exhausted) cannot occur here
+   * by construction: the gathering phase stops asking for a tool decision
+   * the moment the budget is spent, and the finalization phase rejects any
+   * use_tool attempt at the validation layer (wrong type for that phase)
+   * before it ever reaches a governance decision.
+   */
+  governance: "authorized" | "blocked_unregistered" | "blocked_duplicate" | null;
   observation: ToolObservation | null;
+  /** Which loop phase produced this step - see runAgentToolLoop.ts. */
+  phase: AgentLoopStepPhase;
 };
 
 export type AgentLoopResult = {
