@@ -89,6 +89,91 @@ function skippedResult(reason: string, humanOwnerActive: boolean, aiBlocked: boo
   };
 }
 
+const SALES_AGENT_CONFIGURATION_UNAVAILABLE_HANDOFF_REASON = "sales_agent_configuration_unavailable";
+
+export type RunNativeAgentToolLoopCycleConfigurationFailureInput = {
+  conversationId: number;
+  waId: string;
+  inboundMessageId: string;
+  correlationId: string;
+  currentTime: string;
+  snapshot: CommercialContextSnapshot;
+  /**
+   * Internal only - the real technical cause (e.g. a DB error message).
+   * Never reaches the customer and is never persisted verbatim to a
+   * commercial_event - it only ever surfaces in this cycle's own
+   * `warnings` (returned up through NativeAutonomousCycleResult.warnings),
+   * the same place every other technical failure in
+   * runNativeAutonomousCycle.ts (shadow_failed, loop_failed,
+   * bridge_failed, ...) already surfaces internally.
+   */
+  technicalReason: string;
+};
+
+/**
+ * ACS-R1-05.1-T02.3B (fix). A real Sales Agent Configuration resolution
+ * failure (DB/repository error - never "nothing published", which the
+ * resolver already resolves on its own to a deployment/safe default) must
+ * never license inventing a default personality and keep calling the
+ * model. The model is never invoked here.
+ *
+ * A human-owned or AI-blocked conversation still never gets an
+ * AI-authored message (A4 invariant, unchanged) - skippedResult below
+ * covers that, with zero dispatch, same as the normal path. Otherwise,
+ * this dispatches a real, neutral handoff acknowledgement through the
+ * exact same pipeline any other terminal handoff uses
+ * (dispatchAgentLoopResponse -> buildContinuityFallbackMessage
+ * ("handoff_acknowledgement", ...)) - never a bespoke message, and never
+ * a table name, SQL error, timeout, or stack trace.
+ *
+ * `ran: true` (not the skipped-result shape): ensureAutonomousSalesTurnContinuity
+ * branches on `agentLoop.ran` - `false` means "skipped, human/AI already
+ * owns it, nothing to check", which would misreport this real, dispatched
+ * acknowledgement as if nothing had been sent. `ran: true` routes it
+ * through continuity's normal dispatch-outcome check instead, which never
+ * attempts a second, redundant dispatch once dispatch.outboxWritten is
+ * true.
+ */
+export async function runNativeAgentToolLoopCycleConfigurationFailure(
+  input: RunNativeAgentToolLoopCycleConfigurationFailureInput
+): Promise<NativeAgentToolLoopCycleResult> {
+  const humanOwnerActive = input.snapshot.signals.humanOwnerActive;
+  const aiBlocked = input.snapshot.signals.aiBlocked;
+
+  if (humanOwnerActive || aiBlocked) {
+    return skippedResult(input.technicalReason, humanOwnerActive, aiBlocked);
+  }
+
+  const opportunityId = typeof input.snapshot.opportunity?.id === "number" ? input.snapshot.opportunity.id : null;
+  const conversationCaseId = input.snapshot.opportunity?.conversationCaseId ?? input.conversationId;
+
+  const loop: AgentLoopResult = {
+    ran: true,
+    terminalReason: "handoff",
+    steps: [],
+    toolExecutionCount: 0,
+    finalMessage: null,
+    handoffReason: SALES_AGENT_CONFIGURATION_UNAVAILABLE_HANDOFF_REASON,
+    warnings: [input.technicalReason]
+  };
+
+  const dispatch = await dispatchAgentLoopResponse({
+    conversationId: input.conversationId,
+    conversationCaseId,
+    opportunityId,
+    waId: input.waId,
+    inboundMessageId: input.inboundMessageId,
+    currentTime: input.currentTime,
+    humanOwnerActive,
+    aiBlocked,
+    caseStatus: input.snapshot.opportunity?.status ?? input.snapshot.conversation?.status ?? null,
+    loop,
+    commercialNeed: buildCommercialNeed(input.snapshot)
+  });
+
+  return { loop, dispatch, humanOwnerActive, aiBlocked };
+}
+
 /**
  * ACS-R1-05.1-T02.1. Runs the native read-only agent tool loop for one
  * inbound turn and dispatches its terminal outcome. A conversation a human

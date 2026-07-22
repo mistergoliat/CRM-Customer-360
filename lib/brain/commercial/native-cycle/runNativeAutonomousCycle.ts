@@ -22,7 +22,7 @@ import {
   buildCommercialSalesAgentDryRun,
   readEnvFlag
 } from "../config/commercialCycleConfig";
-import { runNativeAgentToolLoopCycle } from "../agent-loop";
+import { runNativeAgentToolLoopCycle, runNativeAgentToolLoopCycleConfigurationFailure } from "../agent-loop";
 import type { NativeAgentToolLoopCycleResult } from "../agent-loop";
 import { createHttpAgentLoopProvider } from "../agent-loop/providers/httpAgentLoopProvider";
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
@@ -40,13 +40,7 @@ import type { CatalogGroundingResult } from "./buildCatalogGroundedMessage";
 import { applyCatalogGroundingToNextAction } from "./applyCatalogGroundingToNextAction";
 import { listAliasedSalesAgentToolNames } from "../capability-gateway/toolAliases";
 import type { SalesAgentProvider } from "../sales-agent/runtimeTypes";
-import {
-  resolveSalesAgentConfiguration,
-  SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
-  SALES_AGENT_CONFIGURATION_SCOPE,
-  SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
-  SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT
-} from "../sales-agent-configuration";
+import { resolveSalesAgentConfiguration } from "../sales-agent-configuration";
 import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
 
 /**
@@ -57,28 +51,6 @@ import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configurati
  * would let policy keep a request nothing ever fulfills.
  */
 const NATIVE_CYCLE_ALLOWED_CAPABILITIES = listAliasedSalesAgentToolNames();
-
-/**
- * ACS-R1-05.1-T02.3B. Used only if resolveSalesAgentConfiguration() itself
- * throws (a real DB failure) - never as a routine path. A config-resolution
- * failure must not take down the whole customer turn (the whole point of a
- * safe default), but it must also never be silently absorbed: the caller
- * records a warning when it falls back to this. Statically equal to what
- * the resolver's own safe_default branch would produce (its clamp is a
- * no-op on values already within platform limits), so behavior never
- * diverges between "resolver ran and returned safe_default" and "resolver
- * threw and this fallback was used instead".
- */
-const HARD_SAFE_SALES_AGENT_CONFIGURATION_FALLBACK: ResolvedSalesAgentConfiguration = {
-  source: "safe_default",
-  scopeKey: SALES_AGENT_CONFIGURATION_SCOPE,
-  recordId: null,
-  version: null,
-  configurationHash: null,
-  configuration: SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
-  effectiveModelConfiguration: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT,
-  effectiveLoopConfiguration: SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT
-};
 
 // ACS-R1-04-T05: shared, lazily-created Customer 360 query service - same
 // cached-singleton pattern as getSharedCatalogPort in capability-gateway/registry.ts.
@@ -290,21 +262,47 @@ export async function runNativeAutonomousCycle(
       };
     }
 
-    // ACS-R1-05.1-T02.3B: resolved exactly once per cycle. A resolution
-    // failure (real DB error) never blocks the turn - the same
-    // fault-tolerant pattern the legacy path below already uses for
-    // shadow/loop/bridge/catalog - but it is recorded as a warning, never
-    // silently absorbed. resolveSalesAgentConfiguration() itself still
-    // throws on a real error (T02.3A's fail-closed contract, unchanged);
-    // only this composition root decides to degrade instead of failing the
-    // whole turn.
-    const agentConfigWarnings: string[] = [];
+    // ACS-R1-05.1-T02.3B: resolved exactly once per cycle. "Nothing
+    // published" is not an error - resolveSalesAgentConfiguration() already
+    // degrades that case on its own to a deployment/safe default, and the
+    // cycle below proceeds normally, model included. A resolution failure
+    // (a real DB/repository error - the resolver's fail-closed contract:
+    // it never swallows this itself) is different in kind: it must never
+    // be treated as license to invent a default personality and keep
+    // calling the model. The model is never invoked for this turn; a real,
+    // neutral handoff is dispatched instead
+    // (runNativeAgentToolLoopCycleConfigurationFailure), and the technical
+    // cause is recorded only internally (this cycle's own warnings - never
+    // exposed to the customer, never persisted verbatim to a
+    // commercial_event).
     let resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
     try {
       resolvedSalesAgentConfiguration = await resolveSalesAgentConfiguration();
     } catch (error) {
-      agentConfigWarnings.push(`sales_agent_configuration_resolution_failed:${error instanceof Error ? error.message : "unknown"}`);
-      resolvedSalesAgentConfiguration = HARD_SAFE_SALES_AGENT_CONFIGURATION_FALLBACK;
+      const technicalReason = `sales_agent_configuration_resolution_failed:${error instanceof Error ? error.message : "unknown"}`;
+      const agentLoopResult = await runNativeAgentToolLoopCycleConfigurationFailure({
+        conversationId: input.conversationId,
+        waId: input.waId,
+        inboundMessageId: String(input.messageId ?? input.correlationId),
+        correlationId: input.correlationId,
+        currentTime: input.currentTime,
+        snapshot,
+        technicalReason
+      });
+
+      return {
+        ran: true,
+        reason: "agent_tool_loop_configuration_unavailable",
+        shadow: null,
+        loop: null,
+        bridge: null,
+        agentLoop: agentLoopResult,
+        catalogCapability: null,
+        customerContextState: customer360.state,
+        customerSession: session.decision,
+        commercialNeed: null,
+        warnings: dedupeWarnings([...customer360.warnings, ...session.warnings, ...agentLoopResult.loop.warnings, ...agentLoopResult.dispatch.warnings])
+      };
     }
 
     const agentLoopResult = await runNativeAgentToolLoopCycle({
@@ -349,7 +347,6 @@ export async function runNativeAutonomousCycle(
       warnings: dedupeWarnings([
         ...customer360.warnings,
         ...session.warnings,
-        ...agentConfigWarnings,
         ...agentLoopResult.loop.warnings,
         ...agentLoopResult.dispatch.warnings
       ])
