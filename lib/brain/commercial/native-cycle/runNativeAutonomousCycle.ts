@@ -40,6 +40,14 @@ import type { CatalogGroundingResult } from "./buildCatalogGroundedMessage";
 import { applyCatalogGroundingToNextAction } from "./applyCatalogGroundingToNextAction";
 import { listAliasedSalesAgentToolNames } from "../capability-gateway/toolAliases";
 import type { SalesAgentProvider } from "../sales-agent/runtimeTypes";
+import {
+  resolveSalesAgentConfiguration,
+  SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
+  SALES_AGENT_CONFIGURATION_SCOPE,
+  SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
+  SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT
+} from "../sales-agent-configuration";
+import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
 
 /**
  * Capabilities the native cycle's sales agent is allowed to request this
@@ -49,6 +57,28 @@ import type { SalesAgentProvider } from "../sales-agent/runtimeTypes";
  * would let policy keep a request nothing ever fulfills.
  */
 const NATIVE_CYCLE_ALLOWED_CAPABILITIES = listAliasedSalesAgentToolNames();
+
+/**
+ * ACS-R1-05.1-T02.3B. Used only if resolveSalesAgentConfiguration() itself
+ * throws (a real DB failure) - never as a routine path. A config-resolution
+ * failure must not take down the whole customer turn (the whole point of a
+ * safe default), but it must also never be silently absorbed: the caller
+ * records a warning when it falls back to this. Statically equal to what
+ * the resolver's own safe_default branch would produce (its clamp is a
+ * no-op on values already within platform limits), so behavior never
+ * diverges between "resolver ran and returned safe_default" and "resolver
+ * threw and this fallback was used instead".
+ */
+const HARD_SAFE_SALES_AGENT_CONFIGURATION_FALLBACK: ResolvedSalesAgentConfiguration = {
+  source: "safe_default",
+  scopeKey: SALES_AGENT_CONFIGURATION_SCOPE,
+  recordId: null,
+  version: null,
+  configurationHash: null,
+  configuration: SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
+  effectiveModelConfiguration: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT,
+  effectiveLoopConfiguration: SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT
+};
 
 // ACS-R1-04-T05: shared, lazily-created Customer 360 query service - same
 // cached-singleton pattern as getSharedCatalogPort in capability-gateway/registry.ts.
@@ -260,6 +290,23 @@ export async function runNativeAutonomousCycle(
       };
     }
 
+    // ACS-R1-05.1-T02.3B: resolved exactly once per cycle. A resolution
+    // failure (real DB error) never blocks the turn - the same
+    // fault-tolerant pattern the legacy path below already uses for
+    // shadow/loop/bridge/catalog - but it is recorded as a warning, never
+    // silently absorbed. resolveSalesAgentConfiguration() itself still
+    // throws on a real error (T02.3A's fail-closed contract, unchanged);
+    // only this composition root decides to degrade instead of failing the
+    // whole turn.
+    const agentConfigWarnings: string[] = [];
+    let resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
+    try {
+      resolvedSalesAgentConfiguration = await resolveSalesAgentConfiguration();
+    } catch (error) {
+      agentConfigWarnings.push(`sales_agent_configuration_resolution_failed:${error instanceof Error ? error.message : "unknown"}`);
+      resolvedSalesAgentConfiguration = HARD_SAFE_SALES_AGENT_CONFIGURATION_FALLBACK;
+    }
+
     const agentLoopResult = await runNativeAgentToolLoopCycle({
       conversationId: input.conversationId,
       waId: input.waId,
@@ -268,9 +315,17 @@ export async function runNativeAutonomousCycle(
       currentTime: input.currentTime,
       customerMessage: input.messageText,
       snapshot,
-      provider: input.agentLoopProvider ?? createHttpAgentLoopProvider(),
+      provider:
+        input.agentLoopProvider ??
+        createHttpAgentLoopProvider({
+          model: resolvedSalesAgentConfiguration.effectiveModelConfiguration.model,
+          temperature: resolvedSalesAgentConfiguration.effectiveModelConfiguration.temperature,
+          maxOutputTokens: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxOutputTokens,
+          maxModelRetries: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxModelRetries
+        }),
       trustedCustomerSession: session.execution,
-      abortSignal: input.abortSignal ?? null
+      abortSignal: input.abortSignal ?? null,
+      resolvedSalesAgentConfiguration
     });
 
     const commercialNeed: NativeAutonomousCycleCommercialNeed = {
@@ -291,7 +346,13 @@ export async function runNativeAutonomousCycle(
       customerContextState: customer360.state,
       customerSession: session.decision,
       commercialNeed,
-      warnings: dedupeWarnings([...customer360.warnings, ...session.warnings, ...agentLoopResult.loop.warnings, ...agentLoopResult.dispatch.warnings])
+      warnings: dedupeWarnings([
+        ...customer360.warnings,
+        ...session.warnings,
+        ...agentConfigWarnings,
+        ...agentLoopResult.loop.warnings,
+        ...agentLoopResult.dispatch.warnings
+      ])
     };
   }
 

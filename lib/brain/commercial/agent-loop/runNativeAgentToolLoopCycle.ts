@@ -7,6 +7,7 @@ import type { AgentLoopProvider } from "./agentLoopProviderTypes";
 import type { AgentLoopResult } from "./agentStepTypes";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session";
 import type { CommercialContextSnapshot } from "../context/buildNativeCommercialContext";
+import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
 
 export type RunNativeAgentToolLoopCycleInput = {
   conversationId: number;
@@ -19,6 +20,12 @@ export type RunNativeAgentToolLoopCycleInput = {
   provider: AgentLoopProvider | null;
   trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
   abortSignal?: AbortSignal | null;
+  /**
+   * ACS-R1-05.1-T02.3B. Resolved exactly once per cycle by the caller
+   * (runNativeAutonomousCycle.ts) - this function never calls
+   * resolveSalesAgentConfiguration() itself, and never touches the database.
+   */
+  resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
 };
 
 export type NativeAgentToolLoopCycleResult = {
@@ -101,6 +108,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
 
   const opportunityId = typeof input.snapshot.opportunity?.id === "number" ? input.snapshot.opportunity.id : null;
   const conversationCaseId = input.snapshot.opportunity?.conversationCaseId ?? input.conversationId;
+  const { configuration: identityConfiguration, effectiveModelConfiguration, effectiveLoopConfiguration } = input.resolvedSalesAgentConfiguration;
 
   const loop = await runAgentToolLoop({
     correlationId: input.correlationId,
@@ -111,7 +119,11 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     commercialContextSummary: buildCommercialContextSummary(input.snapshot),
     provider: input.provider,
     trustedCustomerSession: input.trustedCustomerSession,
-    abortSignal: input.abortSignal
+    abortSignal: input.abortSignal,
+    identityConfiguration,
+    maxDecisions: effectiveLoopConfiguration.maxAgentStepsPerTurn,
+    maxToolExecutions: effectiveLoopConfiguration.maxToolCallsPerTurn,
+    timeoutMs: effectiveModelConfiguration.timeoutMs
   });
 
   const dispatch = await dispatchAgentLoopResponse({
@@ -139,7 +151,21 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     toolsUsed: [...new Set(loop.steps.filter((record) => record.step.type === "use_tool").map((record) => (record.step as { tool: string }).tool))],
     finalMessagePresent: loop.finalMessage !== null,
     handoffReasonPresent: loop.handoffReason !== null,
-    stepsSummary: buildStepsSummary(loop)
+    stepsSummary: buildStepsSummary(loop),
+    // ACS-R1-05.1-T02.3B: which configuration produced this turn's prompt/
+    // model/loop parameters, and the effective (already-clamped) values
+    // actually used - never just what was requested. No prompt text, no
+    // secrets - see the events/normalize.ts payload comment.
+    configurationSource: input.resolvedSalesAgentConfiguration.source,
+    configurationRecordId: input.resolvedSalesAgentConfiguration.recordId,
+    configurationVersion: input.resolvedSalesAgentConfiguration.version,
+    configurationHash: input.resolvedSalesAgentConfiguration.configurationHash,
+    effectiveModel: effectiveModelConfiguration.model,
+    effectiveTemperature: effectiveModelConfiguration.temperature,
+    effectiveMaxOutputSize: effectiveModelConfiguration.maxOutputTokens,
+    effectiveTimeoutMs: effectiveModelConfiguration.timeoutMs,
+    effectiveMaxAgentStepsPerTurn: effectiveLoopConfiguration.maxAgentStepsPerTurn,
+    effectiveMaxToolCallsPerTurn: effectiveLoopConfiguration.maxToolCallsPerTurn
   }).catch(() => void 0);
 
   return { loop, dispatch, humanOwnerActive, aiBlocked };

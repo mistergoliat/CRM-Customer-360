@@ -2,6 +2,7 @@ import { executeGovernedCapability } from "../capability-gateway/executeCapabili
 import { resolveCapabilityGatewayDefinition } from "../capability-gateway/registry";
 import type { CapabilityGatewayContext } from "../capability-gateway/types";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
+import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfiguration } from "../sales-agent-configuration";
 import { buildAgentStepPromptPackage, type AgentLoopToolDescription } from "./buildAgentStepPromptPackage";
 import { buildToolObservation } from "./buildToolObservation";
 import { validateAgentStep } from "./validateAgentStep";
@@ -38,6 +39,8 @@ export type RunAgentToolLoopInput = {
   maxToolExecutions?: number;
   timeoutMs?: number;
   abortSignal?: AbortSignal | null;
+  /** Defaults to the generic safe default (no PesasChile branding) - production callers always resolve and pass the effective one (ACS-R1-05.1-T02.3B). */
+  identityConfiguration?: SalesAgentPromptConfiguration;
 };
 
 function buildToolDescriptions(): AgentLoopToolDescription[] {
@@ -162,6 +165,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   const maxDecisions = input.maxDecisions ?? DEFAULT_MAX_DECISIONS;
   const maxToolExecutions = input.maxToolExecutions ?? DEFAULT_MAX_TOOL_EXECUTIONS;
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const identityConfiguration = input.identityConfiguration ?? SALES_AGENT_CONFIGURATION_SAFE_DEFAULT;
   const deadline = Date.now() + timeoutMs;
   const warnings: string[] = [];
 
@@ -207,7 +211,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       availableTools: toolDescriptions,
       priorSteps: steps,
       stepsRemaining: maxDecisions - decisionIndex,
-      phase: "gathering"
+      phase: "gathering",
+      identityConfiguration
     });
 
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);
@@ -267,7 +272,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       availableTools: [],
       priorSteps: steps,
       stepsRemaining: 1,
-      phase: "finalization"
+      phase: "finalization",
+      identityConfiguration
     });
 
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);

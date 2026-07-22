@@ -1,6 +1,8 @@
+import type { SalesAgentPromptConfiguration } from "../sales-agent-configuration";
 import { AGENT_STEP_TYPES } from "./agentStepTypes";
 import type { AgentLoopStepRecord } from "./agentStepTypes";
 import type { AgentLoopProviderMessage } from "./agentLoopProviderTypes";
+import { renderSalesAgentIdentityPrompt } from "./renderSalesAgentIdentityPrompt";
 
 export type AgentLoopToolDescription = {
   name: string;
@@ -22,7 +24,62 @@ export type AgentLoopPromptInput = {
    * handoff are legal; no tools are offered or usable.
    */
   phase?: "gathering" | "finalization";
+  /**
+   * ACS-R1-05.1-T02.3B. Never optional/defaulted here - resolving a default
+   * is the loop's job (runAgentToolLoop.ts), not the prompt builder's; this
+   * function stays a pure function of exactly what it is given, and never
+   * touches the database itself.
+   */
+  identityConfiguration: SalesAgentPromptConfiguration;
 };
+
+const RESPOND_JSON_INSTRUCTION = "Return exactly one JSON object matching AgentStep, nothing else, no markdown fence.";
+
+/**
+ * Layer 1: the immutable Agent Tool Loop contract - what actions exist this
+ * phase and the exact response shape. Never editable, never touched by
+ * configuration.
+ */
+function buildLoopContractLines(phase: "gathering" | "finalization", stepsRemaining: number): string[] {
+  if (phase === "finalization") {
+    return [
+      "This turn's tool budget is spent - no more tools are available.",
+      "You must now either respond to the customer with what you already know, or hand off to a human if you genuinely cannot proceed.",
+      RESPOND_JSON_INSTRUCTION,
+      'AgentStep shapes: {"type":"respond","message":"..."} | {"type":"handoff","reason":"..."}. use_tool is not available this turn.',
+      "type must be one of: respond, handoff."
+    ];
+  }
+  return [
+    "Deciding one step at a time.",
+    "You may only: request one read-only tool, respond to the customer, or hand off to a human.",
+    `Steps remaining this turn: ${stepsRemaining}.`,
+    RESPOND_JSON_INSTRUCTION,
+    'AgentStep shapes: {"type":"use_tool","tool":"<tool name>","arguments":{...}} | {"type":"respond","message":"..."} | {"type":"handoff","reason":"..."}.',
+    `type must be one of: ${AGENT_STEP_TYPES.join(", ")}.`
+  ];
+}
+
+/**
+ * Layer 2: immutable evidence/tool-usage rules - grounding invariants and,
+ * for gathering only, the tool catalog. Never editable, never derived from
+ * configuration.
+ */
+function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", availableTools: AgentLoopToolDescription[]): string[] {
+  if (phase === "finalization") {
+    return [
+      "Use the customer's already-confirmed context (product type, training type, goal, budget, and any tool results already returned this turn) - do not ask again for anything already provided, and do not broaden or change the product category the customer already stated.",
+      "You must never invent product, price, stock, or delivery information not returned by a tool this turn.",
+      "You must never claim to have executed anything yourself - the platform executes tools, not you."
+    ];
+  }
+  return [
+    "Use a tool as soon as you have enough information to do so - do not wait for a fully detailed query, and do not ask the customer to repeat information already given.",
+    "You must never invent product, price, stock, or delivery information not returned by a tool.",
+    "You must never claim to have executed anything yourself - the platform executes tools, not you.",
+    `Available tools: ${availableTools.map((tool) => `${tool.name} - ${tool.description}`).join("; ") || "none"}.`
+  ];
+}
 
 function summarizeObservation(record: AgentLoopStepRecord) {
   const step = record.step;
@@ -38,40 +95,27 @@ function summarizeObservation(record: AgentLoopStepRecord) {
 }
 
 /**
- * ACS-R1-05.1-T02.1 (spec section 7). One question only: "what is the next
- * step?" - never analysis, policy assessment, rationale, a final response,
- * multiple tool requests, entity proposals, or full commercial state in the
- * same call. Deliberately much smaller than buildSalesAgentPromptPackage.ts.
+ * ACS-R1-05.1-T02.1/T02.3B (spec section 7). One question only: "what is the
+ * next step?" - never analysis, policy assessment, rationale, a final
+ * response, multiple tool requests, entity proposals, or full commercial
+ * state in the same call. Deliberately much smaller than
+ * buildSalesAgentPromptPackage.ts.
+ *
+ * Five layers, in order, never interleaved: (1) immutable loop contract,
+ * (2) immutable evidence/tool rules, (3) editable identity
+ * (renderSalesAgentIdentityPrompt.ts - the one shared renderer, called
+ * identically from both phases below), (4) dynamic per-turn context, (5)
+ * this turn's own prior tool observations. Layers 4-5 travel in the `user`
+ * message (unchanged shape) - layers 1-3 compose the `system` message.
  */
 export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { messages: AgentLoopProviderMessage[] } {
   const phase = input.phase ?? "gathering";
-  const isFinalization = phase === "finalization";
 
-  const systemInstructions = (
-    isFinalization
-      ? [
-          "You are the Sales Agent for PesasChile AI Hub. This turn's tool budget is spent - no more tools are available.",
-          "You must now either respond to the customer with what you already know, or hand off to a human if you genuinely cannot proceed.",
-          "Use the customer's already-confirmed context (product type, training type, goal, budget, and any tool results already returned this turn) - do not ask again for anything already provided, and do not broaden or change the product category the customer already stated.",
-          "You must never invent product, price, stock, or delivery information not returned by a tool this turn.",
-          "You must never claim to have executed anything yourself - the platform executes tools, not you.",
-          "Return exactly one JSON object matching AgentStep, nothing else, no markdown fence.",
-          'AgentStep shapes: {"type":"respond","message":"..."} | {"type":"handoff","reason":"..."}. use_tool is not available this turn.',
-          'type must be one of: respond, handoff.'
-        ]
-      : [
-          "You are the Sales Agent for PesasChile AI Hub, deciding one step at a time.",
-          "You may only: request one read-only tool, respond to the customer, or hand off to a human.",
-          "Use a tool as soon as you have enough information to do so - do not wait for a fully detailed query, and do not ask the customer to repeat information already given.",
-          "You must never invent product, price, stock, or delivery information not returned by a tool.",
-          "You must never claim to have executed anything yourself - the platform executes tools, not you.",
-          `Available tools: ${input.availableTools.map((tool) => `${tool.name} - ${tool.description}`).join("; ") || "none"}.`,
-          `Steps remaining this turn: ${input.stepsRemaining}.`,
-          "Return exactly one JSON object matching AgentStep, nothing else, no markdown fence.",
-          'AgentStep shapes: {"type":"use_tool","tool":"<tool name>","arguments":{...}} | {"type":"respond","message":"..."} | {"type":"handoff","reason":"..."}.',
-          `type must be one of: ${AGENT_STEP_TYPES.join(", ")}.`
-        ]
-  ).join("\n");
+  const systemInstructions = [
+    ...buildLoopContractLines(phase, input.stepsRemaining),
+    ...buildEvidenceAndToolRulesLines(phase, input.availableTools),
+    renderSalesAgentIdentityPrompt(input.identityConfiguration)
+  ].join("\n");
 
   const userPayload = {
     currentTime: input.currentTime,
