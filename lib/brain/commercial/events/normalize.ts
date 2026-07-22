@@ -1,5 +1,6 @@
 import type {
   AgentToolLoopCompletedRecordedPayload,
+  AgentToolLoopConfigurationSource,
   AgentToolLoopTerminalReason,
   AutonomousTurnContinuityFailedRecordedPayload,
   AutonomousTurnDispositionRecordedPayload,
@@ -570,6 +571,16 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
   finalMessagePresent: boolean;
   handoffReasonPresent: boolean;
   stepsSummary: AgentToolLoopCompletedRecordedPayload["stepsSummary"];
+  configurationSource: AgentToolLoopConfigurationSource;
+  configurationRecordId: number | null;
+  configurationVersion: number | null;
+  configurationHash: string | null;
+  effectiveModel: string;
+  effectiveTemperature: number;
+  effectiveMaxOutputSize: number | null;
+  effectiveTimeoutMs: number;
+  effectiveMaxAgentStepsPerTurn: number;
+  effectiveMaxToolCallsPerTurn: number;
   correlationId?: string | null;
   customerId?: string | number | null;
   conversationId?: string | number | null;
@@ -587,7 +598,17 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
     toolsUsed: [...input.toolsUsed],
     finalMessagePresent: input.finalMessagePresent,
     handoffReasonPresent: input.handoffReasonPresent,
-    stepsSummary: input.stepsSummary.map((entry) => ({ ...entry }))
+    stepsSummary: input.stepsSummary.map((entry) => ({ ...entry })),
+    configurationSource: input.configurationSource,
+    configurationRecordId: input.configurationRecordId,
+    configurationVersion: input.configurationVersion,
+    configurationHash: input.configurationHash,
+    effectiveModel: input.effectiveModel,
+    effectiveTemperature: input.effectiveTemperature,
+    effectiveMaxOutputSize: input.effectiveMaxOutputSize,
+    effectiveTimeoutMs: input.effectiveTimeoutMs,
+    effectiveMaxAgentStepsPerTurn: input.effectiveMaxAgentStepsPerTurn,
+    effectiveMaxToolCallsPerTurn: input.effectiveMaxToolCallsPerTurn
   };
   return buildBaseEvent({
     eventType: "agent_tool_loop_completed",

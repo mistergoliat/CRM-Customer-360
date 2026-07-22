@@ -185,6 +185,11 @@ export type AgentToolLoopStepSummary = {
   observationStatus?: "completed" | "failed" | "blocked";
 };
 
+// ACS-R1-05.1-T02.3B. Local literal union mirroring
+// sales-agent-configuration/types.ts#ResolvedSalesAgentConfigurationSource -
+// same no-cross-module-import rationale as the rest of this file.
+export type AgentToolLoopConfigurationSource = "published" | "deployment_default" | "safe_default";
+
 export type AgentToolLoopCompletedRecordedPayload = {
   inboundMessageId: string | null;
   terminalReason: AgentToolLoopTerminalReason;
@@ -194,6 +199,23 @@ export type AgentToolLoopCompletedRecordedPayload = {
   finalMessagePresent: boolean;
   handoffReasonPresent: boolean;
   stepsSummary: AgentToolLoopStepSummary[];
+  /**
+   * ACS-R1-05.1-T02.3B. Which Sales Agent Configuration produced this turn's
+   * prompt/model/loop parameters, and the effective (already
+   * platform-clamped) values actually used - never just what was requested,
+   * never the prompt text itself or any secret.
+   */
+  configurationSource: AgentToolLoopConfigurationSource;
+  configurationRecordId: number | null;
+  configurationVersion: number | null;
+  configurationHash: string | null;
+  effectiveModel: string;
+  effectiveTemperature: number;
+  /** null when no real maxOutputTokens was configured - never defaulted, see EffectiveSalesAgentModelConfiguration. */
+  effectiveMaxOutputSize: number | null;
+  effectiveTimeoutMs: number;
+  effectiveMaxAgentStepsPerTurn: number;
+  effectiveMaxToolCallsPerTurn: number;
 };
 
 export interface CommercialEventV1 {

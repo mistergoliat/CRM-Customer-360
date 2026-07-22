@@ -1,6 +1,10 @@
+import type { PoolConnection } from "mysql2/promise";
 import { headers } from "next/headers";
-import { hasTable, insertExistingColumns, queryRows, sanitizeDbError } from "./db";
+import { chileNowSql, hasTable, insertExistingColumns, queryRows, sanitizeDbError } from "./db";
 import { isDbWriteEnabled } from "./write-access";
+
+/** Minimal surface a caller's own transaction connection needs to expose. */
+type AuditConnection = Pick<PoolConnection, "execute">;
 
 export type AuditAction =
   | "manual_reply_sent"
@@ -35,7 +39,11 @@ export type AuditAction =
   | "outbox.send.escalated"
   | "outbox.sent_after_cancel"
   | "outbox.window_closed.escalated"
-  | "whatsapp.inbound.rejected";
+  | "whatsapp.inbound.rejected"
+  | "sales_agent_configuration.created"
+  | "sales_agent_configuration.updated"
+  | "sales_agent_configuration.published"
+  | "sales_agent_configuration.archived";
 
 export async function ensureAuditTable() {
   await queryRows(`
@@ -60,7 +68,41 @@ export async function auditLog(input: {
   entityId?: string | number | null;
   before?: unknown;
   after?: unknown;
+  /**
+   * When provided, the audit row is written on this connection instead of
+   * the shared pool - so a caller inside its own transaction (e.g.
+   * publishing a Sales Agent Configuration, ACS-R1-05.1-T02.3A) gets the
+   * audit write inside that same commit/rollback boundary, never a second
+   * writer racing the domain write. HTTP request context (ip/user-agent) is
+   * skipped in this mode: a transactional domain write is not itself an
+   * HTTP handler, and calling headers() there would either throw outside a
+   * request scope or attribute the row to the wrong request.
+   */
+  connection?: AuditConnection;
 }) {
+  if (input.connection) {
+    // Transactional path: errors are never swallowed here - the caller's
+    // transaction is expected to commit atomically with this audit row, so
+    // a failed write must roll back the whole transaction, not be logged
+    // and ignored like the fire-and-forget pool path below.
+    if (!isDbWriteEnabled()) return;
+    const auditTableExists = await hasTable("hub_audit_log");
+    if (!auditTableExists) return;
+
+    await input.connection.execute(
+      `INSERT INTO hub_audit_log (action, entity_type, entity_id, before_json, after_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ${chileNowSql()})`,
+      [
+        input.action,
+        input.entityType,
+        input.entityId === undefined || input.entityId === null ? null : String(input.entityId),
+        input.before === undefined ? null : JSON.stringify(input.before),
+        input.after === undefined ? null : JSON.stringify(input.after)
+      ]
+    );
+    return;
+  }
+
   try {
     if (!isDbWriteEnabled()) return;
     const auditTableExists = await hasTable("hub_audit_log");

@@ -22,7 +22,7 @@ import {
   buildCommercialSalesAgentDryRun,
   readEnvFlag
 } from "../config/commercialCycleConfig";
-import { runNativeAgentToolLoopCycle } from "../agent-loop";
+import { runNativeAgentToolLoopCycle, runNativeAgentToolLoopCycleConfigurationFailure } from "../agent-loop";
 import type { NativeAgentToolLoopCycleResult } from "../agent-loop";
 import { createHttpAgentLoopProvider } from "../agent-loop/providers/httpAgentLoopProvider";
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
@@ -40,6 +40,8 @@ import type { CatalogGroundingResult } from "./buildCatalogGroundedMessage";
 import { applyCatalogGroundingToNextAction } from "./applyCatalogGroundingToNextAction";
 import { listAliasedSalesAgentToolNames } from "../capability-gateway/toolAliases";
 import type { SalesAgentProvider } from "../sales-agent/runtimeTypes";
+import { resolveSalesAgentConfiguration } from "../sales-agent-configuration";
+import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
 
 /**
  * Capabilities the native cycle's sales agent is allowed to request this
@@ -260,6 +262,49 @@ export async function runNativeAutonomousCycle(
       };
     }
 
+    // ACS-R1-05.1-T02.3B: resolved exactly once per cycle. "Nothing
+    // published" is not an error - resolveSalesAgentConfiguration() already
+    // degrades that case on its own to a deployment/safe default, and the
+    // cycle below proceeds normally, model included. A resolution failure
+    // (a real DB/repository error - the resolver's fail-closed contract:
+    // it never swallows this itself) is different in kind: it must never
+    // be treated as license to invent a default personality and keep
+    // calling the model. The model is never invoked for this turn; a real,
+    // neutral handoff is dispatched instead
+    // (runNativeAgentToolLoopCycleConfigurationFailure), and the technical
+    // cause is recorded only internally (this cycle's own warnings - never
+    // exposed to the customer, never persisted verbatim to a
+    // commercial_event).
+    let resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
+    try {
+      resolvedSalesAgentConfiguration = await resolveSalesAgentConfiguration();
+    } catch (error) {
+      const technicalReason = `sales_agent_configuration_resolution_failed:${error instanceof Error ? error.message : "unknown"}`;
+      const agentLoopResult = await runNativeAgentToolLoopCycleConfigurationFailure({
+        conversationId: input.conversationId,
+        waId: input.waId,
+        inboundMessageId: String(input.messageId ?? input.correlationId),
+        correlationId: input.correlationId,
+        currentTime: input.currentTime,
+        snapshot,
+        technicalReason
+      });
+
+      return {
+        ran: true,
+        reason: "agent_tool_loop_configuration_unavailable",
+        shadow: null,
+        loop: null,
+        bridge: null,
+        agentLoop: agentLoopResult,
+        catalogCapability: null,
+        customerContextState: customer360.state,
+        customerSession: session.decision,
+        commercialNeed: null,
+        warnings: dedupeWarnings([...customer360.warnings, ...session.warnings, ...agentLoopResult.loop.warnings, ...agentLoopResult.dispatch.warnings])
+      };
+    }
+
     const agentLoopResult = await runNativeAgentToolLoopCycle({
       conversationId: input.conversationId,
       waId: input.waId,
@@ -268,9 +313,17 @@ export async function runNativeAutonomousCycle(
       currentTime: input.currentTime,
       customerMessage: input.messageText,
       snapshot,
-      provider: input.agentLoopProvider ?? createHttpAgentLoopProvider(),
+      provider:
+        input.agentLoopProvider ??
+        createHttpAgentLoopProvider({
+          model: resolvedSalesAgentConfiguration.effectiveModelConfiguration.model,
+          temperature: resolvedSalesAgentConfiguration.effectiveModelConfiguration.temperature,
+          maxOutputTokens: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxOutputTokens,
+          maxModelRetries: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxModelRetries
+        }),
       trustedCustomerSession: session.execution,
-      abortSignal: input.abortSignal ?? null
+      abortSignal: input.abortSignal ?? null,
+      resolvedSalesAgentConfiguration
     });
 
     const commercialNeed: NativeAutonomousCycleCommercialNeed = {
@@ -291,7 +344,12 @@ export async function runNativeAutonomousCycle(
       customerContextState: customer360.state,
       customerSession: session.decision,
       commercialNeed,
-      warnings: dedupeWarnings([...customer360.warnings, ...session.warnings, ...agentLoopResult.loop.warnings, ...agentLoopResult.dispatch.warnings])
+      warnings: dedupeWarnings([
+        ...customer360.warnings,
+        ...session.warnings,
+        ...agentLoopResult.loop.warnings,
+        ...agentLoopResult.dispatch.warnings
+      ])
     };
   }
 
