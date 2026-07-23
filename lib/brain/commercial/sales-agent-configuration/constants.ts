@@ -22,13 +22,23 @@ export const SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1 = "sales_agent_configur
  */
 export const SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2 = "sales_agent_configuration.v2" as const;
 
+/**
+ * ACS-R1-05.1-T02.3D: same flat shape as v2 (all v1/v2 fields unchanged and
+ * still required/optional as before) plus one new, optional top-level
+ * section - `followUpConfiguration`. A v1 or v2 document is valid input
+ * wherever a v3 document is expected (structural superset), so no migration
+ * of existing rows is needed.
+ */
+export const SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3 = "sales_agent_configuration.v3" as const;
+
 export const SALES_AGENT_CONFIGURATION_SUPPORTED_SCHEMA_VERSIONS = [
   SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1,
-  SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2
+  SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2,
+  SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3
 ] as const;
 
 /** Version stamped on every new draft/update - never on a read-only load. */
-export const SALES_AGENT_CONFIGURATION_SCHEMA_VERSION = SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2;
+export const SALES_AGENT_CONFIGURATION_SCHEMA_VERSION = SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3;
 
 export const SALES_AGENT_CONFIGURATION_TABLE = "sales_agent_configurations";
 
@@ -107,3 +117,35 @@ export const SALES_AGENT_LOOP_CONFIGURATION_LIMITS = {
  * input.
  */
 export const SALES_AGENT_CONFIGURATION_HUB_ACTOR = "hub_operator" as const;
+
+export const SALES_AGENT_FOLLOW_UP_CONFIGURATION_FIELDS = [
+  "enabled",
+  "maxAttempts",
+  "attemptDelaysMinutes",
+  "allowedWindow",
+  "maxOpportunityAgeDays"
+] as const;
+
+export const SALES_AGENT_FOLLOW_UP_ALLOWED_WINDOW_FIELDS = ["timezone", "startHour", "endHour", "allowedWeekdays"] as const;
+
+/** Single supported business timezone for this deployment - never a per-tenant/free-string value. */
+export const SALES_AGENT_FOLLOW_UP_TIMEZONE = "America/Santiago" as const;
+
+/**
+ * ACS-R1-05.1-T02.3D. Platform ceilings/floors for the follow-up scheduling
+ * section, applied by the resolver to every effective value regardless of
+ * source - same convention as SALES_AGENT_MODEL_CONFIGURATION_LIMITS/
+ * SALES_AGENT_LOOP_CONFIGURATION_LIMITS above.
+ */
+export const SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS = {
+  maxAttemptsMin: 1,
+  maxAttemptsMax: 5,
+  attemptDelayMinutesMin: 5,
+  attemptDelayMinutesMax: 43_200,
+  maxOpportunityAgeDaysMin: 1,
+  maxOpportunityAgeDaysMax: 180,
+  windowHourMin: 0,
+  windowHourMax: 23,
+  weekdayMin: 0,
+  weekdayMax: 6
+} as const;

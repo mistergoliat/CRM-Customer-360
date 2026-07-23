@@ -112,7 +112,30 @@ test("multi-request/requestFollowups.ts keeps only the read-only projection, no 
 // outside that manual harness, so it is not a competing planner.
 const KNOWN_TEST_FIXTURE_SEED_SCRIPTS = new Set(["scripts/e2e-autonomous-harness.ts"]);
 
-test("sales-consultative/repository.ts is the only productive schedule_followup persister and derives its plan from follow-up-planner", () => {
+/**
+ * ACS-R1-05.1-T02.3D: before this task, action-queue/persistAgentAction.ts
+ * (the generic, action-type-agnostic writer the NATIVE runtime uses) never
+ * mentioned "schedule_followup" as a literal string anywhere in its own
+ * source - it just inserted whatever action_type value the caller passed in,
+ * opaque to a source-text grep. That's exactly why the native path's
+ * schedule_followup rows persisted with scheduled_for = NULL for so long
+ * without this static check ever catching it: the row really was being
+ * written there, just with no real scheduling behind it. This task fixes
+ * that (execution-bridge/runCommercialExecutionBridge.ts now computes a
+ * real schedule) and adds a literal 'schedule_followup' reference to
+ * persistAgentAction.ts itself (the active-sequence dedup query,
+ * loadActiveFollowUpForSequence) - so persistAgentAction.ts is now, by
+ * design, a second legitimate productive persister alongside the legacy
+ * sales-consultative/repository.ts (kept intact and disabled per this same
+ * task's decisions - reference only, never runtime authority). Any THIRD
+ * file doing this is still exactly what this test exists to catch.
+ */
+const KNOWN_PRODUCTIVE_SCHEDULE_FOLLOWUP_PERSISTERS = new Set([
+  "lib/brain/commercial/sales-consultative/repository.ts",
+  "lib/brain/commercial/action-queue/persistAgentAction.ts"
+]);
+
+test("sales-consultative/repository.ts and action-queue/persistAgentAction.ts are the only productive schedule_followup persisters", () => {
   const repositorySource = readFileSync(resolve(ROOT, "lib/brain/commercial/sales-consultative/repository.ts"), "utf8");
   assert.match(repositorySource, /from ["']\.\.\/follow-up-planner["']/);
   assert.match(repositorySource, /planCommercialFollowUp/);
@@ -121,7 +144,7 @@ test("sales-consultative/repository.ts is the only productive schedule_followup 
   const offenders: string[] = [];
   for (const absPath of listProductionSourceFiles()) {
     const relPath = toPosix(absPath.slice(ROOT.length + 1));
-    if (relPath === "lib/brain/commercial/sales-consultative/repository.ts") continue;
+    if (KNOWN_PRODUCTIVE_SCHEDULE_FOLLOWUP_PERSISTERS.has(relPath)) continue;
     if (isAllowedSandboxImporter(relPath)) continue; // in-memory only, never a real INSERT
     if (KNOWN_TEST_FIXTURE_SEED_SCRIPTS.has(relPath)) continue;
     const source = readFileSync(absPath, "utf8");

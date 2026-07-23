@@ -1,5 +1,6 @@
 import {
   SALES_AGENT_CONFIGURATION_SCOPE,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS,
   SALES_AGENT_LOOP_CONFIGURATION_LIMITS,
   SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL,
   SALES_AGENT_MODEL_CONFIGURATION_LIMITS
@@ -7,11 +8,19 @@ import {
 import {
   readDeploymentDefaultSalesAgentConfiguration,
   SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT
 } from "./defaults";
 import { loadPublishedPesasChileConfiguration } from "./repository";
-import type { EffectiveSalesAgentModelConfiguration, ResolvedSalesAgentConfiguration, SalesAgentLoopConfiguration, SalesAgentModelConfiguration } from "./types";
+import type {
+  EffectiveSalesAgentFollowUpConfiguration,
+  EffectiveSalesAgentModelConfiguration,
+  ResolvedSalesAgentConfiguration,
+  SalesAgentFollowUpConfiguration,
+  SalesAgentLoopConfiguration,
+  SalesAgentModelConfiguration
+} from "./types";
 import { isSalesAgentModelAllowed } from "./validation";
 
 function clamp(value: number, min: number, max: number): number {
@@ -64,6 +73,43 @@ function resolveEffectiveLoopConfiguration(candidate: SalesAgentLoopConfiguratio
 }
 
 /**
+ * ACS-R1-05.1-T02.3D. Same "always clamp to current platform limits,
+ * regardless of source" rule as model/loop above - a persisted value can
+ * never exceed these, even if it was in range when written. allowedWeekdays
+ * is filtered to valid entries and, only if that leaves it empty (corrupted/
+ * stale data), falls back to the safe default's weekdays - the resolver must
+ * never hand back a structurally-empty effective window, which the worker
+ * would have no way to schedule anything against.
+ */
+function resolveEffectiveFollowUpConfiguration(candidate: SalesAgentFollowUpConfiguration | undefined): EffectiveSalesAgentFollowUpConfiguration {
+  const base = candidate ?? SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT;
+  const limits = SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS;
+
+  const maxAttempts = clamp(Math.round(base.maxAttempts), limits.maxAttemptsMin, limits.maxAttemptsMax);
+  const attemptDelaysMinutes = base.attemptDelaysMinutes.map((minutes) =>
+    clamp(Math.round(minutes), limits.attemptDelayMinutesMin, limits.attemptDelayMinutesMax)
+  );
+  const startHour = clamp(Math.round(base.allowedWindow.startHour), limits.windowHourMin, limits.windowHourMax);
+  const endHour = clamp(Math.round(base.allowedWindow.endHour), limits.windowHourMin, limits.windowHourMax);
+  const filteredWeekdays = base.allowedWindow.allowedWeekdays.filter(
+    (day) => Number.isInteger(day) && day >= limits.weekdayMin && day <= limits.weekdayMax
+  );
+
+  return {
+    enabled: base.enabled,
+    maxAttempts,
+    attemptDelaysMinutes,
+    allowedWindow: {
+      timezone: base.allowedWindow.timezone,
+      startHour,
+      endHour: endHour > startHour ? endHour : startHour + 1 > limits.windowHourMax ? limits.windowHourMax : startHour + 1,
+      allowedWeekdays: filteredWeekdays.length > 0 ? filteredWeekdays : [...SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT.allowedWindow.allowedWeekdays]
+    },
+    maxOpportunityAgeDays: clamp(Math.round(base.maxOpportunityAgeDays), limits.maxOpportunityAgeDaysMin, limits.maxOpportunityAgeDaysMax)
+  };
+}
+
+/**
  * published (scope=pesas_chile) -> deployment default -> safe default, for
  * the prompt identity. Model/loop configuration has no deployment-default
  * tier (that concept is prompt-only, from T02.3A) - it comes from the
@@ -90,7 +136,8 @@ export async function resolveSalesAgentConfiguration(env: NodeJS.ProcessEnv = pr
       configurationHash: published.configurationHash,
       configuration: published.configuration,
       effectiveModelConfiguration: resolveEffectiveModelConfiguration(published.configuration.modelConfiguration, env),
-      effectiveLoopConfiguration: resolveEffectiveLoopConfiguration(published.configuration.loopConfiguration)
+      effectiveLoopConfiguration: resolveEffectiveLoopConfiguration(published.configuration.loopConfiguration),
+      effectiveFollowUpConfiguration: resolveEffectiveFollowUpConfiguration(published.configuration.followUpConfiguration)
     };
   }
 
@@ -104,7 +151,8 @@ export async function resolveSalesAgentConfiguration(env: NodeJS.ProcessEnv = pr
       configurationHash: null,
       configuration: deploymentDefault.configuration,
       effectiveModelConfiguration: resolveEffectiveModelConfiguration(undefined, env),
-      effectiveLoopConfiguration: resolveEffectiveLoopConfiguration(undefined)
+      effectiveLoopConfiguration: resolveEffectiveLoopConfiguration(undefined),
+      effectiveFollowUpConfiguration: resolveEffectiveFollowUpConfiguration(undefined)
     };
   }
 
@@ -116,6 +164,7 @@ export async function resolveSalesAgentConfiguration(env: NodeJS.ProcessEnv = pr
     configurationHash: null,
     configuration: SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
     effectiveModelConfiguration: resolveEffectiveModelConfiguration(undefined, env),
-    effectiveLoopConfiguration: resolveEffectiveLoopConfiguration(undefined)
+    effectiveLoopConfiguration: resolveEffectiveLoopConfiguration(undefined),
+    effectiveFollowUpConfiguration: resolveEffectiveFollowUpConfiguration(undefined)
   };
 }

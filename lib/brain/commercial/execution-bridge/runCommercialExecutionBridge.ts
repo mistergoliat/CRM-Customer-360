@@ -4,8 +4,12 @@ import { buildSandboxAutonomyConfig, evaluateAgentActionForSandbox } from "../au
 import type { SandboxAutonomyAgentActionContext } from "../autonomy-sandbox";
 import { executeActionThroughGate } from "../execution-gate";
 import { SqlExecutionUnitOfWork } from "../execution-gate/sqlExecutionUnitOfWork";
-import type { CommercialOperationalLoopResult } from "../operational-loop";
+import type { CommercialNextAction, CommercialOperationalLoopResult } from "../operational-loop";
 import type { CommercialExecutionBridgeFeatureFlags, CommercialExecutionBridgeResult } from "./types";
+import { resolveSalesAgentConfiguration } from "../sales-agent-configuration";
+import type { ResolvedSalesAgentConfigurationSource } from "../sales-agent-configuration";
+import { buildFollowUpSequenceKey, loadFollowUpAttemptHistory } from "../followup/loadFollowUpAttemptHistory";
+import { computeNextFollowUpSchedule } from "../followup/computeFollowUpSchedule";
 
 type RunCommercialExecutionBridgeInput = {
   operationalLoopResult: CommercialOperationalLoopResult | null;
@@ -47,7 +51,156 @@ function emptyResult(
   };
 }
 
-function buildActionContext(input: RunCommercialExecutionBridgeInput, loop: CommercialOperationalLoopResult): CrmAgentActionBuildContext {
+/**
+ * ACS-R1-05.1-T02.3D. What buildActionContext used to hardcode
+ * (`maxAttempts: 1`, no scheduledFor, no attempt continuity) - the native
+ * runtime never had real follow-up scheduling before this task; every
+ * `propose_followup` row was persisted with `scheduled_for = NULL`, which
+ * `runFollowupTick.selectDueFollowUps`'s `scheduled_for <= UTC_TIMESTAMP()`
+ * can never match. This resolves the CURRENT published Sales Agent
+ * Configuration's followUpConfiguration, the sequence's real attempt
+ * history (opportunity_id first, conversation_case_id fallback - never
+ * wa_id), and computes attempt N's real scheduled_for - or explains why it
+ * can't (disabled, max attempts reached, opportunity too old, window
+ * unreachable, configuration unavailable) via additionalBlockReasons, which
+ * the caller folds into the built action's blockedReasons so the existing
+ * status-derivation logic in buildAgentActionFromNextAction naturally
+ * produces `blocked`, never a schedule_followup row with a fabricated date.
+ */
+type FollowUpSchedulingContext = {
+  scheduledFor: string | null;
+  attemptNumber: number;
+  maxAttempts: number;
+  followUpSequenceKey: string | null;
+  followUpConfigurationSource: ResolvedSalesAgentConfigurationSource | null;
+  followUpConfigurationId: number | null;
+  followUpConfigurationVersion: number | null;
+  followUpConfigurationHash: string | null;
+  additionalBlockReasons: string[];
+};
+
+/**
+ * Narrowed to exactly what this function reads (never the full
+ * CommercialOperationalLoopResult) - keeps this testable in isolation with a
+ * small literal object instead of hand-constructing the entire operational
+ * loop result type, and keeps the coupling honest about what actually
+ * matters for scheduling.
+ */
+export type FollowUpSchedulingLoopContext = {
+  resultingState: {
+    opportunityId: number | string | null;
+    conversationCaseId: number | string | null;
+    createdAt?: string | null;
+  } | null;
+};
+
+export async function resolveFollowUpSchedulingContext(loop: FollowUpSchedulingLoopContext, now: string): Promise<FollowUpSchedulingContext> {
+  const opportunityId = loop.resultingState?.opportunityId ?? null;
+  const conversationCaseId = loop.resultingState?.conversationCaseId ?? null;
+  const followUpSequenceKey = buildFollowUpSequenceKey(opportunityId, conversationCaseId);
+
+  const base = {
+    scheduledFor: null as string | null,
+    attemptNumber: 1,
+    maxAttempts: 1,
+    followUpSequenceKey,
+    followUpConfigurationSource: null as ResolvedSalesAgentConfigurationSource | null,
+    followUpConfigurationId: null as number | null,
+    followUpConfigurationVersion: null as number | null,
+    followUpConfigurationHash: null as string | null
+  };
+
+  let resolved;
+  try {
+    resolved = await resolveSalesAgentConfiguration();
+  } catch {
+    // A real DB/resolver failure - never fabricate a schedule from a
+    // hardcoded default here. Mirrors the worker's own decision 13 handling
+    // (configuration_unavailable): no model was invoked as a result of this
+    // (the LLM already ran earlier in the loop), but the platform refuses to
+    // authorize/schedule anything on top of an unreadable configuration.
+    return { ...base, additionalBlockReasons: ["configuration_unavailable"] };
+  }
+
+  const configSnapshot = {
+    followUpConfigurationSource: resolved.source,
+    followUpConfigurationId: resolved.recordId,
+    followUpConfigurationVersion: resolved.version,
+    followUpConfigurationHash: resolved.configurationHash
+  };
+  const followUpConfig = resolved.effectiveFollowUpConfiguration;
+
+  if (!followUpConfig.enabled) {
+    return { ...base, ...configSnapshot, maxAttempts: followUpConfig.maxAttempts, additionalBlockReasons: ["follow_up_disabled"] };
+  }
+
+  const history = await loadFollowUpAttemptHistory({ opportunityId, conversationCaseId });
+  if (!history.ok) {
+    return { ...base, ...configSnapshot, maxAttempts: followUpConfig.maxAttempts, additionalBlockReasons: ["configuration_unavailable"] };
+  }
+
+  const nextAttemptNumber = history.maxConsumedAttemptNumber + 1;
+  if (nextAttemptNumber > followUpConfig.maxAttempts) {
+    return {
+      ...base,
+      ...configSnapshot,
+      attemptNumber: nextAttemptNumber,
+      maxAttempts: followUpConfig.maxAttempts,
+      additionalBlockReasons: ["max_attempts_reached"]
+    };
+  }
+
+  const opportunityCreatedAt = loop.resultingState?.createdAt ?? null;
+  if (opportunityCreatedAt) {
+    const createdMs = new Date(opportunityCreatedAt).getTime();
+    const nowMs = new Date(now).getTime();
+    if (!Number.isNaN(createdMs) && !Number.isNaN(nowMs)) {
+      const ageDays = (nowMs - createdMs) / 86_400_000;
+      if (ageDays > followUpConfig.maxOpportunityAgeDays) {
+        return {
+          ...base,
+          ...configSnapshot,
+          attemptNumber: nextAttemptNumber,
+          maxAttempts: followUpConfig.maxAttempts,
+          additionalBlockReasons: ["opportunity_too_old"]
+        };
+      }
+    }
+  }
+
+  const scheduleResult = computeNextFollowUpSchedule({
+    attemptNumber: nextAttemptNumber,
+    initialDecisionAt: now,
+    previousAttemptScheduledFor: history.lastConsumedRow?.scheduledFor ?? null,
+    attemptDelaysMinutes: followUpConfig.attemptDelaysMinutes,
+    allowedWindow: followUpConfig.allowedWindow
+  });
+
+  if (!scheduleResult.ok) {
+    return {
+      ...base,
+      ...configSnapshot,
+      attemptNumber: nextAttemptNumber,
+      maxAttempts: followUpConfig.maxAttempts,
+      additionalBlockReasons: [scheduleResult.reason]
+    };
+  }
+
+  return {
+    scheduledFor: scheduleResult.scheduledFor,
+    attemptNumber: nextAttemptNumber,
+    maxAttempts: followUpConfig.maxAttempts,
+    followUpSequenceKey,
+    ...configSnapshot,
+    additionalBlockReasons: []
+  };
+}
+
+function buildActionContext(
+  input: RunCommercialExecutionBridgeInput,
+  loop: CommercialOperationalLoopResult,
+  followUpScheduling: FollowUpSchedulingContext | null
+): CrmAgentActionBuildContext {
   return {
     currentTime: input.currentTime,
     timezone: input.timezone,
@@ -62,7 +215,14 @@ function buildActionContext(input: RunCommercialExecutionBridgeInput, loop: Comm
     policyVersion: loop.versions.policyVersion,
     runtimeVersion: loop.versions.salesAgentRuntimeVersion,
     lifecycleVersion: "brain.commercial.action-lifecycle.v1",
-    maxAttempts: 1,
+    scheduledFor: followUpScheduling?.scheduledFor ?? undefined,
+    attemptNumber: followUpScheduling?.attemptNumber ?? undefined,
+    maxAttempts: followUpScheduling?.maxAttempts ?? 1,
+    followUpSequenceKey: followUpScheduling?.followUpSequenceKey ?? null,
+    followUpConfigurationSource: followUpScheduling?.followUpConfigurationSource ?? null,
+    followUpConfigurationId: followUpScheduling?.followUpConfigurationId ?? null,
+    followUpConfigurationVersion: followUpScheduling?.followUpConfigurationVersion ?? null,
+    followUpConfigurationHash: followUpScheduling?.followUpConfigurationHash ?? null,
     metadata: {
       source: "commercial_execution_bridge",
       loopVersion: loop.versions.loopVersion
@@ -98,6 +258,15 @@ function isOutboxBackedAction(actionType: string) {
   return actionType === "send_whatsapp_reply" || actionType === "request_more_context";
 }
 
+/** Folds follow-up-specific block reasons into the selected next action before it reaches buildAgentActionFromNextAction, so the existing status-derivation (deriveActionStatusFromGovernance) naturally produces `blocked` - no separate status logic duplicated here. */
+function applyFollowUpBlockReasons(nextAction: CommercialNextAction, additionalBlockReasons: string[]): CommercialNextAction {
+  if (additionalBlockReasons.length === 0) return nextAction;
+  return {
+    ...nextAction,
+    blockedReasons: [...new Set([...nextAction.blockedReasons, ...additionalBlockReasons])]
+  };
+}
+
 export async function runCommercialExecutionBridge(input: RunCommercialExecutionBridgeInput): Promise<CommercialExecutionBridgeResult> {
   const enabled = input.featureFlags.actionQueueEnabled || input.featureFlags.executionGateEnabled || input.featureFlags.outboxBridgeEnabled;
   if (!enabled) return emptyResult("disabled", false, ["commercial_execution_bridge_disabled"]);
@@ -108,9 +277,15 @@ export async function runCommercialExecutionBridge(input: RunCommercialExecution
   }
 
   const now = toIso(input.currentTime);
+
+  const followUpScheduling = loop.selectedNextAction.type === "propose_followup" ? await resolveFollowUpSchedulingContext(loop, now) : null;
+  const effectiveNextAction = followUpScheduling
+    ? applyFollowUpBlockReasons(loop.selectedNextAction, followUpScheduling.additionalBlockReasons)
+    : loop.selectedNextAction;
+
   const action = buildAgentActionFromNextAction({
-    nextAction: loop.selectedNextAction,
-    context: buildActionContext(input, loop)
+    nextAction: effectiveNextAction,
+    context: buildActionContext(input, loop, followUpScheduling)
   });
 
   const actionPersistence = await persistAgentAction({

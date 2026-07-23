@@ -68,6 +68,26 @@ export type CrmAgentAction = {
   attemptNumber: number;
   maxAttempts: number;
 
+  /**
+   * ACS-R1-05.1-T02.3D. Deterministic identity for "this opportunity's (or
+   * conversation's) follow-up sequence" - null/absent for every action type
+   * except schedule_followup. Never includes a timestamp (unlike
+   * idempotencyKey's digest), so it stays stable across every attempt of the
+   * same logical sequence - see
+   * followup/loadFollowUpAttemptHistory.ts#buildFollowUpSequenceKey.
+   * Optional (not just nullable) so the many existing CrmAgentAction object
+   * literals unrelated to follow-up (dispatchAgentLoopResponse.ts,
+   * dispatchFallbackAction.ts, test fixtures) never had to be touched -
+   * buildAgentActionStorageRow/deserializeAgentActionRow always normalize
+   * missing to null when reading/writing the DB row.
+   */
+  followUpSequenceKey?: string | null;
+  /** Snapshot of the Sales Agent Configuration that governed this row's scheduling - source is always set, id/version/hash are null for deployment_default/safe_default (they have no record to snapshot). Optional for the same reason as followUpSequenceKey above. */
+  followUpConfigurationSource?: "published" | "deployment_default" | "safe_default" | null;
+  followUpConfigurationId?: number | null;
+  followUpConfigurationVersion?: number | null;
+  followUpConfigurationHash?: string | null;
+
   blockReasons: string[];
   cancelReason: string | null;
   failureReason: string | null;
@@ -115,6 +135,11 @@ export type CrmAgentActionBuildContext = {
   approvedAt?: string | Date | null;
   attemptNumber?: number;
   maxAttempts?: number;
+  followUpSequenceKey?: string | null;
+  followUpConfigurationSource?: "published" | "deployment_default" | "safe_default" | null;
+  followUpConfigurationId?: number | null;
+  followUpConfigurationVersion?: number | null;
+  followUpConfigurationHash?: string | null;
   metadata?: Record<string, unknown> | null;
 };
 

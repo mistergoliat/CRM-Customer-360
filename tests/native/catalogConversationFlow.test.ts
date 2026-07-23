@@ -14,15 +14,16 @@ import type { SalesAgentProvider, SalesAgentProviderRequest } from "@/lib/brain/
  * HTTP server): catalog search -> grounded recommendation -> objection ->
  * alternative search -> "lo voy a pensar" (propose_followup).
  *
- * Honest scope note (see docs/audits evidence for the full explanation):
- * propose_followup here is the operational loop's *next-action selection*
- * and its resulting crm_agent_actions row (actionType=schedule_followup).
- * The separate durable follow-up scheduling/cancellation/worker-execution
- * subsystem (lib/brain/commercial/follow-up-planner, already covered by
- * followUpScheduling.test.ts / runFollowupTick.test.ts) is not wired to
- * runCommercialExecutionBridge yet, so this test does not claim a due_at
- * wake-up actually fires from this path - that gap is documented as debt,
- * not silently asserted away.
+ * Honest scope note: this test asserts the operational loop's *next-action
+ * selection* (propose_followup) - it does not enable
+ * BRAIN_AGENT_ACTION_QUEUE_ENABLED/BRAIN_AGENT_ACTION_PERSISTENCE_ENABLED,
+ * so it never exercises whether a crm_agent_actions row actually gets
+ * persisted or scheduled. ACS-R1-05.1-T02.3D wired real, configuration-
+ * governed scheduling into that persistence path
+ * (execution-bridge/runCommercialExecutionBridge.ts#resolveFollowUpSchedulingContext,
+ * replacing the previously permanent scheduled_for=NULL/max_attempts=1) -
+ * covered end-to-end, with those flags enabled, by
+ * tests/commercial/followUpSequenceContinuity.test.ts.
  */
 
 Object.assign(process.env, {

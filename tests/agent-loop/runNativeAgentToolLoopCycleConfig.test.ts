@@ -7,6 +7,7 @@ import type { CommercialContextSnapshot } from "@/lib/brain/commercial/context/b
 import {
   SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_CONFIGURATION_SCOPE,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT,
   type ResolvedSalesAgentConfiguration
@@ -69,6 +70,7 @@ function buildResolvedConfig(overrides: Partial<ResolvedSalesAgentConfiguration>
     configuration: SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
     effectiveModelConfiguration: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT,
     effectiveLoopConfiguration: SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
+    effectiveFollowUpConfiguration: SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT,
     ...overrides
   };
 }
