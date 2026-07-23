@@ -11,6 +11,8 @@ import {
   SALES_AGENT_CONFIGURATION_SCOPE,
   SALES_AGENT_CONFIGURATION_TABLE,
   SALES_AGENT_PROMPT_CONFIGURATION_FIELDS,
+  SalesAgentConfigurationConflictError,
+  SalesAgentConfigurationInvalidError,
   SalesAgentConfigurationNotDraftError,
   SalesAgentConfigurationScopeMismatchError,
   archiveConfiguration,
@@ -321,6 +323,99 @@ test("[R15] updateDraftConfiguration on a published row throws a named domain er
 
   const reloaded = await loadConfigurationById(published.id);
   assert.equal(reloaded?.configuration.role, published.configuration.role, "published row content must remain untouched");
+});
+
+// ---------------------------------------------------------------------------
+// Optimistic concurrency (ACS-R1-05.1-T02.3C)
+// ---------------------------------------------------------------------------
+
+test("[C1] updateDraftConfiguration with a matching expectedUpdatedAt succeeds and advances updated_at", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-ok"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const updated = await updateDraftConfiguration({
+    id: draft.id,
+    configuration: buildValidConfigurationInput({ role: "Jefa de ventas" }),
+    expectedUpdatedAt: draft.updatedAt
+  });
+  assert.equal(updated.configuration.role, "Jefa de ventas");
+});
+
+test("[C2] updateDraftConfiguration with a stale expectedUpdatedAt throws SalesAgentConfigurationConflictError, never overwrites silently", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-stale"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+
+  // A first, real save moves updated_at forward - draft.updatedAt (the value
+  // a second, slower editor would still be holding) is now stale.
+  await updateDraftConfiguration({
+    id: draft.id,
+    configuration: buildValidConfigurationInput({ role: "Primer editor" }),
+    expectedUpdatedAt: draft.updatedAt
+  });
+
+  await assert.rejects(
+    () =>
+      updateDraftConfiguration({
+        id: draft.id,
+        configuration: buildValidConfigurationInput({ role: "Segundo editor, deberia fallar" }),
+        expectedUpdatedAt: draft.updatedAt
+      }),
+    SalesAgentConfigurationConflictError
+  );
+
+  const reloaded = await loadConfigurationById(draft.id);
+  assert.equal(reloaded?.configuration.role, "Primer editor", "the first editor's save must survive untouched");
+});
+
+test("[C3] a stale expectedUpdatedAt on an already-published row still reports not_draft, never a conflict", async () => {
+  // Lifecycle-state mismatch and content-conflict are different failure
+  // modes - status must win when both are technically true, since "this
+  // isn't a draft anymore" is the more actionable message.
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-published"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const stalePublishedUpdatedAt = draft.updatedAt;
+  await publishDraftConfiguration({ id: draft.id });
+
+  await assert.rejects(
+    () =>
+      updateDraftConfiguration({
+        id: draft.id,
+        configuration: buildValidConfigurationInput({ role: "no deberia aplicar" }),
+        expectedUpdatedAt: stalePublishedUpdatedAt
+      }),
+    SalesAgentConfigurationNotDraftError
+  );
+});
+
+test("[C4] updateDraftConfiguration without expectedUpdatedAt (optional) still updates a genuine draft - existing callers unaffected", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-optional"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const updated = await updateDraftConfiguration({ id: draft.id, configuration: buildValidConfigurationInput({ role: "Sin expectedUpdatedAt" }) });
+  assert.equal(updated.configuration.role, "Sin expectedUpdatedAt");
+});
+
+test("[C5] an invalid expectedUpdatedAt (unparseable date) throws a domain invalid error before touching the row", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-bad-date"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  await assert.rejects(
+    () => updateDraftConfiguration({ id: draft.id, configuration: buildValidConfigurationInput(), expectedUpdatedAt: "not-a-real-date" }),
+    SalesAgentConfigurationInvalidError
+  );
+  const reloaded = await loadConfigurationById(draft.id);
+  assert.equal(reloaded?.configurationHash, draft.configurationHash, "the row must remain exactly as created");
+});
+
+test("[C6] createDraftConfiguration/publishDraftConfiguration audit payload includes parentConfigurationId (clone lineage)", async () => {
+  const parent = await createDraftConfiguration({ name: uniqueName("audit-parent"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const clone = await createDraftConfiguration({
+    name: uniqueName("audit-clone"),
+    configuration: parent.configuration,
+    createdBy: "test-suite",
+    parentConfigurationId: parent.id
+  });
+  assert.equal(clone.parentConfigurationId, parent.id);
+
+  const auditRows = await queryRows<{ after_json: string }>(
+    "SELECT after_json FROM hub_audit_log WHERE action = 'sales_agent_configuration.created' AND entity_id = ? ORDER BY id DESC LIMIT 1",
+    [String(clone.id)]
+  );
+  assert.equal(auditRows.length, 1, "expected exactly one created audit row for the cloned draft");
+  const payload = JSON.parse(auditRows[0].after_json);
+  assert.equal(payload.parentConfigurationId, parent.id);
 });
 
 test("[R16] two versions with identical content are both allowed to exist (hash is indexed, not unique)", async () => {
