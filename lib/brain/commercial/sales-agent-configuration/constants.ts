@@ -97,3 +97,13 @@ export const SALES_AGENT_LOOP_CONFIGURATION_LIMITS = {
   maxToolCallsPerTurnMin: 0,
   maxToolCallsPerTurnMax: 12
 } as const;
+
+/**
+ * ACS-R1-05.1-T02.3C. Single fixed actor for every Hub-originated write
+ * (create/update/publish/clone/archive) - requireOperator() has no
+ * per-operator identity today (shared session cookie or admin bypass
+ * token, never a user id). Temporary, documented limitation until the Hub
+ * has real per-operator accounts; never invented per-request from client
+ * input.
+ */
+export const SALES_AGENT_CONFIGURATION_HUB_ACTOR = "hub_operator" as const;

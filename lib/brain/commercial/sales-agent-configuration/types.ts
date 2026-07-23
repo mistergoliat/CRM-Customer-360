@@ -174,3 +174,17 @@ export class SalesAgentConfigurationLockTimeoutError extends Error {
     this.name = "SalesAgentConfigurationLockTimeoutError";
   }
 }
+
+/**
+ * ACS-R1-05.1-T02.3C. Thrown by updateDraftConfiguration when the row
+ * still exists and is still a draft, but `expectedUpdatedAt` no longer
+ * matches the stored `updated_at` - a concurrent editor saved first.
+ * Distinct from SalesAgentConfigurationNotDraftError (which means the
+ * lifecycle state itself changed, not just the content).
+ */
+export class SalesAgentConfigurationConflictError extends Error {
+  constructor(message = "sales_agent_configuration_conflict") {
+    super(message);
+    this.name = "SalesAgentConfigurationConflictError";
+  }
+}

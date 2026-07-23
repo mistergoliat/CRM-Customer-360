@@ -10,6 +10,7 @@ import {
 } from "./constants";
 import { computeSalesAgentConfigurationHash } from "./hash";
 import {
+  SalesAgentConfigurationConflictError,
   SalesAgentConfigurationIntegrityError,
   SalesAgentConfigurationInvalidError,
   SalesAgentConfigurationLockTimeoutError,
@@ -186,7 +187,8 @@ function buildAuditPayload(record: SalesAgentConfigurationRecord) {
     configurationId: record.id,
     version: record.version,
     status: record.status,
-    configurationHash: record.configurationHash
+    configurationHash: record.configurationHash,
+    parentConfigurationId: record.parentConfigurationId
   };
 }
 
@@ -261,11 +263,22 @@ export type UpdateDraftConfigurationInput = {
   id: number;
   configuration: unknown;
   name?: string;
+  /**
+   * ACS-R1-05.1-T02.3C optimistic concurrency. When provided, compared
+   * against the stored `updated_at` in the same UPDATE's WHERE clause
+   * (never a separate read-then-write check) - a stale value makes the
+   * UPDATE match zero rows atomically, distinguishable below from
+   * not-found/not-draft. Optional so existing/future callers that don't
+   * need concurrency control (e.g. tests) are unaffected.
+   */
+  expectedUpdatedAt?: string;
 };
 
 /**
- * WHERE status = 'draft' only. Zero affectedRows always resolves to a
- * named domain error (not-found vs not-draft), never a silent no-op.
+ * WHERE id/scope/status(='draft')[/updated_at] - zero affectedRows always
+ * resolves to a named domain error (not-found, not-draft, or - new in
+ * T02.3C - a concurrent edit conflict when the row is still a draft but
+ * `updated_at` moved), never a silent no-op.
  */
 export async function updateDraftConfiguration(input: UpdateDraftConfigurationInput): Promise<SalesAgentConfigurationRecord> {
   const validation = validateSalesAgentConfigurationDocument(input.configuration);
@@ -274,6 +287,14 @@ export async function updateDraftConfiguration(input: UpdateDraftConfigurationIn
   }
   const configurationHash = computeSalesAgentConfigurationHash(validation.configuration, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION);
   const trimmedName = input.name?.trim();
+
+  let expectedUpdatedAtDate: Date | undefined;
+  if (input.expectedUpdatedAt !== undefined) {
+    expectedUpdatedAtDate = new Date(input.expectedUpdatedAt);
+    if (Number.isNaN(expectedUpdatedAtDate.getTime())) {
+      throw new SalesAgentConfigurationInvalidError("sales_agent_configuration_invalid:invalid_expected_updated_at");
+    }
+  }
 
   return withConnection((connection) =>
     runInTransaction(connection, async () => {
@@ -284,16 +305,22 @@ export async function updateDraftConfiguration(input: UpdateDraftConfigurationIn
       // re-written under the current code (unlike published/archived rows,
       // which are immutable history and never touched here).
       const assignments = ["configuration_json = ?", "configuration_hash = ?", "schema_version = ?"];
-      const params: unknown[] = [JSON.stringify(validation.configuration), configurationHash, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION];
+      const setParams: unknown[] = [JSON.stringify(validation.configuration), configurationHash, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION];
       if (trimmedName) {
         assignments.push("name = ?");
-        params.push(trimmedName);
+        setParams.push(trimmedName);
       }
-      params.push(input.id);
+
+      const whereConditions = ["id = ?", "scope_key = ?", "status = 'draft'"];
+      const whereParams: unknown[] = [input.id, SALES_AGENT_CONFIGURATION_SCOPE];
+      if (expectedUpdatedAtDate) {
+        whereConditions.push("updated_at = ?");
+        whereParams.push(expectedUpdatedAtDate);
+      }
 
       const [result] = await connection.execute<ResultSetHeader>(
-        `UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET ${assignments.join(", ")} WHERE id = ? AND status = 'draft'`,
-        toExecuteValues(params)
+        `UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET ${assignments.join(", ")} WHERE ${whereConditions.join(" AND ")}`,
+        toExecuteValues([...setParams, ...whereParams])
       );
 
       if (result.affectedRows === 0) {
@@ -301,7 +328,10 @@ export async function updateDraftConfiguration(input: UpdateDraftConfigurationIn
         if (!existing) {
           throw new SalesAgentConfigurationNotFoundError(`sales_agent_configuration_not_found:${input.id}`);
         }
-        throw new SalesAgentConfigurationNotDraftError(`sales_agent_configuration_not_draft:${input.id}:${existing.status}`);
+        if (existing.status !== "draft") {
+          throw new SalesAgentConfigurationNotDraftError(`sales_agent_configuration_not_draft:${input.id}:${existing.status}`);
+        }
+        throw new SalesAgentConfigurationConflictError(`sales_agent_configuration_conflict:${input.id}`);
       }
 
       const record = await loadConfigurationByIdOnConnection(connection, input.id);
