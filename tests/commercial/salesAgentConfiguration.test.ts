@@ -16,6 +16,7 @@ import {
   SalesAgentConfigurationNotDraftError,
   SalesAgentConfigurationScopeMismatchError,
   archiveConfiguration,
+  archiveDraftConfiguration,
   computeSalesAgentConfigurationHash,
   createDraftConfiguration,
   listPesasChileConfigurations,
@@ -416,6 +417,51 @@ test("[C6] createDraftConfiguration/publishDraftConfiguration audit payload incl
   assert.equal(auditRows.length, 1, "expected exactly one created audit row for the cloned draft");
   const payload = JSON.parse(auditRows[0].after_json);
   assert.equal(payload.parentConfigurationId, parent.id);
+});
+
+// ---------------------------------------------------------------------------
+// archiveDraftConfiguration - Hub-only atomic archive (review correction)
+// ---------------------------------------------------------------------------
+
+test("[C7] archiveDraftConfiguration archives a genuine draft", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("archive-draft-ok"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const archived = await archiveDraftConfiguration(draft.id);
+  assert.equal(archived.status, "archived");
+});
+
+test("[C8] archiveDraftConfiguration on a published row throws not_draft and never touches the row", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("archive-published"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const published = await publishDraftConfiguration({ id: draft.id });
+
+  await assert.rejects(() => archiveDraftConfiguration(published.id), SalesAgentConfigurationNotDraftError);
+
+  const reloaded = await loadConfigurationById(published.id);
+  assert.equal(reloaded?.status, "published", "a published row must never end up archived via this path");
+});
+
+test("[C9] concurrent archiveDraftConfiguration vs publishDraftConfiguration on the same draft: exactly one wins, a published row is never left archived", async () => {
+  // No shared advisory lock between archive and publish - the WHERE clause
+  // itself (status = 'draft') is the only thing preventing both from
+  // succeeding on the same row.
+  const draft = await createDraftConfiguration({ name: uniqueName("archive-publish-race"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+
+  const [archiveResult, publishResult] = await Promise.allSettled([archiveDraftConfiguration(draft.id), publishDraftConfiguration({ id: draft.id })]);
+
+  const succeeded = [archiveResult, publishResult].filter((result) => result.status === "fulfilled");
+  assert.equal(succeeded.length, 1, "exactly one of archive/publish must win the race");
+
+  const reloaded = await loadConfigurationById(draft.id);
+  if (archiveResult.status === "fulfilled") {
+    assert.equal(reloaded?.status, "archived");
+    assert.equal(publishResult.status, "rejected");
+  } else {
+    assert.equal(reloaded?.status, "published", "publish won - the row must be published, never archived");
+    assert.equal(archiveResult.status, "rejected");
+    assert.ok(
+      (archiveResult as PromiseRejectedResult).reason instanceof SalesAgentConfigurationNotDraftError,
+      "the losing archive attempt must fail with not_draft, never silently succeed on a now-published row"
+    );
+  }
 });
 
 test("[R16] two versions with identical content are both allowed to exist (hash is indexed, not unique)", async () => {

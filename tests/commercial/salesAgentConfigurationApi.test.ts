@@ -244,3 +244,48 @@ test("[A9] POST /[id]/clone creates a new draft with parentConfigurationId set t
   assert.equal(body.parentConfigurationId, source.id);
   assert.equal(body.status, "draft");
 });
+
+// ---------------------------------------------------------------------------
+// decision 8 (review correction): archiveDraftConfiguration is atomic - a
+// published row can never be archived through the Hub endpoint
+// ---------------------------------------------------------------------------
+
+test("[A10] POST /[id]/archive on a row that got published between two requests still returns not_draft, never archives it", async () => {
+  const draft = await createDraftRow();
+  await publishDraftConfiguration({ id: draft.id });
+  const { POST } = await import("@/app/api/brain/agents/sales/configuration/[id]/archive/route");
+  const request = new NextRequest(
+    new Request(`http://127.0.0.1/api/brain/agents/sales/configuration/${draft.id}/archive`, { method: "POST", headers: AUTH_HEADERS })
+  );
+  const response = await POST(request, { params: Promise.resolve({ id: String(draft.id) }) });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, "not_draft");
+});
+
+// ---------------------------------------------------------------------------
+// decision 5 (review correction): ?limit is validated, not passed through raw
+// ---------------------------------------------------------------------------
+
+test("[A11] GET /configuration?limit=abc is rejected with 400 invalid_limit", async () => {
+  const { GET } = await import("@/app/api/brain/agents/sales/configuration/route");
+  const request = new NextRequest(new Request("http://127.0.0.1/api/brain/agents/sales/configuration?limit=abc", { headers: AUTH_HEADERS }));
+  const response = await GET(request);
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, "invalid_limit");
+});
+
+test("[A12] GET /configuration?limit=-5 and ?limit=0 are both rejected with 400 invalid_limit", async () => {
+  const { GET } = await import("@/app/api/brain/agents/sales/configuration/route");
+  for (const limit of ["-5", "0"]) {
+    const request = new NextRequest(new Request(`http://127.0.0.1/api/brain/agents/sales/configuration?limit=${limit}`, { headers: AUTH_HEADERS }));
+    const response = await GET(request);
+    assert.equal(response.status, 400, `limit=${limit} must be rejected`);
+  }
+});
+
+test("[A13] GET /configuration?limit=999999 is clamped, never passed through raw (never a 500 from invalid SQL)", async () => {
+  const { GET } = await import("@/app/api/brain/agents/sales/configuration/route");
+  const request = new NextRequest(new Request("http://127.0.0.1/api/brain/agents/sales/configuration?limit=999999", { headers: AUTH_HEADERS }));
+  const response = await GET(request);
+  assert.equal(response.status, 200);
+});

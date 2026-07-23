@@ -5,6 +5,7 @@ import {
   computeFormDirty,
   describeConfigurationSource,
   describeConfigurationStatus,
+  isEditingDirtyDraft,
   mapConfigurationApiError,
   mapConfigurationToFormState,
   mapFormStateToPayload,
@@ -155,4 +156,17 @@ test("[F14] describeConfigurationStatus: covers all three lifecycle statuses wit
   assert.deepEqual(describeConfigurationStatus("draft"), { label: "Borrador", tone: "amber" });
   assert.deepEqual(describeConfigurationStatus("published"), { label: "Publicado", tone: "green" });
   assert.deepEqual(describeConfigurationStatus("archived"), { label: "Archivado", tone: "gray" });
+});
+
+// ---------------------------------------------------------------------------
+// isEditingDirtyDraft (review correction: block publish/archive of the
+// currently-edited draft while it has unsaved changes)
+// ---------------------------------------------------------------------------
+
+test("[F15] isEditingDirtyDraft: blocks only when the target IS the currently-edited draft AND it is dirty", () => {
+  assert.equal(isEditingDirtyDraft(5, 5, true), true, "same draft, dirty -> block");
+  assert.equal(isEditingDirtyDraft(5, 5, false), false, "same draft, clean -> allowed");
+  assert.equal(isEditingDirtyDraft(5, 7, true), false, "different draft, dirty -> not blocked (caller asks for confirmation instead)");
+  assert.equal(isEditingDirtyDraft(5, 7, false), false, "different draft, clean -> allowed");
+  assert.equal(isEditingDirtyDraft(null, 7, true), false, "no draft being edited yet -> never blocked");
 });
