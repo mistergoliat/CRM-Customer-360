@@ -28,6 +28,7 @@ import { createHttpAgentLoopProvider } from "../agent-loop/providers/httpAgentLo
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
 import { buildNativeBrainContextShim } from "./buildNativeBrainContextShim";
 import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
+import { detectExplicitOptOutCommand, isCustomerOptedOut, recordCustomerOptOut } from "../optOutStore";
 import { isMultiRequestRuntimeEnabled, runMultiRequestAutonomousCycle } from "../multi-request";
 import type { MultiRequestCycleResult } from "../multi-request";
 import type { CommercialShadowResult } from "../shadow";
@@ -154,6 +155,26 @@ export async function runNativeAutonomousCycle(
   const pilotAllowlist = loadAutonomousPilotAllowlist();
   if (!isWaIdAuthorizedForPilot(input.waId, pilotAllowlist)) {
     return { ran: false, reason: "wa_id_not_authorized_for_pilot", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
+  }
+
+  // Step 0.5 (ACS-R1-05.1-T02.3D, decision 11): a customer who has
+  // explicitly opted out never gets another autonomous message this turn -
+  // no LLM call, no Customer 360 load, no decision/action persistence, no
+  // outbox write. Same "checked before anything else" placement as Step 0.
+  // An opt-out already on record short-circuits immediately; otherwise this
+  // turn's own inbound text is checked for an explicit, unambiguous opt-out
+  // command (never a fuzzy/keyword match on ordinary objections like "no" -
+  // see optOutStore.ts) and recorded before this turn is gated the same way.
+  if (await isCustomerOptedOut(input.waId)) {
+    return { ran: false, reason: "customer_opted_out", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
+  }
+  if (detectExplicitOptOutCommand(input.messageText)) {
+    await recordCustomerOptOut({
+      waId: input.waId,
+      reason: "explicit_customer_command",
+      sourceMessageId: input.messageId === null || input.messageId === undefined ? null : String(input.messageId)
+    });
+    return { ran: false, reason: "customer_opted_out", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
   }
 
   // Step 1: which runtime, if any, is enabled this turn. Multi-request is

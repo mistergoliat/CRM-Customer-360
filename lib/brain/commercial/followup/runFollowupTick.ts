@@ -2,6 +2,9 @@ import { safeExecute, safeQueryRows } from "@/lib/db";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import { redactErrorMessage } from "@/lib/brain/commercial/redactErrorMessage";
 import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
+import { isCustomerOptedOut } from "@/lib/brain/commercial/optOutStore";
+import { resolveSalesAgentConfiguration } from "@/lib/brain/commercial/sales-agent-configuration";
+import { findNextAllowedWindowStartIso, isInstantWithinAllowedWindow } from "./computeFollowUpSchedule";
 import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON, hasAttemptsRemaining } from "./followUpWorkerPolicy";
 
 /**
@@ -44,6 +47,8 @@ export type FollowUpCandidate = {
   status: string;
   attempt_number: number;
   max_attempts: number;
+  /** ACS-R1-05.1-T02.3D: which Sales Agent Configuration governed this row's scheduling - null for rows created before this task (or seeded outside the config-aware pipeline), which never had one and are never revalidated against a config. */
+  followup_configuration_source: string | null;
 };
 
 export type FollowupTickResult = {
@@ -53,6 +58,8 @@ export type FollowupTickResult = {
   failed: string[];
   /** ACS-R1-05-T06.1: candidates skipped for pilot isolation - row and attempt_number left untouched, never claimed. */
   skippedUnauthorized: string[];
+  /** ACS-R1-05.1-T02.3D: due, but outside the CURRENT allowed window - moved forward to the next window start, never executed or cancelled. */
+  rescheduled: Array<{ actionId: string; scheduledFor: string }>;
 };
 
 export type FollowupTickOptions = {
@@ -77,7 +84,7 @@ export async function selectDueFollowUps(limit: number, actionIds?: string[]): P
   // otherwise consume the LIMIT before an in-memory filter could apply.
   const scope = actionIds && actionIds.length > 0 ? ` AND action_id IN (${actionIds.map(() => "?").join(",")})` : "";
   const result = await safeQueryRows<FollowUpCandidate>(
-    `SELECT id, action_id, wa_id, conversation_case_id, scheduled_for, draft_message, status, attempt_number, max_attempts
+    `SELECT id, action_id, wa_id, conversation_case_id, scheduled_for, draft_message, status, attempt_number, max_attempts, followup_configuration_source
       FROM crm_agent_actions
       WHERE action_type = 'schedule_followup'
         AND (
@@ -115,6 +122,26 @@ async function abortClaimedFollowUp(actionId: string, reason: string): Promise<b
     `UPDATE crm_agent_actions SET status = 'cancelled', cancel_reason = ?, updated_at = CURRENT_TIMESTAMP(3)
       WHERE action_id = ? AND status = 'executing'`,
     [reason, actionId]
+  );
+  return result.ok && result.affectedRows > 0;
+}
+
+function toMysqlDateTime(iso: string): string {
+  return iso.slice(0, 19).replace("T", " ");
+}
+
+// ACS-R1-05.1-T02.3D: a row this tick already claimed ('executing') turns
+// out to be due at an instant outside the CURRENT allowed window (the
+// window changed since scheduling, or scheduled_for landed exactly on a
+// boundary) - moved forward, never discarded, same "no se descarta, se
+// mueve" rule computeFollowUpSchedule.ts already applies at creation time.
+// Goes back to 'planned' (not a terminal state) with the new scheduled_for -
+// distinct from abortClaimedFollowUp, which is always terminal.
+async function rescheduleClaimedFollowUp(actionId: string, scheduledForIso: string): Promise<boolean> {
+  const result = await safeExecute(
+    `UPDATE crm_agent_actions SET status = 'planned', scheduled_for = ?, updated_at = CURRENT_TIMESTAMP(3)
+      WHERE action_id = ? AND status = 'executing'`,
+    [toMysqlDateTime(scheduledForIso), actionId]
   );
   return result.ok && result.affectedRows > 0;
 }
@@ -253,10 +280,71 @@ export async function shouldCancelFollowUp(candidate: FollowUpCandidate): Promis
   return { cancel: false, reason: "" };
 }
 
+export type FollowUpRevalidationOutcome =
+  | { outcome: "proceed" }
+  | { outcome: "cancel"; reason: string }
+  | { outcome: "reschedule"; reason: string; scheduledFor: string }
+  | { outcome: "technical_failure"; reason: string };
+
+/**
+ * ACS-R1-05.1-T02.3D, decision 13. Re-checks a claimed row against the
+ * CURRENT published Sales Agent Configuration - never the snapshot recorded
+ * at scheduling time (followup_configuration_*), which only exists for
+ * audit/attribution, not as authority at execution time. A configuration
+ * that changed between scheduling and now (disabled, tightened maxAttempts,
+ * shortened maxOpportunityAgeDays, moved the window) must take effect on
+ * the very next tick, not wait for a fresh schedule.
+ *
+ * Resolver failure is a TECHNICAL problem, never a business decision -
+ * mirrors execution-bridge's own resolveFollowUpSchedulingContext
+ * (configuration_unavailable): the caller routes this outcome through the
+ * same retryable 'failed' path a cycle-runner exception already uses,
+ * never a customer-facing cancellation.
+ */
+export async function revalidateFollowUpConfiguration(
+  candidate: FollowUpCandidate,
+  now: string = new Date().toISOString()
+): Promise<FollowUpRevalidationOutcome> {
+  let resolved;
+  try {
+    resolved = await resolveSalesAgentConfiguration();
+  } catch {
+    return { outcome: "technical_failure", reason: "configuration_unavailable" };
+  }
+  const config = resolved.effectiveFollowUpConfiguration;
+
+  if (!config.enabled) return { outcome: "cancel", reason: "follow_up_disabled" };
+  if (candidate.attempt_number > config.maxAttempts) return { outcome: "cancel", reason: "max_attempts_reached" };
+
+  if (candidate.wa_id) {
+    const opportunity = await safeQueryRows<{ created_at: string }>(
+      `SELECT created_at FROM crm_opportunities WHERE wa_id = ? ORDER BY updated_at DESC LIMIT 1`,
+      [candidate.wa_id]
+    );
+    const createdAt = opportunity.ok ? (opportunity.rows[0]?.created_at ?? null) : null;
+    if (createdAt) {
+      const createdMs = new Date(createdAt).getTime();
+      const nowMs = new Date(now).getTime();
+      if (!Number.isNaN(createdMs) && !Number.isNaN(nowMs)) {
+        const ageDays = (nowMs - createdMs) / 86_400_000;
+        if (ageDays > config.maxOpportunityAgeDays) return { outcome: "cancel", reason: "opportunity_too_old" };
+      }
+    }
+  }
+
+  if (!isInstantWithinAllowedWindow(now, config.allowedWindow)) {
+    const nextWindowStart = findNextAllowedWindowStartIso(now, config.allowedWindow);
+    if (!nextWindowStart) return { outcome: "technical_failure", reason: "window_unreachable" };
+    return { outcome: "reschedule", reason: "outside_allowed_window", scheduledFor: nextWindowStart };
+  }
+
+  return { outcome: "proceed" };
+}
+
 export async function runFollowupTick(options: FollowupTickOptions): Promise<FollowupTickResult> {
   const log = options.log ?? (() => void 0);
   const cycleRunner = options.cycleRunner ?? runNativeAutonomousCycle;
-  const result: FollowupTickResult = { processed: 0, cancelled: [], executed: [], failed: [], skippedUnauthorized: [] };
+  const result: FollowupTickResult = { processed: 0, cancelled: [], executed: [], failed: [], skippedUnauthorized: [], rescheduled: [] };
 
   const candidates = await selectDueFollowUps(options.limit, options.actionIds);
   if (candidates.length === 0) return result;
@@ -309,12 +397,60 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
       continue;
     }
 
+    // ACS-R1-05.1-T02.3D, decision 11: checked before the business-state
+    // checks below and before any configuration resolution - an opt-out is
+    // definitive and cheap to check, same "before anything else" placement
+    // as native-cycle Step 0.5.
+    if (await isCustomerOptedOut(candidate.wa_id)) {
+      await abortClaimedFollowUp(candidate.action_id, "customer_opted_out");
+      log(`[worker:followup] cancelling action ${candidate.action_id}: customer_opted_out`);
+      result.cancelled.push({ actionId: candidate.action_id, reason: "customer_opted_out" });
+      continue;
+    }
+
     const { cancel, reason } = await shouldCancelFollowUp(candidate);
     if (cancel) {
       await abortClaimedFollowUp(candidate.action_id, reason);
       log(`[worker:followup] cancelling action ${candidate.action_id}: ${reason}`);
       result.cancelled.push({ actionId: candidate.action_id, reason });
       continue;
+    }
+
+    // ACS-R1-05.1-T02.3D, decision 13: re-validated against the CURRENT
+    // configuration, never the snapshot recorded at scheduling time - but
+    // only for rows that actually went through the config-aware scheduling
+    // pipeline (followup_configuration_source is set). A row with no
+    // recorded source predates this feature (or was seeded directly outside
+    // it, e.g. by a test harness) and never had a config governing it in
+    // the first place - it keeps exactly the pre-T02.3D worker behavior
+    // (business-state checks only). This is also what keeps a deployment
+    // that has never published a followUpConfiguration from having every
+    // legitimately-scheduled row cancelled here: nothing gets scheduled at
+    // all while disabled (execution-bridge's own gate), so this check only
+    // ever fires for rows a real, enabled configuration actually produced.
+    if (candidate.followup_configuration_source !== null) {
+      const revalidation = await revalidateFollowUpConfiguration(candidate);
+      if (revalidation.outcome === "technical_failure") {
+        log(`[worker:followup] technical failure revalidating action ${candidate.action_id}: ${revalidation.reason}`);
+        await safeQueryRows(
+          `UPDATE crm_agent_actions SET status = 'failed', failure_reason = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ? AND status = 'executing'`,
+          [revalidation.reason, candidate.action_id]
+        );
+        result.failed.push(candidate.action_id);
+        continue;
+      }
+      if (revalidation.outcome === "cancel") {
+        await abortClaimedFollowUp(candidate.action_id, revalidation.reason);
+        log(`[worker:followup] cancelling action ${candidate.action_id}: ${revalidation.reason}`);
+        result.cancelled.push({ actionId: candidate.action_id, reason: revalidation.reason });
+        continue;
+      }
+      if (revalidation.outcome === "reschedule") {
+        await rescheduleClaimedFollowUp(candidate.action_id, revalidation.scheduledFor);
+        log(`[worker:followup] rescheduling action ${candidate.action_id} to ${revalidation.scheduledFor}: ${revalidation.reason}`);
+        result.rescheduled.push({ actionId: candidate.action_id, scheduledFor: revalidation.scheduledFor });
+        continue;
+      }
     }
 
     const convRows = await safeQueryRows<{ id: number; public_id: string }>(
