@@ -4,7 +4,9 @@
 // client component, so any runtime import from the barrel would drag a
 // server-only chain into the browser bundle and fail the build.
 import { SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT } from "@/lib/brain/commercial/sales-agent-configuration/defaults";
+import { SALES_AGENT_FOLLOW_UP_TIMEZONE } from "@/lib/brain/commercial/sales-agent-configuration/constants";
 import type {
+  EffectiveSalesAgentFollowUpConfiguration,
   EffectiveSalesAgentModelConfiguration,
   ResolvedSalesAgentConfigurationSource,
   SalesAgentConfigurationDocument,
@@ -36,6 +38,16 @@ export type SalesAgentConfigurationFormState = {
   loopConfigurationEnabled: boolean;
   maxAgentStepsPerTurn: number;
   maxToolCallsPerTurn: number;
+  /** Whether the draft owns an explicit followUpConfiguration section at all - see mapFormStateToPayload. */
+  followUpConfigurationEnabled: boolean;
+  /** SalesAgentFollowUpConfiguration.enabled - whether follow-ups actually get scheduled, distinct from followUpConfigurationEnabled above. */
+  followUpEnabled: boolean;
+  followUpMaxAttempts: number;
+  followUpAttemptDelaysMinutes: number[];
+  followUpStartHour: number;
+  followUpEndHour: number;
+  followUpAllowedWeekdays: number[];
+  followUpMaxOpportunityAgeDays: number;
 };
 
 /**
@@ -47,10 +59,12 @@ export type SalesAgentConfigurationFormState = {
 export function mapConfigurationToFormState(
   configuration: SalesAgentConfigurationDocument,
   effectiveModel: EffectiveSalesAgentModelConfiguration,
-  effectiveLoop: SalesAgentLoopConfiguration
+  effectiveLoop: SalesAgentLoopConfiguration,
+  effectiveFollowUp: EffectiveSalesAgentFollowUpConfiguration
 ): SalesAgentConfigurationFormState {
   const model = configuration.modelConfiguration;
   const loop = configuration.loopConfiguration;
+  const followUp = configuration.followUpConfiguration;
 
   return {
     agentName: configuration.agentName,
@@ -71,7 +85,15 @@ export function mapConfigurationToFormState(
     maxModelRetries: model?.maxModelRetries ?? effectiveModel.maxModelRetries,
     loopConfigurationEnabled: Boolean(loop),
     maxAgentStepsPerTurn: loop?.maxAgentStepsPerTurn ?? effectiveLoop.maxAgentStepsPerTurn,
-    maxToolCallsPerTurn: loop?.maxToolCallsPerTurn ?? effectiveLoop.maxToolCallsPerTurn
+    maxToolCallsPerTurn: loop?.maxToolCallsPerTurn ?? effectiveLoop.maxToolCallsPerTurn,
+    followUpConfigurationEnabled: Boolean(followUp),
+    followUpEnabled: followUp?.enabled ?? effectiveFollowUp.enabled,
+    followUpMaxAttempts: followUp?.maxAttempts ?? effectiveFollowUp.maxAttempts,
+    followUpAttemptDelaysMinutes: followUp?.attemptDelaysMinutes ?? effectiveFollowUp.attemptDelaysMinutes,
+    followUpStartHour: followUp?.allowedWindow.startHour ?? effectiveFollowUp.allowedWindow.startHour,
+    followUpEndHour: followUp?.allowedWindow.endHour ?? effectiveFollowUp.allowedWindow.endHour,
+    followUpAllowedWeekdays: followUp?.allowedWindow.allowedWeekdays ?? effectiveFollowUp.allowedWindow.allowedWeekdays,
+    followUpMaxOpportunityAgeDays: followUp?.maxOpportunityAgeDays ?? effectiveFollowUp.maxOpportunityAgeDays
   };
 }
 
@@ -110,8 +132,46 @@ export function mapFormStateToPayload(form: SalesAgentConfigurationFormState): S
             maxToolCallsPerTurn: form.maxToolCallsPerTurn
           }
         }
+      : {}),
+    ...(form.followUpConfigurationEnabled
+      ? {
+          followUpConfiguration: {
+            enabled: form.followUpEnabled,
+            maxAttempts: form.followUpMaxAttempts,
+            attemptDelaysMinutes: form.followUpAttemptDelaysMinutes,
+            allowedWindow: {
+              timezone: SALES_AGENT_FOLLOW_UP_TIMEZONE,
+              startHour: form.followUpStartHour,
+              endHour: form.followUpEndHour,
+              allowedWeekdays: form.followUpAllowedWeekdays
+            },
+            maxOpportunityAgeDays: form.followUpMaxOpportunityAgeDays
+          }
+        }
       : {})
   };
+}
+
+/**
+ * One entry per line or comma - mirrors normalizeProhibitedPhrasesInput's
+ * "raw textarea text lives in component state, parsed into the form array
+ * only at submit/dirty-check time" convention, adapted for integers instead
+ * of strings. Non-numeric/non-integer entries are dropped rather than
+ * rejected here - validateSalesAgentFollowUpConfiguration is the real
+ * authority on whether the resulting array is acceptable (right length,
+ * right bounds); this only turns free text into a number array.
+ */
+export function parseAttemptDelaysMinutesInput(raw: string): number[] {
+  return raw
+    .split(/[,\n]/)
+    .map((piece) => piece.trim())
+    .filter((piece) => piece.length > 0)
+    .map((piece) => Number(piece))
+    .filter((value) => Number.isFinite(value) && Number.isInteger(value));
+}
+
+export function formatAttemptDelaysMinutesInput(delays: number[]): string {
+  return delays.join(", ");
 }
 
 /**

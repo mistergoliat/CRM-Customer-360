@@ -153,7 +153,17 @@ test("[A5] GET /configuration/effective exposes only source/metadata/effective p
   const body = await response.json();
   assert.deepEqual(
     Object.keys(body).sort(),
-    ["allowedModels", "configuration", "configurationHash", "effectiveLoopConfiguration", "effectiveModelConfiguration", "recordId", "source", "version"].sort()
+    [
+      "allowedModels",
+      "configuration",
+      "configurationHash",
+      "effectiveFollowUpConfiguration",
+      "effectiveLoopConfiguration",
+      "effectiveModelConfiguration",
+      "recordId",
+      "source",
+      "version"
+    ].sort()
   );
   const serialized = JSON.stringify(body).toLowerCase();
   assert.ok(!serialized.includes("api_key"), "must never expose an api key field name");

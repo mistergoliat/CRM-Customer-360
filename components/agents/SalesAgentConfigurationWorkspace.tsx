@@ -13,6 +13,7 @@ import { TabStrip } from "@/components/p1m/TabStrip";
 // next/headers, which cannot be bundled into this client component.
 import {
   SALES_AGENT_CONFIGURATION_LIMITS,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS,
   SALES_AGENT_LOOP_CONFIGURATION_LIMITS,
   SALES_AGENT_MODEL_CONFIGURATION_LIMITS
 } from "@/lib/brain/commercial/sales-agent-configuration/constants";
@@ -20,16 +21,28 @@ import type { ResolvedSalesAgentConfiguration, SalesAgentConfigurationRecord } f
 import {
   computeFormDirty,
   describeConfigurationSource,
+  formatAttemptDelaysMinutesInput,
   isEditingDirtyDraft,
   mapConfigurationApiError,
   mapConfigurationToFormState,
   mapFormStateToPayload,
   normalizeProhibitedPhrasesInput,
+  parseAttemptDelaysMinutesInput,
   type SalesAgentConfigurationFormState
 } from "@/lib/domains/sales-agent-config/form";
 import { SalesAgentConfigurationVersionsTable } from "./SalesAgentConfigurationVersionsTable";
 
-type Tab = "identidad" | "modelo" | "ejecucion" | "versiones";
+type Tab = "identidad" | "modelo" | "ejecucion" | "seguimiento" | "versiones";
+
+const FOLLOW_UP_WEEKDAYS = [
+  { value: 1, label: "Lun" },
+  { value: 2, label: "Mar" },
+  { value: 3, label: "Mie" },
+  { value: 4, label: "Jue" },
+  { value: 5, label: "Vie" },
+  { value: 6, label: "Sab" },
+  { value: 0, label: "Dom" }
+] as const;
 
 type Props = {
   effective: ResolvedSalesAgentConfiguration;
@@ -53,12 +66,14 @@ export function SalesAgentConfigurationWorkspace({ effective, versions, selected
   const initialForm = mapConfigurationToFormState(
     draft?.configuration ?? effective.configuration,
     effective.effectiveModelConfiguration,
-    effective.effectiveLoopConfiguration
+    effective.effectiveLoopConfiguration,
+    effective.effectiveFollowUpConfiguration
   );
   const [form, setForm] = useState<SalesAgentConfigurationFormState>(initialForm);
   const [savedForm, setSavedForm] = useState<SalesAgentConfigurationFormState>(initialForm);
   const [savedRecordName, setSavedRecordName] = useState(recordName);
   const [phrasesText, setPhrasesText] = useState(initialForm.prohibitedPhrases.join("\n"));
+  const [delaysText, setDelaysText] = useState(formatAttemptDelaysMinutesInput(initialForm.followUpAttemptDelaysMinutes));
 
   const [pending, setPending] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -66,7 +81,12 @@ export function SalesAgentConfigurationWorkspace({ effective, versions, selected
   const [conflict, setConflict] = useState(false);
 
   const currentPhrases = normalizeProhibitedPhrasesInput(phrasesText);
-  const currentForm: SalesAgentConfigurationFormState = { ...form, prohibitedPhrases: currentPhrases };
+  const currentDelays = parseAttemptDelaysMinutesInput(delaysText);
+  const currentForm: SalesAgentConfigurationFormState = {
+    ...form,
+    prohibitedPhrases: currentPhrases,
+    followUpAttemptDelaysMinutes: currentDelays
+  };
   const dirty = computeFormDirty(savedForm, currentForm) || recordName !== savedRecordName;
 
   const sourceInfo = describeConfigurationSource(effective.source);
@@ -185,6 +205,7 @@ export function SalesAgentConfigurationWorkspace({ effective, versions, selected
   function handleDiscard() {
     setForm(savedForm);
     setPhrasesText(savedForm.prohibitedPhrases.join("\n"));
+    setDelaysText(formatAttemptDelaysMinutesInput(savedForm.followUpAttemptDelaysMinutes));
     setRecordName(savedRecordName);
     setFieldError(null);
     setFeedback(null);
@@ -317,7 +338,12 @@ export function SalesAgentConfigurationWorkspace({ effective, versions, selected
             { label: "Timeout", value: `${effective.effectiveModelConfiguration.timeoutMs} ms` },
             { label: "Retries", value: effective.effectiveModelConfiguration.maxModelRetries },
             { label: "Pasos maximos", value: effective.effectiveLoopConfiguration.maxAgentStepsPerTurn },
-            { label: "Tools maximas", value: effective.effectiveLoopConfiguration.maxToolCallsPerTurn }
+            { label: "Tools maximas", value: effective.effectiveLoopConfiguration.maxToolCallsPerTurn },
+            {
+              label: "Seguimiento",
+              value: <StatusChip label={effective.effectiveFollowUpConfiguration.enabled ? "Activado" : "Desactivado"} tone={effective.effectiveFollowUpConfiguration.enabled ? "green" : "gray"} />
+            },
+            { label: "Intentos maximos", value: effective.effectiveFollowUpConfiguration.maxAttempts }
           ]}
         />
         {effective.source !== "published" ? (
@@ -348,6 +374,7 @@ export function SalesAgentConfigurationWorkspace({ effective, versions, selected
           { label: "Identidad", active: tab === "identidad", onClick: () => setTab("identidad") },
           { label: "Modelo", active: tab === "modelo", onClick: () => setTab("modelo") },
           { label: "Ejecucion", active: tab === "ejecucion", onClick: () => setTab("ejecucion") },
+          { label: "Seguimiento", active: tab === "seguimiento", onClick: () => setTab("seguimiento") },
           { label: "Versiones", active: tab === "versiones", onClick: () => setTab("versiones") }
         ]}
       />
@@ -588,6 +615,143 @@ export function SalesAgentConfigurationWorkspace({ effective, versions, selected
                       onChange={(event) => setForm({ ...form, maxToolCallsPerTurn: Number(event.target.value) })}
                       disabled={pending !== null}
                     />
+                  </label>
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {tab === "seguimiento" ? (
+            <div className="grid gap-3">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={form.followUpConfigurationEnabled}
+                  onChange={(event) => setForm({ ...form, followUpConfigurationEnabled: event.target.checked })}
+                  disabled={pending !== null}
+                />
+                <span className="text-body-md text-slate-700">
+                  Configurar seguimiento (follow-up) para este borrador (si no, hereda el efectivo actual)
+                </span>
+              </label>
+              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-body-md text-slate-600">
+                Esto solo autoriza, pausa y acota CUANDO puede agendarse un seguimiento - nunca decide si corresponde uno (eso lo sigue
+                decidiendo el Sales Agent). Cancelaciones por opt-out, cliente humano activo, IA pausada u oportunidad cerrada no son
+                configurables aqui: siempre aplican.
+              </p>
+              {!form.followUpConfigurationEnabled ? (
+                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-body-md text-slate-600">
+                  Heredando: seguimiento {effective.effectiveFollowUpConfiguration.enabled ? "activado" : "desactivado"},{" "}
+                  {effective.effectiveFollowUpConfiguration.maxAttempts} intentos maximos, demoras{" "}
+                  {formatAttemptDelaysMinutesInput(effective.effectiveFollowUpConfiguration.attemptDelaysMinutes)} minutos, ventana{" "}
+                  {effective.effectiveFollowUpConfiguration.allowedWindow.startHour}-{effective.effectiveFollowUpConfiguration.allowedWindow.endHour}h{" "}
+                  America/Santiago, edad maxima de oportunidad {effective.effectiveFollowUpConfiguration.maxOpportunityAgeDays} dias.
+                </p>
+              ) : (
+                <>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={form.followUpEnabled}
+                      onChange={(event) => setForm({ ...form, followUpEnabled: event.target.checked })}
+                      disabled={pending !== null}
+                    />
+                    <span className="text-body-md text-slate-700">Habilitar el agendamiento real de seguimientos</span>
+                  </label>
+                  <label className="grid gap-1 md:max-w-sm">
+                    <span className="text-label-sm uppercase text-slate-500">
+                      Intentos maximos ({SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxAttemptsMin}-
+                      {SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxAttemptsMax})
+                    </span>
+                    <input
+                      type="number"
+                      className="hub-input"
+                      value={form.followUpMaxAttempts}
+                      min={SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxAttemptsMin}
+                      max={SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxAttemptsMax}
+                      onChange={(event) => setForm({ ...form, followUpMaxAttempts: Number(event.target.value) })}
+                      disabled={pending !== null}
+                    />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-label-sm uppercase text-slate-500">
+                      Demoras por intento, en minutos (separadas por coma, {currentDelays.length} valores - debe coincidir con intentos
+                      maximos)
+                    </span>
+                    <input
+                      className="hub-input"
+                      value={delaysText}
+                      onChange={(event) => setDelaysText(event.target.value)}
+                      disabled={pending !== null}
+                    />
+                    <span className="text-body-sm text-slate-500">
+                      El intento 1 se mide desde la decision inicial; cada intento siguiente se mide desde el scheduled_for del intento
+                      anterior, nunca desde &quot;ahora&quot;.
+                    </span>
+                  </label>
+                  <div className="grid gap-1 md:max-w-sm">
+                    <span className="text-label-sm uppercase text-slate-500">
+                      Ventana horaria permitida (America/Santiago, {SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMin}-
+                      {SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMax}h)
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        className="hub-input"
+                        value={form.followUpStartHour}
+                        min={SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMin}
+                        max={SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMax}
+                        onChange={(event) => setForm({ ...form, followUpStartHour: Number(event.target.value) })}
+                        disabled={pending !== null}
+                      />
+                      <span className="text-body-md text-slate-500">a</span>
+                      <input
+                        type="number"
+                        className="hub-input"
+                        value={form.followUpEndHour}
+                        min={SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMin}
+                        max={SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMax}
+                        onChange={(event) => setForm({ ...form, followUpEndHour: Number(event.target.value) })}
+                        disabled={pending !== null}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-1">
+                    <span className="text-label-sm uppercase text-slate-500">Dias permitidos</span>
+                    <div className="flex flex-wrap gap-3">
+                      {FOLLOW_UP_WEEKDAYS.map(({ value, label }) => (
+                        <label key={value} className="flex items-center gap-1 text-body-md text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={form.followUpAllowedWeekdays.includes(value)}
+                            disabled={pending !== null}
+                            onChange={(event) => {
+                              const next = event.target.checked
+                                ? [...form.followUpAllowedWeekdays, value].sort((a, b) => a - b)
+                                : form.followUpAllowedWeekdays.filter((day) => day !== value);
+                              setForm({ ...form, followUpAllowedWeekdays: next });
+                            }}
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <label className="grid gap-1 md:max-w-sm">
+                    <span className="text-label-sm uppercase text-slate-500">
+                      Edad maxima de la oportunidad, en dias ({SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxOpportunityAgeDaysMin}-
+                      {SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxOpportunityAgeDaysMax})
+                    </span>
+                    <input
+                      type="number"
+                      className="hub-input"
+                      value={form.followUpMaxOpportunityAgeDays}
+                      min={SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxOpportunityAgeDaysMin}
+                      max={SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxOpportunityAgeDaysMax}
+                      onChange={(event) => setForm({ ...form, followUpMaxOpportunityAgeDays: Number(event.target.value) })}
+                      disabled={pending !== null}
+                    />
+                    <span className="text-body-sm text-slate-500">Basado en la fecha de creacion de la oportunidad, nunca en inactividad.</span>
                   </label>
                 </>
               )}

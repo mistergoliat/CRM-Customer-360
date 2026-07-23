@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT } from "@/lib/brain/commercial/sales-agent-configuration";
+import { SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT, SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT } from "@/lib/brain/commercial/sales-agent-configuration";
 import {
   computeFormDirty,
   describeConfigurationSource,
   describeConfigurationStatus,
+  formatAttemptDelaysMinutesInput,
   isEditingDirtyDraft,
   mapConfigurationApiError,
   mapConfigurationToFormState,
   mapFormStateToPayload,
   normalizeProhibitedPhrasesInput,
+  parseAttemptDelaysMinutesInput,
   type SalesAgentConfigurationFormState
 } from "@/lib/domains/sales-agent-config/form";
 
@@ -30,6 +32,8 @@ const EFFECTIVE_MODEL_NO_LIMIT = {
 
 const EFFECTIVE_LOOP = { maxAgentStepsPerTurn: 3, maxToolCallsPerTurn: 2 };
 
+const EFFECTIVE_FOLLOW_UP = SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT;
+
 const BASE_PROMPT_CONFIGURATION = {
   agentName: "Valentina",
   companyName: "PesasChile",
@@ -44,7 +48,7 @@ const BASE_PROMPT_CONFIGURATION = {
 // ---------------------------------------------------------------------------
 
 test("[F1] mapConfigurationToFormState: a v1 document (no model/loop section) resolves to effective values and disabled toggles", () => {
-  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP);
+  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP);
   assert.equal(form.modelConfigurationEnabled, false);
   assert.equal(form.loopConfigurationEnabled, false);
   assert.equal(form.model, EFFECTIVE_MODEL_WITH_LIMIT.model);
@@ -54,7 +58,7 @@ test("[F1] mapConfigurationToFormState: a v1 document (no model/loop section) re
 });
 
 test("[F2] mapConfigurationToFormState: absent effective maxOutputTokens seeds the safe default, never blank/NaN", () => {
-  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_NO_LIMIT, EFFECTIVE_LOOP);
+  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_NO_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP);
   assert.equal(form.maxOutputTokens, SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.maxOutputTokens);
 });
 
@@ -64,7 +68,7 @@ test("[F3] mapConfigurationToFormState: a document WITH modelConfiguration/loopC
     modelConfiguration: { model: "custom-model", temperature: 0.7, maxOutputTokens: 999, timeoutMs: 9000, maxModelRetries: 3 },
     loopConfiguration: { maxAgentStepsPerTurn: 5, maxToolCallsPerTurn: 4 }
   };
-  const form = mapConfigurationToFormState(document, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP);
+  const form = mapConfigurationToFormState(document, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP);
   assert.equal(form.modelConfigurationEnabled, true);
   assert.equal(form.loopConfigurationEnabled, true);
   assert.equal(form.model, "custom-model");
@@ -72,7 +76,7 @@ test("[F3] mapConfigurationToFormState: a document WITH modelConfiguration/loopC
 });
 
 test("[F4] mapFormStateToPayload: disabled sections are entirely absent from the payload (never a partially-filled section)", () => {
-  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP);
+  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP);
   const payload = mapFormStateToPayload(form);
   assert.equal("modelConfiguration" in payload, false);
   assert.equal("loopConfiguration" in payload, false);
@@ -81,7 +85,7 @@ test("[F4] mapFormStateToPayload: disabled sections are entirely absent from the
 
 test("[F5] mapFormStateToPayload: enabling a section persists all of its fields together, never a partial subset", () => {
   const form: SalesAgentConfigurationFormState = {
-    ...mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP),
+    ...mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP),
     modelConfigurationEnabled: true,
     temperature: 0.9
   };
@@ -90,6 +94,78 @@ test("[F5] mapFormStateToPayload: enabling a section persists all of its fields 
   assert.equal(payload.modelConfiguration?.temperature, 0.9);
   assert.equal(payload.modelConfiguration?.model, EFFECTIVE_MODEL_WITH_LIMIT.model);
   assert.equal(payload.modelConfiguration?.maxOutputTokens, form.maxOutputTokens);
+});
+
+// ---------------------------------------------------------------------------
+// mapConfigurationToFormState / mapFormStateToPayload - followUpConfiguration
+// ---------------------------------------------------------------------------
+
+test("[F16] mapConfigurationToFormState: a document with no followUpConfiguration resolves to the effective values and a disabled toggle", () => {
+  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP);
+  assert.equal(form.followUpConfigurationEnabled, false);
+  assert.equal(form.followUpEnabled, EFFECTIVE_FOLLOW_UP.enabled);
+  assert.equal(form.followUpMaxAttempts, EFFECTIVE_FOLLOW_UP.maxAttempts);
+  assert.deepEqual(form.followUpAttemptDelaysMinutes, EFFECTIVE_FOLLOW_UP.attemptDelaysMinutes);
+  assert.deepEqual(form.followUpAllowedWeekdays, EFFECTIVE_FOLLOW_UP.allowedWindow.allowedWeekdays);
+});
+
+test("[F17] mapConfigurationToFormState: a document WITH followUpConfiguration enables the toggle and reads its own values", () => {
+  const document = {
+    ...BASE_PROMPT_CONFIGURATION,
+    followUpConfiguration: {
+      enabled: true,
+      maxAttempts: 2,
+      attemptDelaysMinutes: [30, 720],
+      allowedWindow: { timezone: "America/Santiago" as const, startHour: 10, endHour: 18, allowedWeekdays: [2, 4] },
+      maxOpportunityAgeDays: 14
+    }
+  };
+  const form = mapConfigurationToFormState(document, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP);
+  assert.equal(form.followUpConfigurationEnabled, true);
+  assert.equal(form.followUpEnabled, true);
+  assert.equal(form.followUpMaxAttempts, 2);
+  assert.deepEqual(form.followUpAttemptDelaysMinutes, [30, 720]);
+  assert.equal(form.followUpStartHour, 10);
+  assert.equal(form.followUpEndHour, 18);
+  assert.deepEqual(form.followUpAllowedWeekdays, [2, 4]);
+  assert.equal(form.followUpMaxOpportunityAgeDays, 14);
+});
+
+test("[F18] mapFormStateToPayload: a disabled followUpConfiguration section is entirely absent from the payload", () => {
+  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP);
+  const payload = mapFormStateToPayload(form);
+  assert.equal("followUpConfiguration" in payload, false);
+});
+
+test("[F19] mapFormStateToPayload: enabling followUpConfiguration persists the whole section together, timezone always fixed", () => {
+  const form: SalesAgentConfigurationFormState = {
+    ...mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP),
+    followUpConfigurationEnabled: true,
+    followUpEnabled: true,
+    followUpMaxAttempts: 1,
+    followUpAttemptDelaysMinutes: [45]
+  };
+  const payload = mapFormStateToPayload(form);
+  assert.ok(payload.followUpConfiguration);
+  assert.equal(payload.followUpConfiguration?.enabled, true);
+  assert.equal(payload.followUpConfiguration?.maxAttempts, 1);
+  assert.deepEqual(payload.followUpConfiguration?.attemptDelaysMinutes, [45]);
+  assert.equal(payload.followUpConfiguration?.allowedWindow.timezone, "America/Santiago");
+});
+
+// ---------------------------------------------------------------------------
+// parseAttemptDelaysMinutesInput / formatAttemptDelaysMinutesInput
+// ---------------------------------------------------------------------------
+
+test("[F20] parseAttemptDelaysMinutesInput: comma/newline separated integers, blanks and non-numeric entries dropped", () => {
+  assert.deepEqual(parseAttemptDelaysMinutesInput("60, 1440,\n4320"), [60, 1440, 4320]);
+  assert.deepEqual(parseAttemptDelaysMinutesInput("60, abc, 1440.5, , 30"), [60, 30]);
+  assert.deepEqual(parseAttemptDelaysMinutesInput(""), []);
+});
+
+test("[F21] formatAttemptDelaysMinutesInput/parseAttemptDelaysMinutesInput round-trip for a valid array", () => {
+  const delays = [60, 1440, 4320];
+  assert.deepEqual(parseAttemptDelaysMinutesInput(formatAttemptDelaysMinutesInput(delays)), delays);
 });
 
 // ---------------------------------------------------------------------------
@@ -111,12 +187,12 @@ test("[F7] normalizeProhibitedPhrasesInput: empty input returns an empty array",
 // ---------------------------------------------------------------------------
 
 test("[F8] computeFormDirty: identical form states are not dirty", () => {
-  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP);
+  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP);
   assert.equal(computeFormDirty(form, { ...form }), false);
 });
 
 test("[F9] computeFormDirty: any field change makes the form dirty", () => {
-  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP);
+  const form = mapConfigurationToFormState(BASE_PROMPT_CONFIGURATION, EFFECTIVE_MODEL_WITH_LIMIT, EFFECTIVE_LOOP, EFFECTIVE_FOLLOW_UP);
   assert.equal(computeFormDirty(form, { ...form, agentName: "Otra" }), true);
   assert.equal(computeFormDirty(form, { ...form, prohibitedPhrases: [...form.prohibitedPhrases, "nueva frase"] }), true);
 });

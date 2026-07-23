@@ -28,7 +28,7 @@ export default async function SalesAgentConfigurationPage({ searchParams }: Page
     console.error("sales_agent_configuration_page_error", sanitizeDbError(error));
     return (
       <div className="space-y-6">
-        <PageHeader eyebrow="Agentes" title="Configura al agente" description="Identidad, modelo y ejecucion del Sales Agent de PesasChile." />
+        <PageHeader eyebrow="Agentes" title="Configura al agente" description="Identidad, modelo, ejecucion y seguimiento del Sales Agent de PesasChile." />
         <ErrorState title="Configuracion no disponible" message={INFRASTRUCTURE_ERROR_MESSAGE} />
       </div>
     );
@@ -45,7 +45,7 @@ export default async function SalesAgentConfigurationPage({ searchParams }: Page
       <PageHeader
         eyebrow="Agentes"
         title="Configura al agente"
-        description="Identidad, modelo y ejecucion del Sales Agent de PesasChile."
+        description="Identidad, modelo, ejecucion y seguimiento del Sales Agent de PesasChile."
         status={source.label}
       />
       <SalesAgentConfigurationWorkspace
