@@ -22,6 +22,12 @@ export function SalesAgentConfigurationVersionsTable({ versions, writeEnabled, p
     return <EmptyState title="Sin versiones todavia" description="Crea el primer borrador desde las pestanas de arriba." icon="history" />;
   }
 
+  // parentConfigurationId is a row id, never a version number - resolve it
+  // to the real version via the loaded page's own versions, falling back to
+  // "ID <id>" only if the parent falls outside the loaded window (e.g.
+  // beyond the 100-row limit page.tsx requests).
+  const versionById = new Map(versions.map((version) => [version.id, version.version]));
+
   return (
     <DataTable headers={["Version", "Nombre", "Estado", "Autor", "Creado", "Publicado", "Hash", "Parent", "Acciones"]}>
       {versions.map((version) => {
@@ -38,7 +44,13 @@ export function SalesAgentConfigurationVersionsTable({ versions, writeEnabled, p
             <td>{formatDateTime(version.createdAt)}</td>
             <td>{version.publishedAt ? formatDateTime(version.publishedAt) : "-"}</td>
             <td className="font-mono text-label-sm">{version.configurationHash.slice(0, 8)}</td>
-            <td>{version.parentConfigurationId ? `v${version.parentConfigurationId}` : "-"}</td>
+            <td>
+              {version.parentConfigurationId
+                ? versionById.has(version.parentConfigurationId)
+                  ? `v${versionById.get(version.parentConfigurationId)}`
+                  : `ID ${version.parentConfigurationId}`
+                : "-"}
+            </td>
             <td>
               <div className="flex flex-wrap gap-2">
                 {version.status === "draft" ? (

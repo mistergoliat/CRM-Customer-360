@@ -78,6 +78,7 @@ export {
   loadLatestVersionForScope,
   assertConfigurationIsDraft,
   archiveConfiguration,
+  archiveDraftConfiguration,
   archiveConfigurationRowOnConnection,
   withSalesAgentConfigurationScopeLock,
   runInTransaction,

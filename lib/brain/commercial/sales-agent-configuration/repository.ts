@@ -448,3 +448,50 @@ export async function archiveConfiguration(id: number): Promise<SalesAgentConfig
     })
   );
 }
+
+/**
+ * ACS-R1-05.1-T02.3C review correction. Hub-only archive: the Hub must
+ * never archive a published row (only publishDraftConfiguration's own
+ * transactional flow archives the previously-published row, when a new
+ * version is published). archiveConfiguration() above allows either
+ * draft or published for other callers - a route-level "load, check
+ * status === draft, then call archiveConfiguration" left a real window
+ * for a concurrent publish to turn the row published between the read and
+ * the write, which archiveConfiguration() would then still accept. This
+ * function closes that window with a single atomic UPDATE whose WHERE
+ * clause itself enforces status = 'draft' - the same pattern
+ * updateDraftConfiguration uses for optimistic concurrency.
+ */
+export async function archiveDraftConfiguration(id: number): Promise<SalesAgentConfigurationRecord> {
+  return withConnection((connection) =>
+    runInTransaction(connection, async () => {
+      const [result] = await connection.execute<ResultSetHeader>(
+        `UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET status = 'archived', archived_at = UTC_TIMESTAMP(3) WHERE id = ? AND scope_key = ? AND status = 'draft'`,
+        toExecuteValues([id, SALES_AGENT_CONFIGURATION_SCOPE])
+      );
+
+      if (result.affectedRows === 0) {
+        const existing = await loadConfigurationByIdOnConnection(connection, id);
+        if (!existing) {
+          throw new SalesAgentConfigurationNotFoundError(`sales_agent_configuration_not_found:${id}`);
+        }
+        throw new SalesAgentConfigurationNotDraftError(`sales_agent_configuration_not_draft:${id}:${existing.status}`);
+      }
+
+      const record = await loadConfigurationByIdOnConnection(connection, id);
+      if (!record) {
+        throw new SalesAgentConfigurationNotFoundError(`sales_agent_configuration_not_found:${id}`);
+      }
+
+      await auditLog({
+        action: "sales_agent_configuration.archived",
+        entityType: "sales_agent_configuration",
+        entityId: record.id,
+        after: buildAuditPayload(record),
+        connection
+      });
+
+      return record;
+    })
+  );
+}

@@ -1,9 +1,12 @@
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { isDbWriteEnabled } from "@/lib/write-access";
+import { sanitizeDbError } from "@/lib/db";
 import { buildAllowedSalesAgentModelValues, listPesasChileConfigurations, resolveSalesAgentConfiguration } from "@/lib/brain/commercial/sales-agent-configuration";
 import { describeConfigurationSource } from "@/lib/domains/sales-agent-config/form";
 import { SalesAgentConfigurationWorkspace } from "@/components/agents/SalesAgentConfigurationWorkspace";
+
+const INFRASTRUCTURE_ERROR_MESSAGE = "No se pudo cargar la configuracion del Sales Agent. Intenta de nuevo en unos minutos.";
 
 type PageProps = {
   searchParams: Promise<{ draft?: string }>;
@@ -20,13 +23,13 @@ export default async function SalesAgentConfigurationPage({ searchParams }: Page
   try {
     [effective, versions] = await Promise.all([resolveSalesAgentConfiguration(), listPesasChileConfigurations({ limit: 100 })]);
   } catch (error) {
+    // Internal-only detail (still credential-redacted) - the operator never
+    // sees SQL, table names, host/port, or a raw repository error message.
+    console.error("sales_agent_configuration_page_error", sanitizeDbError(error));
     return (
       <div className="space-y-6">
         <PageHeader eyebrow="Agentes" title="Configura al agente" description="Identidad, modelo y ejecucion del Sales Agent de PesasChile." />
-        <ErrorState
-          title="Configuracion no disponible"
-          message={error instanceof Error ? error.message : "No se pudo cargar la configuracion del Sales Agent."}
-        />
+        <ErrorState title="Configuracion no disponible" message={INFRASTRUCTURE_ERROR_MESSAGE} />
       </div>
     );
   }

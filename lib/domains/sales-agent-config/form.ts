@@ -115,6 +115,21 @@ export function mapFormStateToPayload(form: SalesAgentConfigurationFormState): S
 }
 
 /**
+ * ACS-R1-05.1-T02.3C review correction. Publishing or archiving the SAME
+ * draft the operator is currently editing, while it has unsaved local
+ * changes, must be blocked outright - the API only ever acts on what's
+ * already persisted, so proceeding would publish/archive stale content
+ * without the operator realizing their on-screen edits were never saved.
+ * A different draft (targetId !== currentDraftId) is unaffected by this -
+ * the caller still separately prompts for confirmation in that case, since
+ * the operator's unsaved edits (elsewhere) aren't at risk of being
+ * silently acted on, just easy to forget about.
+ */
+export function isEditingDirtyDraft(currentDraftId: number | null, targetId: number, dirty: boolean): boolean {
+  return dirty && currentDraftId === targetId;
+}
+
+/**
  * One line per phrase (textarea input). Same normalization as the domain
  * validator (normalizeConfigurationText: collapse whitespace, trim) plus
  * dedup, so the count/preview the operator sees before saving matches what

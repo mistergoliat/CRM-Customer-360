@@ -6,6 +6,28 @@ export function parseConfigurationId(raw: string | undefined): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+const LIST_LIMIT_MAX = 200;
+
+export type ListLimitParseResult = { ok: true; limit: number | undefined } | { ok: false };
+
+/**
+ * ACS-R1-05.1-T02.3C review correction. A malformed ?limit (NaN, negative,
+ * non-integer) is rejected outright rather than passed through -
+ * listPesasChileConfigurations() interpolates its limit directly into the
+ * SQL string (`LIMIT ${limit}`), and Math.max/Math.min propagate NaN
+ * instead of clamping it, so an unvalidated NaN would reach real SQL.
+ * A merely excessive value is clamped (not rejected) to LIST_LIMIT_MAX,
+ * matching the domain's own ceiling.
+ */
+export function parseListLimit(raw: string | null): ListLimitParseResult {
+  if (raw === null) return { ok: true, limit: undefined };
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return { ok: false };
+  }
+  return { ok: true, limit: Math.min(parsed, LIST_LIMIT_MAX) };
+}
+
 /**
  * ACS-R1-05.1-T02.3C, decision 6: reject an oversized body from
  * `Content-Length` alone, before `request.json()` ever runs - no

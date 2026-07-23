@@ -8,7 +8,7 @@ import {
   validateSalesAgentConfigurationDocument,
   type SalesAgentConfigurationStatus
 } from "@/lib/brain/commercial/sales-agent-configuration";
-import { rejectOversizedRequest, validationFailureResponse } from "./_lib/httpHelpers";
+import { parseListLimit, rejectOversizedRequest, validationFailureResponse } from "./_lib/httpHelpers";
 import { mapDomainErrorToResponse } from "./_lib/mapDomainError";
 
 function isValidStatus(value: string): value is SalesAgentConfigurationStatus {
@@ -22,11 +22,14 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const statusParam = searchParams.get("status");
   const status = statusParam ? statusParam.split(",").filter(isValidStatus) : undefined;
-  const limitParam = searchParams.get("limit");
-  const limit = limitParam ? Number(limitParam) : undefined;
+
+  const limitResult = parseListLimit(searchParams.get("limit"));
+  if (!limitResult.ok) {
+    return Response.json({ error: "invalid_limit" }, { status: 400 });
+  }
 
   try {
-    const configurations = await listPesasChileConfigurations({ status, limit });
+    const configurations = await listPesasChileConfigurations({ status, limit: limitResult.limit });
     return Response.json({ configurations });
   } catch (error) {
     return mapDomainErrorToResponse(error);

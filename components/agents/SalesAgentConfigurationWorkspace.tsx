@@ -20,6 +20,7 @@ import type { ResolvedSalesAgentConfiguration, SalesAgentConfigurationRecord } f
 import {
   computeFormDirty,
   describeConfigurationSource,
+  isEditingDirtyDraft,
   mapConfigurationApiError,
   mapConfigurationToFormState,
   mapFormStateToPayload,
@@ -220,6 +221,19 @@ export function SalesAgentConfigurationWorkspace({ effective, versions, selected
   }
 
   async function handlePublishFromTable(id: number) {
+    // Publishing THIS same draft while it has unsaved local edits would
+    // publish stale, already-persisted content, not what's on screen -
+    // block outright rather than silently publishing the wrong version.
+    if (isEditingDirtyDraft(draft?.id ?? null, id, dirty)) {
+      setFeedback("Guarda el borrador antes de publicar.");
+      return;
+    }
+    // Publishing a DIFFERENT draft while the one being edited still has
+    // unsaved changes doesn't touch that other draft's content, but the
+    // operator may not realize their in-progress edits are still unsaved -
+    // require an explicit, separate confirmation before the usual publish
+    // confirmation.
+    if (dirty && !window.confirm("Tienes cambios sin guardar en el borrador que estas editando. Continuar de todas formas?")) return;
     if (!window.confirm(`Publicar la version seleccionada? Esto reemplaza la configuracion activa.`)) return;
     if (!writeEnabled) {
       setFeedback(DB_WRITE_DISABLED_MESSAGE);
@@ -241,6 +255,13 @@ export function SalesAgentConfigurationWorkspace({ effective, versions, selected
   }
 
   async function handleArchive(id: number) {
+    // Same protection as publish: archiving the draft currently being
+    // edited while it has unsaved changes would discard those edits along
+    // with the whole row - block outright, require save or discard first.
+    if (isEditingDirtyDraft(draft?.id ?? null, id, dirty)) {
+      setFeedback("Guarda o descarta los cambios antes de archivar este borrador.");
+      return;
+    }
     if (!writeEnabled) {
       setFeedback(DB_WRITE_DISABLED_MESSAGE);
       return;
