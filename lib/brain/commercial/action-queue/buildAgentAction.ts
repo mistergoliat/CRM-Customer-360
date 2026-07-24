@@ -86,6 +86,11 @@ function buildBaseAction(input: {
   expiresAt: string | null;
   attemptNumber: number;
   maxAttempts: number;
+  followUpSequenceKey?: string | null;
+  followUpConfigurationSource?: CrmAgentAction["followUpConfigurationSource"];
+  followUpConfigurationId?: number | null;
+  followUpConfigurationVersion?: number | null;
+  followUpConfigurationHash?: string | null;
   blockReasons: string[];
   cancelReason: string | null;
   failureReason: string | null;
@@ -167,6 +172,11 @@ function buildBaseAction(input: {
     expiresAt: input.expiresAt,
     attemptNumber: input.attemptNumber,
     maxAttempts: input.maxAttempts,
+    followUpSequenceKey: input.followUpSequenceKey ?? null,
+    followUpConfigurationSource: input.followUpConfigurationSource ?? null,
+    followUpConfigurationId: input.followUpConfigurationId ?? null,
+    followUpConfigurationVersion: input.followUpConfigurationVersion ?? null,
+    followUpConfigurationHash: input.followUpConfigurationHash ?? null,
     blockReasons: [...input.blockReasons],
     cancelReason: input.cancelReason,
     failureReason: input.failureReason,
@@ -208,6 +218,15 @@ function normalizeContext(context: CrmAgentActionBuildContext) {
     approvedAt: asIso(context.approvedAt),
     attemptNumber: Number.isInteger(context.attemptNumber ?? 1) && (context.attemptNumber ?? 1) > 0 ? Math.floor(context.attemptNumber ?? 1) : 1,
     maxAttempts: Number.isInteger(context.maxAttempts ?? 1) && (context.maxAttempts ?? 1) > 0 ? Math.floor(context.maxAttempts ?? 1) : 1,
+    followUpSequenceKey: asText(context.followUpSequenceKey),
+    followUpConfigurationSource: context.followUpConfigurationSource ?? null,
+    followUpConfigurationId:
+      typeof context.followUpConfigurationId === "number" && Number.isFinite(context.followUpConfigurationId) ? context.followUpConfigurationId : null,
+    followUpConfigurationVersion:
+      typeof context.followUpConfigurationVersion === "number" && Number.isFinite(context.followUpConfigurationVersion)
+        ? context.followUpConfigurationVersion
+        : null,
+    followUpConfigurationHash: asText(context.followUpConfigurationHash),
     createdAt: buildCreatedAt(context),
     updatedAt: null
   };
@@ -360,6 +379,8 @@ export function buildAgentActionFromNextAction(input: BuildAgentActionFromNextAc
       ? "blocked"
       : nextAction.approvalRequirement === "explicit_operator_approval" || nextAction.approvalRequirement === "operator_review"
         ? "requires_review"
+        : actionType === "schedule_followup"
+          ? "planned"
         : "proposed";
   const status = deriveActionStatusFromGovernance({
     baseStatus,
@@ -418,6 +439,11 @@ export function buildAgentActionFromNextAction(input: BuildAgentActionFromNextAc
     expiresAt: normalizedContext.expiresAt,
     attemptNumber: normalizedContext.attemptNumber,
     maxAttempts: normalizedContext.maxAttempts,
+    followUpSequenceKey: normalizedContext.followUpSequenceKey,
+    followUpConfigurationSource: normalizedContext.followUpConfigurationSource,
+    followUpConfigurationId: normalizedContext.followUpConfigurationId,
+    followUpConfigurationVersion: normalizedContext.followUpConfigurationVersion,
+    followUpConfigurationHash: normalizedContext.followUpConfigurationHash,
     blockReasons: uniqueTextArray(blockReasons),
     cancelReason: null,
     failureReason: status === "blocked" ? nextAction.reason : null,

@@ -1,0 +1,7 @@
+{
+  "enabledPlugins": {
+    "ponytail@ponytail": true,
+    "fullstack-dev-skills@fullstack-dev-skills": true,
+    "claude-mem@thedotmack": true
+  }
+}

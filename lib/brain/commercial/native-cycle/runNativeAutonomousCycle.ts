@@ -28,6 +28,13 @@ import { createHttpAgentLoopProvider } from "../agent-loop/providers/httpAgentLo
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
 import { buildNativeBrainContextShim } from "./buildNativeBrainContextShim";
 import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
+import {
+  checkCustomerOptOutStatus,
+  detectExplicitOptInCommand,
+  detectExplicitOptOutCommand,
+  recordCustomerOptIn,
+  recordCustomerOptOut
+} from "../optOutStore";
 import { isMultiRequestRuntimeEnabled, runMultiRequestAutonomousCycle } from "../multi-request";
 import type { MultiRequestCycleResult } from "../multi-request";
 import type { CommercialShadowResult } from "../shadow";
@@ -154,6 +161,57 @@ export async function runNativeAutonomousCycle(
   const pilotAllowlist = loadAutonomousPilotAllowlist();
   if (!isWaIdAuthorizedForPilot(input.waId, pilotAllowlist)) {
     return { ran: false, reason: "wa_id_not_authorized_for_pilot", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
+  }
+
+  // Step 0.5 (ACS-R1-05.1-T02.3D, decision 11): a customer who has
+  // explicitly opted out never gets another autonomous message this turn -
+  // no LLM call, no Customer 360 load, no decision/action persistence, no
+  // outbox write. Same "checked before anything else" placement as Step 0.
+  //
+  // Review correction (post-close): checkCustomerOptOutStatus never fails
+  // open - a real DB read failure ("unavailable") blocks this turn exactly
+  // like a genuine opt-out, it is never treated as "not opted out". While
+  // opted out, the ONLY thing this turn is allowed to act on is an explicit,
+  // unambiguous opt-in command (detectExplicitOptInCommand) - reversing the
+  // opt-out deterministically, never by routing through the Sales Agent/LLM.
+  // A customer who is NOT opted out is instead checked for an explicit
+  // opt-out command and recorded before this turn is gated the same way.
+  const optOutStatus = await checkCustomerOptOutStatus(input.waId);
+  const sourceMessageId = input.messageId === null || input.messageId === undefined ? null : String(input.messageId);
+
+  if (optOutStatus === "unavailable") {
+    return {
+      ran: false,
+      reason: "customer_opt_out_status_unavailable",
+      shadow: null,
+      loop: null,
+      bridge: null,
+      catalogCapability: null,
+      commercialNeed: null,
+      warnings: []
+    };
+  }
+
+  if (optOutStatus === "opted_out") {
+    if (detectExplicitOptInCommand(input.messageText)) {
+      await recordCustomerOptIn({ waId: input.waId, reason: "explicit_customer_command", sourceMessageId });
+      return {
+        ran: false,
+        reason: "customer_opted_back_in",
+        shadow: null,
+        loop: null,
+        bridge: null,
+        catalogCapability: null,
+        commercialNeed: null,
+        warnings: []
+      };
+    }
+    return { ran: false, reason: "customer_opted_out", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
+  }
+
+  if (detectExplicitOptOutCommand(input.messageText)) {
+    await recordCustomerOptOut({ waId: input.waId, reason: "explicit_customer_command", sourceMessageId });
+    return { ran: false, reason: "customer_opted_out", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
   }
 
   // Step 1: which runtime, if any, is enabled this turn. Multi-request is

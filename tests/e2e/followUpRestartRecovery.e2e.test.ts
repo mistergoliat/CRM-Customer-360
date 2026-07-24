@@ -426,11 +426,13 @@ test("T07-E14: human ownership active - follow-up never executes, cancelled with
     action_id: actionId,
     wa_id: waId,
     conversation_case_id: conversation.id,
+    opportunity_id: null,
     scheduled_for: null,
     draft_message: null,
     status: "executing",
     attempt_number: 1,
-    max_attempts: 1
+    max_attempts: 1,
+    followup_configuration_source: null
   });
   assert.equal(revalidation.cancel, true);
   assert.equal(revalidation.reason, "human_owner_active");

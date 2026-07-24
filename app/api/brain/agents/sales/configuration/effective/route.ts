@@ -21,6 +21,7 @@ export async function GET(request: Request) {
       configuration: resolved.configuration,
       effectiveModelConfiguration: resolved.effectiveModelConfiguration,
       effectiveLoopConfiguration: resolved.effectiveLoopConfiguration,
+      effectiveFollowUpConfiguration: resolved.effectiveFollowUpConfiguration,
       allowedModels: buildAllowedSalesAgentModelValues()
     });
   } catch (error) {

@@ -4,8 +4,10 @@ import { getPool, queryRows } from "@/lib/db";
 import {
   SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1,
   SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2,
+  SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3,
   SALES_AGENT_CONFIGURATION_SCOPE,
   SALES_AGENT_CONFIGURATION_TABLE,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL,
   SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT,
@@ -21,8 +23,10 @@ import {
   SalesAgentConfigurationNotDraftError,
   SalesAgentConfigurationNotFoundError,
   validateSalesAgentConfigurationDocument,
+  validateSalesAgentFollowUpConfiguration,
   validateSalesAgentLoopConfiguration,
   validateSalesAgentModelConfiguration,
+  type SalesAgentFollowUpConfiguration,
   type SalesAgentLoopConfiguration,
   type SalesAgentModelConfiguration,
   type SalesAgentPromptConfiguration
@@ -86,6 +90,17 @@ function buildValidLoopConfiguration(overrides: Partial<SalesAgentLoopConfigurat
   return {
     maxAgentStepsPerTurn: 4,
     maxToolCallsPerTurn: 3,
+    ...overrides
+  };
+}
+
+function buildValidFollowUpConfiguration(overrides: Partial<SalesAgentFollowUpConfiguration> = {}): SalesAgentFollowUpConfiguration {
+  return {
+    enabled: true,
+    maxAttempts: 3,
+    attemptDelaysMinutes: [60, 1440, 4320],
+    allowedWindow: { timezone: "America/Santiago", startHour: 9, endHour: 19, allowedWeekdays: [1, 2, 3, 4, 5] },
+    maxOpportunityAgeDays: 30,
     ...overrides
   };
 }
@@ -227,6 +242,110 @@ test("[L1] validateSalesAgentLoopConfiguration accepts a valid configuration and
 });
 
 // ---------------------------------------------------------------------------
+// Follow-up configuration validation (ACS-R1-05.1-T02.3D)
+// ---------------------------------------------------------------------------
+
+test("[FU1] validateSalesAgentFollowUpConfiguration accepts a valid configuration", () => {
+  const result = validateSalesAgentFollowUpConfiguration(buildValidFollowUpConfiguration());
+  assert.equal(result.valid, true);
+});
+
+test("[FU2] validateSalesAgentFollowUpConfiguration rejects an unknown top-level field", () => {
+  const result = validateSalesAgentFollowUpConfiguration({ ...buildValidFollowUpConfiguration(), retryPolicy: "aggressive" });
+  assert.equal(result.valid, false);
+  if (!result.valid) assert.equal(result.code, "unknown_field");
+});
+
+test("[FU3] validateSalesAgentFollowUpConfiguration rejects a missing required field", () => {
+  const input = { ...buildValidFollowUpConfiguration() } as Record<string, unknown>;
+  delete input.maxOpportunityAgeDays;
+  const result = validateSalesAgentFollowUpConfiguration(input);
+  assert.equal(result.valid, false);
+  if (!result.valid) assert.equal(result.code, "missing_required_field");
+});
+
+test("[FU4] validateSalesAgentFollowUpConfiguration enforces platform bounds on maxAttempts/maxOpportunityAgeDays", () => {
+  const tooFewAttempts = validateSalesAgentFollowUpConfiguration(
+    buildValidFollowUpConfiguration({ maxAttempts: 0, attemptDelaysMinutes: [] })
+  );
+  assert.equal(tooFewAttempts.valid, false);
+  if (!tooFewAttempts.valid) assert.equal(tooFewAttempts.code, "out_of_range");
+
+  const tooManyAttempts = validateSalesAgentFollowUpConfiguration(
+    buildValidFollowUpConfiguration({ maxAttempts: 6, attemptDelaysMinutes: [60, 120, 180, 240, 300, 360] })
+  );
+  assert.equal(tooManyAttempts.valid, false);
+  if (!tooManyAttempts.valid) assert.equal(tooManyAttempts.code, "out_of_range");
+
+  const ageTooHigh = validateSalesAgentFollowUpConfiguration(buildValidFollowUpConfiguration({ maxOpportunityAgeDays: 181 }));
+  assert.equal(ageTooHigh.valid, false);
+  if (!ageTooHigh.valid) assert.equal(ageTooHigh.code, "out_of_range");
+});
+
+test("[FU5] validateSalesAgentFollowUpConfiguration rejects attemptDelaysMinutes whose length does not match maxAttempts", () => {
+  const result = validateSalesAgentFollowUpConfiguration(
+    buildValidFollowUpConfiguration({ maxAttempts: 2, attemptDelaysMinutes: [60, 120, 180] })
+  );
+  assert.equal(result.valid, false);
+  if (!result.valid) assert.equal(result.code, "attempt_delays_length_mismatch");
+});
+
+test("[FU6] validateSalesAgentFollowUpConfiguration enforces bounds on every attemptDelaysMinutes entry", () => {
+  const tooLow = validateSalesAgentFollowUpConfiguration(buildValidFollowUpConfiguration({ attemptDelaysMinutes: [4, 1440, 4320] }));
+  assert.equal(tooLow.valid, false);
+  if (!tooLow.valid) assert.equal(tooLow.code, "out_of_range");
+
+  const tooHigh = validateSalesAgentFollowUpConfiguration(buildValidFollowUpConfiguration({ attemptDelaysMinutes: [60, 1440, 43201] }));
+  assert.equal(tooHigh.valid, false);
+  if (!tooHigh.valid) assert.equal(tooHigh.code, "out_of_range");
+});
+
+test("[FU7] validateSalesAgentFollowUpConfiguration rejects a timezone other than America/Santiago", () => {
+  const result = validateSalesAgentFollowUpConfiguration({
+    ...buildValidFollowUpConfiguration(),
+    allowedWindow: { ...buildValidFollowUpConfiguration().allowedWindow, timezone: "UTC" }
+  });
+  assert.equal(result.valid, false);
+  if (!result.valid) assert.equal(result.field, "allowedWindow.timezone");
+});
+
+test("[FU8] validateSalesAgentFollowUpConfiguration rejects endHour <= startHour, always (even with enforceRange: false)", () => {
+  const result = validateSalesAgentFollowUpConfiguration(
+    { ...buildValidFollowUpConfiguration(), allowedWindow: { ...buildValidFollowUpConfiguration().allowedWindow, startHour: 19, endHour: 9 } },
+    { enforceRange: false }
+  );
+  assert.equal(result.valid, false);
+  if (!result.valid) assert.equal(result.code, "out_of_range");
+});
+
+test("[FU9] validateSalesAgentFollowUpConfiguration rejects an empty allowedWeekdays and rejects duplicates", () => {
+  const empty = validateSalesAgentFollowUpConfiguration({
+    ...buildValidFollowUpConfiguration(),
+    allowedWindow: { ...buildValidFollowUpConfiguration().allowedWindow, allowedWeekdays: [] }
+  });
+  assert.equal(empty.valid, false);
+  if (!empty.valid) assert.equal(empty.code, "empty_required_field");
+
+  const duplicates = validateSalesAgentFollowUpConfiguration({
+    ...buildValidFollowUpConfiguration(),
+    allowedWindow: { ...buildValidFollowUpConfiguration().allowedWindow, allowedWeekdays: [1, 1, 2] }
+  });
+  assert.equal(duplicates.valid, false);
+  if (!duplicates.valid) assert.equal(duplicates.code, "duplicate_weekday");
+});
+
+test("[FU10] validateSalesAgentFollowUpConfiguration's numeric ceilings are skipped on read paths (enforceRange: false), structural rules are not", () => {
+  // Same "never let a stricter platform cap break reading a historical row"
+  // rationale as [M8] - but hour-ordering/weekday-shape are real structural
+  // invariants, never a loosenable ceiling, so FU8/FU9 above must hold
+  // regardless of enforceRange (already asserted with enforceRange:false).
+  const result = validateSalesAgentFollowUpConfiguration(buildValidFollowUpConfiguration({ maxOpportunityAgeDays: 400 }), {
+    enforceRange: false
+  });
+  assert.equal(result.valid, true);
+});
+
+// ---------------------------------------------------------------------------
 // Document validator (v1/v2 compatibility)
 // ---------------------------------------------------------------------------
 
@@ -269,6 +388,38 @@ test("[D4] an unknown top-level field is still rejected at the document level", 
   if (!result.valid) assert.equal(result.code, "unknown_field");
 });
 
+test("[D5] a v3 document with followUpConfiguration validates and preserves the section alongside model/loop", () => {
+  const document = {
+    ...buildValidPromptConfiguration(),
+    modelConfiguration: buildValidModelConfiguration(),
+    loopConfiguration: buildValidLoopConfiguration(),
+    followUpConfiguration: buildValidFollowUpConfiguration()
+  };
+  const result = validateSalesAgentConfigurationDocument(document);
+  assert.equal(result.valid, true);
+  if (result.valid) {
+    assert.deepEqual(result.configuration.followUpConfiguration, buildValidFollowUpConfiguration());
+    assert.deepEqual(result.configuration.modelConfiguration, buildValidModelConfiguration());
+  }
+});
+
+test("[D6] an invalid followUpConfiguration fails the whole document, never silently dropped", () => {
+  const document = {
+    ...buildValidPromptConfiguration(),
+    followUpConfiguration: { ...buildValidFollowUpConfiguration(), maxAttempts: 99 }
+  };
+  const result = validateSalesAgentConfigurationDocument(document);
+  assert.equal(result.valid, false);
+  if (!result.valid) assert.equal(result.code, "out_of_range");
+});
+
+test("[D7] a v1/v2-shaped document (no followUpConfiguration key) still validates - structural superset, no migration required", () => {
+  const document = { ...buildValidPromptConfiguration(), modelConfiguration: buildValidModelConfiguration() };
+  const result = validateSalesAgentConfigurationDocument(document);
+  assert.equal(result.valid, true);
+  if (result.valid) assert.equal(result.configuration.followUpConfiguration, undefined);
+});
+
 // ---------------------------------------------------------------------------
 // Hash: v1 compatibility + v2 content sensitivity
 // ---------------------------------------------------------------------------
@@ -306,6 +457,44 @@ test("[H3] hash changes when only the model configuration changes", () => {
   assert.notEqual(
     computeSalesAgentConfigurationHash(document, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2),
     computeSalesAgentConfigurationHash(changed, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2)
+  );
+});
+
+test("[H4] adding followUpConfiguration changes the hash even if every other field/schemaVersion is unchanged", () => {
+  const prompt = buildValidPromptConfiguration();
+  const withoutFollowUp = computeSalesAgentConfigurationHash(prompt, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3);
+  const withFollowUp = computeSalesAgentConfigurationHash(
+    { ...prompt, followUpConfiguration: buildValidFollowUpConfiguration() },
+    SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3
+  );
+  assert.notEqual(withoutFollowUp, withFollowUp);
+});
+
+test("[H5] hash changes when only attemptDelaysMinutes content changes, but is order-preserving (not sorted) for that field", () => {
+  const document = { ...buildValidPromptConfiguration(), followUpConfiguration: buildValidFollowUpConfiguration() };
+  const reordered = {
+    ...buildValidPromptConfiguration(),
+    followUpConfiguration: buildValidFollowUpConfiguration({ attemptDelaysMinutes: [4320, 1440, 60] })
+  };
+  assert.notEqual(
+    computeSalesAgentConfigurationHash(document, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3),
+    computeSalesAgentConfigurationHash(reordered, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3),
+    "attemptDelaysMinutes order is semantically meaningful (per-attempt cadence) - it must not be canonicalized away like allowedWeekdays is"
+  );
+});
+
+test("[H6] hash is stable regardless of allowedWeekdays input order (canonicalized/sorted)", () => {
+  const document = {
+    ...buildValidPromptConfiguration(),
+    followUpConfiguration: buildValidFollowUpConfiguration({ allowedWindow: { ...buildValidFollowUpConfiguration().allowedWindow, allowedWeekdays: [5, 1, 3, 2, 4] } })
+  };
+  const sorted = {
+    ...buildValidPromptConfiguration(),
+    followUpConfiguration: buildValidFollowUpConfiguration({ allowedWindow: { ...buildValidFollowUpConfiguration().allowedWindow, allowedWeekdays: [1, 2, 3, 4, 5] } })
+  };
+  assert.equal(
+    computeSalesAgentConfigurationHash(document, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3),
+    computeSalesAgentConfigurationHash(sorted, SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3)
   );
 });
 
@@ -365,6 +554,19 @@ test("[R2] deserializing a real pre-T02.3B v1 row (schema_version v1, no model/l
   assert.equal(record.configuration.loopConfiguration, undefined);
 });
 
+test("[R4] createDraftConfiguration accepts and stores followUpConfiguration", async () => {
+  const draft = await createDraftConfiguration({
+    name: uniqueName("with-followup-config"),
+    configuration: { ...buildValidPromptConfiguration(), followUpConfiguration: buildValidFollowUpConfiguration() },
+    createdBy: "test-suite"
+  });
+
+  assert.deepEqual(draft.configuration.followUpConfiguration, buildValidFollowUpConfiguration());
+
+  const reloaded = await loadConfigurationById(draft.id);
+  assert.deepEqual(reloaded?.configuration.followUpConfiguration, buildValidFollowUpConfiguration());
+});
+
 test("[R3] resolver falls back to the safe model/loop defaults for a published row that never had runtime config", async () => {
   await clearActivePublication();
   const draft = await createDraftConfiguration({
@@ -391,6 +593,7 @@ test("[R3] resolver falls back to the safe model/loop defaults for a published r
     maxModelRetries: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.maxModelRetries
   });
   assert.deepEqual(resolved.effectiveLoopConfiguration, SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT);
+  assert.deepEqual(resolved.effectiveFollowUpConfiguration, SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT);
 });
 
 // ---------------------------------------------------------------------------
@@ -415,6 +618,48 @@ test("[E1] resolver uses the published row's own model/loop configuration when p
   assert.equal(resolved.effectiveModelConfiguration.temperature, 0.4);
   assert.equal(resolved.effectiveLoopConfiguration.maxAgentStepsPerTurn, 5);
   assert.equal(resolved.effectiveLoopConfiguration.maxToolCallsPerTurn, 4);
+});
+
+test("[E8] resolver uses the published row's own followUpConfiguration when present", async () => {
+  await clearActivePublication();
+  const draft = await createDraftConfiguration({
+    name: uniqueName("effective-followup-published"),
+    configuration: {
+      ...buildValidPromptConfiguration(),
+      followUpConfiguration: buildValidFollowUpConfiguration({ enabled: true, maxAttempts: 2, attemptDelaysMinutes: [90, 720] })
+    },
+    createdBy: "test-suite"
+  });
+  await publishDraftConfiguration({ id: draft.id });
+
+  const resolved = await resolveSalesAgentConfiguration();
+  assert.equal(resolved.effectiveFollowUpConfiguration.enabled, true);
+  assert.equal(resolved.effectiveFollowUpConfiguration.maxAttempts, 2);
+  assert.deepEqual(resolved.effectiveFollowUpConfiguration.attemptDelaysMinutes, [90, 720]);
+});
+
+test("[E9] resolver clamps an out-of-range persisted followUpConfiguration value to platform limits, defense in depth", async () => {
+  await clearActivePublication();
+  const draft = await createDraftConfiguration({
+    name: uniqueName("followup-clamp-test"),
+    configuration: { ...buildValidPromptConfiguration(), followUpConfiguration: buildValidFollowUpConfiguration() },
+    createdBy: "test-suite"
+  });
+  const published = await publishDraftConfiguration({ id: draft.id });
+
+  // Bypass validation directly - simulates a platform cap tightening after
+  // this row was written, or a corrupted row - same technique as [E3].
+  const corruptedConfiguration = {
+    ...published.configuration,
+    followUpConfiguration: { ...published.configuration.followUpConfiguration, maxOpportunityAgeDays: 9999 }
+  };
+  await queryRows(`UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET configuration_json = ? WHERE id = ?`, [
+    JSON.stringify(corruptedConfiguration),
+    published.id
+  ]);
+
+  const resolved = await resolveSalesAgentConfiguration();
+  assert.equal(resolved.effectiveFollowUpConfiguration.maxOpportunityAgeDays, 180, "maxOpportunityAgeDays must be clamped to the platform max");
 });
 
 test("[E2] resolver falls back to the safe model/loop defaults when nothing is published", async () => {
@@ -446,6 +691,7 @@ test("[E2] resolver falls back to the safe model/loop defaults when nothing is p
     maxModelRetries: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.maxModelRetries
   });
   assert.deepEqual(resolved.effectiveLoopConfiguration, SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT);
+  assert.deepEqual(resolved.effectiveFollowUpConfiguration, SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT);
 });
 
 test("[E3] resolver clamps an out-of-range persisted value to platform limits (defense in depth, not just write-time validation)", async () => {

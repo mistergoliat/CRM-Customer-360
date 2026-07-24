@@ -89,8 +89,10 @@ async function runTick(options: { limit: number; dryRun: boolean }) {
     dryRun: options.dryRun,
     log: (message) => console.log(message)
   });
-  if (result.cancelled.length > 0 || result.failed.length > 0) {
-    console.log(`[worker:followup] tick summary executed=${result.executed.length} cancelled=${result.cancelled.length} failed=${result.failed.length}`);
+  if (result.cancelled.length > 0 || result.failed.length > 0 || result.rescheduled.length > 0) {
+    console.log(
+      `[worker:followup] tick summary executed=${result.executed.length} cancelled=${result.cancelled.length} failed=${result.failed.length} rescheduled=${result.rescheduled.length}`
+    );
   }
   return result.processed;
 }
