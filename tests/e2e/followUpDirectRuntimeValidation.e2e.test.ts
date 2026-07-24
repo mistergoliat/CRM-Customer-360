@@ -267,6 +267,16 @@ const ALWAYS_OPEN_CONFIG: SalesAgentFollowUpConfiguration = {
   maxOpportunityAgeDays: 30
 };
 
+// Review correction: startHour:0/endHour:23 excludes local hour 23 (see
+// computeFollowUpSchedule.ts#isWithinAllowedWindow, `hour < endHour`) - a
+// real wall-clock "now" during 23:00-23:59 America/Santiago would make
+// runFollowupTick's own revalidation reschedule instead of execute, failing
+// this test for a reason unrelated to any actual defect. Fixed, hardcoded
+// at 16:00 UTC, which is always Santiago-local 12:00 or 13:00 depending on
+// DST - deterministically inside ALWAYS_OPEN_CONFIG's window regardless of
+// the real date/time this test happens to run at.
+const DETERMINISTIC_WINDOW_NOW = "2026-01-15T16:00:00.000Z";
+
 test("direct runtime validation: real inbound -> real model decision -> real due scheduled row -> real worker -> real Agent Tool Loop -> real outbox planned row", async () => {
   const nowMs = Date.now();
   const inboundAt = new Date(nowMs - 20 * 60_000);
@@ -343,10 +353,12 @@ test("direct runtime validation: real inbound -> real model decision -> real due
     assert.equal(followUpRow.followup_configuration_id, published.id);
     assert.equal(followUpRow.followup_configuration_version, published.version);
     assert.equal(followUpRow.followup_configuration_hash, published.configurationHash);
-    assert.ok(
-      ["planned", "requires_review", "proposed"].includes(followUpRow.status),
-      `expected a live, not-yet-executed status, got ${followUpRow.status}`
-    );
+    // Review correction: 'planned' is the ONLY status selectDueFollowUps
+    // picks up as a fresh due row (see runFollowupTick.ts). Accepting
+    // 'proposed' or 'requires_review' here would let a real scheduling
+    // defect (the row never actually reaching a claimable state) pass this
+    // assertion silently - this is the exact defect class T02.3D fixed.
+    assert.equal(followUpRow.status, "planned", `expected the real pipeline to leave the row 'planned', got ${followUpRow.status}`);
 
     const outboxCountBefore = await queryRows<{ count: number }>(
       "SELECT COUNT(*) as count FROM brain_message_outbox WHERE conversation_case_id = ?",
@@ -360,6 +372,7 @@ test("direct runtime validation: real inbound -> real model decision -> real due
     const tick = await runFollowupTick({
       limit: 10,
       actionIds: [followUpRow.action_id],
+      now: DETERMINISTIC_WINDOW_NOW,
       cycleRunner: (input) => runNativeAutonomousCycle({ ...input, provider: replyProvider })
     });
 

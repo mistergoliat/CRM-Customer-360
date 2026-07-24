@@ -69,7 +69,8 @@ export type FollowupTickResult = {
    * attempt_number never advanced. Distinct from `failed` (a real cycle-
    * runner/business failure, which does consume an attempt).
    */
-  technicalFailures: Array<{ actionId: string; reason: string; scheduledFor: string }>;
+  /** scheduledFor is null when the backoff itself failed to persist (see applyTechnicalFailureBackoff) - persisted distinguishes that case from a genuine reschedule. */
+  technicalFailures: Array<{ actionId: string; reason: string; scheduledFor: string | null; persisted: boolean }>;
 };
 
 export type FollowupTickOptions = {
@@ -80,6 +81,15 @@ export type FollowupTickOptions = {
   cycleRunner?: typeof runNativeAutonomousCycle;
   defaultPhoneNumberId?: string;
   log?: (message: string) => void;
+  /**
+   * Test-only determinism hook. Defaults to the real wall clock
+   * (new Date().toISOString()) for the actual worker. Overriding this lets
+   * a test pin the instant used for opt-out/configuration/allowed-window
+   * revalidation to a known-safe value, instead of depending on whatever
+   * real local hour the allowed window's boundary happens to fall on when
+   * the test actually runs.
+   */
+  now?: string;
   /**
    * Test-only synchronization hook: invoked immediately after a successful
    * claim, before revalidation. Lets tests deterministically simulate a race
@@ -174,11 +184,29 @@ const FOLLOW_UP_TECHNICAL_BACKOFF_MINUTES = 5;
  * before this tick's own claim ran), so it is exactly what's needed to know
  * whether to undo that bump here - a technical failure must leave
  * attempt_number exactly where it was before this tick ever touched the row.
+ *
+ * Review correction (post-close): the UPDATE's own safeExecute result used
+ * to be discarded outright - a failed write (or a write that matched zero
+ * rows, e.g. a concurrent process already moved the row off 'executing')
+ * still reported the computed scheduledFor as if it had been persisted,
+ * which could log/report a reschedule that never actually happened. Success
+ * now requires affectedRows === 1 exactly; anything else is an explicit,
+ * logged persistence failure with no fabricated scheduledFor. The row is
+ * deliberately left in 'executing' when this happens - never forced to
+ * 'planned' through some other path - so it is still picked up later by the
+ * existing stale-executing recovery (claimStaleExecutingFollowUp /
+ * terminalizeExhaustedStaleFollowUp) once the DB accepts writes again.
  */
-async function applyTechnicalFailureBackoff(candidate: FollowUpCandidate, now: string): Promise<string> {
+export type ApplyTechnicalFailureBackoffResult = { persisted: true; scheduledFor: string } | { persisted: false; scheduledFor: null };
+
+async function applyTechnicalFailureBackoff(
+  candidate: FollowUpCandidate,
+  now: string,
+  log: (message: string) => void
+): Promise<ApplyTechnicalFailureBackoffResult> {
   const scheduledForIso = new Date(new Date(now).getTime() + FOLLOW_UP_TECHNICAL_BACKOFF_MINUTES * 60_000).toISOString();
   const attemptWasBumpedAtClaim = candidate.status === "executing" || candidate.status === "failed";
-  await safeExecute(
+  const result = await safeExecute(
     `UPDATE crm_agent_actions
       SET status = 'planned',
           scheduled_for = ?,
@@ -187,7 +215,14 @@ async function applyTechnicalFailureBackoff(candidate: FollowUpCandidate, now: s
       WHERE action_id = ? AND status = 'executing'`,
     [toMysqlDateTime(scheduledForIso), candidate.action_id]
   );
-  return scheduledForIso;
+  if (!result.ok || result.affectedRows !== 1) {
+    const detail = result.ok ? `unexpected_affected_rows:${result.affectedRows}` : result.error;
+    log(
+      `[worker:followup] failed to persist technical-failure backoff for action ${candidate.action_id} (${detail}) - row left in 'executing' for stale-execution recovery`
+    );
+    return { persisted: false, scheduledFor: null };
+  }
+  return { persisted: true, scheduledFor: scheduledForIso };
 }
 
 /**
@@ -199,12 +234,29 @@ async function applyTechnicalFailureBackoff(candidate: FollowUpCandidate, now: s
  * multiple matches means there is no unambiguous canonical relation, so the
  * age check is skipped entirely rather than guessing.
  */
-async function loadOpportunityCreatedAtForCandidate(candidate: FollowUpCandidate): Promise<string | null> {
+export type OpportunityCreatedAtLookup =
+  | { status: "found"; createdAt: string }
+  | { status: "not_found" }
+  | { status: "ambiguous" }
+  /** A real DB read failure - distinct from "no canonical relation" above. The caller must never treat this as "skip the age check". */
+  | { status: "unavailable" };
+
+/**
+ * Review correction (post-close): a real query failure used to collapse
+ * into the same `null` as "no row found" (result.ok ? ... : null), which
+ * made revalidateFollowUpConfiguration silently skip the max-age check on a
+ * transient DB error - failing OPEN exactly when the check could not be
+ * trusted. found/not_found/ambiguous/unavailable are now distinct outcomes;
+ * only `unavailable` (a genuine read failure) is required to block.
+ */
+async function loadOpportunityCreatedAtForCandidate(candidate: FollowUpCandidate): Promise<OpportunityCreatedAtLookup> {
   if (candidate.opportunity_id !== null && candidate.opportunity_id !== undefined) {
     const result = await safeQueryRows<{ created_at: string }>(`SELECT created_at FROM crm_opportunities WHERE id = ? LIMIT 1`, [
       candidate.opportunity_id
     ]);
-    return result.ok ? (result.rows[0]?.created_at ?? null) : null;
+    if (!result.ok) return { status: "unavailable" };
+    const row = result.rows[0];
+    return row ? { status: "found", createdAt: row.created_at } : { status: "not_found" };
   }
 
   if (candidate.conversation_case_id !== null && candidate.conversation_case_id !== undefined) {
@@ -212,11 +264,13 @@ async function loadOpportunityCreatedAtForCandidate(candidate: FollowUpCandidate
       `SELECT created_at FROM crm_opportunities WHERE conversation_case_id = ? LIMIT 2`,
       [String(candidate.conversation_case_id)]
     );
-    if (result.ok && result.rows.length === 1) return result.rows[0].created_at;
-    return null;
+    if (!result.ok) return { status: "unavailable" };
+    if (result.rows.length === 0) return { status: "not_found" };
+    if (result.rows.length > 1) return { status: "ambiguous" };
+    return { status: "found", createdAt: result.rows[0].created_at };
   }
 
-  return null;
+  return { status: "not_found" };
 }
 
 export async function claimPlannedFollowUp(actionId: string): Promise<boolean> {
@@ -390,15 +444,23 @@ export async function revalidateFollowUpConfiguration(
   if (!config.enabled) return { outcome: "cancel", reason: "follow_up_disabled" };
   if (candidate.attempt_number > config.maxAttempts) return { outcome: "cancel", reason: "max_attempts_reached" };
 
-  const opportunityCreatedAt = await loadOpportunityCreatedAtForCandidate(candidate);
-  if (opportunityCreatedAt) {
-    const createdMs = new Date(opportunityCreatedAt).getTime();
+  const opportunityLookup = await loadOpportunityCreatedAtForCandidate(candidate);
+  // unavailable = the age check could not be trusted this tick - never
+  // executed as if the opportunity were within range (fail-closed), never
+  // cancelled as a business decision (this is a technical problem).
+  if (opportunityLookup.status === "unavailable") {
+    return { outcome: "technical_failure", reason: "opportunity_age_lookup_unavailable" };
+  }
+  if (opportunityLookup.status === "found") {
+    const createdMs = new Date(opportunityLookup.createdAt).getTime();
     const nowMs = new Date(now).getTime();
     if (!Number.isNaN(createdMs) && !Number.isNaN(nowMs)) {
       const ageDays = (nowMs - createdMs) / 86_400_000;
       if (ageDays > config.maxOpportunityAgeDays) return { outcome: "cancel", reason: "opportunity_too_old" };
     }
   }
+  // not_found / ambiguous: no unambiguous canonical relation - the age
+  // check is skipped, same as before this correction.
 
   if (!isInstantWithinAllowedWindow(now, config.allowedWindow)) {
     const nextWindowStart = findNextAllowedWindowStartIso(now, config.allowedWindow);
@@ -482,12 +544,17 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     // open. "unavailable" (a real DB read failure) is a TECHNICAL problem,
     // never treated as "not opted out" - routed through the same bounded,
     // non-attempt-consuming backoff as a configuration resolver failure.
-    const nowIso = new Date().toISOString();
+    const nowIso = options.now ?? new Date().toISOString();
     const optOutStatus = await checkCustomerOptOutStatus(candidate.wa_id);
     if (optOutStatus === "unavailable") {
-      const scheduledFor = await applyTechnicalFailureBackoff(candidate, nowIso);
+      const backoff = await applyTechnicalFailureBackoff(candidate, nowIso, log);
       log(`[worker:followup] technical failure checking opt-out status for action ${candidate.action_id}: opt_out_status_unavailable`);
-      result.technicalFailures.push({ actionId: candidate.action_id, reason: "opt_out_status_unavailable", scheduledFor });
+      result.technicalFailures.push({
+        actionId: candidate.action_id,
+        reason: "opt_out_status_unavailable",
+        scheduledFor: backoff.scheduledFor,
+        persisted: backoff.persisted
+      });
       continue;
     }
     if (optOutStatus === "opted_out") {
@@ -523,9 +590,14 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
         // Review correction: never a business-consuming 'failed' - a
         // resolver/window failure is technical, stays retryable, never
         // advances attempt_number.
-        const scheduledFor = await applyTechnicalFailureBackoff(candidate, nowIso);
+        const backoff = await applyTechnicalFailureBackoff(candidate, nowIso, log);
         log(`[worker:followup] technical failure revalidating action ${candidate.action_id}: ${revalidation.reason}`);
-        result.technicalFailures.push({ actionId: candidate.action_id, reason: revalidation.reason, scheduledFor });
+        result.technicalFailures.push({
+          actionId: candidate.action_id,
+          reason: revalidation.reason,
+          scheduledFor: backoff.scheduledFor,
+          persisted: backoff.persisted
+        });
         continue;
       }
       if (revalidation.outcome === "cancel") {

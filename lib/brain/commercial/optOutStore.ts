@@ -1,4 +1,5 @@
-import { safeExecute, safeQueryRows } from "@/lib/db";
+import type { ResultSetHeader } from "mysql2/promise";
+import { safeQueryRows, sanitizeDbError, withTransaction } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
 
 /**
@@ -47,42 +48,62 @@ export type RecordCustomerOptOutResult = { ok: true; cancelledFollowUps: number 
  * row for this identity, unconditionally and idempotently (a second call
  * finds nothing left to cancel, never an error) - an opt-out means no
  * future autonomous send, including one already scheduled before the
- * opt-out was recorded. Both the registration and any cancellations are
- * audited.
+ * opt-out was recorded.
+ *
+ * Review correction (post-close): the insert, the cancellation and both
+ * audit rows now run on one connection inside one transaction
+ * (lib/db.ts#withTransaction), never three independent pool writes. A
+ * customer who successfully opts out but whose pending follow-up fails to
+ * cancel (a transient DB error mid-write) used to get `{ok:true,
+ * cancelledFollowUps:0}` - indistinguishable from "nothing was scheduled" -
+ * while the follow-up worker could still pick up and send that row later.
+ * Any failure in any step now rolls back the whole transaction (including
+ * the opt-out row itself) and returns `{ok:false}`, so the caller never
+ * mistakes a partially-applied opt-out for a complete one.
  */
 export async function recordCustomerOptOut(input: RecordCustomerOptOutInput): Promise<RecordCustomerOptOutResult> {
   const channel = input.channel ?? DEFAULT_CHANNEL;
-  const insertResult = await safeExecute(
-    `INSERT IGNORE INTO crm_customer_opt_outs (wa_id, channel, reason, source_message_id) VALUES (?, ?, ?, ?)`,
-    [input.waId, channel, input.reason, input.sourceMessageId ?? null]
-  );
-  if (!insertResult.ok) return { ok: false, error: insertResult.error };
+  try {
+    const cancelledFollowUps = await withTransaction(async (connection) => {
+      await connection.execute(
+        `INSERT IGNORE INTO crm_customer_opt_outs (wa_id, channel, reason, source_message_id) VALUES (?, ?, ?, ?)`,
+        [input.waId, channel, input.reason, input.sourceMessageId ?? null]
+      );
 
-  await auditLog({
-    action: "customer_opt_out.recorded",
-    entityType: "customer_opt_out",
-    entityId: input.waId,
-    after: { waId: input.waId, channel, reason: input.reason, sourceMessageId: input.sourceMessageId ?? null }
-  });
+      await auditLog({
+        action: "customer_opt_out.recorded",
+        entityType: "customer_opt_out",
+        entityId: input.waId,
+        after: { waId: input.waId, channel, reason: input.reason, sourceMessageId: input.sourceMessageId ?? null },
+        connection
+      });
 
-  const cancelResult = await safeExecute(
-    `UPDATE crm_agent_actions
-      SET status = 'cancelled', cancel_reason = 'customer_opted_out', updated_at = CURRENT_TIMESTAMP(3)
-      WHERE wa_id = ? AND channel = ? AND action_type = 'schedule_followup'
-        AND status IN ('planned', 'requires_review', 'executing')`,
-    [input.waId, channel]
-  );
-  const cancelledFollowUps = cancelResult.ok ? cancelResult.affectedRows : 0;
-  if (cancelledFollowUps > 0) {
-    await auditLog({
-      action: "customer_opt_out.pending_followups_cancelled",
-      entityType: "customer_opt_out",
-      entityId: input.waId,
-      after: { waId: input.waId, channel, cancelledCount: cancelledFollowUps }
+      const [cancelResult] = await connection.execute<ResultSetHeader>(
+        `UPDATE crm_agent_actions
+          SET status = 'cancelled', cancel_reason = 'customer_opted_out', updated_at = CURRENT_TIMESTAMP(3)
+          WHERE wa_id = ? AND channel = ? AND action_type = 'schedule_followup'
+            AND status IN ('planned', 'requires_review', 'executing')`,
+        [input.waId, channel]
+      );
+      const cancelledCount = cancelResult.affectedRows ?? 0;
+
+      if (cancelledCount > 0) {
+        await auditLog({
+          action: "customer_opt_out.pending_followups_cancelled",
+          entityType: "customer_opt_out",
+          entityId: input.waId,
+          after: { waId: input.waId, channel, cancelledCount },
+          connection
+        });
+      }
+
+      return cancelledCount;
     });
-  }
 
-  return { ok: true, cancelledFollowUps };
+    return { ok: true, cancelledFollowUps };
+  } catch (error) {
+    return { ok: false, error: sanitizeDbError(error) };
+  }
 }
 
 export type RecordCustomerOptInInput = {
@@ -101,20 +122,31 @@ export type RecordCustomerOptInResult = { ok: true } | { ok: false; error: strin
  * re-cancel here: every follow-up pending at opt-out time was already
  * cancelled by recordCustomerOptOut, and no new one could have been
  * scheduled while opted out (Step 0.5 blocks autonomy entirely).
+ *
+ * Review correction (post-close): same transactional criterion as
+ * recordCustomerOptOut - the delete and its audit row share one connection
+ * and one transaction, so a failed audit write rolls back the delete
+ * instead of leaving an unaudited state change.
  */
 export async function recordCustomerOptIn(input: RecordCustomerOptInInput): Promise<RecordCustomerOptInResult> {
   const channel = input.channel ?? DEFAULT_CHANNEL;
-  const result = await safeExecute(`DELETE FROM crm_customer_opt_outs WHERE wa_id = ? AND channel = ?`, [input.waId, channel]);
-  if (!result.ok) return { ok: false, error: result.error };
+  try {
+    await withTransaction(async (connection) => {
+      await connection.execute(`DELETE FROM crm_customer_opt_outs WHERE wa_id = ? AND channel = ?`, [input.waId, channel]);
 
-  await auditLog({
-    action: "customer_opt_in.recorded",
-    entityType: "customer_opt_out",
-    entityId: input.waId,
-    after: { waId: input.waId, channel, reason: input.reason, sourceMessageId: input.sourceMessageId ?? null }
-  });
+      await auditLog({
+        action: "customer_opt_in.recorded",
+        entityType: "customer_opt_out",
+        entityId: input.waId,
+        after: { waId: input.waId, channel, reason: input.reason, sourceMessageId: input.sourceMessageId ?? null },
+        connection
+      });
+    });
 
-  return { ok: true };
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: sanitizeDbError(error) };
+  }
 }
 
 // Inverted Spanish "!"/"?" (U+00A1 / U+00BF) plus ordinary punctuation -
