@@ -215,6 +215,11 @@ export function buildAgentActionStorageRow(action: CrmAgentAction): Record<strin
     expires_at: toIsoString(action.expiresAt),
     attempt_number: Number.isInteger(action.attemptNumber) ? action.attemptNumber : 1,
     max_attempts: Number.isInteger(action.maxAttempts) && action.maxAttempts > 0 ? action.maxAttempts : 1,
+    followup_sequence_key: clampText(action.followUpSequenceKey, 191),
+    followup_configuration_source: clampText(action.followUpConfigurationSource, 32),
+    followup_configuration_id: toSerializableId(action.followUpConfigurationId),
+    followup_configuration_version: Number.isInteger(action.followUpConfigurationVersion) ? action.followUpConfigurationVersion : null,
+    followup_configuration_hash: clampText(action.followUpConfigurationHash, 64),
     block_reasons_json: uniqueTextArray(action.blockReasons, COMMERCIAL_AGENT_ACTION_QUEUE_MAX_BLOCK_REASONS),
     cancel_reason: clampText(action.cancelReason, 64),
     failure_reason: clampText(action.failureReason, 1200),
@@ -251,6 +256,18 @@ function readIdRow(row: Record<string, unknown>, candidates: string[]): number |
   for (const candidate of candidates) {
     const id = toSerializableId(row[candidate]);
     if (id !== null) return id;
+  }
+  return null;
+}
+
+function readNullableIntegerRow(row: Record<string, unknown>, candidates: string[]): number | null {
+  for (const candidate of candidates) {
+    const value = row[candidate];
+    if (typeof value === "number" && Number.isInteger(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isInteger(parsed)) return parsed;
+    }
   }
   return null;
 }
@@ -306,6 +323,11 @@ export function deserializeAgentActionRow(row: Record<string, unknown>): CrmAgen
     expiresAt: toIsoString(row.expires_at ?? row.expiresAt),
     attemptNumber: readNumberRow(row, ["attempt_number", "attemptNumber"], 1),
     maxAttempts: Math.max(1, readNumberRow(row, ["max_attempts", "maxAttempts"], 1)),
+    followUpSequenceKey: readTextRow(row, ["followup_sequence_key", "followUpSequenceKey"]),
+    followUpConfigurationSource: readTextRow(row, ["followup_configuration_source", "followUpConfigurationSource"]) as CrmAgentAction["followUpConfigurationSource"],
+    followUpConfigurationId: readIdRow(row, ["followup_configuration_id", "followUpConfigurationId"]) as number | null,
+    followUpConfigurationVersion: readNullableIntegerRow(row, ["followup_configuration_version", "followUpConfigurationVersion"]),
+    followUpConfigurationHash: readTextRow(row, ["followup_configuration_hash", "followUpConfigurationHash"]),
     blockReasons: readStringArrayRow(row, ["block_reasons_json", "blockReasons"]),
     cancelReason: readTextRow(row, ["cancel_reason", "cancelReason"]),
     failureReason: readTextRow(row, ["failure_reason", "failureReason"]),

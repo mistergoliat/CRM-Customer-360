@@ -19,6 +19,15 @@ export const modules: HubModule[] = [
   { key: "actions", label: "Acciones", href: "/actions", status: "preview", icon: "playlist_add_check", group: "crm", navVisible: true },
   { key: "marketing", label: "Marketing", href: "/marketing", status: "preview", icon: "campaign", group: "growth", navVisible: true },
   { key: "knowledge", label: "Conocimiento", href: "/knowledge", status: "preview", icon: "book_5", group: "intelligence", navVisible: true },
+  {
+    key: "agent-sales-config",
+    label: "Configura al agente",
+    href: "/agents/sales/configuration",
+    status: "active",
+    icon: "smart_toy",
+    group: "intelligence",
+    navVisible: true
+  },
   { key: "analytics", label: "Analítica", href: "/analytics", status: "preview", icon: "monitoring", group: "intelligence", navVisible: true },
   { key: "integrations", label: "Integraciones", href: "/integrations", status: "partial", icon: "hub", group: "system", navVisible: true },
   { key: "settings", label: "Configuración", href: "/settings", status: "partial", icon: "settings", group: "system", navVisible: true },

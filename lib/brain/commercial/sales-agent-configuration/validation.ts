@@ -1,6 +1,10 @@
 import {
   SALES_AGENT_CONFIGURATION_LIMITS,
   SALES_AGENT_CONFIGURATION_SUPPORTED_SCHEMA_VERSIONS,
+  SALES_AGENT_FOLLOW_UP_ALLOWED_WINDOW_FIELDS,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_FIELDS,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS,
+  SALES_AGENT_FOLLOW_UP_TIMEZONE,
   SALES_AGENT_LOOP_CONFIGURATION_FIELDS,
   SALES_AGENT_LOOP_CONFIGURATION_LIMITS,
   SALES_AGENT_MODEL_CONFIGURATION_FIELDS,
@@ -11,6 +15,7 @@ import {
   SALES_AGENT_PROMPT_CONFIGURATION_FIELDS,
   type SalesAgentConfigurationDocument,
   type SalesAgentConfigurationSchemaVersion,
+  type SalesAgentFollowUpConfiguration,
   type SalesAgentLoopConfiguration,
   type SalesAgentModelConfiguration,
   type SalesAgentPromptConfiguration
@@ -30,7 +35,9 @@ export type SalesAgentConfigurationValidationErrorCode =
   | "prohibited_phrase_empty"
   | "prohibited_phrase_too_long"
   | "out_of_range"
-  | "model_not_allowed";
+  | "model_not_allowed"
+  | "attempt_delays_length_mismatch"
+  | "duplicate_weekday";
 
 export type SalesAgentConfigurationValidationFailure = {
   valid: false;
@@ -49,6 +56,10 @@ export type SalesAgentModelConfigurationValidationResult =
 
 export type SalesAgentLoopConfigurationValidationResult =
   | { valid: true; configuration: SalesAgentLoopConfiguration }
+  | SalesAgentConfigurationValidationFailure;
+
+export type SalesAgentFollowUpConfigurationValidationResult =
+  | { valid: true; configuration: SalesAgentFollowUpConfiguration }
   | SalesAgentConfigurationValidationFailure;
 
 export type SalesAgentConfigurationDocumentValidationResult =
@@ -370,6 +381,155 @@ export function validateSalesAgentLoopConfiguration(
 }
 
 /**
+ * ACS-R1-05.1-T02.3D. Format-only, same conventions as model/loop above.
+ * Structural invariants (attemptDelaysMinutes.length === maxAttempts,
+ * allowedWeekdays non-empty/no duplicates, endHour > startHour, timezone
+ * fixed) are always enforced regardless of `enforceRange` - unlike numeric
+ * ceilings, these are never "a platform policy that might tighten later",
+ * they are shape/consistency requirements the document can never be valid
+ * without.
+ */
+export function validateSalesAgentFollowUpConfiguration(
+  raw: unknown,
+  options: SalesAgentConfigurationValidationOptions = {}
+): SalesAgentFollowUpConfigurationValidationResult {
+  const enforceRange = options.enforceRange ?? true;
+  if (!isPlainObject(raw)) {
+    return fail("invalid_root", "followUpConfiguration must be a plain object");
+  }
+
+  const allowedFields = new Set<string>(SALES_AGENT_FOLLOW_UP_CONFIGURATION_FIELDS);
+  for (const key of Object.keys(raw)) {
+    if (!allowedFields.has(key)) return fail("unknown_field", `unknown field: ${key}`, key);
+  }
+  for (const field of SALES_AGENT_FOLLOW_UP_CONFIGURATION_FIELDS) {
+    if (!(field in raw)) return fail("missing_required_field", `missing required field: ${field}`, field);
+  }
+
+  if (typeof raw.enabled !== "boolean") {
+    return fail("invalid_type", "enabled must be a boolean", "enabled");
+  }
+
+  const maxAttempts = validateNumberField(raw.maxAttempts, "maxAttempts", {
+    min: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxAttemptsMin,
+    max: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxAttemptsMax,
+    integer: true,
+    enforceRange
+  });
+  if (!maxAttempts.ok) return maxAttempts.result;
+
+  if (!Array.isArray(raw.attemptDelaysMinutes)) {
+    return fail("invalid_type", "attemptDelaysMinutes must be an array", "attemptDelaysMinutes");
+  }
+  if (raw.attemptDelaysMinutes.length !== maxAttempts.value) {
+    return fail(
+      "attempt_delays_length_mismatch",
+      `attemptDelaysMinutes must have exactly ${maxAttempts.value} entries (one per attempt)`,
+      "attemptDelaysMinutes"
+    );
+  }
+
+  const attemptDelaysMinutes: number[] = [];
+  for (let index = 0; index < raw.attemptDelaysMinutes.length; index += 1) {
+    const delay = validateNumberField(raw.attemptDelaysMinutes[index], `attemptDelaysMinutes[${index}]`, {
+      min: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.attemptDelayMinutesMin,
+      max: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.attemptDelayMinutesMax,
+      integer: true,
+      enforceRange
+    });
+    if (!delay.ok) return delay.result;
+    attemptDelaysMinutes.push(delay.value);
+  }
+
+  if (!isPlainObject(raw.allowedWindow)) {
+    return fail("invalid_root", "allowedWindow must be a plain object", "allowedWindow");
+  }
+  const windowAllowedFields = new Set<string>(SALES_AGENT_FOLLOW_UP_ALLOWED_WINDOW_FIELDS);
+  for (const key of Object.keys(raw.allowedWindow)) {
+    if (!windowAllowedFields.has(key)) return fail("unknown_field", `unknown field: ${key}`, `allowedWindow.${key}`);
+  }
+  for (const field of SALES_AGENT_FOLLOW_UP_ALLOWED_WINDOW_FIELDS) {
+    if (!(field in raw.allowedWindow)) return fail("missing_required_field", `missing required field: ${field}`, `allowedWindow.${field}`);
+  }
+
+  if (raw.allowedWindow.timezone !== SALES_AGENT_FOLLOW_UP_TIMEZONE) {
+    return fail("invalid_type", `allowedWindow.timezone must be ${SALES_AGENT_FOLLOW_UP_TIMEZONE}`, "allowedWindow.timezone");
+  }
+
+  // Hour bounds are a real structural constraint (an hour cannot be outside
+  // 0-23), never a "platform ceiling that might loosen/tighten later" -
+  // always enforced regardless of the enforceRange option.
+  const startHour = validateNumberField(raw.allowedWindow.startHour, "allowedWindow.startHour", {
+    min: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMin,
+    max: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMax,
+    integer: true,
+    enforceRange: true
+  });
+  if (!startHour.ok) return startHour.result;
+
+  const endHour = validateNumberField(raw.allowedWindow.endHour, "allowedWindow.endHour", {
+    min: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMin,
+    max: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.windowHourMax,
+    integer: true,
+    enforceRange: true
+  });
+  if (!endHour.ok) return endHour.result;
+
+  if (endHour.value <= startHour.value) {
+    return fail("out_of_range", "allowedWindow.endHour must be greater than allowedWindow.startHour", "allowedWindow.endHour");
+  }
+
+  if (!Array.isArray(raw.allowedWindow.allowedWeekdays)) {
+    return fail("invalid_type", "allowedWindow.allowedWeekdays must be an array", "allowedWindow.allowedWeekdays");
+  }
+  if (raw.allowedWindow.allowedWeekdays.length === 0) {
+    return fail("empty_required_field", "allowedWindow.allowedWeekdays must not be empty", "allowedWindow.allowedWeekdays");
+  }
+
+  const allowedWeekdays: number[] = [];
+  const seenWeekdays = new Set<number>();
+  for (const value of raw.allowedWindow.allowedWeekdays) {
+    if (
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.weekdayMin ||
+      value > SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.weekdayMax
+    ) {
+      return fail("out_of_range", "allowedWindow.allowedWeekdays entries must be integers between 0 and 6", "allowedWindow.allowedWeekdays");
+    }
+    if (seenWeekdays.has(value)) {
+      return fail("duplicate_weekday", "allowedWindow.allowedWeekdays must not contain duplicates", "allowedWindow.allowedWeekdays");
+    }
+    seenWeekdays.add(value);
+    allowedWeekdays.push(value);
+  }
+
+  const maxOpportunityAgeDays = validateNumberField(raw.maxOpportunityAgeDays, "maxOpportunityAgeDays", {
+    min: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxOpportunityAgeDaysMin,
+    max: SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS.maxOpportunityAgeDaysMax,
+    integer: true,
+    enforceRange
+  });
+  if (!maxOpportunityAgeDays.ok) return maxOpportunityAgeDays.result;
+
+  return {
+    valid: true,
+    configuration: {
+      enabled: raw.enabled,
+      maxAttempts: maxAttempts.value,
+      attemptDelaysMinutes,
+      allowedWindow: {
+        timezone: SALES_AGENT_FOLLOW_UP_TIMEZONE,
+        startHour: startHour.value,
+        endHour: endHour.value,
+        allowedWeekdays
+      },
+      maxOpportunityAgeDays: maxOpportunityAgeDays.value
+    }
+  };
+}
+
+/**
  * Validates the full stored document: the six v1 prompt fields (always,
  * reusing validateSalesAgentPromptConfiguration unchanged - never
  * duplicated) plus the two optional v2 runtime sections, if present. A v1
@@ -385,7 +545,7 @@ export function validateSalesAgentConfigurationDocument(
     return fail("invalid_root", "configuration must be a plain object");
   }
 
-  const { modelConfiguration, loopConfiguration, ...promptFields } = raw;
+  const { modelConfiguration, loopConfiguration, followUpConfiguration, ...promptFields } = raw;
 
   const promptValidation = validateSalesAgentPromptConfiguration(promptFields);
   if (!promptValidation.valid) return promptValidation;
@@ -404,12 +564,20 @@ export function validateSalesAgentConfigurationDocument(
     resolvedLoopConfiguration = loopValidation.configuration;
   }
 
+  let resolvedFollowUpConfiguration: SalesAgentFollowUpConfiguration | undefined;
+  if (followUpConfiguration !== undefined) {
+    const followUpValidation = validateSalesAgentFollowUpConfiguration(followUpConfiguration, options);
+    if (!followUpValidation.valid) return followUpValidation;
+    resolvedFollowUpConfiguration = followUpValidation.configuration;
+  }
+
   return {
     valid: true,
     configuration: {
       ...promptValidation.configuration,
       ...(resolvedModelConfiguration ? { modelConfiguration: resolvedModelConfiguration } : {}),
-      ...(resolvedLoopConfiguration ? { loopConfiguration: resolvedLoopConfiguration } : {})
+      ...(resolvedLoopConfiguration ? { loopConfiguration: resolvedLoopConfiguration } : {}),
+      ...(resolvedFollowUpConfiguration ? { followUpConfiguration: resolvedFollowUpConfiguration } : {})
     }
   };
 }

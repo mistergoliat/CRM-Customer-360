@@ -11,9 +11,12 @@ import {
   SALES_AGENT_CONFIGURATION_SCOPE,
   SALES_AGENT_CONFIGURATION_TABLE,
   SALES_AGENT_PROMPT_CONFIGURATION_FIELDS,
+  SalesAgentConfigurationConflictError,
+  SalesAgentConfigurationInvalidError,
   SalesAgentConfigurationNotDraftError,
   SalesAgentConfigurationScopeMismatchError,
   archiveConfiguration,
+  archiveDraftConfiguration,
   computeSalesAgentConfigurationHash,
   createDraftConfiguration,
   listPesasChileConfigurations,
@@ -321,6 +324,144 @@ test("[R15] updateDraftConfiguration on a published row throws a named domain er
 
   const reloaded = await loadConfigurationById(published.id);
   assert.equal(reloaded?.configuration.role, published.configuration.role, "published row content must remain untouched");
+});
+
+// ---------------------------------------------------------------------------
+// Optimistic concurrency (ACS-R1-05.1-T02.3C)
+// ---------------------------------------------------------------------------
+
+test("[C1] updateDraftConfiguration with a matching expectedUpdatedAt succeeds and advances updated_at", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-ok"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const updated = await updateDraftConfiguration({
+    id: draft.id,
+    configuration: buildValidConfigurationInput({ role: "Jefa de ventas" }),
+    expectedUpdatedAt: draft.updatedAt
+  });
+  assert.equal(updated.configuration.role, "Jefa de ventas");
+});
+
+test("[C2] updateDraftConfiguration with a stale expectedUpdatedAt throws SalesAgentConfigurationConflictError, never overwrites silently", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-stale"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+
+  // A first, real save moves updated_at forward - draft.updatedAt (the value
+  // a second, slower editor would still be holding) is now stale.
+  await updateDraftConfiguration({
+    id: draft.id,
+    configuration: buildValidConfigurationInput({ role: "Primer editor" }),
+    expectedUpdatedAt: draft.updatedAt
+  });
+
+  await assert.rejects(
+    () =>
+      updateDraftConfiguration({
+        id: draft.id,
+        configuration: buildValidConfigurationInput({ role: "Segundo editor, deberia fallar" }),
+        expectedUpdatedAt: draft.updatedAt
+      }),
+    SalesAgentConfigurationConflictError
+  );
+
+  const reloaded = await loadConfigurationById(draft.id);
+  assert.equal(reloaded?.configuration.role, "Primer editor", "the first editor's save must survive untouched");
+});
+
+test("[C3] a stale expectedUpdatedAt on an already-published row still reports not_draft, never a conflict", async () => {
+  // Lifecycle-state mismatch and content-conflict are different failure
+  // modes - status must win when both are technically true, since "this
+  // isn't a draft anymore" is the more actionable message.
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-published"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const stalePublishedUpdatedAt = draft.updatedAt;
+  await publishDraftConfiguration({ id: draft.id });
+
+  await assert.rejects(
+    () =>
+      updateDraftConfiguration({
+        id: draft.id,
+        configuration: buildValidConfigurationInput({ role: "no deberia aplicar" }),
+        expectedUpdatedAt: stalePublishedUpdatedAt
+      }),
+    SalesAgentConfigurationNotDraftError
+  );
+});
+
+test("[C4] updateDraftConfiguration without expectedUpdatedAt (optional) still updates a genuine draft - existing callers unaffected", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-optional"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const updated = await updateDraftConfiguration({ id: draft.id, configuration: buildValidConfigurationInput({ role: "Sin expectedUpdatedAt" }) });
+  assert.equal(updated.configuration.role, "Sin expectedUpdatedAt");
+});
+
+test("[C5] an invalid expectedUpdatedAt (unparseable date) throws a domain invalid error before touching the row", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("concurrency-bad-date"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  await assert.rejects(
+    () => updateDraftConfiguration({ id: draft.id, configuration: buildValidConfigurationInput(), expectedUpdatedAt: "not-a-real-date" }),
+    SalesAgentConfigurationInvalidError
+  );
+  const reloaded = await loadConfigurationById(draft.id);
+  assert.equal(reloaded?.configurationHash, draft.configurationHash, "the row must remain exactly as created");
+});
+
+test("[C6] createDraftConfiguration/publishDraftConfiguration audit payload includes parentConfigurationId (clone lineage)", async () => {
+  const parent = await createDraftConfiguration({ name: uniqueName("audit-parent"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const clone = await createDraftConfiguration({
+    name: uniqueName("audit-clone"),
+    configuration: parent.configuration,
+    createdBy: "test-suite",
+    parentConfigurationId: parent.id
+  });
+  assert.equal(clone.parentConfigurationId, parent.id);
+
+  const auditRows = await queryRows<{ after_json: string }>(
+    "SELECT after_json FROM hub_audit_log WHERE action = 'sales_agent_configuration.created' AND entity_id = ? ORDER BY id DESC LIMIT 1",
+    [String(clone.id)]
+  );
+  assert.equal(auditRows.length, 1, "expected exactly one created audit row for the cloned draft");
+  const payload = JSON.parse(auditRows[0].after_json);
+  assert.equal(payload.parentConfigurationId, parent.id);
+});
+
+// ---------------------------------------------------------------------------
+// archiveDraftConfiguration - Hub-only atomic archive (review correction)
+// ---------------------------------------------------------------------------
+
+test("[C7] archiveDraftConfiguration archives a genuine draft", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("archive-draft-ok"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const archived = await archiveDraftConfiguration(draft.id);
+  assert.equal(archived.status, "archived");
+});
+
+test("[C8] archiveDraftConfiguration on a published row throws not_draft and never touches the row", async () => {
+  const draft = await createDraftConfiguration({ name: uniqueName("archive-published"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+  const published = await publishDraftConfiguration({ id: draft.id });
+
+  await assert.rejects(() => archiveDraftConfiguration(published.id), SalesAgentConfigurationNotDraftError);
+
+  const reloaded = await loadConfigurationById(published.id);
+  assert.equal(reloaded?.status, "published", "a published row must never end up archived via this path");
+});
+
+test("[C9] concurrent archiveDraftConfiguration vs publishDraftConfiguration on the same draft: exactly one wins, a published row is never left archived", async () => {
+  // No shared advisory lock between archive and publish - the WHERE clause
+  // itself (status = 'draft') is the only thing preventing both from
+  // succeeding on the same row.
+  const draft = await createDraftConfiguration({ name: uniqueName("archive-publish-race"), configuration: buildValidConfigurationInput(), createdBy: "test-suite" });
+
+  const [archiveResult, publishResult] = await Promise.allSettled([archiveDraftConfiguration(draft.id), publishDraftConfiguration({ id: draft.id })]);
+
+  const succeeded = [archiveResult, publishResult].filter((result) => result.status === "fulfilled");
+  assert.equal(succeeded.length, 1, "exactly one of archive/publish must win the race");
+
+  const reloaded = await loadConfigurationById(draft.id);
+  if (archiveResult.status === "fulfilled") {
+    assert.equal(reloaded?.status, "archived");
+    assert.equal(publishResult.status, "rejected");
+  } else {
+    assert.equal(reloaded?.status, "published", "publish won - the row must be published, never archived");
+    assert.equal(archiveResult.status, "rejected");
+    assert.ok(
+      (archiveResult as PromiseRejectedResult).reason instanceof SalesAgentConfigurationNotDraftError,
+      "the losing archive attempt must fail with not_draft, never silently succeed on a now-published row"
+    );
+  }
 });
 
 test("[R16] two versions with identical content are both allowed to exist (hash is indexed, not unique)", async () => {

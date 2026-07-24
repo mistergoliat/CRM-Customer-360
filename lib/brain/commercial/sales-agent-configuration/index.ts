@@ -3,17 +3,23 @@ export {
   SALES_AGENT_CONFIGURATION_SCHEMA_VERSION,
   SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V1,
   SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V2,
+  SALES_AGENT_CONFIGURATION_SCHEMA_VERSION_V3,
   SALES_AGENT_CONFIGURATION_SUPPORTED_SCHEMA_VERSIONS,
   SALES_AGENT_CONFIGURATION_TABLE,
   SALES_AGENT_CONFIGURATION_STATUSES,
   SALES_AGENT_CONFIGURATION_LOCK_KEY,
   SALES_AGENT_CONFIGURATION_LOCK_TIMEOUT_SECONDS,
   SALES_AGENT_CONFIGURATION_LIMITS,
+  SALES_AGENT_CONFIGURATION_HUB_ACTOR,
   SALES_AGENT_MODEL_CONFIGURATION_FIELDS,
   SALES_AGENT_LOOP_CONFIGURATION_FIELDS,
   SALES_AGENT_MODEL_CONFIGURATION_LIMITS,
   SALES_AGENT_LOOP_CONFIGURATION_LIMITS,
-  SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL
+  SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_FIELDS,
+  SALES_AGENT_FOLLOW_UP_ALLOWED_WINDOW_FIELDS,
+  SALES_AGENT_FOLLOW_UP_TIMEZONE,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_LIMITS
 } from "./constants";
 
 export {
@@ -24,15 +30,18 @@ export {
   SalesAgentConfigurationInvalidError,
   SalesAgentConfigurationIntegrityError,
   SalesAgentConfigurationLockTimeoutError,
+  SalesAgentConfigurationConflictError,
   type SalesAgentConfigurationScope,
   type SalesAgentConfigurationSchemaVersion,
   type SalesAgentConfigurationStatus,
   type SalesAgentPromptConfiguration,
   type SalesAgentModelConfiguration,
   type SalesAgentLoopConfiguration,
+  type SalesAgentFollowUpConfiguration,
   type SalesAgentConfigurationDocument,
   type SalesAgentConfigurationRecord,
   type EffectiveSalesAgentModelConfiguration,
+  type EffectiveSalesAgentFollowUpConfiguration,
   type ResolvedSalesAgentConfigurationSource,
   type ResolvedSalesAgentConfiguration,
   type SalesAgentConfigurationConnection
@@ -44,6 +53,7 @@ export {
   validateSalesAgentPromptConfiguration,
   validateSalesAgentModelConfiguration,
   validateSalesAgentLoopConfiguration,
+  validateSalesAgentFollowUpConfiguration,
   validateSalesAgentConfigurationDocument,
   buildAllowedSalesAgentModelValues,
   isSalesAgentModelAllowed,
@@ -53,6 +63,7 @@ export {
   type SalesAgentConfigurationValidationOptions,
   type SalesAgentModelConfigurationValidationResult,
   type SalesAgentLoopConfigurationValidationResult,
+  type SalesAgentFollowUpConfigurationValidationResult,
   type SalesAgentConfigurationDocumentValidationResult
 } from "./validation";
 
@@ -62,6 +73,7 @@ export {
   SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
+  SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT,
   readDeploymentDefaultSalesAgentConfiguration,
   type DeploymentDefaultLookup
 } from "./defaults";
@@ -76,6 +88,7 @@ export {
   loadLatestVersionForScope,
   assertConfigurationIsDraft,
   archiveConfiguration,
+  archiveDraftConfiguration,
   archiveConfigurationRowOnConnection,
   withSalesAgentConfigurationScopeLock,
   runInTransaction,

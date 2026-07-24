@@ -1,6 +1,6 @@
-import { SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL } from "./constants";
+import { SALES_AGENT_FOLLOW_UP_TIMEZONE, SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL } from "./constants";
 import { validateSalesAgentPromptConfiguration } from "./validation";
-import type { SalesAgentLoopConfiguration, SalesAgentModelConfiguration, SalesAgentPromptConfiguration } from "./types";
+import type { SalesAgentFollowUpConfiguration, SalesAgentLoopConfiguration, SalesAgentModelConfiguration, SalesAgentPromptConfiguration } from "./types";
 
 /**
  * Never depends on the database - the last fallback the resolver reaches
@@ -43,6 +43,32 @@ export const SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT: SalesAgentModelConfig
 export const SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT: SalesAgentLoopConfiguration = {
   maxAgentStepsPerTurn: 3,
   maxToolCallsPerTurn: 2
+};
+
+/**
+ * ACS-R1-05.1-T02.3D. Unlike the model/loop safe defaults above, there is no
+ * pre-existing native-runtime behavior to reproduce here - follow-up
+ * scheduling never worked in the native path before this task (it always
+ * persisted scheduled_for = NULL, permanently unreachable by the worker).
+ * `enabled: false` is the deliberately conservative choice: a deployment
+ * that has never published a followUpConfiguration section must not start
+ * auto-scheduling follow-ups the moment this feature ships - an operator has
+ * to explicitly turn it on. The other values mirror the exact example in
+ * the task's own UI mockup (60/1440/4320 minutes, 09:00-19:00 Mon-Fri,
+ * 30-day max age) - a real, deliberately chosen baseline, not an arbitrary
+ * placeholder.
+ */
+export const SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT: SalesAgentFollowUpConfiguration = {
+  enabled: false,
+  maxAttempts: 3,
+  attemptDelaysMinutes: [60, 1440, 4320],
+  allowedWindow: {
+    timezone: SALES_AGENT_FOLLOW_UP_TIMEZONE,
+    startHour: 9,
+    endHour: 19,
+    allowedWeekdays: [1, 2, 3, 4, 5]
+  },
+  maxOpportunityAgeDays: 30
 };
 
 const DEPLOYMENT_DEFAULT_ENV_VAR = "SALES_AGENT_CONFIGURATION_DEPLOYMENT_DEFAULT_JSON";

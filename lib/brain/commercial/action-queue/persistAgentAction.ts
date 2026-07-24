@@ -143,6 +143,31 @@ function buildSingleReplyLockKey(action: CrmAgentAction, enforceSingleReplyPerMe
   return `crm-agent-action-reply:${action.conversationCaseId}:${action.messageId}:${action.actionType}`;
 }
 
+/**
+ * ACS-R1-05.1-T02.3D. Same shape as buildSingleReplyLockKey, for the
+ * analogous "at most one ACTIVE schedule_followup row per sequence"
+ * invariant - migrations/027's active_followup_sequence_key generated
+ * column/unique index is the ultimate backstop, but a proactive check-then-
+ * insert under an advisory lock avoids surfacing that as a raw DB error on
+ * the common (non-concurrent) path.
+ */
+function buildFollowUpSequenceLockKey(action: CrmAgentAction): string | null {
+  if (action.actionType !== "schedule_followup") return null;
+  if (!action.followUpSequenceKey) return null;
+  return `crm-agent-action-followup-sequence:${action.followUpSequenceKey}`;
+}
+
+async function loadActiveFollowUpForSequence(connection: AgentActionQueueConnection, sequenceKey: string): Promise<CrmAgentAction | null> {
+  const [rows] = await connection.execute<RowDataPacket[]>(
+    `SELECT * FROM ${CRM_AGENT_ACTIONS_TABLE}
+      WHERE followup_sequence_key = ? AND action_type = 'schedule_followup' AND status IN ('planned', 'requires_review', 'executing')
+      ORDER BY id DESC LIMIT 1`,
+    toExecuteValues([sequenceKey])
+  );
+  const first = rows[0];
+  return first ? deserializeAgentActionRow(first) : null;
+}
+
 async function withOptionalSingleReplyLock<T>(connection: AgentActionQueueConnection, lockKey: string | null, fn: () => Promise<T>): Promise<T> {
   if (!lockKey) return fn();
 
@@ -190,6 +215,11 @@ async function insertAction(connection: AgentActionQueueConnection, action: CrmA
         expires_at,
         attempt_number,
         max_attempts,
+        followup_sequence_key,
+        followup_configuration_source,
+        followup_configuration_id,
+        followup_configuration_version,
+        followup_configuration_hash,
         block_reasons_json,
         cancel_reason,
         failure_reason,
@@ -207,7 +237,7 @@ async function insertAction(connection: AgentActionQueueConnection, action: CrmA
         runtime_version,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     toExecuteValues([
       row.action_id,
@@ -232,6 +262,11 @@ async function insertAction(connection: AgentActionQueueConnection, action: CrmA
       toMysqlDateTime(row.expires_at),
       row.attempt_number,
       row.max_attempts,
+      row.followup_sequence_key,
+      row.followup_configuration_source,
+      row.followup_configuration_id,
+      row.followup_configuration_version,
+      row.followup_configuration_hash,
       JSON.stringify(row.block_reasons_json ?? []),
       row.cancel_reason,
       row.failure_reason,
@@ -284,6 +319,11 @@ async function updateExistingAction(connection: AgentActionQueueConnection, acti
         expires_at = ?,
         attempt_number = ?,
         max_attempts = ?,
+        followup_sequence_key = ?,
+        followup_configuration_source = ?,
+        followup_configuration_id = ?,
+        followup_configuration_version = ?,
+        followup_configuration_hash = ?,
         block_reasons_json = ?,
         cancel_reason = ?,
         failure_reason = ?,
@@ -323,6 +363,11 @@ async function updateExistingAction(connection: AgentActionQueueConnection, acti
       toMysqlDateTime(row.expires_at),
       row.attempt_number,
       row.max_attempts,
+      row.followup_sequence_key,
+      row.followup_configuration_source,
+      row.followup_configuration_id,
+      row.followup_configuration_version,
+      row.followup_configuration_hash,
       JSON.stringify(row.block_reasons_json ?? []),
       row.cancel_reason,
       row.failure_reason,
@@ -417,9 +462,14 @@ export async function persistAgentAction(
 
     const enforceSingleReplyPerMessage = input.enforceSingleReplyPerMessage ?? false;
     const singleReplyLockKey = buildSingleReplyLockKey(validation.action, enforceSingleReplyPerMessage);
+    // Never both non-null for the same action (schedule_followup is never an
+    // OUTBOX_BACKED_SINGLE_REPLY_ACTION_TYPES member) - nesting is simple and
+    // correct either way, since at most one of the two ever actually locks.
+    const followUpSequenceLockKey = buildFollowUpSequenceLockKey(validation.action);
 
     return await adapter.withConnection((connection) =>
-      withOptionalSingleReplyLock(connection, singleReplyLockKey, async () => {
+      withOptionalSingleReplyLock(connection, singleReplyLockKey, () =>
+      withOptionalSingleReplyLock(connection, followUpSequenceLockKey, async () => {
       try {
         await connection.beginTransaction();
         const existing = await loadExistingActionByIdempotencyKey(connection, validation.action!.idempotencyKey);
@@ -461,6 +511,27 @@ export async function persistAgentAction(
           );
         }
 
+        // ACS-R1-05.1-T02.3D: at most one ACTIVE schedule_followup row per
+        // sequence (opportunity_id, or conversation_case_id fallback) - a
+        // different attemptNumber/scheduledFor while one is still
+        // planned/requires_review/executing is never a reason to create a
+        // second row; the existing active one is reused/reported instead,
+        // mirroring the legacy planner's active_followup_exists outcome.
+        const existingActiveForSequence = followUpSequenceLockKey && validation.action!.followUpSequenceKey
+          ? await loadActiveFollowUpForSequence(connection, validation.action!.followUpSequenceKey)
+          : null;
+        if (existingActiveForSequence) {
+          await connection.rollback();
+          return normalizeResult(
+            "duplicate_ignored",
+            existingActiveForSequence,
+            existingActiveForSequence.id,
+            "An active follow-up already exists for this sequence.",
+            false,
+            validation.warnings
+          );
+        }
+
         try {
           const rowId = await insertAction(connection, validation.action!, currentTime);
           await connection.commit();
@@ -497,7 +568,17 @@ export async function persistAgentAction(
            * (autocommit) read and actually observes the winner's committed row.
            */
           await connection.rollback();
-          const winner = await loadExistingActionByIdempotencyKey(connection, validation.action!.idempotencyKey);
+          const winner =
+            (await loadExistingActionByIdempotencyKey(connection, validation.action!.idempotencyKey)) ??
+            // The duplicate could instead be migrations/027's
+            // uq_crm_agent_actions_active_followup_sequence race (a
+            // concurrent insert for the same sequence winning between our
+            // own existingActiveForSequence SELECT and this INSERT) - the
+            // idempotency-key digest differs (it includes createdAt), so
+            // that lookup alone would find nothing for this specific race.
+            (followUpSequenceLockKey && validation.action!.followUpSequenceKey
+              ? await loadActiveFollowUpForSequence(connection, validation.action!.followUpSequenceKey)
+              : null);
           if (!winner) {
             return normalizeResult(
               "failed",
@@ -518,7 +599,7 @@ export async function persistAgentAction(
         }
         return normalizeResult("failed", validation.action!, null, sanitizeError(error), false, validation.warnings);
       }
-      })
+      }))
     );
   } catch (error) {
     return normalizeResult("failed", validation.action, null, sanitizeError(error), false, validation.warnings);

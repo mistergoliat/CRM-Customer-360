@@ -54,6 +54,35 @@ export type SalesAgentLoopConfiguration = {
 };
 
 /**
+ * ACS-R1-05.1-T02.3D. Governs the platform's follow-up SCHEDULING limits -
+ * never the commercial decision itself (the Sales Agent still decides
+ * whether/why a follow-up is warranted; this only authorizes, paces and
+ * bounds it). `timezone` is fixed to "America/Santiago" (single business
+ * timezone for this deployment, not a per-tenant setting) - typed as a
+ * literal so a future multi-timezone need is a real type change, not a
+ * silently-accepted free string. The non-configurable invariants
+ * (cancelOnOptOut, ai-blocked, human-owner-active, opportunity-closed,
+ * no-duplicate-per-sequence) are deliberately NOT fields here - they are
+ * hardcoded in the worker/execution-bridge and never exposed as something
+ * the Hub could turn off.
+ */
+export type SalesAgentFollowUpConfiguration = {
+  enabled: boolean;
+  maxAttempts: number;
+  /** Length must equal maxAttempts - attemptDelaysMinutes[0] is measured from the initial decision, attemptDelaysMinutes[n] (n>0) from attempt n's own scheduled_for, never from "now" at worker-recovery time. */
+  attemptDelaysMinutes: number[];
+  allowedWindow: {
+    timezone: "America/Santiago";
+    startHour: number;
+    endHour: number;
+    /** 0=Sunday .. 6=Saturday, matching Date#getUTCDay()/Intl.DateTimeFormat weekday parts used by computeFollowUpSchedule.ts. */
+    allowedWeekdays: number[];
+  };
+  /** Based on the opportunity's created_at (age), never lastActivityAt (inactivity) - a deliberately distinct concept. */
+  maxOpportunityAgeDays: number;
+};
+
+/**
  * The resolved, effective model configuration actually handed to the
  * provider (resolver.ts). `model` is always resolved - published (if it
  * still passes today's allowlist) -> BRAIN_MODEL_NAME -> the generic
@@ -80,6 +109,7 @@ export type EffectiveSalesAgentModelConfiguration = {
 export type SalesAgentConfigurationDocument = SalesAgentPromptConfiguration & {
   modelConfiguration?: SalesAgentModelConfiguration;
   loopConfiguration?: SalesAgentLoopConfiguration;
+  followUpConfiguration?: SalesAgentFollowUpConfiguration;
 };
 
 export type SalesAgentConfigurationRecord = {
@@ -99,6 +129,9 @@ export type SalesAgentConfigurationRecord = {
   archivedAt: string | null;
 };
 
+/** Same shape as SalesAgentFollowUpConfiguration - every field is always fully resolved and clamped to platform limits, never partial (unlike EffectiveSalesAgentModelConfiguration's maxOutputTokens, nothing here is meant to stay absent). */
+export type EffectiveSalesAgentFollowUpConfiguration = SalesAgentFollowUpConfiguration;
+
 export type ResolvedSalesAgentConfigurationSource = "published" | "deployment_default" | "safe_default";
 
 export type ResolvedSalesAgentConfiguration = {
@@ -117,6 +150,7 @@ export type ResolvedSalesAgentConfiguration = {
    */
   effectiveModelConfiguration: EffectiveSalesAgentModelConfiguration;
   effectiveLoopConfiguration: SalesAgentLoopConfiguration;
+  effectiveFollowUpConfiguration: EffectiveSalesAgentFollowUpConfiguration;
 };
 
 /**
@@ -172,5 +206,19 @@ export class SalesAgentConfigurationLockTimeoutError extends Error {
   constructor(message = "sales_agent_configuration_lock_timeout") {
     super(message);
     this.name = "SalesAgentConfigurationLockTimeoutError";
+  }
+}
+
+/**
+ * ACS-R1-05.1-T02.3C. Thrown by updateDraftConfiguration when the row
+ * still exists and is still a draft, but `expectedUpdatedAt` no longer
+ * matches the stored `updated_at` - a concurrent editor saved first.
+ * Distinct from SalesAgentConfigurationNotDraftError (which means the
+ * lifecycle state itself changed, not just the content).
+ */
+export class SalesAgentConfigurationConflictError extends Error {
+  constructor(message = "sales_agent_configuration_conflict") {
+    super(message);
+    this.name = "SalesAgentConfigurationConflictError";
   }
 }

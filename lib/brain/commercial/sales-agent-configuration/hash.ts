@@ -3,6 +3,7 @@ import { normalizeConfigurationText } from "./validation";
 import type {
   SalesAgentConfigurationDocument,
   SalesAgentConfigurationSchemaVersion,
+  SalesAgentFollowUpConfiguration,
   SalesAgentLoopConfiguration,
   SalesAgentModelConfiguration
 } from "./types";
@@ -21,6 +22,28 @@ function canonicalLoopConfiguration(configuration: SalesAgentLoopConfiguration) 
   return {
     maxAgentStepsPerTurn: configuration.maxAgentStepsPerTurn,
     maxToolCallsPerTurn: configuration.maxToolCallsPerTurn
+  };
+}
+
+/**
+ * attemptDelaysMinutes order is meaningful (index N is attempt N+1's delay)
+ * - never sorted, unlike prohibitedPhrases. allowedWeekdays is a SET of
+ * allowed days with no meaningful order, so it is sorted for the same
+ * reason prohibitedPhrases is: two configurations differing only in the
+ * insertion order of the same weekdays must hash identically.
+ */
+function canonicalFollowUpConfiguration(configuration: SalesAgentFollowUpConfiguration) {
+  return {
+    enabled: configuration.enabled,
+    maxAttempts: configuration.maxAttempts,
+    attemptDelaysMinutes: [...configuration.attemptDelaysMinutes],
+    allowedWindow: {
+      timezone: configuration.allowedWindow.timezone,
+      startHour: configuration.allowedWindow.startHour,
+      endHour: configuration.allowedWindow.endHour,
+      allowedWeekdays: [...configuration.allowedWindow.allowedWeekdays].sort((a, b) => a - b)
+    },
+    maxOpportunityAgeDays: configuration.maxOpportunityAgeDays
   };
 }
 
@@ -80,7 +103,8 @@ export function computeSalesAgentConfigurationHash(
     customInstructions: normalizeConfigurationText(configuration.customInstructions),
     prohibitedPhrases: [...configuration.prohibitedPhrases].map(normalizeConfigurationText).sort(),
     ...(configuration.modelConfiguration ? { modelConfiguration: canonicalModelConfiguration(configuration.modelConfiguration) } : {}),
-    ...(configuration.loopConfiguration ? { loopConfiguration: canonicalLoopConfiguration(configuration.loopConfiguration) } : {})
+    ...(configuration.loopConfiguration ? { loopConfiguration: canonicalLoopConfiguration(configuration.loopConfiguration) } : {}),
+    ...(configuration.followUpConfiguration ? { followUpConfiguration: canonicalFollowUpConfiguration(configuration.followUpConfiguration) } : {})
   };
 
   const payload = canonicalStringify({

@@ -31,7 +31,8 @@ function buildAuditPayload(record: SalesAgentConfigurationRecord) {
     configurationId: record.id,
     version: record.version,
     status: record.status,
-    configurationHash: record.configurationHash
+    configurationHash: record.configurationHash,
+    parentConfigurationId: record.parentConfigurationId
   };
 }
 

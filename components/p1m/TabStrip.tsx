@@ -5,6 +5,8 @@ export type TabItem = {
   label: string;
   href?: string;
   active?: boolean;
+  /** Used only when href is absent - lets a tab strip drive local (non-routed) tab state. */
+  onClick?: () => void;
 };
 
 type TabStripProps = {
@@ -28,15 +30,17 @@ export function TabStrip({ tabs, className }: TabStripProps) {
             {tab.label}
           </Link>
         ) : (
-          <span
+          <button
             key={tab.label}
+            type="button"
+            onClick={tab.onClick}
             className={clsx(
-              "inline-flex h-10 items-center rounded-xl border px-4 text-label-bold uppercase",
-              tab.active ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600"
+              "inline-flex h-10 items-center rounded-xl border px-4 text-label-bold uppercase transition",
+              tab.active ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
             )}
           >
             {tab.label}
-          </span>
+          </button>
         )
       )}
     </div>
