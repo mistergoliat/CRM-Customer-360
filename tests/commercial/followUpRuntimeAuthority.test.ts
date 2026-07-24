@@ -140,7 +140,15 @@ test("sales-consultative/repository.ts and action-queue/persistAgentAction.ts ar
   assert.match(repositorySource, /from ["']\.\.\/follow-up-planner["']/);
   assert.match(repositorySource, /planCommercialFollowUp/);
 
-  // No other production file may write action_type = 'schedule_followup' into crm_agent_actions.
+  // No other production file may write action_type = 'schedule_followup' into
+  // crm_agent_actions specifically - matched against THAT table, never just
+  // "any INSERT anywhere in a file that also mentions the string
+  // schedule_followup" (ACS-R1-05.1-T02.3D review correction: optOutStore.ts
+  // legitimately does both - it INSERTs into the unrelated crm_customer_opt_outs
+  // table, and separately UPDATEs crm_agent_actions rows WHERE action_type =
+  // 'schedule_followup' to cancel them - neither is a new persister of
+  // schedule_followup rows, so the check now requires the INSERT itself to
+  // target crm_agent_actions before flagging a file).
   const offenders: string[] = [];
   for (const absPath of listProductionSourceFiles()) {
     const relPath = toPosix(absPath.slice(ROOT.length + 1));
@@ -148,7 +156,7 @@ test("sales-consultative/repository.ts and action-queue/persistAgentAction.ts ar
     if (isAllowedSandboxImporter(relPath)) continue; // in-memory only, never a real INSERT
     if (KNOWN_TEST_FIXTURE_SEED_SCRIPTS.has(relPath)) continue;
     const source = readFileSync(absPath, "utf8");
-    if (/schedule_followup/.test(source) && /INSERT\s+(IGNORE\s+)?INTO/i.test(source)) {
+    if (/schedule_followup/.test(source) && /INSERT\s+(IGNORE\s+)?INTO\s+`?crm_agent_actions`?/i.test(source)) {
       offenders.push(relPath);
     }
   }

@@ -379,6 +379,8 @@ export function buildAgentActionFromNextAction(input: BuildAgentActionFromNextAc
       ? "blocked"
       : nextAction.approvalRequirement === "explicit_operator_approval" || nextAction.approvalRequirement === "operator_review"
         ? "requires_review"
+        : actionType === "schedule_followup"
+          ? "planned"
         : "proposed";
   const status = deriveActionStatusFromGovernance({
     baseStatus,

@@ -43,7 +43,10 @@ export type AuditAction =
   | "sales_agent_configuration.created"
   | "sales_agent_configuration.updated"
   | "sales_agent_configuration.published"
-  | "sales_agent_configuration.archived";
+  | "sales_agent_configuration.archived"
+  | "customer_opt_out.recorded"
+  | "customer_opt_out.pending_followups_cancelled"
+  | "customer_opt_in.recorded";
 
 export async function ensureAuditTable() {
   await queryRows(`

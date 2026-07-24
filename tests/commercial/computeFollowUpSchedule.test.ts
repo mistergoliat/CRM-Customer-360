@@ -139,9 +139,15 @@ test("[CS8] a raw target on a weekend moves forward to the next allowed weekday"
   if (result.ok) {
     assert.equal(result.movedToAllowedWindow, true);
     assert.ok(isInstantWithinAllowedWindow(result.scheduledFor, BUSINESS_HOURS_WINDOW), "must land inside the allowed window");
-    // Must not be a Saturday/Sunday.
-    const localWeekday = new Date(result.scheduledFor).getUTCDay();
-    assert.ok([1, 2, 3, 4, 5].includes(localWeekday) || result.scheduledFor !== undefined);
+    // Must not be a Saturday/Sunday - checked in the REAL local weekday
+    // (America/Santiago), never getUTCDay() (which can disagree with the
+    // local date near a UTC-3/-4 midnight boundary and, combined with a
+    // vacuous `|| result.scheduledFor !== undefined` fallback, used to make
+    // this assertion always pass regardless of the actual weekday).
+    const localWeekdayLabel = new Intl.DateTimeFormat("en-US", { timeZone: "America/Santiago", weekday: "short" }).format(
+      new Date(result.scheduledFor)
+    );
+    assert.ok(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(localWeekdayLabel), `expected a weekday, got ${localWeekdayLabel}`);
   }
 });
 

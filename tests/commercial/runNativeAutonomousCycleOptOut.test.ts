@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
-import { getPool } from "@/lib/db";
+import { getPool, resetPoolForTests } from "@/lib/db";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle/runNativeAutonomousCycle";
-import { isCustomerOptedOut, recordCustomerOptOut } from "@/lib/brain/commercial/optOutStore";
+import { checkCustomerOptOutStatus, recordCustomerOptOut } from "@/lib/brain/commercial/optOutStore";
 import type { SalesAgentProvider } from "@/lib/brain/commercial/sales-agent/runtimeTypes";
 
 // ACS-R1-05.1-T02.3D, decision 11 (native-cycle Step 0.5). Real MariaDB,
-// real crm_test - isCustomerOptedOut/recordCustomerOptOut hit the database
-// for real, unlike the pilot-isolation Step 0 tests (which never reach a DB
-// call at all). No BRAIN_AUTONOMOUS_TEST_WA_IDS is set, so Step 0's pilot
-// allowlist is unrestricted and every wa_id below reaches Step 0.5.
+// real crm_test - checkCustomerOptOutStatus/recordCustomerOptOut hit the
+// database for real, unlike the pilot-isolation Step 0 tests (which never
+// reach a DB call at all). No BRAIN_AUTONOMOUS_TEST_WA_IDS is set, so Step
+// 0's pilot allowlist is unrestricted and every wa_id below reaches Step 0.5.
 Object.assign(process.env, {
   NODE_ENV: "development",
   DB_HOST: "127.0.0.1",
@@ -83,13 +83,13 @@ test("[OC1] a customer already opted out short-circuits before any LLM call, DB 
 
 test("[OC2] an explicit opt-out command this turn is recorded and short-circuits the SAME turn, before any LLM call", async () => {
   const waId = uniqueWaId("oc2");
-  assert.equal(await isCustomerOptedOut(waId), false);
+  assert.equal(await checkCustomerOptOutStatus(waId), "not_opted_out");
 
   const result = await runNativeAutonomousCycle(baseInput(waId, "STOP"));
 
   assert.equal(result.ran, false);
   assert.equal(result.reason, "customer_opted_out");
-  assert.equal(await isCustomerOptedOut(waId), true, "the explicit command must be recorded before this turn is gated");
+  assert.equal(await checkCustomerOptOutStatus(waId), "opted_out", "the explicit command must be recorded before this turn is gated");
 });
 
 test("[OC3] an ordinary message from a customer who never opted out is never blocked at the opt-out gate", async () => {
@@ -110,4 +110,52 @@ test("[OC3] an ordinary message from a customer who never opted out is never blo
   // whatever the cycle decides to do afterward (e.g. autonomous_cycle_disabled
   // in this test's minimal env).
   assert.notEqual(result.reason, "customer_opted_out");
+});
+
+// ---------------------------------------------------------------------------
+// Review correction: fail-closed opt-out status + opt-in reversal
+// ---------------------------------------------------------------------------
+
+test("[OC4] a customer already opted out who sends an explicit opt-in command is reversed and short-circuits, WITHOUT ever reaching the LLM", async () => {
+  const waId = uniqueWaId("oc4");
+  await recordCustomerOptOut({ waId, reason: "explicit_customer_command" });
+  assert.equal(await checkCustomerOptOutStatus(waId), "opted_out");
+
+  const result = await runNativeAutonomousCycle(baseInput(waId, "START"));
+
+  assert.equal(result.ran, false);
+  assert.equal(result.reason, "customer_opted_back_in");
+  assert.equal(result.shadow, null);
+  assert.equal(result.loop, null);
+  assert.equal(result.bridge, null);
+  assert.equal(await checkCustomerOptOutStatus(waId), "not_opted_out", "the opt-in must be durably recorded, reversing the opt-out");
+});
+
+test("[OC5] a customer already opted out who sends anything OTHER than an explicit opt-in command stays blocked - never routes through the Sales Agent", async () => {
+  const waId = uniqueWaId("oc5");
+  await recordCustomerOptOut({ waId, reason: "explicit_customer_command" });
+
+  const result = await runNativeAutonomousCycle(baseInput(waId, "hola, tienen descuentos?"));
+
+  assert.equal(result.ran, false);
+  assert.equal(result.reason, "customer_opted_out");
+  assert.equal(await checkCustomerOptOutStatus(waId), "opted_out", "an ordinary message must never reverse the opt-out");
+});
+
+test("[OC6] a real opt-out status check failure (database unavailable) blocks autonomy - never proceeds as if not opted out", async () => {
+  const waId = uniqueWaId("oc6");
+  await resetPoolForTests();
+  const originalDbName = process.env.DB_NAME;
+  process.env.DB_NAME = "crm_test_nonexistent_for_oc6";
+  try {
+    const result = await runNativeAutonomousCycle(baseInput(waId, "Hola, quiero cotizar"));
+    assert.equal(result.ran, false);
+    assert.equal(result.reason, "customer_opt_out_status_unavailable");
+    assert.equal(result.shadow, null);
+    assert.equal(result.loop, null);
+    assert.equal(result.bridge, null);
+  } finally {
+    process.env.DB_NAME = originalDbName;
+    await resetPoolForTests();
+  }
 });

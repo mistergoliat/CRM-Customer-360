@@ -2,7 +2,7 @@ import { safeExecute, safeQueryRows } from "@/lib/db";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import { redactErrorMessage } from "@/lib/brain/commercial/redactErrorMessage";
 import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
-import { isCustomerOptedOut } from "@/lib/brain/commercial/optOutStore";
+import { checkCustomerOptOutStatus } from "@/lib/brain/commercial/optOutStore";
 import { resolveSalesAgentConfiguration } from "@/lib/brain/commercial/sales-agent-configuration";
 import { findNextAllowedWindowStartIso, isInstantWithinAllowedWindow } from "./computeFollowUpSchedule";
 import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON, hasAttemptsRemaining } from "./followUpWorkerPolicy";
@@ -42,6 +42,8 @@ export type FollowUpCandidate = {
   action_id: string;
   wa_id: string | null;
   conversation_case_id: string | number | null;
+  /** ACS-R1-05.1-T02.3D review correction: the canonical identity for the age check below - never wa_id, which can be shared/reassigned across opportunities. */
+  opportunity_id: number | null;
   scheduled_for: string | null;
   draft_message: string | null;
   status: string;
@@ -60,6 +62,14 @@ export type FollowupTickResult = {
   skippedUnauthorized: string[];
   /** ACS-R1-05.1-T02.3D: due, but outside the CURRENT allowed window - moved forward to the next window start, never executed or cancelled. */
   rescheduled: Array<{ actionId: string; scheduledFor: string }>;
+  /**
+   * ACS-R1-05.1-T02.3D review correction: a TECHNICAL failure (opt-out
+   * status unavailable, configuration resolver failure, window computation
+   * failure) - returned to 'planned' with a short bounded backoff, its
+   * attempt_number never advanced. Distinct from `failed` (a real cycle-
+   * runner/business failure, which does consume an attempt).
+   */
+  technicalFailures: Array<{ actionId: string; reason: string; scheduledFor: string }>;
 };
 
 export type FollowupTickOptions = {
@@ -84,7 +94,7 @@ export async function selectDueFollowUps(limit: number, actionIds?: string[]): P
   // otherwise consume the LIMIT before an in-memory filter could apply.
   const scope = actionIds && actionIds.length > 0 ? ` AND action_id IN (${actionIds.map(() => "?").join(",")})` : "";
   const result = await safeQueryRows<FollowUpCandidate>(
-    `SELECT id, action_id, wa_id, conversation_case_id, scheduled_for, draft_message, status, attempt_number, max_attempts, followup_configuration_source
+    `SELECT id, action_id, wa_id, conversation_case_id, opportunity_id, scheduled_for, draft_message, status, attempt_number, max_attempts, followup_configuration_source
       FROM crm_agent_actions
       WHERE action_type = 'schedule_followup'
         AND (
@@ -144,6 +154,69 @@ async function rescheduleClaimedFollowUp(actionId: string, scheduledForIso: stri
     [toMysqlDateTime(scheduledForIso), actionId]
   );
   return result.ok && result.affectedRows > 0;
+}
+
+/** Bounded, fixed delay - never unlimited/growing backoff. */
+const FOLLOW_UP_TECHNICAL_BACKOFF_MINUTES = 5;
+
+/**
+ * ACS-R1-05.1-T02.3D review correction. A TECHNICAL failure (opt-out status
+ * unavailable, configuration resolver failure, window computation failure)
+ * is never a business decision - it must never consume a commercial
+ * attempt, and must stay retryable rather than landing in 'failed' (which
+ * FOLLOW_UP_ATTEMPT_CONSUMING_STATUSES treats as a real, consumed try).
+ *
+ * The claim CAS that won this row already incremented attempt_number
+ * atomically for two of the three possible origins - claimStaleExecutingFollowUp
+ * (recovered-stale) and claimFailedFollowUpRetry (retry) both bump it as
+ * part of winning the claim; claimPlannedFollowUp does not. candidate.status
+ * still holds the PRE-claim status (the row as selectDueFollowUps read it,
+ * before this tick's own claim ran), so it is exactly what's needed to know
+ * whether to undo that bump here - a technical failure must leave
+ * attempt_number exactly where it was before this tick ever touched the row.
+ */
+async function applyTechnicalFailureBackoff(candidate: FollowUpCandidate, now: string): Promise<string> {
+  const scheduledForIso = new Date(new Date(now).getTime() + FOLLOW_UP_TECHNICAL_BACKOFF_MINUTES * 60_000).toISOString();
+  const attemptWasBumpedAtClaim = candidate.status === "executing" || candidate.status === "failed";
+  await safeExecute(
+    `UPDATE crm_agent_actions
+      SET status = 'planned',
+          scheduled_for = ?,
+          attempt_number = ${attemptWasBumpedAtClaim ? "GREATEST(attempt_number - 1, 1)" : "attempt_number"},
+          updated_at = CURRENT_TIMESTAMP(3)
+      WHERE action_id = ? AND status = 'executing'`,
+    [toMysqlDateTime(scheduledForIso), candidate.action_id]
+  );
+  return scheduledForIso;
+}
+
+/**
+ * ACS-R1-05.1-T02.3D review correction. opportunity_id is the canonical
+ * identity for the age check - never wa_id (shared/reassignable across
+ * opportunities, and matched via an unrelated ORDER BY updated_at DESC
+ * heuristic before this correction). conversation_case_id is only used as a
+ * fallback, and only when it resolves to EXACTLY one opportunity - zero or
+ * multiple matches means there is no unambiguous canonical relation, so the
+ * age check is skipped entirely rather than guessing.
+ */
+async function loadOpportunityCreatedAtForCandidate(candidate: FollowUpCandidate): Promise<string | null> {
+  if (candidate.opportunity_id !== null && candidate.opportunity_id !== undefined) {
+    const result = await safeQueryRows<{ created_at: string }>(`SELECT created_at FROM crm_opportunities WHERE id = ? LIMIT 1`, [
+      candidate.opportunity_id
+    ]);
+    return result.ok ? (result.rows[0]?.created_at ?? null) : null;
+  }
+
+  if (candidate.conversation_case_id !== null && candidate.conversation_case_id !== undefined) {
+    const result = await safeQueryRows<{ created_at: string }>(
+      `SELECT created_at FROM crm_opportunities WHERE conversation_case_id = ? LIMIT 2`,
+      [String(candidate.conversation_case_id)]
+    );
+    if (result.ok && result.rows.length === 1) return result.rows[0].created_at;
+    return null;
+  }
+
+  return null;
 }
 
 export async function claimPlannedFollowUp(actionId: string): Promise<boolean> {
@@ -297,9 +370,10 @@ export type FollowUpRevalidationOutcome =
  *
  * Resolver failure is a TECHNICAL problem, never a business decision -
  * mirrors execution-bridge's own resolveFollowUpSchedulingContext
- * (configuration_unavailable): the caller routes this outcome through the
- * same retryable 'failed' path a cycle-runner exception already uses,
- * never a customer-facing cancellation.
+ * (configuration_unavailable): the caller routes this outcome through
+ * applyTechnicalFailureBackoff (bounded backoff, 'planned', attempt_number
+ * never advanced), never a customer-facing cancellation and never the
+ * attempt-consuming 'failed' status a real cycle-runner exception uses.
  */
 export async function revalidateFollowUpConfiguration(
   candidate: FollowUpCandidate,
@@ -316,19 +390,13 @@ export async function revalidateFollowUpConfiguration(
   if (!config.enabled) return { outcome: "cancel", reason: "follow_up_disabled" };
   if (candidate.attempt_number > config.maxAttempts) return { outcome: "cancel", reason: "max_attempts_reached" };
 
-  if (candidate.wa_id) {
-    const opportunity = await safeQueryRows<{ created_at: string }>(
-      `SELECT created_at FROM crm_opportunities WHERE wa_id = ? ORDER BY updated_at DESC LIMIT 1`,
-      [candidate.wa_id]
-    );
-    const createdAt = opportunity.ok ? (opportunity.rows[0]?.created_at ?? null) : null;
-    if (createdAt) {
-      const createdMs = new Date(createdAt).getTime();
-      const nowMs = new Date(now).getTime();
-      if (!Number.isNaN(createdMs) && !Number.isNaN(nowMs)) {
-        const ageDays = (nowMs - createdMs) / 86_400_000;
-        if (ageDays > config.maxOpportunityAgeDays) return { outcome: "cancel", reason: "opportunity_too_old" };
-      }
+  const opportunityCreatedAt = await loadOpportunityCreatedAtForCandidate(candidate);
+  if (opportunityCreatedAt) {
+    const createdMs = new Date(opportunityCreatedAt).getTime();
+    const nowMs = new Date(now).getTime();
+    if (!Number.isNaN(createdMs) && !Number.isNaN(nowMs)) {
+      const ageDays = (nowMs - createdMs) / 86_400_000;
+      if (ageDays > config.maxOpportunityAgeDays) return { outcome: "cancel", reason: "opportunity_too_old" };
     }
   }
 
@@ -344,7 +412,15 @@ export async function revalidateFollowUpConfiguration(
 export async function runFollowupTick(options: FollowupTickOptions): Promise<FollowupTickResult> {
   const log = options.log ?? (() => void 0);
   const cycleRunner = options.cycleRunner ?? runNativeAutonomousCycle;
-  const result: FollowupTickResult = { processed: 0, cancelled: [], executed: [], failed: [], skippedUnauthorized: [], rescheduled: [] };
+  const result: FollowupTickResult = {
+    processed: 0,
+    cancelled: [],
+    executed: [],
+    failed: [],
+    skippedUnauthorized: [],
+    rescheduled: [],
+    technicalFailures: []
+  };
 
   const candidates = await selectDueFollowUps(options.limit, options.actionIds);
   if (candidates.length === 0) return result;
@@ -401,7 +477,20 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     // checks below and before any configuration resolution - an opt-out is
     // definitive and cheap to check, same "before anything else" placement
     // as native-cycle Step 0.5.
-    if (await isCustomerOptedOut(candidate.wa_id)) {
+    //
+    // Review correction (post-close): checkCustomerOptOutStatus never fails
+    // open. "unavailable" (a real DB read failure) is a TECHNICAL problem,
+    // never treated as "not opted out" - routed through the same bounded,
+    // non-attempt-consuming backoff as a configuration resolver failure.
+    const nowIso = new Date().toISOString();
+    const optOutStatus = await checkCustomerOptOutStatus(candidate.wa_id);
+    if (optOutStatus === "unavailable") {
+      const scheduledFor = await applyTechnicalFailureBackoff(candidate, nowIso);
+      log(`[worker:followup] technical failure checking opt-out status for action ${candidate.action_id}: opt_out_status_unavailable`);
+      result.technicalFailures.push({ actionId: candidate.action_id, reason: "opt_out_status_unavailable", scheduledFor });
+      continue;
+    }
+    if (optOutStatus === "opted_out") {
       await abortClaimedFollowUp(candidate.action_id, "customer_opted_out");
       log(`[worker:followup] cancelling action ${candidate.action_id}: customer_opted_out`);
       result.cancelled.push({ actionId: candidate.action_id, reason: "customer_opted_out" });
@@ -429,14 +518,14 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     // all while disabled (execution-bridge's own gate), so this check only
     // ever fires for rows a real, enabled configuration actually produced.
     if (candidate.followup_configuration_source !== null) {
-      const revalidation = await revalidateFollowUpConfiguration(candidate);
+      const revalidation = await revalidateFollowUpConfiguration(candidate, nowIso);
       if (revalidation.outcome === "technical_failure") {
+        // Review correction: never a business-consuming 'failed' - a
+        // resolver/window failure is technical, stays retryable, never
+        // advances attempt_number.
+        const scheduledFor = await applyTechnicalFailureBackoff(candidate, nowIso);
         log(`[worker:followup] technical failure revalidating action ${candidate.action_id}: ${revalidation.reason}`);
-        await safeQueryRows(
-          `UPDATE crm_agent_actions SET status = 'failed', failure_reason = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ? AND status = 'executing'`,
-          [revalidation.reason, candidate.action_id]
-        );
-        result.failed.push(candidate.action_id);
+        result.technicalFailures.push({ actionId: candidate.action_id, reason: revalidation.reason, scheduledFor });
         continue;
       }
       if (revalidation.outcome === "cancel") {

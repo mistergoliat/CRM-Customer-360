@@ -426,6 +426,7 @@ test("T07-E14: human ownership active - follow-up never executes, cancelled with
     action_id: actionId,
     wa_id: waId,
     conversation_case_id: conversation.id,
+    opportunity_id: null,
     scheduled_for: null,
     draft_message: null,
     status: "executing",
