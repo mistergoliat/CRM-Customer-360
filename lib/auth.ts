@@ -96,11 +96,9 @@ export async function requireOperator(request?: Request) {
 
     const token = request?.headers.get("x-admin-bypass-token");
     if (token === adminBypassToken) return { ok: true as const };
-
-    const cookieStore = await cookies();
-    const session = cookieStore.get(COOKIE_NAME)?.value;
-    if (verifySession(session)) return { ok: true as const };
   } catch (error) {
+    // Genuine server misconfiguration (ADMIN_BYPASS_TOKEN/SESSION_SECRET
+    // missing) - distinct from "no session provided", kept as 500.
     return {
       ok: false as const,
       response: NextResponse.json(
@@ -110,6 +108,18 @@ export async function requireOperator(request?: Request) {
         { status: 500 }
       )
     };
+  }
+
+  // A session lookup failure (no request scope for next/headers#cookies(),
+  // no cookie header, malformed value) is never a server error - it is
+  // exactly "no valid session", the same outcome as an invalid cookie.
+  // Never surface the underlying reason to the client.
+  try {
+    const cookieStore = await cookies();
+    const session = cookieStore.get(COOKIE_NAME)?.value;
+    if (verifySession(session)) return { ok: true as const };
+  } catch {
+    // fall through to unauthorized below
   }
 
   return { ok: false as const, response: NextResponse.json({ error: "unauthorized" }, { status: 401 }) };

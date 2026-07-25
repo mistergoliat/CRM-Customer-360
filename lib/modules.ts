@@ -28,6 +28,15 @@ export const modules: HubModule[] = [
     group: "intelligence",
     navVisible: true
   },
+  {
+    key: "agent-sales-followups",
+    label: "Seguimientos del agente",
+    href: "/agents/sales/follow-ups",
+    status: "active",
+    icon: "schedule",
+    group: "intelligence",
+    navVisible: true
+  },
   { key: "analytics", label: "Analítica", href: "/analytics", status: "preview", icon: "monitoring", group: "intelligence", navVisible: true },
   { key: "integrations", label: "Integraciones", href: "/integrations", status: "partial", icon: "hub", group: "system", navVisible: true },
   { key: "settings", label: "Configuración", href: "/settings", status: "partial", icon: "settings", group: "system", navVisible: true },
