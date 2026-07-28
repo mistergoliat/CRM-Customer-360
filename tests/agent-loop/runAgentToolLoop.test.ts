@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import test, { after, before } from "node:test";
 import { runAgentToolLoop } from "@/lib/brain/commercial/agent-loop/runAgentToolLoop";
 import { createFakeAgentLoopProvider } from "@/lib/brain/commercial/agent-loop/providers/fakeAgentLoopProvider";
+import type { AgentLoopProvider } from "@/lib/brain/commercial/agent-loop/agentLoopProviderTypes";
 import { resetCapabilityGatewayCatalogPortForTests } from "@/lib/brain/commercial/capability-gateway/registry";
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
@@ -86,6 +87,91 @@ const baseInput = {
   opportunityId: null,
   currentTime: "2026-07-21T15:00:00.000Z"
 };
+
+function createRecentCatalogReferenceProvider(): AgentLoopProvider {
+  return {
+    name: "recent-catalog-reference-provider",
+    async invoke(request) {
+      const user = request.messages.find((message) => message.role === "user");
+      const payload = JSON.parse(user?.content ?? "{}") as {
+        customerMessage?: string;
+        recentCatalogContext?: {
+          interactions?: Array<{
+            products?: Array<{ position?: number; productId?: string; combinationId?: string; name?: string }>;
+          }>;
+        };
+        priorStepsThisTurn?: Array<{
+          step?: { type?: string; tool?: string };
+          observation?: { data?: { publicLink?: { canonicalUrl?: string | null } } };
+        }>;
+      };
+
+      const detailObservation = payload.priorStepsThisTurn?.find((step) => step.step?.type === "use_tool" && step.step.tool === "get_product_details")?.observation;
+      const canonicalUrl = detailObservation?.data?.publicLink?.canonicalUrl;
+      if (canonicalUrl) {
+        return { rawOutput: { type: "respond", message: `Te dejo el link: ${canonicalUrl}` } };
+      }
+
+      const products = (payload.recentCatalogContext?.interactions ?? []).flatMap((interaction) => interaction.products ?? []);
+      const customerMessage = payload.customerMessage?.toLowerCase() ?? "";
+      let selected: { productId?: string; combinationId?: string; name?: string } | null = null;
+
+      if (customerMessage.includes("segundo")) {
+        selected = products.find((product) => product.position === 2) ?? null;
+      } else if (customerMessage.includes("barra")) {
+        selected = products.find((product) => product.name?.toLowerCase().includes("barra")) ?? null;
+      } else if (customerMessage.includes("ese") && products.length > 1) {
+        return { rawOutput: { type: "respond", message: "A cual producto te refieres: la barra o los discos?" } };
+      } else if (products.length === 1) {
+        selected = products[0];
+      }
+
+      if (!selected?.productId) {
+        return { rawOutput: { type: "respond", message: "A cual producto te refieres?" } };
+      }
+
+      return {
+        rawOutput: {
+          type: "use_tool",
+          tool: "get_product_details",
+          arguments: {
+            productId: selected.productId,
+            ...(selected.combinationId ? { combinationId: selected.combinationId } : {})
+          }
+        }
+      };
+    }
+  };
+}
+
+function createAdaptivePresentationProvider(): AgentLoopProvider {
+  return {
+    name: "adaptive-presentation-provider",
+    async invoke(request) {
+      const system = request.messages.find((message) => message.role === "system")?.content ?? "";
+      assert.match(system, /Adapt how many products you present to the customer's intent/);
+      assert.match(system, /Absolute maximum: show no more than five products in one message/);
+
+      const user = request.messages.find((message) => message.role === "user");
+      const payload = JSON.parse(user?.content ?? "{}") as { customerMessage?: string };
+      const customerMessage = payload.customerMessage?.toLowerCase() ?? "";
+
+      if (customerMessage.includes("ambigu")) {
+        return { rawOutput: { type: "respond", message: "Para recomendar bien, buscas barra olimpica, barra tecnica o discos?" } };
+      }
+      if (customerMessage.includes("mas opciones")) {
+        return { rawOutput: { type: "respond", message: "1. Barra olimpica: mayor carga.\n2. Barra tecnica: mas liviana.\n3. Barra Z: agarre comodo.\n4. Mancuernas: alternativa compacta." } };
+      }
+      if (customerMessage.includes("muestrame uno")) {
+        return { rawOutput: { type: "respond", message: "Te mostraria la Barra olimpica 20 kg como opcion principal." } };
+      }
+      if (customerMessage.includes("explorar")) {
+        return { rawOutput: { type: "respond", message: "1. Barra olimpica: para fuerza.\n2. Discos bumper: para halterofilia.\n3. Mancuernas: para accesorios.\n4. Kettlebell: para acondicionamiento." } };
+      }
+      return { rawOutput: { type: "respond", message: "Principal: Barra olimpica 20 kg.\nAlternativas pertinentes: Barra tecnica 10 kg y Barra Z." } };
+    }
+  };
+}
 
 test("A - producto claro: search_products then a grounded respond", async () => {
   catalogUp(1);
@@ -220,6 +306,214 @@ test("publicLink: parent product detail can answer with URL and variant selectio
   const detailData = result.steps[1].observation?.data as { publicLink?: { requiresVariantSelection?: boolean; variantAttributeLabels?: string[] } } | null;
   assert.equal(detailData?.publicLink?.requiresVariantSelection, true);
   assert.deepEqual(detailData?.publicLink?.variantAttributeLabels, ["Talla", "Color"]);
+});
+
+test("RecentCatalogContext: 'dame el link' with a single recent product uses get_product_details", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/501-kettlebell-16kg.html";
+  catalogUpWithPublicLink({
+    canonicalUrl,
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dame el link",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-search",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "501", name: "Kettlebell 16kg" }]
+        }
+      ]
+    },
+    provider: createRecentCatalogReferenceProvider()
+  });
+
+  assert.equal(result.steps[0].step.type, "use_tool");
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.tool : null, "get_product_details");
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.arguments.productId : null, "501");
+  assert.equal(result.finalMessage, `Te dejo el link: ${canonicalUrl}`);
+});
+
+test("RecentCatalogContext: 'dame el link del segundo' uses the productId at position 2", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/501-kettlebell-16kg.html";
+  catalogUpWithPublicLink({
+    canonicalUrl,
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dame el link del segundo",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-search",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [
+            { position: 1, productId: "111", name: "Disco bumper" },
+            { position: 2, productId: "501", combinationId: "7", name: "Kettlebell 16kg" },
+            { position: 3, productId: "333", name: "Mancuerna" }
+          ]
+        }
+      ]
+    },
+    provider: createRecentCatalogReferenceProvider()
+  });
+
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.arguments.productId : null, "501");
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.arguments.combinationId : null, "7");
+  assert.equal(result.finalMessage, `Te dejo el link: ${canonicalUrl}`);
+});
+
+test("RecentCatalogContext: after bars and discs, 'dame el link de la barra' selects the bar identity", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/501-barra.html";
+  catalogUpWithPublicLink({
+    canonicalUrl,
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dame el link de la barra",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-discs",
+          completedAt: "2026-07-21T15:00:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "301", name: "Discos bumper 10 kg" }]
+        },
+        {
+          inboundMessageId: "msg-bars",
+          completedAt: "2026-07-21T14:50:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "501", name: "Barra olimpica 20 kg" }]
+        }
+      ]
+    },
+    provider: createRecentCatalogReferenceProvider()
+  });
+
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.arguments.productId : null, "501");
+  assert.equal(result.finalMessage, `Te dejo el link: ${canonicalUrl}`);
+});
+
+test("RecentCatalogContext: 'ese' with multiple equivalent candidates asks for clarification and does not use a URL", async () => {
+  catalogUpWithPublicLink({
+    canonicalUrl: "https://pesaschile.cl/categories/501-hidden.html",
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dame el link de ese",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-search",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [
+            { position: 1, productId: "501", name: "Barra olimpica 20 kg" },
+            { position: 2, productId: "502", name: "Barra tecnica 10 kg" }
+          ]
+        }
+      ]
+    },
+    provider: createRecentCatalogReferenceProvider()
+  });
+
+  assert.equal(result.toolExecutionCount, 0);
+  assert.match(result.finalMessage ?? "", /A cual producto te refieres/i);
+  assert.doesNotMatch(result.finalMessage ?? "", /https?:\/\//);
+});
+
+test("Adaptive presentation: a specific query can respond with one main product and up to two alternatives", async () => {
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "busco una barra olimpica especifica",
+    commercialContextSummary: {},
+    provider: createAdaptivePresentationProvider()
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 0);
+  assert.match(result.finalMessage ?? "", /Principal:/);
+  assert.match(result.finalMessage ?? "", /Alternativas pertinentes:/);
+});
+
+test("Adaptive presentation: an exploratory query can present between three and five products", async () => {
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "quiero explorar opciones para entrenar en casa",
+    commercialContextSummary: {},
+    provider: createAdaptivePresentationProvider()
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.match(result.finalMessage ?? "", /1\./);
+  assert.match(result.finalMessage ?? "", /4\./);
+  assert.doesNotMatch(result.finalMessage ?? "", /6\./);
+});
+
+test("Adaptive presentation: an ambiguous query can ask for clarification without unnecessary tool calls", async () => {
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "quiero algo ambiguo para entrenar",
+    commercialContextSummary: {},
+    provider: createAdaptivePresentationProvider()
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 0);
+  assert.match(result.finalMessage ?? "", /Para recomendar bien/);
+});
+
+test("Adaptive presentation: 'dame mas opciones' can present more than one product", async () => {
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dame mas opciones",
+    commercialContextSummary: {},
+    provider: createAdaptivePresentationProvider()
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.match(result.finalMessage ?? "", /1\./);
+  assert.match(result.finalMessage ?? "", /4\./);
+});
+
+test("Adaptive presentation: 'muestrame uno' can present only one product", async () => {
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "muestrame uno",
+    commercialContextSummary: {},
+    provider: createAdaptivePresentationProvider()
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.match(result.finalMessage ?? "", /opcion principal/);
+  assert.doesNotMatch(result.finalMessage ?? "", /2\./);
+  assert.doesNotMatch(result.finalMessage ?? "", /Alternativas/);
 });
 
 test("D - horarios: search_company_knowledge answers from the fixture source", async () => {

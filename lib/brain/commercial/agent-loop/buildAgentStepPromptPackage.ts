@@ -2,6 +2,7 @@ import type { SalesAgentPromptConfiguration } from "../sales-agent-configuration
 import { AGENT_STEP_TYPES } from "./agentStepTypes";
 import type { AgentLoopStepRecord } from "./agentStepTypes";
 import type { AgentLoopProviderMessage } from "./agentLoopProviderTypes";
+import type { RecentCatalogContext } from "./recentCatalogContext";
 import { renderSalesAgentIdentityPrompt } from "./renderSalesAgentIdentityPrompt";
 
 export type AgentLoopToolDescription = {
@@ -14,6 +15,12 @@ export type AgentLoopPromptInput = {
   customerMessage: string;
   /** Whatever reduced, already-sanitized commercial context is available this turn (opportunity id/stage, need profile fields, recent messages) - never raw PII, never a full domain snapshot. */
   commercialContextSummary: Record<string, unknown>;
+  /**
+   * Ephemeral product-identity context derived from recent catalog tool
+   * executions. It is only for resolving conversational references; commercial
+   * facts must still be rehydrated with tools.
+   */
+  recentCatalogContext?: RecentCatalogContext | null;
   availableTools: AgentLoopToolDescription[];
   /** This turn's own prior steps/observations only - never cross-turn state. */
   priorSteps: AgentLoopStepRecord[];
@@ -59,6 +66,30 @@ const PRODUCT_PUBLIC_LINK_RULE_LINES = [
   "publicLink.unavailableReason is internal evidence; do not quote it literally to the customer."
 ];
 
+const RECENT_CATALOG_CONTEXT_RULE_LINES = [
+  "RecentCatalogContext is only for identifying which product the customer is referring to.",
+  "Never use historical RecentCatalogContext data as current price, stock, availability, or URL evidence.",
+  "After identifying a product from RecentCatalogContext, use get_product_details before answering with current commercial information.",
+  "If the reference is still ambiguous between multiple products, ask the customer to clarify.",
+  "For phrases like \"el segundo\", use position within the relevant search interaction.",
+  "Never invent productId or combinationId."
+];
+
+const ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES = [
+  "Adapt how many products you present to the customer's intent and the clarity of the catalog evidence.",
+  "Do not always present a single option, and do not automatically present every available search result.",
+  "If one product is clearly dominant for a specific query, present it as the main option and include up to two relevant alternatives only when they genuinely fit.",
+  "Do not say it is the only option unless the tool returned exactly one valid result.",
+  "If several products are comparable, normally present three products and briefly state the relevant differences.",
+  "If the customer is exploring broadly or explicitly asks for options, present three to five relevant products.",
+  "If results are ambiguous, span different categories, or lack enough evidence, ask a clarifying question before recommending instead of filling the reply with weakly related products.",
+  "Respect explicit quantity requests: show one when the customer asks for one, expand the pool when they ask for more options, and compare only the relevant identified products when they ask to compare.",
+  "For requests such as cheapest, best, strongest, or most resistant, select only from evidence available in this turn's ToolObservations and do not invent criteria or attributes.",
+  "For WhatsApp, keep product presentations compact: enumerate when showing more than one product, use product name plus the main difference, avoid full descriptions, and do not repeat identical information across options.",
+  "Never share product links from search_products; use get_product_details when a concrete product must be rehydrated for current price, stock, availability, variants, or URL.",
+  "Absolute maximum: show no more than five products in one message."
+];
+
 /**
  * Layer 1: the immutable Agent Tool Loop contract - what actions exist this
  * phase and the exact response shape. Never editable, never touched by
@@ -95,6 +126,8 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       "Use the customer's already-confirmed context (product type, training type, goal, budget, and any tool results already returned this turn) - do not ask again for anything already provided, and do not broaden or change the product category the customer already stated.",
       "You must never invent product, price, stock, or delivery information not returned by a tool this turn.",
       ...PRODUCT_PUBLIC_LINK_RULE_LINES,
+      ...RECENT_CATALOG_CONTEXT_RULE_LINES,
+      ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
       "You must never claim to have executed anything yourself - the platform executes tools, not you."
     ];
   }
@@ -102,6 +135,8 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     "Use a tool as soon as you have enough information to do so - do not wait for a fully detailed query, and do not ask the customer to repeat information already given.",
     "You must never invent product, price, stock, or delivery information not returned by a tool.",
     ...PRODUCT_PUBLIC_LINK_RULE_LINES,
+    ...RECENT_CATALOG_CONTEXT_RULE_LINES,
+    ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
     "You must never claim to have executed anything yourself - the platform executes tools, not you.",
     `Available tools: ${availableTools.map((tool) => `${tool.name} - ${tool.description}`).join("; ") || "none"}.`
   ];
@@ -150,6 +185,7 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
     currentTime: input.currentTime,
     customerMessage: input.customerMessage,
     commercialContext: input.commercialContextSummary,
+    recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
     priorStepsThisTurn: input.priorSteps.map(summarizeObservation),
     question: "What is the single next AgentStep?"
   };

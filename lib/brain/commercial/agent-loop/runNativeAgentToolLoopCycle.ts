@@ -8,6 +8,7 @@ import type { AgentLoopResult } from "./agentStepTypes";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session";
 import type { CommercialContextSnapshot } from "../context/buildNativeCommercialContext";
 import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
+import type { RecentCatalogContext } from "./recentCatalogContext";
 
 export type RunNativeAgentToolLoopCycleInput = {
   conversationId: number;
@@ -19,6 +20,7 @@ export type RunNativeAgentToolLoopCycleInput = {
   snapshot: CommercialContextSnapshot;
   provider: AgentLoopProvider | null;
   trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
+  recentCatalogContext?: RecentCatalogContext | null;
   abortSignal?: AbortSignal | null;
   /**
    * ACS-R1-05.1-T02.3B. Resolved exactly once per cycle by the caller
@@ -35,7 +37,17 @@ export type NativeAgentToolLoopCycleResult = {
   aiBlocked: boolean;
 };
 
-function buildCommercialContextSummary(snapshot: CommercialContextSnapshot): Record<string, unknown> {
+function buildCommercialContextSummary(
+  snapshot: CommercialContextSnapshot,
+  currentTurn: { inboundMessageId: string; customerMessage: string }
+): Record<string, unknown> {
+  const recentMessages = snapshot.recentMessages.filter((message, index, messages) => {
+    if (message.id === currentTurn.inboundMessageId) return false;
+    const isLastMessage = index === messages.length - 1;
+    if (isLastMessage && message.direction === "inbound" && message.body === currentTurn.customerMessage) return false;
+    return true;
+  });
+
   return {
     opportunityStatus: snapshot.opportunity?.status ?? null,
     opportunityStage: snapshot.opportunity?.stage ?? null,
@@ -46,7 +58,7 @@ function buildCommercialContextSummary(snapshot: CommercialContextSnapshot): Rec
           requiredFeatures: snapshot.needProfile.requiredFeatures
         }
       : null,
-    recentMessages: snapshot.recentMessages.slice(-5).map((message) => ({ direction: message.direction, body: message.body }))
+    recentMessages: recentMessages.slice(-5).map((message) => ({ direction: message.direction, body: message.body }))
   };
 }
 
@@ -201,7 +213,11 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     opportunityId,
     currentTime: input.currentTime,
     customerMessage: input.customerMessage,
-    commercialContextSummary: buildCommercialContextSummary(input.snapshot),
+    commercialContextSummary: buildCommercialContextSummary(input.snapshot, {
+      inboundMessageId: input.inboundMessageId,
+      customerMessage: input.customerMessage
+    }),
+    recentCatalogContext: input.recentCatalogContext ?? null,
     provider: input.provider,
     trustedCustomerSession: input.trustedCustomerSession,
     abortSignal: input.abortSignal,

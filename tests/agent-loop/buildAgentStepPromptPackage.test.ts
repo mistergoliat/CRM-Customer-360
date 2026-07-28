@@ -225,3 +225,78 @@ test("[PR14] requiresVariantSelection with empty labels exposes the generic rule
   assert.deepEqual(userPayload.priorStepsThisTurn[0].observation.data.publicLink.variantAttributeLabels, []);
   assert.doesNotMatch(messages[1].content, /Talla|Color/);
 });
+
+test("[PR15] RecentCatalogContext reaches the prompt as a separate product-identity block only", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    identityConfiguration: pesasChileConfig(),
+    commercialContextSummary: {
+      recentMessages: [{ direction: "agent", body: "Te mostre una barra y discos." }]
+    },
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-1",
+          completedAt: "2026-07-28T15:00:00.000Z",
+          sourceTool: "search_products",
+          products: [
+            { position: 1, productId: "101", combinationId: "201", name: "Barra olimpica 20 kg", variantLabel: "20 kg" },
+            { position: 2, productId: "102", name: "Discos bumper" }
+          ]
+        }
+      ]
+    }
+  });
+
+  const userPayload = JSON.parse(messages[1].content) as {
+    commercialContext: { recentMessages: unknown[] };
+    recentCatalogContext: { interactions: Array<{ products: Array<Record<string, unknown>> }> };
+  };
+
+  assert.ok(Array.isArray(userPayload.commercialContext.recentMessages));
+  assert.equal(userPayload.recentCatalogContext.interactions[0].products[0].productId, "101");
+  assert.equal(userPayload.recentCatalogContext.interactions[0].products[0].combinationId, "201");
+  assert.equal(userPayload.recentCatalogContext.interactions[0].products[0].position, 1);
+  assert.equal(userPayload.recentCatalogContext.interactions[0].products[0].name, "Barra olimpica 20 kg");
+  assert.equal("recentCatalogContext" in userPayload.commercialContext, false);
+  assert.doesNotMatch(messages[1].content, /agentFinalMessage|canonicalUrl|publicLink|price|stock|availability|https?:\/\//);
+});
+
+test("[PR16] immutable RecentCatalogContext rules require rehydration and ambiguity handling", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+
+  assert.match(system, /RecentCatalogContext is only for identifying which product/);
+  assert.match(system, /Never use historical RecentCatalogContext data as current price, stock, availability, or URL evidence/);
+  assert.match(system, /use get_product_details before answering with current commercial information/);
+  assert.match(system, /If the reference is still ambiguous between multiple products, ask the customer to clarify/);
+  assert.match(system, /For phrases like "el segundo", use position/);
+  assert.match(system, /Never invent productId or combinationId/);
+});
+
+test("[PR17] immutable adaptive product presentation policy is present in gathering and finalization", () => {
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase, identityConfiguration: pesasChileConfig() });
+    const system = messages[0].content;
+
+    assert.match(system, /Adapt how many products you present to the customer's intent/);
+    assert.match(system, /Do not always present a single option/);
+    assert.match(system, /do not automatically present every available search result/);
+    assert.match(system, /one product is clearly dominant/);
+    assert.match(system, /up to two relevant alternatives/);
+    assert.match(system, /normally present three products/);
+    assert.match(system, /present three to five relevant products/);
+    assert.match(system, /ask a clarifying question before recommending/);
+    assert.match(system, /Respect explicit quantity requests/);
+    assert.match(system, /Absolute maximum: show no more than five products in one message/);
+  }
+});
+
+test("[PR18] adaptive product presentation policy does not force exactly one product or all products", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+
+  assert.doesNotMatch(system, /\bmust\s+(?:always\s+)?(?:show|present)\s+(?:exactly\s+)?(?:one|1)\b/i);
+  assert.doesNotMatch(system, /\b(?:must|always)\s+(?:show|present)\s+(?:every|all)\s+(?:available\s+)?(?:search\s+)?(?:result|results|product|products)\b/i);
+  assert.doesNotMatch(system, /\bshow\s+all\s+results\b/i);
+});

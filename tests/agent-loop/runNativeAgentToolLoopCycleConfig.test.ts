@@ -168,3 +168,47 @@ test("[W4] identityConfiguration reaches the real system prompt sent to the prov
   assert.ok(systemMessage?.content.includes("Camila"));
   assert.ok(systemMessage?.content.includes("Tienda de Prueba"));
 });
+
+test("[W5] RecentCatalogContext reaches the provider separately and current inbound is not duplicated in recentMessages", async () => {
+  const capturedRequests: AgentLoopProviderRequest[] = [];
+  const capturingProvider: AgentLoopProvider = {
+    name: "capturing-test-provider",
+    async invoke(request) {
+      capturedRequests.push(request);
+      return { rawOutput: { type: "respond", message: "hola" } };
+    }
+  };
+
+  const snapshot = buildSnapshot();
+  snapshot.recentMessages = [
+    { id: "older-1", direction: "agent", body: "Tenemos barras y discos.", status: "sent", occurredAt: "2026-07-22T14:59:00.000Z" },
+    { id: "msg-1", direction: "inbound", body: baseInput.customerMessage, status: "received", occurredAt: "2026-07-22T15:00:00.000Z" }
+  ];
+
+  await runNativeAgentToolLoopCycle({
+    ...baseInput,
+    snapshot,
+    provider: capturingProvider,
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "older-1",
+          completedAt: "2026-07-22T14:59:30.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "501", name: "Barra olimpica" }]
+        }
+      ]
+    },
+    resolvedSalesAgentConfiguration: buildResolvedConfig()
+  });
+
+  const userMessage = capturedRequests[0].messages.find((message) => message.role === "user");
+  const payload = JSON.parse(userMessage?.content ?? "{}") as {
+    commercialContext: { recentMessages: Array<{ body: string | null }> };
+    recentCatalogContext: { interactions: Array<{ products: Array<{ productId: string }> }> };
+  };
+
+  assert.deepEqual(payload.commercialContext.recentMessages, [{ direction: "agent", body: "Tenemos barras y discos." }]);
+  assert.equal(payload.recentCatalogContext.interactions[0].products[0].productId, "501");
+  assert.equal("recentCatalogContext" in payload.commercialContext, false);
+});

@@ -8,6 +8,7 @@ import { buildToolObservation } from "./buildToolObservation";
 import { validateAgentStep } from "./validateAgentStep";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
 import type { AgentLoopResult, AgentLoopStepRecord, AgentLoopTerminalReason, AgentStepUseTool, ToolObservation } from "./agentStepTypes";
+import type { RecentCatalogContext } from "./recentCatalogContext";
 
 /**
  * ACS-R1-05.1-T02.1 (spec section 5). Fixed, backend-owned pool for this
@@ -33,6 +34,8 @@ export type RunAgentToolLoopInput = {
   customerMessage: string;
   /** Already-sanitized, already-reduced context - never raw PII, never a full domain snapshot. */
   commercialContextSummary: Record<string, unknown>;
+  /** Ephemeral recent catalog product identity context. Never a source of current price, stock, availability or URLs. */
+  recentCatalogContext?: RecentCatalogContext | null;
   provider: AgentLoopProvider | null;
   trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
   maxDecisions?: number;
@@ -208,6 +211,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       currentTime: input.currentTime,
       customerMessage: input.customerMessage,
       commercialContextSummary: input.commercialContextSummary,
+      recentCatalogContext: input.recentCatalogContext ?? null,
       availableTools: toolDescriptions,
       priorSteps: steps,
       stepsRemaining: maxDecisions - decisionIndex,
@@ -269,6 +273,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       currentTime: input.currentTime,
       customerMessage: input.customerMessage,
       commercialContextSummary: input.commercialContextSummary,
+      recentCatalogContext: input.recentCatalogContext ?? null,
       availableTools: [],
       priorSteps: steps,
       stepsRemaining: 1,

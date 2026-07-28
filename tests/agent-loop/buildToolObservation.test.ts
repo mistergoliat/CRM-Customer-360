@@ -130,3 +130,27 @@ test("search_products observation does not expose publicLink even if upstream se
   const data = observation.data as { items: Array<Record<string, unknown>> };
   assert.equal("publicLink" in data.items[0], false);
 });
+
+test("search_products observation exposes at most five compact product results", () => {
+  const observation = buildToolObservation("search_products", {
+    ...completed({
+      query: "barra",
+      items: Array.from({ length: 7 }, (_unused, index) => ({
+        productId: String(index + 1),
+        name: `Producto ${index + 1}`,
+        availability: "in_stock",
+        stockQuantity: index + 1,
+        shortDescription: `Descripcion ${index + 1}`,
+        price: { amount: 1000 + index, currency: "CLP" },
+        publicLink: { canonicalUrl: `https://example.test/${index + 1}` }
+      })),
+      provenance: { source: "catalog_service_http", retrievedAt: FIXED_TIME, cached: false }
+    }),
+    capability: "search_products"
+  });
+
+  const data = observation.data as { items: Array<Record<string, unknown>> };
+  assert.equal(data.items.length, 5);
+  assert.deepEqual(Object.keys(data.items[0]).sort(), ["availability", "name", "productId", "stockQuantity"]);
+  assert.doesNotMatch(JSON.stringify(data), /price|shortDescription|publicLink|https?:\/\//);
+});
