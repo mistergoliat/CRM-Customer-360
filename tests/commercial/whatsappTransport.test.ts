@@ -224,6 +224,16 @@ test("request builder produces deterministic request id, URL and body", () => {
   assert.equal(request.headers["X-Idempotency-Key"], "whatsapp:test-001");
 });
 
+test("request builder preserves canonical product URLs exactly while disabling previews only", () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/7-pack-4-bandas.html?utm_source=wa&color=rojo#detalle";
+  const messageText = `Puedes revisar el producto aqui: ${canonicalUrl}`;
+  const request = buildWhatsAppTextRequest(makeInput({ input: { messageText } }).input, makeConfig({ maxTextLength: 500 }));
+
+  assert.equal(request.body.text.preview_url, false);
+  assert.equal(request.body.text.body, messageText);
+  assert.ok(request.body.text.body.includes(canonicalUrl));
+});
+
 test("safe request summary omits sensitive fields", () => {
   const request = buildWhatsAppTextRequest(makeInput().input, makeConfig());
   const summary = buildSafeWhatsAppRequestSummary(request);

@@ -20,7 +20,8 @@ import {
   type CatalogProductVariant,
   type CatalogRequestContext,
   type CatalogSearchResult,
-  type CatalogSearchResultItem
+  type CatalogSearchResultItem,
+  type ProductPublicLink
 } from "./types";
 
 /** Real service contract (POST /v1/products/batch): max 20 items per call. */
@@ -33,6 +34,8 @@ export type HttpCatalogAdapterConfig = {
 };
 
 const DEFAULT_TIMEOUT_MS = 5000;
+const PUBLIC_LINK_SCOPES = ["exact_product", "parent_product"] as const;
+const PUBLIC_LINK_UNAVAILABLE_REASONS = ["missing_link_rewrite", "invalid_product_id", "invalid_base_url"] as const;
 
 export function readHttpCatalogAdapterConfig(): HttpCatalogAdapterConfig | null {
   const baseUrl = process.env.CATALOG_SERVICE_BASE_URL?.trim();
@@ -60,6 +63,56 @@ function asNumber(value: unknown): number | null {
 
 function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function parsePublicLinkLabels(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const labels: string[] = [];
+  for (const label of value) {
+    if (typeof label !== "string") return null;
+    labels.push(label);
+  }
+  return labels;
+}
+
+function parsePublicLink(value: unknown): ProductPublicLink | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return undefined;
+
+  const canonicalUrl = value.canonicalUrl;
+  if (canonicalUrl !== null && typeof canonicalUrl !== "string") return undefined;
+  if (canonicalUrl !== null) {
+    try {
+      const parsed = new URL(canonicalUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  const scope = asString(value.scope);
+  if (!(PUBLIC_LINK_SCOPES as readonly string[]).includes(scope ?? "")) return undefined;
+
+  if (typeof value.available !== "boolean") return undefined;
+  if (value.available === true && canonicalUrl === null) return undefined;
+  if (typeof value.requiresVariantSelection !== "boolean") return undefined;
+
+  const variantAttributeLabels = parsePublicLinkLabels(value.variantAttributeLabels);
+  if (variantAttributeLabels === null) return undefined;
+
+  const unavailableReason = asString(value.unavailableReason);
+  if (value.unavailableReason !== undefined && !(PUBLIC_LINK_UNAVAILABLE_REASONS as readonly string[]).includes(unavailableReason ?? "")) {
+    return undefined;
+  }
+
+  return {
+    canonicalUrl,
+    scope: scope as ProductPublicLink["scope"],
+    available: value.available,
+    ...(unavailableReason !== null ? { unavailableReason: unavailableReason as ProductPublicLink["unavailableReason"] } : {}),
+    requiresVariantSelection: value.requiresVariantSelection,
+    variantAttributeLabels
+  };
 }
 
 function sanitizeErrorMessage(message: string): string {
@@ -202,6 +255,7 @@ function parseProductResponse(payload: unknown, retrievedAt: string): CatalogPro
   const stockQuantity = stock ? asNumber(stock.physicalQuantity) : null;
 
   const freshness = isRecord(payload.freshness) ? payload.freshness : {};
+  const publicLink = parsePublicLink(payload.publicLink);
 
   return {
     productId: String(productId),
@@ -215,6 +269,7 @@ function parseProductResponse(payload: unknown, retrievedAt: string): CatalogPro
     price,
     availability,
     stockQuantity,
+    ...(publicLink !== undefined ? { publicLink } : {}),
     provenance: { source: "catalog_service_http", retrievedAt, cached: asBoolean(freshness.cached) }
   };
 }

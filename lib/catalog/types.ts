@@ -45,6 +45,15 @@ export type CatalogProductPrice = {
   discountApplied: boolean;
 };
 
+export type ProductPublicLink = {
+  canonicalUrl: string | null;
+  scope: "exact_product" | "parent_product";
+  available: boolean;
+  unavailableReason?: "missing_link_rewrite" | "invalid_product_id" | "invalid_base_url";
+  requiresVariantSelection: boolean;
+  variantAttributeLabels: string[];
+};
+
 export type CatalogProduct = {
   productId: string;
   name: string;
@@ -57,6 +66,7 @@ export type CatalogProduct = {
   price: CatalogProductPrice | null;
   availability: CatalogAvailabilityStatus;
   stockQuantity: number | null;
+  publicLink?: ProductPublicLink;
   provenance: CatalogProvenance;
 };
 
