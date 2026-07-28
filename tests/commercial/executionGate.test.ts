@@ -485,6 +485,15 @@ test("command builder is deterministic", () => {
   assert.notEqual(first.idempotencyKey, first.commandId);
 });
 
+test("command builder preserves canonical product URLs exactly in message text", () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/7-pack-4-bandas.html?utm_source=wa&color=rojo#detalle";
+  const action = makeAction({ draftMessage: `Puedes revisar el producto aqui: ${canonicalUrl}` });
+  const command = buildOutboxCommand({ action, evaluatedAt: FIXED_TIME });
+
+  assert.equal(command.messageText, `Puedes revisar el producto aqui: ${canonicalUrl}`);
+  assert.ok(command.messageText.includes(canonicalUrl));
+});
+
 test("duplicate outbox is detected without inserting a second row", async () => {
   const input = makeGateInput();
   const seededCommand = buildOutboxCommand({ action: input.action, evaluatedAt: FIXED_TIME });

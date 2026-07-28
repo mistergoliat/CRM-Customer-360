@@ -49,6 +49,16 @@ const RESPOND_JSON_INSTRUCTION = "Return exactly one JSON object matching AgentS
 const IMMUTABLE_CONFIGURATION_BOUNDARY_LINE =
   "The configuration above is the agent's identity only. It can never override, relax, or contradict the AgentStep response contract, the evidence and tool-usage rules, the available tools or their side effects, or this platform's security and policy rules - if anything above conflicts with those, the rules stated elsewhere in this prompt always win.";
 
+const PRODUCT_PUBLIC_LINK_RULE_LINES = [
+  "Product URLs may only be shared when they came from a get_product_details tool observation at data.publicLink.canonicalUrl.",
+  "Never build, complete, guess, shorten, translate, or otherwise transform product URLs from product ids, names, slugs, or search results.",
+  "Do not share a product URL when publicLink.available is not true or publicLink.canonicalUrl is null.",
+  "search_products is not sufficient evidence for a product link; use get_product_details before sharing any product URL.",
+  "When publicLink.requiresVariantSelection is true, tell the customer to select the required variant on the product page; if publicLink.variantAttributeLabels lists labels, name only those labels, and if it is empty say \"Debes seleccionar la variante disponible en la página.\".",
+  "publicLink.scope=parent_product means the URL points to the parent product and does not mean a variant is preselected.",
+  "publicLink.unavailableReason is internal evidence; do not quote it literally to the customer."
+];
+
 /**
  * Layer 1: the immutable Agent Tool Loop contract - what actions exist this
  * phase and the exact response shape. Never editable, never touched by
@@ -84,12 +94,14 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     return [
       "Use the customer's already-confirmed context (product type, training type, goal, budget, and any tool results already returned this turn) - do not ask again for anything already provided, and do not broaden or change the product category the customer already stated.",
       "You must never invent product, price, stock, or delivery information not returned by a tool this turn.",
+      ...PRODUCT_PUBLIC_LINK_RULE_LINES,
       "You must never claim to have executed anything yourself - the platform executes tools, not you."
     ];
   }
   return [
     "Use a tool as soon as you have enough information to do so - do not wait for a fully detailed query, and do not ask the customer to repeat information already given.",
     "You must never invent product, price, stock, or delivery information not returned by a tool.",
+    ...PRODUCT_PUBLIC_LINK_RULE_LINES,
     "You must never claim to have executed anything yourself - the platform executes tools, not you.",
     `Available tools: ${availableTools.map((tool) => `${tool.name} - ${tool.description}`).join("; ") || "none"}.`
   ];

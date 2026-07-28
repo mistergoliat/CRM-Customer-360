@@ -50,6 +50,32 @@ function catalogUp(itemCount: number) {
   };
 }
 
+function catalogUpWithPublicLink(publicLink: Record<string, unknown>) {
+  handler = (req, res) => {
+    if (req.url?.includes("/v1/products/search")) {
+      return sendJson(res, 200, {
+        query: "kettlebell",
+        items: [
+          { productId: 501, combinationId: 1, sku: "KB-16", name: "Kettlebell 16kg", variantLabel: null, shortDescription: "Kettlebell de fundicion 16kg.", physicalQuantity: 4, available: true, matchType: "exact_name" }
+        ],
+        freshness: { cached: false }
+      });
+    }
+    if (req.url?.startsWith("/v1/products/501")) {
+      return sendJson(res, 200, {
+        product: { productId: 501, name: "Kettlebell 16kg", sku: "KB-16", shortDescription: "Kettlebell de fundicion 16kg.", longDescription: null, active: true },
+        variants: [],
+        selectedVariant: null,
+        pricing: { effectiveUnitPrice: 29990, currency: "CLP", taxIncluded: true, discountApplied: false },
+        stock: { available: true, physicalQuantity: 4 },
+        publicLink,
+        freshness: { cached: false }
+      });
+    }
+    return sendJson(res, 404, { error: "not_found" });
+  };
+}
+
 function catalogDown() {
   handler = (_req, res) => sendJson(res, 503, { error: "unavailable" });
 }
@@ -114,6 +140,86 @@ test("C - presupuesto: search then detail then a grounded respond within the 3-d
   assert.equal(result.terminalReason, "responded");
   assert.equal(result.toolExecutionCount, 2);
   assert.equal(result.steps.length, 3);
+});
+
+test("publicLink: search then detail can finalize with the exact catalog URL within the current tool budget", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/501-kettlebell-16kg.html?ref=wa";
+  catalogUpWithPublicLink({
+    canonicalUrl,
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell 16 kg" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: `Puedes revisar el producto aqui: ${canonicalUrl}` }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Dame el link de la kettlebell", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 2);
+  assert.equal(result.finalMessage, `Puedes revisar el producto aqui: ${canonicalUrl}`);
+  const detailData = result.steps[1].observation?.data as { publicLink?: { canonicalUrl?: string } } | null;
+  assert.equal(detailData?.publicLink?.canonicalUrl, canonicalUrl);
+  assert.ok(result.warnings.includes("agent_loop_finalization_entered"));
+});
+
+test("publicLink: unavailable link evidence does not require or produce a URL in the final answer", async () => {
+  catalogUpWithPublicLink({
+    canonicalUrl: null,
+    scope: "exact_product",
+    available: false,
+    unavailableReason: "missing_link_rewrite",
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell 16 kg" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "No tengo un enlace oficial disponible para ese producto ahora." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Dame el link de la kettlebell", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.doesNotMatch(result.finalMessage ?? "", /https?:\/\//);
+  const detailData = result.steps[1].observation?.data as { publicLink?: { canonicalUrl?: string | null; available?: boolean } } | null;
+  assert.equal(detailData?.publicLink?.available, false);
+  assert.equal(detailData?.publicLink?.canonicalUrl, null);
+});
+
+test("publicLink: parent product detail can answer with URL and variant selection guidance", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/501-kettlebell-16kg.html";
+  catalogUpWithPublicLink({
+    canonicalUrl,
+    scope: "parent_product",
+    available: true,
+    requiresVariantSelection: true,
+    variantAttributeLabels: ["Talla", "Color"]
+  });
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: `Puedes revisar el producto aqui: ${canonicalUrl}\n\nRecuerda seleccionar la talla y el color antes de agregarlo al carrito.` }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Dame el link del producto", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.match(result.finalMessage ?? "", new RegExp(canonicalUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(result.finalMessage ?? "", /talla y el color/i);
+  const detailData = result.steps[1].observation?.data as { publicLink?: { requiresVariantSelection?: boolean; variantAttributeLabels?: string[] } } | null;
+  assert.equal(detailData?.publicLink?.requiresVariantSelection, true);
+  assert.deepEqual(detailData?.publicLink?.variantAttributeLabels, ["Talla", "Color"]);
 });
 
 test("D - horarios: search_company_knowledge answers from the fixture source", async () => {

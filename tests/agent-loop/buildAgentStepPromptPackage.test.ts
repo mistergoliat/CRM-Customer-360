@@ -133,3 +133,95 @@ test("[PR11] an immutable closing boundary always follows the editable identity 
     assert.ok(identityIndex >= 0 && boundaryIndex > identityIndex, `${phase}: boundary must come after the editable identity block`);
   }
 });
+
+test("[PR12] immutable publicLink rules are present in gathering and finalization prompts", () => {
+  const config = pesasChileConfig();
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase, identityConfiguration: config });
+    const system = messages[0].content;
+    assert.match(system, /Product URLs may only be shared when they came from a get_product_details tool observation at data\.publicLink\.canonicalUrl/);
+    assert.match(system, /Never build, complete, guess, shorten, translate, or otherwise transform product URLs/);
+    assert.match(system, /publicLink\.available is not true or publicLink\.canonicalUrl is null/);
+    assert.match(system, /search_products is not sufficient evidence for a product link/);
+    assert.match(system, /publicLink\.requiresVariantSelection is true/);
+    assert.match(system, /publicLink\.scope=parent_product/);
+    assert.match(system, /publicLink\.unavailableReason is internal evidence/);
+  }
+});
+
+test("[PR13] prior get_product_details publicLink reaches the model context unchanged", () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/13-vendaje-k-tape.html?utm_source=wa#color";
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    identityConfiguration: pesasChileConfig(),
+    priorSteps: [
+      {
+        stepIndex: 0,
+        phase: "gathering",
+        governance: "authorized",
+        step: { type: "use_tool", tool: "get_product_details", arguments: { productId: "13" } },
+        observation: {
+          tool: "get_product_details",
+          status: "completed",
+          data: {
+            productId: "13",
+            name: "Vendaje K-Tape",
+            publicLink: {
+              canonicalUrl,
+              scope: "parent_product",
+              available: true,
+              requiresVariantSelection: true,
+              variantAttributeLabels: ["Color"]
+            }
+          }
+        }
+      }
+    ]
+  });
+
+  assert.equal(messages[1].role, "user");
+  assert.ok(messages[1].content.includes(canonicalUrl));
+  assert.ok(messages[1].content.includes('"variantAttributeLabels":["Color"]'));
+  assert.ok(!messages[0].content.includes(canonicalUrl));
+});
+
+test("[PR14] requiresVariantSelection with empty labels exposes the generic rule without inventing attribute names", () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/13-vendaje-k-tape.html";
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    identityConfiguration: pesasChileConfig(),
+    priorSteps: [
+      {
+        stepIndex: 0,
+        phase: "gathering",
+        governance: "authorized",
+        step: { type: "use_tool", tool: "get_product_details", arguments: { productId: "13" } },
+        observation: {
+          tool: "get_product_details",
+          status: "completed",
+          data: {
+            productId: "13",
+            name: "Vendaje K-Tape",
+            publicLink: {
+              canonicalUrl,
+              scope: "parent_product",
+              available: true,
+              requiresVariantSelection: true,
+              variantAttributeLabels: []
+            }
+          }
+        }
+      }
+    ]
+  });
+
+  const userPayload = JSON.parse(messages[1].content) as {
+    priorStepsThisTurn: Array<{ observation: { data: { publicLink: { variantAttributeLabels: string[] } } } }>;
+  };
+
+  assert.match(messages[0].content, /Debes seleccionar la variante disponible en la página/);
+  assert.deepEqual(userPayload.priorStepsThisTurn[0].observation.data.publicLink.variantAttributeLabels, []);
+  assert.doesNotMatch(messages[1].content, /Talla|Color/);
+});

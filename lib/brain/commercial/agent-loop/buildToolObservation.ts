@@ -32,7 +32,19 @@ function projectProductDetails(data: unknown) {
     shortDescription: product.shortDescription,
     price: product.price ? { amount: product.price.amount, currency: product.price.currency } : null,
     availability: product.availability,
-    stockQuantity: product.stockQuantity
+    stockQuantity: product.stockQuantity,
+    ...(product.publicLink
+      ? {
+          publicLink: {
+            canonicalUrl: product.publicLink.canonicalUrl,
+            scope: product.publicLink.scope,
+            available: product.publicLink.available,
+            ...(product.publicLink.unavailableReason ? { unavailableReason: product.publicLink.unavailableReason } : {}),
+            requiresVariantSelection: product.publicLink.requiresVariantSelection,
+            variantAttributeLabels: [...product.publicLink.variantAttributeLabels]
+          }
+        }
+      : {})
   };
 }
 

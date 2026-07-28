@@ -35,6 +35,19 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+function productDetailPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    product: { productId: 7, name: "Jaula X", sku: "SKU-7", shortDescription: null, longDescription: null, active: true },
+    selectedVariant: null,
+    attributes: [],
+    variants: [],
+    pricing: { quantity: 1, baseUnitPrice: 100000, effectiveUnitPrice: 89990, subtotal: 89990, currency: "CLP", taxIncluded: true, taxMode: "configured_rate", discountApplied: true, discountType: "amount", discountValue: 10010, specificPriceId: 3, pricingMode: "sql_specific_price" },
+    stock: { physicalQuantity: 2, available: true, shopId: 1 },
+    freshness: { productCheckedAt: new Date().toISOString(), priceCalculatedAt: new Date().toISOString(), stockCheckedAt: new Date().toISOString(), cached: false },
+    ...overrides
+  };
+}
+
 test.beforeEach(() => {
   requestCount = 0;
   handler = (_req, res) => res.writeHead(500).end();
@@ -47,7 +60,24 @@ test("searchProducts maps a successful response into the domain shape", async ()
     sendJson(res, 200, {
       query: "banca",
       items: [
-        { productId: 1, combinationId: 0, sku: "SKU-1", name: "Banca plana", variantLabel: null, shortDescription: "desc", physicalQuantity: 5, available: true, matchType: "exact_name" }
+        {
+          productId: 1,
+          combinationId: 0,
+          sku: "SKU-1",
+          name: "Banca plana",
+          variantLabel: null,
+          shortDescription: "desc",
+          physicalQuantity: 5,
+          available: true,
+          matchType: "exact_name",
+          publicLink: {
+            canonicalUrl: "https://pesaschile.cl/categories/1-banca-plana.html",
+            scope: "exact_product",
+            available: true,
+            requiresVariantSelection: false,
+            variantAttributeLabels: []
+          }
+        }
       ],
       freshness: { cached: false, generatedAt: new Date().toISOString() }
     });
@@ -58,6 +88,7 @@ test("searchProducts maps a successful response into the domain shape", async ()
   if (!result.ok) return;
   assert.equal(result.value.items.length, 1);
   assert.equal(result.value.items[0].availability, "in_stock");
+  assert.equal("publicLink" in result.value.items[0], false);
   assert.equal(result.value.provenance.source, "catalog_service_http");
   assert.equal(requestCount, 1);
 });
@@ -82,6 +113,113 @@ test("getProductDetails maps a successful response including price and stock", a
   assert.equal(result.value.price?.currency, "CLP");
   assert.equal(result.value.availability, "in_stock");
   assert.equal(result.value.stockQuantity, 2);
+});
+
+test("getProductDetails preserves a valid exact_product publicLink", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/7-pack-4-bandas-de-resistencia-hwm.html";
+  handler = (_req, res) => {
+    sendJson(res, 200, productDetailPayload({
+      publicLink: {
+        canonicalUrl,
+        scope: "exact_product",
+        available: true,
+        requiresVariantSelection: false,
+        variantAttributeLabels: []
+      }
+    }));
+  };
+
+  const result = await makeAdapter().getProductDetails({ productId: "7" }, { correlationId: "corr-link-1" });
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.value) return assert.fail("expected a product");
+  assert.deepEqual(result.value.publicLink, {
+    canonicalUrl,
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+});
+
+test("getProductDetails preserves a parent_product publicLink with variant labels", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/13-vendaje-k-tape.html";
+  handler = (_req, res) => {
+    sendJson(res, 200, productDetailPayload({
+      publicLink: {
+        canonicalUrl,
+        scope: "parent_product",
+        available: true,
+        requiresVariantSelection: true,
+        variantAttributeLabels: ["Talla", "Color"]
+      }
+    }));
+  };
+
+  const result = await makeAdapter().getProductDetails({ productId: "13" }, { correlationId: "corr-link-2" });
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.value) return assert.fail("expected a product");
+  assert.equal(result.value.publicLink?.canonicalUrl, canonicalUrl);
+  assert.equal(result.value.publicLink?.scope, "parent_product");
+  assert.equal(result.value.publicLink?.requiresVariantSelection, true);
+  assert.deepEqual(result.value.publicLink?.variantAttributeLabels, ["Talla", "Color"]);
+});
+
+test("getProductDetails preserves unavailable publicLink evidence with canonicalUrl null and a valid reason", async () => {
+  handler = (_req, res) => {
+    sendJson(res, 200, productDetailPayload({
+      publicLink: {
+        canonicalUrl: null,
+        scope: "exact_product",
+        available: false,
+        unavailableReason: "missing_link_rewrite",
+        requiresVariantSelection: false,
+        variantAttributeLabels: []
+      }
+    }));
+  };
+
+  const result = await makeAdapter().getProductDetails({ productId: "7" }, { correlationId: "corr-link-3" });
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.value) return assert.fail("expected a product");
+  assert.deepEqual(result.value.publicLink, {
+    canonicalUrl: null,
+    scope: "exact_product",
+    available: false,
+    unavailableReason: "missing_link_rewrite",
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+});
+
+test("getProductDetails remains backward-compatible when publicLink is absent", async () => {
+  handler = (_req, res) => sendJson(res, 200, productDetailPayload());
+
+  const result = await makeAdapter().getProductDetails({ productId: "7" }, { correlationId: "corr-link-4" });
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.value) return assert.fail("expected a product");
+  assert.equal(result.value.publicLink, undefined);
+});
+
+test("getProductDetails omits invalid publicLink objects but keeps the product", async () => {
+  const invalidPublicLinks = [
+    { canonicalUrl: 123, scope: "exact_product", available: true, requiresVariantSelection: false, variantAttributeLabels: [] },
+    { canonicalUrl: "https://pesaschile.cl/categories/7.html", scope: "combination", available: true, requiresVariantSelection: false, variantAttributeLabels: [] },
+    { canonicalUrl: "https://pesaschile.cl/categories/7.html", scope: "exact_product", available: "yes", requiresVariantSelection: false, variantAttributeLabels: [] },
+    { canonicalUrl: "https://pesaschile.cl/categories/7.html", scope: "exact_product", available: true, requiresVariantSelection: false, variantAttributeLabels: ["Color", 1] },
+    { canonicalUrl: null, scope: "exact_product", available: false, unavailableReason: "not_a_reason", requiresVariantSelection: false, variantAttributeLabels: [] },
+    { canonicalUrl: null, scope: "exact_product", available: true, requiresVariantSelection: false, variantAttributeLabels: [] },
+    { canonicalUrl: "", scope: "exact_product", available: true, requiresVariantSelection: false, variantAttributeLabels: [] },
+    { canonicalUrl: "not a url", scope: "exact_product", available: true, requiresVariantSelection: false, variantAttributeLabels: [] },
+    { canonicalUrl: "ftp://pesaschile.cl/categories/7.html", scope: "exact_product", available: true, requiresVariantSelection: false, variantAttributeLabels: [] }
+  ];
+
+  for (const publicLink of invalidPublicLinks) {
+    handler = (_req, res) => sendJson(res, 200, productDetailPayload({ publicLink }));
+    const result = await makeAdapter().getProductDetails({ productId: "7" }, { correlationId: "corr-link-invalid" });
+    assert.equal(result.ok, true);
+    if (!result.ok || !result.value) return assert.fail("expected a product");
+    assert.equal(result.value.publicLink, undefined);
+  }
 });
 
 test("401 unauthorized is not retried and maps to a denied-style error", async () => {
@@ -187,15 +325,15 @@ test("ACS-R1-05-T06.2: batchGetProducts POSTs to /v1/products/batch and maps mix
           {
             ok: true,
             input: { productId: 7, combinationId: 0, quantity: 1 },
-            product: {
-              product: { productId: 7, name: "Jaula X", sku: "SKU-7", shortDescription: null, longDescription: null, active: true },
-              selectedVariant: null,
-              attributes: [],
-              variants: [],
-              pricing: { quantity: 1, baseUnitPrice: 100000, effectiveUnitPrice: 89990, subtotal: 89990, currency: "CLP", taxIncluded: true, taxMode: "configured_rate", discountApplied: true, discountType: "amount", discountValue: 10010, specificPriceId: 3, pricingMode: "sql_specific_price" },
-              stock: { physicalQuantity: 2, available: true, shopId: 1 },
-              freshness: { productCheckedAt: new Date().toISOString(), priceCalculatedAt: new Date().toISOString(), stockCheckedAt: new Date().toISOString(), cached: false }
-            }
+            product: productDetailPayload({
+              publicLink: {
+                canonicalUrl: "https://pesaschile.cl/categories/7-jaula-x.html?utm=test",
+                scope: "exact_product",
+                available: true,
+                requiresVariantSelection: false,
+                variantAttributeLabels: []
+              }
+            })
           },
           {
             ok: false,
@@ -219,6 +357,7 @@ test("ACS-R1-05-T06.2: batchGetProducts POSTs to /v1/products/batch and maps mix
   if (first.ok) {
     assert.equal(first.product.price?.amount, 89990);
     assert.equal(first.input.productId, "7");
+    assert.equal(first.product.publicLink?.canonicalUrl, "https://pesaschile.cl/categories/7-jaula-x.html?utm=test");
   }
   assert.equal(second.ok, false);
   if (!second.ok) {
