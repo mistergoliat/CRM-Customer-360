@@ -61,6 +61,7 @@ const PRODUCT_PUBLIC_LINK_RULE_LINES = [
   "Never build, complete, guess, shorten, translate, or otherwise transform product URLs from product ids, names, slugs, or search results.",
   "Do not share a product URL when publicLink.available is not true or publicLink.canonicalUrl is null.",
   "search_products is not sufficient evidence for a product link; use get_product_details before sharing any product URL.",
+  "explore_catalog is not sufficient evidence for a product link either; use get_product_details before sharing any product URL.",
   "When publicLink.requiresVariantSelection is true, tell the customer to select the required variant on the product page; if publicLink.variantAttributeLabels lists labels, name only those labels, and if it is empty say \"Debes seleccionar la variante disponible en la página.\".",
   "publicLink.scope=parent_product means the URL points to the parent product and does not mean a variant is preselected.",
   "publicLink.unavailableReason is internal evidence; do not quote it literally to the customer."
@@ -86,8 +87,23 @@ const ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES = [
   "Respect explicit quantity requests: show one when the customer asks for one, expand the pool when they ask for more options, and compare only the relevant identified products when they ask to compare.",
   "For requests such as cheapest, best, strongest, or most resistant, select only from evidence available in this turn's ToolObservations and do not invent criteria or attributes.",
   "For WhatsApp, keep product presentations compact: enumerate when showing more than one product, use product name plus the main difference, avoid full descriptions, and do not repeat identical information across options.",
-  "Never share product links from search_products; use get_product_details when a concrete product must be rehydrated for current price, stock, availability, variants, or URL.",
+  "Never share product links from search_products or explore_catalog; use get_product_details when a concrete product must be rehydrated for current price, stock, availability, variants, or URL.",
   "Absolute maximum: show no more than five products in one message."
+];
+
+/**
+ * ACS-R1-05.1-T02.6. Fixed differentiation rules between the three catalog
+ * tools, plus the exhaustiveForScope commercial-language gate and the
+ * internal-terms leak guard - never editable, never derived from
+ * configuration (same immutability class as the other rule blocks above).
+ */
+const EXPLORE_CATALOG_RULE_LINES = [
+  "Do not use search_products to claim a global maximum, minimum, top-N, or ranking - it only returns matches for a query, never a verified extreme or ranking.",
+  "Use explore_catalog for extremes (cheapest/most expensive), top-N, rankings, or filtered/sorted views by price, stock, name, category, type, or availability.",
+  "Use get_product_details after explore_catalog (or after search_products) when the customer asks for a link, variants, or full detail on one already-identified product.",
+  "If a explore_catalog observation has exhaustiveForScope=true, you may use absolute language (e.g. \"the most expensive\", \"the five with the most stock\"). If exhaustiveForScope=false, you must say something equivalent to \"among the results found\" - never an absolute claim.",
+  "Never invent categoryId or categorySlug for explore_catalog: use them only when the customer stated them, they came from a prior tool observation this turn, or they are already present in trusted commercial context. productType may be inferred from the customer's intent only for supported, documented values (e.g. machine, bench). query may be used for brand, product family, or free text.",
+  "Never mention internal implementation terms to the customer: endpoint, tool, capability, exhaustiveForScope, stockScope, or internal catalog classification."
 ];
 
 /**
@@ -128,6 +144,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...PRODUCT_PUBLIC_LINK_RULE_LINES,
       ...RECENT_CATALOG_CONTEXT_RULE_LINES,
       ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
+      ...EXPLORE_CATALOG_RULE_LINES,
       "You must never claim to have executed anything yourself - the platform executes tools, not you."
     ];
   }
@@ -137,6 +154,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...PRODUCT_PUBLIC_LINK_RULE_LINES,
     ...RECENT_CATALOG_CONTEXT_RULE_LINES,
     ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
+    ...EXPLORE_CATALOG_RULE_LINES,
     "You must never claim to have executed anything yourself - the platform executes tools, not you.",
     `Available tools: ${availableTools.map((tool) => `${tool.name} - ${tool.description}`).join("; ") || "none"}.`
   ];

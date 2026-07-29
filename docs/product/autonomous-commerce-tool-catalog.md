@@ -2,9 +2,9 @@
 title: Autonomous Commerce Tool Catalog
 doc_id: product-autonomous-commerce-tool-catalog
 status: active
-version: "1.1.0"
+version: "1.2.0"
 owner: product
-last_reviewed: 2026-07-21
+last_reviewed: 2026-07-29
 source_of_truth_for:
   - tool/capability classification (implemented vs planned vs prohibited)
 depends_on:
@@ -29,6 +29,7 @@ This catalog separates capability classes from implementation status.
 | `get_active_opportunity` | context recovery | conversation id | active opportunity | `crm_opportunities` | conversation linked | active row check | none | yes | yes | not found | audit logs | backend | consultative repo/service | final stage policy |
 | `get_sales_need_profile` | context recovery | conversation/opportunity refs | need profile | `crm_sales_need_profiles` | active opportunity or thread | profile shape | none | yes | yes | not found | audit logs | backend | consultative repo/service | canonical profile completeness rules |
 | `search_products` | catalog | need profile/query | candidate list | `CatalogService` boundary, Prestashop adapter today | catalog available | filters, stock, compatibility | read only | yes | yes | empty set | audit logs | backend | consultative product repository / catalog service | canonical catalog service boundary |
+| `explore_catalog` | catalog | filters (category/type/price/availability/query), sort, limit | ranked/filtered product list, scope, `exhaustiveForScope` | `CatalogService` boundary (`POST /v1/products/explore`) | catalog available | sort/limit required; `price.max >= price.min`; unknown fields never forwarded (closed request builder) | read only | yes | yes | invalid_input (bad sort/limit/price range) | audit logs | backend | `lib/catalog/httpCatalogAdapter.ts`, `lib/brain/commercial/capability-gateway/registry.ts` | live smoke against the real deployed Catalog Service (blocked this task by a service-side incident, see CAPABILITY_MATRIX) |
 | `get_product_details` | catalog | product id | details | `CatalogService` boundary | product exists | id valid | read only | yes | yes | not found | audit logs | backend | product repository / catalog service | product master normalization |
 | `get_product_price` | catalog | product id | price | `CatalogService` boundary | product exists | currency and price valid | read only | yes | yes | not found | audit logs | backend | product repository / catalog service | exact commercial pricing source |
 | `get_product_stock` | catalog | product id | stock | `CatalogService` boundary | product exists | stock non-negative | read only | yes | yes | not found | audit logs | backend | product repository / catalog service | live stock source |
@@ -57,6 +58,7 @@ This catalog separates capability classes from implementation status.
 | `get_active_opportunity` | implemented_as_internal_function | read-only context recovery |
 | `get_sales_need_profile` | implemented_as_internal_function | read-only context recovery |
 | `search_products` | implemented_as_internal_function | catalog lookup behind `CatalogService` |
+| `explore_catalog` | implemented_as_capability | registered in the Capability Gateway (`CAPABILITY_GATEWAY_REGISTRY`) and directly callable by the native Agent Tool Loop (`AGENT_LOOP_TOOL_POOL`) - extremes/top-N/rankings/filtered browse, distinct from `search_products` (open-ended semantic/textual discovery) |
 | `get_product_details` | implemented_as_internal_function | catalog lookup behind `CatalogService` |
 | `get_product_price` | implemented_as_internal_function | catalog lookup behind `CatalogService` |
 | `get_product_stock` | implemented_as_internal_function | catalog lookup behind `CatalogService` |

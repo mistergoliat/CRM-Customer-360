@@ -104,6 +104,85 @@ export type CatalogBatchResult = {
   provenance: CatalogProvenance;
 };
 
+export const CATALOG_EXPLORE_AVAILABILITY_FILTERS = ["available", "unavailable", "all"] as const;
+export type CatalogExploreAvailabilityFilter = (typeof CATALOG_EXPLORE_AVAILABILITY_FILTERS)[number];
+
+export const CATALOG_EXPLORE_SORT_FIELDS = ["price", "stock", "name"] as const;
+export type CatalogExploreSortField = (typeof CATALOG_EXPLORE_SORT_FIELDS)[number];
+
+export const CATALOG_EXPLORE_SORT_DIRECTIONS = ["asc", "desc"] as const;
+export type CatalogExploreSortDirection = (typeof CATALOG_EXPLORE_SORT_DIRECTIONS)[number];
+
+export type CatalogExploreSort = {
+  by: CatalogExploreSortField;
+  direction: CatalogExploreSortDirection;
+};
+
+export type CatalogExplorePriceRange = {
+  min?: number;
+  max?: number;
+};
+
+export const CATALOG_EXPLORE_STOCK_SCOPES = ["product", "product_aggregate"] as const;
+export type CatalogExploreStockScope = (typeof CATALOG_EXPLORE_STOCK_SCOPES)[number];
+
+export const CATALOG_EXPLORE_CLASSIFICATION_SOURCES = ["category", "attribute", "rule", "text_fallback"] as const;
+export type CatalogExploreClassificationSource = (typeof CATALOG_EXPLORE_CLASSIFICATION_SOURCES)[number];
+
+/**
+ * Explore endpoint input (POST /v1/products/explore, ACS-R1-05.1-T02.6).
+ * Its filter/sort vocabulary and `availability` semantics are an independent
+ * upstream sub-contract from searchProducts/getProductDetails - deliberately
+ * not unified with CatalogAvailabilityStatus (different concept: catalog
+ * scope filter, not per-item stock status). Confirmed against
+ * mistergoliat/MS-pesaschile-catalog-service main@147794b / feature@efc2f7e.
+ */
+export type CatalogExploreInput = {
+  query?: string;
+  categoryId?: string;
+  categorySlug?: string;
+  productType?: string;
+  price?: CatalogExplorePriceRange;
+  availability?: CatalogExploreAvailabilityFilter;
+  sort: CatalogExploreSort;
+  limit: number;
+};
+
+export type CatalogExploreScope = {
+  query?: string;
+  categoryId?: string;
+  categorySlug?: string;
+  productType?: string;
+  availability: CatalogExploreAvailabilityFilter;
+};
+
+export type CatalogExploreItem = {
+  productId: string;
+  name: string;
+  /** Unknown price stays null - never presented as zero or invented (ADR-005). */
+  price: number | null;
+  currency: string;
+  stockQuantity: number | null;
+  stockScope: CatalogExploreStockScope;
+  /**
+   * Upstream leaves this an open string - its own vocabulary (e.g.
+   * "inactive") is distinct from CatalogAvailabilityStatus. Preserved
+   * verbatim, never coerced into a closed enum (ADR-005: unknown se conserva).
+   */
+  availability: string;
+};
+
+export type CatalogExploreResult = {
+  scope: CatalogExploreScope;
+  sort: CatalogExploreSort;
+  totalMatched: number;
+  /** Whether `items` covers every match for `scope`, or only a top slice - governs whether the agent may use absolute ranking language. */
+  exhaustiveForScope: boolean;
+  classificationSource?: CatalogExploreClassificationSource;
+  items: CatalogExploreItem[];
+  provenance: CatalogProvenance;
+};
+
 export const CATALOG_PORT_ERROR_CODES = [
   "invalid_input",
   "unauthorized",
@@ -150,6 +229,16 @@ export type CatalogPort = {
     input: { items: CatalogBatchItemInput[] },
     context: CatalogRequestContext
   ): Promise<CatalogPortResult<CatalogBatchResult>>;
+  /**
+   * ACS-R1-05.1-T02.6: extremes, top-N, rankings and filtered/sorted browse
+   * (real service contract: POST /v1/products/explore). Independent
+   * request/response vocabulary from searchProducts/getProductDetails - see
+   * CatalogExploreInput/CatalogExploreResult.
+   */
+  exploreCatalog(
+    input: CatalogExploreInput,
+    context: CatalogRequestContext
+  ): Promise<CatalogPortResult<CatalogExploreResult>>;
 };
 
 export const CATALOG_ADAPTER_CONTRACT_VERSION = "catalog-service.v1" as const;

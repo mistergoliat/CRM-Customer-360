@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before } from "node:test";
-import { runAgentToolLoop } from "@/lib/brain/commercial/agent-loop/runAgentToolLoop";
+import { AGENT_LOOP_TOOL_POOL, runAgentToolLoop } from "@/lib/brain/commercial/agent-loop/runAgentToolLoop";
 import { createFakeAgentLoopProvider } from "@/lib/brain/commercial/agent-loop/providers/fakeAgentLoopProvider";
 import type { AgentLoopProvider } from "@/lib/brain/commercial/agent-loop/agentLoopProviderTypes";
 import { resetCapabilityGatewayCatalogPortForTests } from "@/lib/brain/commercial/capability-gateway/registry";
@@ -80,6 +80,19 @@ function catalogUpWithPublicLink(publicLink: Record<string, unknown>) {
 
 function catalogDown() {
   handler = (_req, res) => sendJson(res, 503, { error: "unavailable" });
+}
+
+/** ACS-R1-05.1-T02.6: serves /v1/products/explore for scripted explore_catalog scenarios, alongside the existing search/details routes. */
+function catalogUpWithExplore(explorePayload: Record<string, unknown>, detailPayload?: Record<string, unknown>) {
+  handler = (req, res) => {
+    if (req.url === "/v1/products/explore" && req.method === "POST") {
+      return sendJson(res, 200, explorePayload);
+    }
+    if (detailPayload && req.url?.startsWith("/v1/products/")) {
+      return sendJson(res, 200, detailPayload);
+    }
+    return sendJson(res, 404, { error: "not_found" });
+  };
 }
 
 const baseInput = {
@@ -375,6 +388,74 @@ test("RecentCatalogContext: 'dame el link del segundo' uses the productId at pos
 
   assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.arguments.productId : null, "501");
   assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.arguments.combinationId : null, "7");
+  assert.equal(result.finalMessage, `Te dejo el link: ${canonicalUrl}`);
+});
+
+test("RecentCatalogContext (ACS-R1-05.1-T02.6, sourceTool=explore_catalog): turno 1 'las tres bancas mas baratas' -> turno 2 'el enlace de la segunda' resuelve position 2 y usa get_product_details", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/501-banca-ajustable.html";
+  catalogUpWithPublicLink({
+    canonicalUrl,
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dame el link del segundo",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-explore-bancas",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "explore_catalog",
+          products: [
+            { position: 1, productId: "601", name: "Banca plana" },
+            { position: 2, productId: "501", name: "Banca ajustable" },
+            { position: 3, productId: "603", name: "Banca multifuncion" }
+          ]
+        }
+      ]
+    },
+    provider: createRecentCatalogReferenceProvider()
+  });
+
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.tool : null, "get_product_details");
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.arguments.productId : null, "501");
+  assert.equal(result.finalMessage, `Te dejo el link: ${canonicalUrl}`);
+});
+
+test("RecentCatalogContext (ACS-R1-05.1-T02.6, sourceTool=explore_catalog): 'dame el link' con un unico producto reciente resuelve directo, sin ambiguedad", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/501-camara-hiperbarica.html";
+  catalogUpWithPublicLink({
+    canonicalUrl,
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dame el link",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-explore-top",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "explore_catalog",
+          products: [{ position: 1, productId: "501", name: "Camara Hiperbarica ST801" }]
+        }
+      ]
+    },
+    provider: createRecentCatalogReferenceProvider()
+  });
+
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.tool : null, "get_product_details");
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.arguments.productId : null, "501");
   assert.equal(result.finalMessage, `Te dejo el link: ${canonicalUrl}`);
 });
 
@@ -885,4 +966,159 @@ test("[PF12] a provider error during finalization is also preserved (finalizatio
   assert.equal(result.providerFailure?.normalizedReason, "provider_server_error");
   assert.equal(result.providerFailure?.httpStatus, 503);
   assert.equal(result.providerFailure?.retryable, true);
+});
+
+// --- ACS-R1-05.1-T02.6: explore_catalog ---
+
+function exploreResponsePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    scope: { availability: "available" },
+    sort: { by: "price", direction: "desc" },
+    totalMatched: 833,
+    exhaustiveForScope: true,
+    products: [{ productId: "1532", name: "Camara Hiperbarica ST801", price: 8599990, currency: "CLP", stockQuantity: 4, stockScope: "product", availability: "available" }],
+    ...overrides
+  };
+}
+
+test("I0 - el pool conserva las 4 tools previas mas explore_catalog (expansion intencional, nada eliminado)", () => {
+  assert.deepEqual([...AGENT_LOOP_TOOL_POOL].sort(), ["explore_catalog", "get_product_details", "search_company_knowledge", "search_products"].sort());
+});
+
+test("I - 'producto mas caro de la pagina': explore_catalog resuelve el extremo global, nunca search_products", async () => {
+  catalogUpWithExplore(exploreResponsePayload());
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { availability: "available", sort: { by: "price", direction: "desc" }, limit: 1 } },
+      { type: "respond", message: "El producto mas caro disponible es la Camara Hiperbarica ST801 a $8.599.990." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "¿Cual es el producto mas caro que tienen disponible?", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.tool : null, "explore_catalog");
+  assert.equal(result.steps[0].observation?.status, "completed");
+  const data = result.steps[0].observation?.data as { exhaustiveForScope?: boolean } | null;
+  assert.equal(data?.exhaustiveForScope, true);
+});
+
+test("I2 - 'la maquina mas cara': el modelo envia productType=machine y el argumento llega intacto al Catalog Service", async () => {
+  let capturedBody: Record<string, unknown> = {};
+  handler = (req, res) => {
+    if (req.url === "/v1/products/explore") {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        capturedBody = JSON.parse(raw);
+        sendJson(res, 200, exploreResponsePayload({ scope: { productType: "machine", availability: "available" } }));
+      });
+      return;
+    }
+    return sendJson(res, 404, { error: "not_found" });
+  };
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { productType: "machine", sort: { by: "price", direction: "desc" }, limit: 1 } },
+      { type: "respond", message: "La maquina mas cara es la Camara Hiperbarica ST801." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "¿Cual es la maquina mas cara que tienen?", commercialContextSummary: {}, provider });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(capturedBody.productType, "machine");
+});
+
+test("I3 - 'tres bancas mas baratas disponibles': filtros de query/availability/sort/limit llegan correctos", async () => {
+  let capturedBody: Record<string, unknown> = {};
+  handler = (req, res) => {
+    if (req.url === "/v1/products/explore") {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        capturedBody = JSON.parse(raw);
+        sendJson(res, 200, exploreResponsePayload({ sort: { by: "price", direction: "asc" } }));
+      });
+      return;
+    }
+    return sendJson(res, 404, { error: "not_found" });
+  };
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { query: "banca", availability: "available", sort: { by: "price", direction: "asc" }, limit: 3 } },
+      { type: "respond", message: "Estas son las tres bancas mas baratas disponibles que encontre." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Muestrame las tres bancas mas baratas que tengan disponibles.", commercialContextSummary: {}, provider });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(capturedBody.query, "banca");
+  assert.equal(capturedBody.availability, "available");
+  assert.deepEqual(capturedBody.sort, { by: "price", direction: "asc" });
+  assert.equal(capturedBody.limit, 3);
+});
+
+test("I4 - 'enlace de esa': explore_catalog encadena con get_product_details en el mismo turno", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/1532-camara-hiperbarica.html";
+  catalogUpWithExplore(exploreResponsePayload(), {
+    product: { productId: 1532, name: "Camara Hiperbarica ST801", sku: "SKU-1532", shortDescription: null, longDescription: null, active: true },
+    variants: [],
+    selectedVariant: null,
+    pricing: { effectiveUnitPrice: 8599990, currency: "CLP", taxIncluded: true, discountApplied: false },
+    stock: { available: true, physicalQuantity: 4 },
+    publicLink: { canonicalUrl, scope: "exact_product", available: true, requiresVariantSelection: false, variantAttributeLabels: [] },
+    freshness: { cached: false }
+  });
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { availability: "available", sort: { by: "price", direction: "desc" }, limit: 1 } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "1532" } },
+      { type: "respond", message: `Puedes revisar el producto aqui: ${canonicalUrl}` }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Dame el enlace de esa.", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 2);
+  assert.equal(result.steps[0].step.type === "use_tool" ? result.steps[0].step.tool : null, "explore_catalog");
+  assert.equal(result.steps[1].step.type === "use_tool" ? result.steps[1].step.tool : null, "get_product_details");
+  assert.equal(result.finalMessage, `Puedes revisar el producto aqui: ${canonicalUrl}`);
+});
+
+test("I5 - deduplicacion: explore_catalog con el mismo tool+argumentos nunca se ejecuta dos veces", async () => {
+  catalogUpWithExplore(exploreResponsePayload());
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { availability: "available", sort: { by: "price", direction: "desc" }, limit: 1 } },
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "desc" }, availability: "available", limit: 1 } },
+      { type: "respond", message: "Esto es lo que encontre." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "¿Cual es el mas caro?", commercialContextSummary: {}, provider });
+
+  assert.equal(result.steps[1].governance, "blocked_duplicate");
+  assert.equal(result.toolExecutionCount, 1);
+});
+
+test("I6 - falla del catalogo: explore_catalog failed observation, el agente responde sin inventar datos", async () => {
+  catalogDown();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { availability: "available", sort: { by: "price", direction: "desc" }, limit: 1 } },
+      { type: "respond", message: "No pude confirmar el catalogo justo ahora, ¿puedo ayudarte con otra cosa mientras tanto?" }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "¿Cual es el mas caro?", commercialContextSummary: {}, provider });
+
+  assert.equal(result.steps[0].observation?.status, "failed");
+  assert.equal(result.terminalReason, "responded");
 });

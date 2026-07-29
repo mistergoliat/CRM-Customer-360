@@ -95,6 +95,31 @@ async function main() {
 
   console.log("");
   console.log(`Total latency: ${searchLatencyMs + detailsLatencyMs}ms (search=${searchLatencyMs}ms, details=${detailsLatencyMs}ms)`);
+
+  console.log("");
+  console.log("--- ACS-R1-05.1-T02.6: exploreCatalog (most expensive available product) ---");
+  const exploreStartedAt = Date.now();
+  const exploreResult = await adapter.exploreCatalog(
+    { availability: "available", sort: { by: "price", direction: "desc" }, limit: 1 },
+    { correlationId }
+  );
+  const exploreLatencyMs = Date.now() - exploreStartedAt;
+
+  if (!exploreResult.ok) {
+    console.error(`exploreCatalog FAILED in ${exploreLatencyMs}ms`);
+    console.error(JSON.stringify(exploreResult.error, null, 2));
+    process.exitCode = 1;
+    return;
+  }
+
+  const [topItem] = exploreResult.value.items;
+  console.log(`exploreCatalog OK in ${exploreLatencyMs}ms`);
+  console.log(`  totalMatched=${exploreResult.value.totalMatched} exhaustiveForScope=${exploreResult.value.exhaustiveForScope} classificationSource=${exploreResult.value.classificationSource ?? "n/a"}`);
+  if (!topItem) {
+    console.log("  no items returned for scope availability=available - smoke ends after exploreCatalog.");
+    return;
+  }
+  console.log(`  productId=${topItem.productId} name="${topItem.name}" price=${topItem.price ?? "unknown"} ${topItem.currency} stockQuantity=${topItem.stockQuantity} stockScope=${topItem.stockScope} availability=${topItem.availability}`);
 }
 
 main().catch((error) => {

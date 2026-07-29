@@ -181,7 +181,7 @@ test("query applies conversation, window and candidate limit without joining crm
   });
 
   assert.match(captured.sql, /e\.conversation_id = \?/);
-  assert.match(captured.sql, /e\.capability_name IN \('search_products', 'get_product_details'\)/);
+  assert.match(captured.sql, /e\.capability_name IN \('search_products', 'get_product_details', 'explore_catalog'\)/);
   assert.match(captured.sql, /e\.execution_status = 'completed'/);
   assert.match(captured.sql, /e\.completed_at >= \?/);
   assert.equal(captured.params[0], 99);
@@ -253,6 +253,197 @@ test("context keeps at most twelve products across valid interactions", async ()
 
   const totalProducts = result.context.interactions.reduce((sum, interaction) => sum + interaction.products.length, 0);
   assert.equal(totalProducts, RECENT_CATALOG_CONTEXT_MAX_PRODUCTS);
+});
+
+function exploreRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 3,
+    correlation_id: "corr-explore",
+    capability_name: "explore_catalog",
+    completed_at: "2026-07-28T15:58:00.000Z",
+    inbound_message_id: "msg-explore",
+    response_summary_json: JSON.stringify({
+      scope: { availability: "available" },
+      sort: { by: "price", direction: "asc" },
+      totalMatched: 3,
+      exhaustiveForScope: true,
+      items: [
+        { productId: "501", name: "Banca plana", price: 49990, currency: "CLP", stockQuantity: 5, stockScope: "product", availability: "available" },
+        { productId: "502", name: "Banca ajustable", price: 69990, currency: "CLP", stockQuantity: 2, stockScope: "product", availability: "available" },
+        { productId: "503", name: "Banca multifuncion", price: 89990, currency: "CLP", stockQuantity: 0, stockScope: "product_aggregate", availability: "out_of_stock" }
+      ]
+    }),
+    ...overrides
+  };
+}
+
+// --- ACS-R1-05.1-T02.6: explore_catalog as a RecentCatalogContext source ---
+
+test("explore_catalog is captured as a valid source, preserving ranking position/productId/name only", async () => {
+  const result = await loadRecentCatalogContext({
+    conversationId: 7,
+    currentTime: CURRENT_TIME,
+    dataAccess: { async queryRows() { return { ok: true, rows: [exploreRow()] }; } }
+  });
+
+  assert.deepEqual(result.warnings, []);
+  assert.equal(result.context.interactions.length, 1);
+  assert.equal(result.context.interactions[0].sourceTool, "explore_catalog");
+  assert.equal(result.context.interactions[0].inboundMessageId, "msg-explore");
+  assert.deepEqual(result.context.interactions[0].products, [
+    { position: 1, productId: "501", name: "Banca plana" },
+    { position: 2, productId: "502", name: "Banca ajustable" },
+    { position: 3, productId: "503", name: "Banca multifuncion" }
+  ]);
+
+  const serialized = JSON.stringify(result.context);
+  assert.doesNotMatch(serialized, /price|49990|69990|89990|stock|stockQuantity|stockScope|availability|exhaustiveForScope|totalMatched/i);
+});
+
+test("a productId already surfaced by a more recent interaction is deduplicated, never repeated across interactions", async () => {
+  const result = await loadRecentCatalogContext({
+    conversationId: 7,
+    currentTime: CURRENT_TIME,
+    dataAccess: {
+      async queryRows() {
+        return {
+          ok: true,
+          // Most recent first (matches the real query's ORDER BY completed_at DESC):
+          // a later explore_catalog turn re-surfaces productId 101, already seen
+          // in the earlier (but processed-second) search_products interaction.
+          rows: [
+            exploreRow({
+              id: 4,
+              inbound_message_id: "msg-explore-2",
+              completed_at: "2026-07-28T15:59:00.000Z",
+              response_summary_json: JSON.stringify({
+                scope: { availability: "available" },
+                sort: { by: "price", direction: "asc" },
+                totalMatched: 1,
+                exhaustiveForScope: true,
+                items: [{ productId: "101", name: "Barra olimpica 20 kg" }]
+              })
+            }),
+            searchRow({ inbound_message_id: "msg-search-1", completed_at: "2026-07-28T15:55:00.000Z" })
+          ]
+        };
+      }
+    }
+  });
+
+  assert.equal(result.context.interactions.length, 2);
+  assert.deepEqual(result.context.interactions[0].products, [{ position: 1, productId: "101", name: "Barra olimpica 20 kg" }]);
+  // The second (older) interaction keeps 102/103, but never repeats 101 - it was already claimed by the more recent explore_catalog interaction.
+  const secondInteractionIds = result.context.interactions[1].products.map((product) => product.productId);
+  assert.deepEqual(secondInteractionIds, ["102", "103"]);
+});
+
+test("an interaction whose every candidate was already deduplicated is skipped with a distinct warning, not miscounted as invalid", async () => {
+  const result = await loadRecentCatalogContext({
+    conversationId: 7,
+    currentTime: CURRENT_TIME,
+    dataAccess: {
+      async queryRows() {
+        return {
+          ok: true,
+          rows: [
+            exploreRow({
+              response_summary_json: JSON.stringify({
+                scope: { availability: "available" },
+                sort: { by: "price", direction: "asc" },
+                totalMatched: 1,
+                exhaustiveForScope: true,
+                items: [{ productId: "999", name: "Repetido" }]
+              })
+            }),
+            exploreRow({
+              id: 5,
+              inbound_message_id: "msg-explore-older",
+              completed_at: "2026-07-28T15:50:00.000Z",
+              response_summary_json: JSON.stringify({
+                scope: { availability: "available" },
+                sort: { by: "price", direction: "asc" },
+                totalMatched: 1,
+                exhaustiveForScope: true,
+                items: [{ productId: "999", name: "Repetido" }]
+              })
+            })
+          ]
+        };
+      }
+    }
+  });
+
+  assert.equal(result.context.interactions.length, 1);
+  assert.ok(result.warnings.includes("recent_catalog_context_all_candidates_deduped"));
+});
+
+test("explore_catalog interactions respect the same MAX_INTERACTIONS/MAX_PRODUCTS limits as search_products", async () => {
+  const rows = Array.from({ length: RECENT_CATALOG_CONTEXT_MAX_INTERACTIONS + 1 }, (_, index) =>
+    exploreRow({
+      id: index + 1,
+      inbound_message_id: `msg-explore-${index + 1}`,
+      completed_at: `2026-07-28T15:${59 - index}:00.000Z`,
+      response_summary_json: JSON.stringify({
+        scope: { availability: "available" },
+        sort: { by: "price", direction: "asc" },
+        totalMatched: 1,
+        exhaustiveForScope: true,
+        items: [{ productId: `explore-${index + 1}`, name: `Producto ${index + 1}` }]
+      })
+    })
+  );
+
+  const result = await loadRecentCatalogContext({
+    conversationId: 7,
+    currentTime: CURRENT_TIME,
+    dataAccess: { async queryRows() { return { ok: true, rows }; } }
+  });
+
+  assert.equal(result.context.interactions.length, RECENT_CATALOG_CONTEXT_MAX_INTERACTIONS);
+});
+
+test("adding explore_catalog does not change search_products or get_product_details behavior when mixed in the same window", async () => {
+  const result = await loadRecentCatalogContext({
+    conversationId: 7,
+    currentTime: CURRENT_TIME,
+    dataAccess: {
+      async queryRows() {
+        return {
+          ok: true,
+          rows: [
+            // Deliberately non-colliding productIds (601-603) with searchRow's
+            // 101/102/103 and detailsRow's 501 - this test proves plain
+            // coexistence of the three sourceTools, not dedup (covered above).
+            exploreRow({
+              completed_at: "2026-07-28T15:58:00.000Z",
+              response_summary_json: JSON.stringify({
+                scope: { availability: "available" },
+                sort: { by: "price", direction: "asc" },
+                totalMatched: 3,
+                exhaustiveForScope: true,
+                items: [
+                  { productId: "601", name: "Banca plana" },
+                  { productId: "602", name: "Banca ajustable" },
+                  { productId: "603", name: "Banca multifuncion" }
+                ]
+              })
+            }),
+            searchRow({ inbound_message_id: "msg-search-mixed", completed_at: "2026-07-28T15:55:00.000Z" }),
+            detailsRow({ inbound_message_id: "msg-details-mixed", completed_at: "2026-07-28T15:50:00.000Z" })
+          ]
+        };
+      }
+    }
+  });
+
+  assert.equal(result.context.interactions.length, 3);
+  assert.deepEqual(
+    result.context.interactions.map((interaction) => interaction.sourceTool),
+    ["explore_catalog", "search_products", "get_product_details"]
+  );
+  assert.deepEqual(result.context.interactions[1].products[0], { position: 1, productId: "101", combinationId: "201", name: "Barra olimpica 20 kg", variantLabel: "20 kg" });
+  assert.deepEqual(result.context.interactions[2].products, [{ productId: "501", combinationId: "601", name: "Disco bumper 10 kg" }]);
 });
 
 test("contract never carries agent text, price, stock, availability or URL fields", async () => {

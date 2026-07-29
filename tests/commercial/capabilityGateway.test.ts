@@ -137,6 +137,140 @@ test("get_product_details without a productId is rejected as invalid_arguments b
   assert.equal(calls, 0);
 });
 
+function exploreResponsePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    scope: { availability: "available" },
+    sort: { by: "price", direction: "desc" },
+    totalMatched: 833,
+    exhaustiveForScope: true,
+    products: [{ productId: "1532", name: "Camara Hiperbarica ST801", price: 8599990, currency: "CLP", stockQuantity: 4, stockScope: "product", availability: "available" }],
+    ...overrides
+  };
+}
+
+test("ACS-R1-05.1-T02.6: explore_catalog reports temporarily_blocked (retryable) when the catalog service is not configured", async () => {
+  clearCatalogEnv();
+  const correlationId = `cap-test-explore-unconfigured-${Date.now()}`;
+  const result = await executeGovernedCapability("explore_catalog", { sort: { by: "price", direction: "desc" }, limit: 1 }, { correlationId });
+  assert.equal(result.availability, "unavailable");
+  assert.equal(result.status, "temporarily_blocked");
+  assert.equal(result.retryable, true);
+
+  const row = await loadExecutionRow(correlationId);
+  assert.equal(row!.availability_status, "unavailable");
+  assert.equal(row!.execution_status, "temporarily_blocked");
+});
+
+test("explore_catalog executes over HTTP, defaults availability to 'available', and persists evidence", async () => {
+  let capturedBody: Record<string, unknown> = {};
+  handler = (req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      capturedBody = JSON.parse(raw);
+      sendJson(res, 200, exploreResponsePayload());
+    });
+  };
+  configureCatalogEnv();
+
+  const correlationId = `cap-test-explore-ok-${Date.now()}`;
+  const result = await executeGovernedCapability(
+    "explore_catalog",
+    { sort: { by: "price", direction: "desc" }, limit: 1 },
+    { correlationId, conversationId: 42, opportunityId: 7 }
+  );
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.availability, "available");
+  assert.ok(result.evidence.length > 0);
+  assert.equal(capturedBody.availability, "available", "the capability must default availability to 'available' when the model omits it");
+
+  const row = await loadExecutionRow(correlationId);
+  assert.equal(row!.execution_status, "completed");
+  assert.equal(row!.capability_name, "explore_catalog");
+  assert.equal(row!.conversation_id, 42);
+  assert.ok(row!.response_summary_json, "response summary should be persisted");
+  assert.ok(row!.evidence_json, "evidence should be persisted");
+});
+
+test("explore_catalog respects an explicit non-default availability from the model (e.g. 'all')", async () => {
+  let capturedBody: Record<string, unknown> = {};
+  handler = (req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      capturedBody = JSON.parse(raw);
+      sendJson(res, 200, exploreResponsePayload({ scope: { availability: "all" } }));
+    });
+  };
+  configureCatalogEnv();
+
+  const result = await executeGovernedCapability(
+    "explore_catalog",
+    { sort: { by: "price", direction: "desc" }, limit: 1, availability: "all" },
+    { correlationId: `cap-test-explore-all-${Date.now()}` }
+  );
+  assert.equal(result.status, "completed");
+  assert.equal(capturedBody.availability, "all");
+});
+
+test("explore_catalog without sort/limit is rejected as invalid_arguments before any HTTP call", async () => {
+  let calls = 0;
+  handler = (_req, res) => {
+    calls += 1;
+    sendJson(res, 200, exploreResponsePayload());
+  };
+  configureCatalogEnv();
+
+  const result = await executeGovernedCapability("explore_catalog", {}, { correlationId: `cap-test-explore-invalid-${Date.now()}` });
+  assert.equal(result.status, "invalid_arguments");
+  assert.equal(calls, 0);
+});
+
+test("explore_catalog rejects price.max < price.min client-side, before any HTTP call", async () => {
+  let calls = 0;
+  handler = (_req, res) => {
+    calls += 1;
+    sendJson(res, 200, exploreResponsePayload());
+  };
+  configureCatalogEnv();
+
+  const result = await executeGovernedCapability(
+    "explore_catalog",
+    { sort: { by: "price", direction: "asc" }, limit: 1, price: { min: 100000, max: 1000 } },
+    { correlationId: `cap-test-explore-price-range-${Date.now()}` }
+  );
+  assert.equal(result.status, "invalid_arguments");
+  assert.equal(result.errorCode, "price_range_invalid");
+  assert.equal(calls, 0, "an inverted price range must never reach the Catalog Service");
+});
+
+test("explore_catalog maps a Catalog Service rejection (invalid_sort) to invalid_arguments and audits it", async () => {
+  handler = (_req, res) => sendJson(res, 400, { error: { code: "invalid_sort", message: "Invalid sort", correlationId: "c" } });
+  configureCatalogEnv();
+
+  const correlationId = `cap-test-explore-service-error-${Date.now()}`;
+  const result = await executeGovernedCapability("explore_catalog", { sort: { by: "price", direction: "asc" }, limit: 1 }, { correlationId });
+  assert.equal(result.status, "invalid_arguments");
+  assert.equal(result.errorCode, "invalid_input");
+
+  const row = await loadExecutionRow(correlationId);
+  assert.equal(row!.execution_status, "invalid_arguments");
+});
+
+test("explore_catalog persisted evidence never leaks the configured API key or raw credentials", async () => {
+  handler = (_req, res) => sendJson(res, 200, exploreResponsePayload());
+  configureCatalogEnv();
+
+  const correlationId = `cap-test-explore-no-secrets-${Date.now()}`;
+  await executeGovernedCapability("explore_catalog", { sort: { by: "price", direction: "desc" }, limit: 1 }, { correlationId });
+
+  const row = await loadExecutionRow(correlationId);
+  const serialized = JSON.stringify(row);
+  assert.doesNotMatch(serialized, /test-key/);
+  assert.doesNotMatch(serialized, /x-api-key/i);
+});
+
 test("a retryable failure is retried exactly once at the capability level - the adapter never retries on its own", async () => {
   let requestCount = 0;
   handler = (_req, res) => {
