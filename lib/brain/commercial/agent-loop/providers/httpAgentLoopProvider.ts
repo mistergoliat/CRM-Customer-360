@@ -9,6 +9,7 @@ import type {
   AgentLoopProviderRequest,
   AgentLoopProviderResponse
 } from "../agentLoopProviderTypes";
+import { classifyHttpStatusFailure, classifyRawProviderError, markAgentLoopProviderFailure } from "./providerFailureClassification";
 
 type HttpAgentLoopProviderConfig = {
   endpoint?: string | null;
@@ -145,7 +146,16 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
     version: "http-openai-compatible.v1",
     async invoke(request: AgentLoopProviderRequest, options: AgentLoopProviderInvokeOptions): Promise<AgentLoopProviderResponse> {
       if (!endpoint || !apiKey) {
-        throw new Error("Agent loop HTTP provider unavailable: missing endpoint or API key.");
+        throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider unavailable: missing endpoint or API key."), {
+          model,
+          attemptCount: 0,
+          maxAttempts: maxModelRetries + 1,
+          httpStatus: null,
+          errorCode: "provider_not_configured",
+          errorClass: "ConfigurationError",
+          normalizedReason: "unknown_provider_error",
+          retryable: false
+        });
       }
 
       const deadline = Date.now() + options.timeoutMs;
@@ -194,29 +204,73 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
             await sleep(Math.min(computeBackoffMs(attempt), remainingBudget), options.signal);
             continue;
           }
-          throw error;
+          throw markAgentLoopProviderFailure(error, classifyRawProviderError(error, { model, attemptCount: attempt + 1, maxAttempts: maxModelRetries + 1 }));
         }
         attemptSignal.cleanup();
 
         if (!response.ok) {
           const statusError = new Error(`Agent loop HTTP provider failed with status ${response.status}.`);
           const remainingBudget = deadline - Date.now();
-          if (RETRYABLE_HTTP_STATUSES.has(response.status) && attempt < maxModelRetries && remainingBudget > 0) {
+          const retryable = RETRYABLE_HTTP_STATUSES.has(response.status);
+          if (retryable && attempt < maxModelRetries && remainingBudget > 0) {
             await sleep(Math.min(computeBackoffMs(attempt), remainingBudget), options.signal);
             continue;
           }
-          throw statusError;
+          throw markAgentLoopProviderFailure(
+            statusError,
+            classifyHttpStatusFailure(response.status, retryable, { model, attemptCount: attempt + 1, maxAttempts: maxModelRetries + 1 })
+          );
         }
 
-        const data = (await response.json()) as OpenAiChatCompletionResponse;
+        let data: OpenAiChatCompletionResponse;
+        try {
+          data = (await response.json()) as OpenAiChatCompletionResponse;
+        } catch {
+          throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned invalid JSON."), {
+            model,
+            attemptCount: attempt + 1,
+            maxAttempts: maxModelRetries + 1,
+            httpStatus: response.status,
+            errorCode: "invalid_json_response",
+            errorClass: "InvalidProviderResponseError",
+            normalizedReason: "invalid_response",
+            retryable: false
+          });
+        }
+
         const choice = data.choices?.[0];
         const content = choice?.message?.content;
         if (!content) {
-          throw new Error("Agent loop HTTP provider returned an empty response.");
+          throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned an empty response."), {
+            model,
+            attemptCount: attempt + 1,
+            maxAttempts: maxModelRetries + 1,
+            httpStatus: response.status,
+            errorCode: "empty_response",
+            errorClass: "InvalidProviderResponseError",
+            normalizedReason: "invalid_response",
+            retryable: false
+          });
+        }
+
+        let rawOutput: unknown;
+        try {
+          rawOutput = parseModelJson(content);
+        } catch {
+          throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned invalid response JSON."), {
+            model,
+            attemptCount: attempt + 1,
+            maxAttempts: maxModelRetries + 1,
+            httpStatus: response.status,
+            errorCode: "invalid_model_json",
+            errorClass: "InvalidProviderResponseError",
+            normalizedReason: "invalid_response",
+            retryable: false
+          });
         }
 
         return {
-          rawOutput: parseModelJson(content),
+          rawOutput,
           model: data.model ?? model,
           inputTokens: data.usage?.prompt_tokens ?? null,
           outputTokens: data.usage?.completion_tokens ?? null,

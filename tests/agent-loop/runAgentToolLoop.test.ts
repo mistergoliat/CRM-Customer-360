@@ -6,6 +6,7 @@ import { runAgentToolLoop } from "@/lib/brain/commercial/agent-loop/runAgentTool
 import { createFakeAgentLoopProvider } from "@/lib/brain/commercial/agent-loop/providers/fakeAgentLoopProvider";
 import type { AgentLoopProvider } from "@/lib/brain/commercial/agent-loop/agentLoopProviderTypes";
 import { resetCapabilityGatewayCatalogPortForTests } from "@/lib/brain/commercial/capability-gateway/registry";
+import { markAgentLoopProviderFailure } from "@/lib/brain/commercial/agent-loop/providers/providerFailureClassification";
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
 let server: http.Server;
@@ -806,4 +807,82 @@ test("no provider configured fails closed without ever attempting a tool call", 
   assert.equal(result.ran, false);
   assert.equal(result.terminalReason, "provider_unavailable");
   assert.equal(result.toolExecutionCount, 0);
+  assert.equal(result.providerFailure ?? null, null, "no exception was ever caught here, so no cause must be fabricated");
+});
+
+// --- LLM provider error observability ---
+
+function createThrowingAgentLoopProvider(): AgentLoopProvider {
+  return {
+    name: "throwing-agent-loop-provider",
+    async invoke() {
+      throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider failed with status 401."), {
+        model: "deepseek-v4-flash",
+        attemptCount: 1,
+        maxAttempts: 1,
+        httpStatus: 401,
+        errorCode: "http_401",
+        errorClass: "HttpStatusError",
+        normalizedReason: "authentication_error",
+        retryable: false
+      });
+    }
+  };
+}
+
+test("[PF11] a provider error in the gathering phase is preserved on the terminal result - never just collapsed into provider_unavailable", async () => {
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "hola",
+    commercialContextSummary: {},
+    provider: createThrowingAgentLoopProvider()
+  });
+
+  assert.equal(result.terminalReason, "provider_unavailable");
+  assert.equal(result.steps.length, 0, "matches the reported production state: decisionCount 0");
+  assert.equal(result.toolExecutionCount, 0, "matches the reported production state: toolExecutionCount 0");
+  assert.ok(result.providerFailure, "the sanitized cause must survive on the loop's own terminal result");
+  assert.equal(result.providerFailure?.provider, "throwing-agent-loop-provider");
+  assert.equal(result.providerFailure?.model, "deepseek-v4-flash");
+  assert.equal(result.providerFailure?.normalizedReason, "authentication_error");
+  assert.equal(result.providerFailure?.httpStatus, 401);
+  assert.equal(result.providerFailure?.retryable, false);
+  assert.equal(typeof result.providerFailure?.elapsedMs, "number");
+  assert.ok(result.warnings.includes("agent_loop_provider_error:authentication_error"));
+  assert.ok(
+    !result.warnings.some((warning) => warning.includes("401.")),
+    "the raw error message must never leak into warnings - only the sanitized reason"
+  );
+});
+
+test("[PF12] a provider error during finalization is also preserved (finalization is only reached after the gathering tool budget is spent)", async () => {
+  catalogUp(1);
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "flaky-finalization-provider",
+    async invoke() {
+      callCount += 1;
+      if (callCount <= 2) {
+        return { rawOutput: { type: "use_tool", tool: callCount === 1 ? "search_products" : "get_product_details", arguments: callCount === 1 ? { query: "a" } : { productId: "501" } } };
+      }
+      throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider failed with status 503."), {
+        model: "deepseek-v4-flash",
+        attemptCount: 1,
+        maxAttempts: 1,
+        httpStatus: 503,
+        errorCode: "http_503",
+        errorClass: "HttpStatusError",
+        normalizedReason: "provider_server_error",
+        retryable: true
+      });
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "provider_unavailable");
+  assert.equal(result.toolExecutionCount, 2);
+  assert.equal(result.providerFailure?.normalizedReason, "provider_server_error");
+  assert.equal(result.providerFailure?.httpStatus, 503);
+  assert.equal(result.providerFailure?.retryable, true);
 });

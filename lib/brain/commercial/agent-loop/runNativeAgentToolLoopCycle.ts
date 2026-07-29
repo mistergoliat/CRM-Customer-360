@@ -267,7 +267,12 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
       effectiveMaxOutputSize: effectiveModelConfiguration.maxOutputTokens ?? null,
       effectiveTimeoutMs: effectiveModelConfiguration.timeoutMs,
       effectiveMaxAgentStepsPerTurn: effectiveLoopConfiguration.maxAgentStepsPerTurn,
-      effectiveMaxToolCallsPerTurn: effectiveLoopConfiguration.maxToolCallsPerTurn
+      effectiveMaxToolCallsPerTurn: effectiveLoopConfiguration.maxToolCallsPerTurn,
+      // LLM provider error observability. Structurally identical to
+      // AgentToolLoopProviderFailurePayload (events/types.ts) by construction -
+      // never imported directly, same no-cross-module-import rationale the
+      // events/ leaf module already documents for every other payload shape.
+      providerFailure: loop.providerFailure ?? undefined
     });
   } catch (error) {
     // ACS-R1-05.1-T02.3B (correction). Never blocks the turn - the customer

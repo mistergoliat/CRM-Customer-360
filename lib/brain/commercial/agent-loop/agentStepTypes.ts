@@ -73,6 +73,39 @@ export type AgentLoopStepRecord = {
   phase: AgentLoopStepPhase;
 };
 
+export const AGENT_LOOP_PROVIDER_FAILURE_NORMALIZED_REASONS = [
+  "authentication_error",
+  "rate_limited",
+  "provider_timeout",
+  "network_error",
+  "model_unavailable",
+  "invalid_response",
+  "provider_server_error",
+  "unknown_provider_error"
+] as const;
+export type AgentLoopProviderFailureNormalizedReason = (typeof AGENT_LOOP_PROVIDER_FAILURE_NORMALIZED_REASONS)[number];
+
+/**
+ * Sanitized cause of a "provider_unavailable" terminal outcome - captured at
+ * the point the raw provider error is first caught (invokeProviderWithDeadline
+ * in runAgentToolLoop.ts), before it collapses into that generic terminal
+ * reason. Never a raw error message, stack trace, prompt, API key or full
+ * provider response - see providers/providerFailureClassification.ts for
+ * what feeds each field.
+ */
+export type AgentLoopProviderFailure = {
+  provider: string | null;
+  model: string | null;
+  attemptCount: number;
+  maxAttempts: number | null;
+  httpStatus: number | null;
+  errorCode: string | null;
+  errorClass: string;
+  normalizedReason: AgentLoopProviderFailureNormalizedReason;
+  retryable: boolean;
+  elapsedMs: number | null;
+};
+
 export type AgentLoopResult = {
   ran: boolean;
   terminalReason: AgentLoopTerminalReason;
@@ -81,4 +114,6 @@ export type AgentLoopResult = {
   finalMessage: string | null;
   handoffReason: string | null;
   warnings: string[];
+  /** Present only when terminalReason is "provider_unavailable" and a real provider error was caught (never fabricated). */
+  providerFailure?: AgentLoopProviderFailure | null;
 };

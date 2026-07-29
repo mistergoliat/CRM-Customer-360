@@ -149,3 +149,80 @@ test("[AE28] effectiveMaxOutputSize is recorded as null when no real maxOutputTo
   });
   assert.equal(event.payload.effectiveMaxOutputSize, null);
 });
+
+// LLM provider error observability. Pure normalizer tests mirroring the
+// AE24-AE28 pattern above - proves providerFailure reaches payload_json
+// verbatim when present, stays fully absent when not, and never carries a
+// forbidden key.
+
+const baseEffective = {
+  configurationSource: "safe_default" as const,
+  configurationRecordId: null,
+  configurationVersion: null,
+  configurationHash: null,
+  effectiveModel: "brain-agent-loop",
+  effectiveTemperature: 0,
+  effectiveMaxOutputSize: null,
+  effectiveTimeoutMs: 20000,
+  effectiveMaxAgentStepsPerTurn: 3,
+  effectiveMaxToolCallsPerTurn: 2
+};
+
+const sampleProviderFailure = {
+  provider: "http-agent-loop-provider",
+  model: "deepseek-v4-flash",
+  attemptCount: 3,
+  maxAttempts: 3,
+  httpStatus: 429,
+  errorCode: "http_429",
+  errorClass: "HttpStatusError",
+  normalizedReason: "rate_limited" as const,
+  retryable: true,
+  elapsedMs: 842
+};
+
+test("[AE29] providerFailure reaches payload_json verbatim when the loop captured one", () => {
+  const event = normalizeAgentToolLoopCompletedCommercialEvent({
+    ...baseInput,
+    ...baseEffective,
+    terminalReason: "provider_unavailable",
+    decisionCount: 0,
+    toolExecutionCount: 0,
+    finalMessagePresent: false,
+    providerFailure: sampleProviderFailure
+  });
+  assert.deepEqual(event.payload.providerFailure, sampleProviderFailure);
+});
+
+test("[AE30] providerFailure is entirely absent from payload_json for a normal (non-failure) terminal outcome - never a stray null key", () => {
+  const event = normalizeAgentToolLoopCompletedCommercialEvent({ ...baseInput, ...baseEffective });
+  assert.equal("providerFailure" in event.payload, false);
+});
+
+test("[AE31] providerFailure never carries a forbidden key (API key, Authorization, secret, ...) - the shared sanitizer still enforces this on the nested object", () => {
+  assert.throws(
+    () =>
+      normalizeAgentToolLoopCompletedCommercialEvent({
+        ...baseInput,
+        ...baseEffective,
+        terminalReason: "provider_unavailable",
+        // @ts-expect-error - deliberately injecting a forbidden key to prove the sanitizer still walks into providerFailure
+        providerFailure: { ...sampleProviderFailure, apiKey: "sk-should-never-persist" }
+      }),
+    /commercial_event_forbidden_key/
+  );
+});
+
+test("[AE32] providerFailure's own keys are exactly the documented contract - no accidental extra field leaks through", () => {
+  const event = normalizeAgentToolLoopCompletedCommercialEvent({
+    ...baseInput,
+    ...baseEffective,
+    terminalReason: "provider_unavailable",
+    providerFailure: sampleProviderFailure
+  });
+  const allowedKeys = new Set(["provider", "model", "attemptCount", "maxAttempts", "httpStatus", "errorCode", "errorClass", "normalizedReason", "retryable", "elapsedMs"]);
+  const providerFailure = event.payload.providerFailure as Record<string, unknown>;
+  for (const key of Object.keys(providerFailure)) {
+    assert.ok(allowedKeys.has(key), `unexpected key leaked into providerFailure: ${key}`);
+  }
+});

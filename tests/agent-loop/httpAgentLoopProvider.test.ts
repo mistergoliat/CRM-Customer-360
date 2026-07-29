@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before } from "node:test";
 import { createHttpAgentLoopProvider } from "@/lib/brain/commercial/agent-loop/providers/httpAgentLoopProvider";
+import { classifyAgentLoopProviderFailure } from "@/lib/brain/commercial/agent-loop/providers/providerFailureClassification";
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
 let server: http.Server;
@@ -227,4 +228,182 @@ test("[HP19] the backoff wait between retries is canceled promptly by the extern
   // under that, not after the full backoff ran to completion.
   assert.ok(elapsed < 200, `expected the abort to cut the backoff short, took ${elapsed}ms`);
   assert.equal(callCount, 1, "no second attempt must be dispatched once the external signal aborted the wait");
+});
+
+// --- LLM provider error observability: sanitized cause classification ---
+// The thrown Error's own .message is intentionally not asserted on below -
+// classifyAgentLoopProviderFailure() is the contract under test, not the
+// human-readable message, which stays internal to this provider.
+
+test("[PF1] 401 classifies as authentication_error, non-retryable, with the real status code - never the response body", async () => {
+  handler = (_req, res) => sendJson(res, 401, { error: { message: "Invalid API key: sk-abc123secret" } });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k", model: "deepseek-v4-flash", maxModelRetries: 2 });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "authentication_error");
+      assert.equal(cause.httpStatus, 401);
+      assert.equal(cause.retryable, false);
+      assert.equal(cause.attemptCount, 1);
+      assert.equal(cause.maxAttempts, 3);
+      assert.equal(cause.model, "deepseek-v4-flash");
+      assert.ok(!JSON.stringify(cause).includes("sk-abc123secret"), "the provider response body must never reach the classified cause");
+      return true;
+    }
+  );
+});
+
+test("[PF2] 403 classifies as authentication_error", async () => {
+  handler = (_req, res) => sendJson(res, 403, { error: "forbidden" });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "authentication_error");
+      assert.equal(cause.httpStatus, 403);
+      assert.equal(cause.retryable, false);
+      return true;
+    }
+  );
+});
+
+test("[PF3] 429 classifies as rate_limited and retryable, attemptCount reflects the exhausted retries", async () => {
+  handler = (_req, res) => sendJson(res, 429, { error: "rate_limited" });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k", maxModelRetries: 1 });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 10000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "rate_limited");
+      assert.equal(cause.httpStatus, 429);
+      assert.equal(cause.retryable, true);
+      assert.equal(cause.attemptCount, 2, "1 initial attempt + 1 retry, both exhausted");
+      assert.equal(cause.maxAttempts, 2);
+      return true;
+    }
+  );
+});
+
+test("[PF4] a transient 5xx classifies as provider_server_error and retryable", async () => {
+  handler = (_req, res) => sendJson(res, 503, { error: "unavailable" });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k", maxModelRetries: 0 });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "provider_server_error");
+      assert.equal(cause.httpStatus, 503);
+      assert.equal(cause.retryable, true);
+      return true;
+    }
+  );
+});
+
+test("[PF5] a hung response that exhausts the attempt timeout classifies as provider_timeout (AbortError), never leaking the raw message", async () => {
+  handler = () => {
+    // Never responds - forces the per-attempt AbortController to fire.
+  };
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k", maxModelRetries: 0 });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 200 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "provider_timeout");
+      assert.equal(cause.errorClass, "AbortError");
+      assert.equal(cause.httpStatus, null);
+      assert.equal(cause.retryable, true);
+      return true;
+    }
+  );
+});
+
+test("[PF6] a connection-level failure (ECONNRESET before any response) classifies as network_error with the sanitized system error code", async () => {
+  const provider = createHttpAgentLoopProvider({
+    endpoint: baseUrl,
+    apiKey: "k",
+    maxModelRetries: 0,
+    fetchImpl: async () => {
+      const cause = new Error("read ECONNRESET") as Error & { code?: string };
+      cause.code = "ECONNRESET";
+      const error = new TypeError("fetch failed");
+      (error as TypeError & { cause?: unknown }).cause = cause;
+      throw error;
+    }
+  });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "network_error");
+      assert.equal(cause.errorCode, "ECONNRESET");
+      assert.equal(cause.httpStatus, null);
+      assert.equal(cause.retryable, true);
+      return true;
+    }
+  );
+});
+
+test("[PF7] a 2xx response with a non-JSON body classifies as invalid_response, never a raw JSON.parse SyntaxError", async () => {
+  handler = (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("this is not json {{{");
+  };
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "invalid_response");
+      assert.equal(cause.errorCode, "invalid_json_response");
+      assert.equal(cause.httpStatus, 200);
+      assert.equal(cause.retryable, false);
+      return true;
+    }
+  );
+});
+
+test("[PF8] a 2xx response whose model content is not valid JSON classifies as invalid_response, never the raw content", async () => {
+  handler = (_req, res) => sendJson(res, 200, successResponse("not valid json content"));
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "invalid_response");
+      assert.equal(cause.errorCode, "invalid_model_json");
+      return true;
+    }
+  );
+});
+
+test("[PF9] no endpoint/apiKey configured classifies without ever attempting a network call", async () => {
+  const provider = createHttpAgentLoopProvider({ endpoint: "", apiKey: "" });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "unknown_provider_error");
+      assert.equal(cause.errorCode, "provider_not_configured");
+      assert.equal(cause.attemptCount, 0);
+      return true;
+    }
+  );
+});
+
+test("[PF10] the classified cause never carries the API key, Authorization header, or any secret-shaped value", async () => {
+  handler = (_req, res) => sendJson(res, 401, { error: "unauthorized" });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "sk-super-secret-key-value" });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      const serialized = JSON.stringify(cause);
+      assert.ok(!serialized.includes("sk-super-secret-key-value"));
+      assert.ok(!serialized.toLowerCase().includes("bearer"));
+      assert.ok(!serialized.toLowerCase().includes("authorization"));
+      return true;
+    }
+  );
 });
