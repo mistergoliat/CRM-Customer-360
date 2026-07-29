@@ -32,12 +32,24 @@ function catalogUnavailable(port: CatalogPort | null): port is null {
   return port === null;
 }
 
+/** ACS-R1-05.1-T02.6.1. Real audited contract: execute() requires query (string), limit is optional (defaults to 5). */
+export const SEARCH_PRODUCTS_INPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["query"],
+  properties: {
+    query: { type: "string" },
+    limit: { type: "integer", minimum: 1 }
+  }
+} as const;
+
 function searchProductsCapability(getPort: () => CatalogPort | null): CapabilityGatewayDefinition<{ query: string; limit?: number }, CatalogSearchResult> {
   return {
     capability: "search_products",
     version: CAPABILITY_GATEWAY_VERSION,
     description: "Search the real product catalog by free text via the catalog microservice.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
+    inputSchema: SEARCH_PRODUCTS_INPUT_SCHEMA,
     maxRetries: 1,
     async checkAvailability() {
       if (catalogUnavailable(getPort())) {
@@ -77,12 +89,24 @@ function searchProductsCapability(getPort: () => CatalogPort | null): Capability
   };
 }
 
+/** ACS-R1-05.1-T02.6.1. Real audited contract: execute() requires productId (string or numeric), combinationId is optional. */
+export const GET_PRODUCT_DETAILS_INPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["productId"],
+  properties: {
+    productId: { type: "string" },
+    combinationId: { type: "string" }
+  }
+} as const;
+
 function getProductDetailsCapability(getPort: () => CatalogPort | null): CapabilityGatewayDefinition<{ productId: string; combinationId?: string }, CatalogProduct | null> {
   return {
     capability: "get_product_details",
     version: CAPABILITY_GATEWAY_VERSION,
     description: "Read verified details (price, stock, variants) for one product via the catalog microservice.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
+    inputSchema: GET_PRODUCT_DETAILS_INPUT_SCHEMA,
     maxRetries: 1,
     async checkAvailability() {
       if (catalogUnavailable(getPort())) {
@@ -218,12 +242,66 @@ function asExploreAvailability(value: unknown): CatalogExploreAvailabilityFilter
 }
 
 /**
- * ACS-R1-05.1-T02.6. Extremes/top-N/rankings/filtered browse - distinct from
+ * ACS-R1-05.1-T02.6.1: real incident (crm_capability_executions,
+ * execution_status=invalid_arguments, error_code=sort_and_limit_required) -
+ * the model sent {orderBy, orderDirection} (flat, legacy shape) instead of
+ * the canonical nested {sort:{by,direction}}. Narrowly scoped, temporary
+ * compatibility: only triggers when `sort` itself is entirely absent, only
+ * for explore_catalog, only for these two exact field names. Never accepts
+ * an unrecognized orderBy/orderDirection value (falls through to null, same
+ * as no alias at all - still invalid_arguments). The alias fields never
+ * reach buildExploreRequestBody/the HTTP adapter - only the derived
+ * canonical `sort` object does. The official contract remains nested `sort`;
+ * this is a bridge for one already-observed production shape, not a second
+ * accepted contract.
+ */
+function asLegacySortAlias(input: Record<string, unknown>): CatalogExploreSort | null {
+  const orderBy = input.orderBy;
+  const orderDirection = input.orderDirection;
+  if (orderBy === undefined && orderDirection === undefined) return null;
+  if (orderBy !== "price" && orderBy !== "stock" && orderBy !== "name") return null;
+  if (orderDirection !== "asc" && orderDirection !== "desc") return null;
+  return { by: orderBy, direction: orderDirection };
+}
+
+/**
+ * ACS-R1-05.1-T02.6: extremes/top-N/rankings/filtered browse - distinct from
  * search_products (open-ended semantic/textual discovery) and get_product_details
  * (expands one already-identified productId). "available" is the closed
  * default (never "all") unless the model explicitly asks for another scope -
  * see registry docs and buildAgentStepPromptPackage.ts rule lines.
  */
+export const EXPLORE_CATALOG_INPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["sort", "limit"],
+  properties: {
+    query: { type: "string" },
+    categoryId: { type: "string" },
+    categorySlug: { type: "string" },
+    productType: { type: "string" },
+    price: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        min: { type: "number", minimum: 0 },
+        max: { type: "number", minimum: 0 }
+      }
+    },
+    availability: { type: "string", enum: ["available", "unavailable", "all"] },
+    sort: {
+      type: "object",
+      additionalProperties: false,
+      required: ["by", "direction"],
+      properties: {
+        by: { type: "string", enum: ["price", "stock", "name"] },
+        direction: { type: "string", enum: ["asc", "desc"] }
+      }
+    },
+    limit: { type: "integer", minimum: 1, maximum: 10 }
+  }
+} as const;
+
 function exploreCatalogCapability(getPort: () => CatalogPort | null): CapabilityGatewayDefinition<Record<string, unknown>, CatalogExploreResult> {
   return {
     capability: "explore_catalog",
@@ -231,6 +309,7 @@ function exploreCatalogCapability(getPort: () => CatalogPort | null): Capability
     description:
       "Find extremes (cheapest/most expensive), top-N, rankings, or filtered/sorted views of the catalog by price, stock, or name - with optional filters by category, product type, price range, availability or text - via the catalog microservice. Not for open-ended semantic product discovery (use search_products) and not for expanding one already-identified product (use get_product_details).",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
+    inputSchema: EXPLORE_CATALOG_INPUT_SCHEMA,
     maxRetries: 1,
     async checkAvailability() {
       if (catalogUnavailable(getPort())) {
@@ -244,10 +323,22 @@ function exploreCatalogCapability(getPort: () => CatalogPort | null): Capability
         return { status: "temporarily_blocked", data: null, errorCode: "catalog_service_not_configured", retryable: true, evidence: [] };
       }
 
-      const sort = asExploreSort(input.sort);
+      let sort = asExploreSort(input.sort);
+      let legacySortAliasUsed = false;
+      if (!sort && input.sort === undefined) {
+        const legacyAlias = asLegacySortAlias(input);
+        if (legacyAlias) {
+          sort = legacyAlias;
+          legacySortAliasUsed = true;
+        }
+      }
+
       const limit = typeof input.limit === "number" && Number.isFinite(input.limit) && input.limit >= 1 ? Math.trunc(input.limit) : null;
       if (!sort || limit === null) {
         return { status: "invalid_arguments", data: null, errorCode: "sort_and_limit_required", retryable: false, evidence: [] };
+      }
+      if (limit > 10) {
+        return { status: "invalid_arguments", data: null, errorCode: "limit_out_of_range", retryable: false, evidence: [] };
       }
 
       const price = asExplorePriceRange(input.price);
@@ -282,7 +373,8 @@ function exploreCatalogCapability(getPort: () => CatalogPort | null): Capability
             summary: `explore_catalog matched ${result.value.totalMatched} item(s), returned ${result.value.items.length}, exhaustiveForScope=${result.value.exhaustiveForScope}.`,
             capturedAt: result.value.provenance.retrievedAt
           }
-        ]
+        ],
+        ...(legacySortAliasUsed ? { warnings: ["explore_catalog_legacy_sort_alias_used"] } : {})
       };
     }
   };

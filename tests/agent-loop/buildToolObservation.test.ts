@@ -6,7 +6,7 @@ import type { CatalogExploreResult, CatalogProduct } from "@/lib/catalog";
 
 const FIXED_TIME = "2026-07-28T12:00:00.000Z";
 
-function completed(data: Record<string, unknown> | null): CapabilityGatewayResult<Record<string, unknown>> {
+function completed(data: Record<string, unknown> | null, overrides: Partial<CapabilityGatewayResult<Record<string, unknown>>> = {}): CapabilityGatewayResult<Record<string, unknown>> {
   return {
     capability: "get_product_details",
     version: "capability-gateway.v1",
@@ -20,7 +20,8 @@ function completed(data: Record<string, unknown> | null): CapabilityGatewayResul
     retryCount: 0,
     startedAt: FIXED_TIME,
     completedAt: FIXED_TIME,
-    executionPublicId: "capability-exec-test"
+    executionPublicId: "capability-exec-test",
+    ...overrides
   };
 }
 
@@ -209,4 +210,38 @@ test("explore_catalog observation exposes only the allowlisted per-product field
   const observation = buildToolObservation("explore_catalog", completed(exploreResult() as unknown as Record<string, unknown>));
   const data = observation.data as { products: Array<Record<string, unknown>> };
   assert.deepEqual(Object.keys(data.products[0]).sort(), ["availability", "currency", "name", "price", "productId", "stockQuantity", "stockScope"]);
+});
+
+test("ACS-R1-05.1-T02.6.1: a capability warning (e.g. explore_catalog_legacy_sort_alias_used) is surfaced verbatim, sanitized, on a completed observation", () => {
+  const observation = buildToolObservation(
+    "explore_catalog",
+    completed(exploreResult() as unknown as Record<string, unknown>, { warnings: ["explore_catalog_legacy_sort_alias_used"] })
+  );
+  assert.deepEqual(observation.warnings, ["explore_catalog_legacy_sort_alias_used"]);
+});
+
+test("no warnings field is added when the capability reported none (never an empty array clutter)", () => {
+  const observation = buildToolObservation("explore_catalog", completed(exploreResult() as unknown as Record<string, unknown>));
+  assert.equal("warnings" in observation, false);
+});
+
+test("a warning is also surfaced on a blocked observation (invalid_arguments), not only on completed", () => {
+  const blockedResult: CapabilityGatewayResult<Record<string, unknown>> = {
+    capability: "explore_catalog",
+    version: "capability-gateway.v1",
+    availability: "available",
+    status: "invalid_arguments",
+    data: null,
+    errorCode: "sort_and_limit_required",
+    retryable: false,
+    evidence: [],
+    warnings: ["some_sanitized_code"],
+    retryCount: 0,
+    startedAt: FIXED_TIME,
+    completedAt: FIXED_TIME,
+    executionPublicId: "capability-exec-test"
+  };
+  const observation = buildToolObservation("explore_catalog", blockedResult);
+  assert.equal(observation.status, "blocked");
+  assert.deepEqual(observation.warnings, ["some_sanitized_code"]);
 });

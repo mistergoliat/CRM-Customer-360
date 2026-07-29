@@ -51,10 +51,16 @@ export type RunAgentToolLoopInput = {
   identityConfiguration?: SalesAgentPromptConfiguration;
 };
 
-function buildToolDescriptions(): AgentLoopToolDescription[] {
+/**
+ * ACS-R1-05.1-T02.6.1. `inputSchema` is read from CapabilityGatewayDefinition
+ * - the single canonical source (registry.ts) - never redefined here or in
+ * the provider. Exported so it can be tested directly (spec section 8, test
+ * 1: "buildToolDescriptions incluye inputSchema").
+ */
+export function buildToolDescriptions(): AgentLoopToolDescription[] {
   return AGENT_LOOP_TOOL_POOL.map((name) => {
     const definition = resolveCapabilityGatewayDefinition(name);
-    return { name, description: definition?.description ?? name };
+    return { name, description: definition?.description ?? name, inputSchema: definition?.inputSchema };
   });
 }
 
@@ -162,6 +168,28 @@ async function processUseToolStep(
 
   executedCalls.add(dedupeKey);
   const gatewayResult = await executeGovernedCapability(step.tool, effectiveArguments, gatewayContext);
+
+  // ACS-R1-05.1-T02.6.1 (spec section 7). A call rejected before any real
+  // work happened (bad shape, never reached the Catalog Service) never
+  // consumed maxToolExecutions budget - only a call that actually attempted
+  // something does. This is what lets the model correct its arguments and
+  // retry within budget instead of the tool budget silently exhausting on a
+  // single malformed call and forcing a premature handoff.
+  // ACS-R1-05.1-T02.6.1. Fold the capability's own sanitized warnings (fixed
+  // string codes only, e.g. explore_catalog_legacy_sort_alias_used) into
+  // this turn's aggregated warning list - the internal-only observability
+  // channel every other technical signal in this loop already uses. Never a
+  // second, independent recording path (ACS-R1-04-T08.1's stated intent for
+  // CapabilityExecutionOutcome.warnings).
+  for (const warning of gatewayResult.warnings) {
+    warnings.push(`agent_loop_tool_warning:${step.tool}:${warning}`);
+  }
+
+  if (gatewayResult.status === "invalid_arguments") {
+    warnings.push(`agent_loop_tool_invalid_arguments:${step.tool}:${gatewayResult.errorCode ?? "unknown"}`);
+    return { step: enrichedStep, governance: "authorized", observation: buildToolObservation(step.tool, gatewayResult), executed: false };
+  }
+
   return { step: enrichedStep, governance: "authorized", observation: buildToolObservation(step.tool, gatewayResult), executed: true };
 }
 

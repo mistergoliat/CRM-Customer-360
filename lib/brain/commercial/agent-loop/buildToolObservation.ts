@@ -98,6 +98,12 @@ function projectCompanyKnowledge(data: unknown) {
  * SQL, no data the observation schema does not name explicitly.
  */
 export function buildToolObservation(tool: string, result: CapabilityGatewayResult): ToolObservation {
+  // ACS-R1-05.1-T02.6.1. Fixed, sanitized warning codes only (e.g.
+  // explore_catalog_legacy_sort_alias_used) - result.warnings is always an
+  // array (never undefined, see executeCapability.ts), so this is safe
+  // regardless of outcome status.
+  const warnings = result.warnings.length > 0 ? { warnings: result.warnings } : {};
+
   if (result.status === "completed") {
     const data =
       tool === "search_products"
@@ -109,12 +115,12 @@ export function buildToolObservation(tool: string, result: CapabilityGatewayResu
             : tool === "explore_catalog"
               ? projectExploreCatalog(result.data)
               : null;
-    return { tool, status: "completed", data };
+    return { tool, status: "completed", data, ...warnings };
   }
 
   if (result.status === "denied" || result.status === "requires_approval" || result.status === "invalid_arguments") {
-    return { tool, status: "blocked", errorCode: result.errorCode ?? result.status };
+    return { tool, status: "blocked", errorCode: result.errorCode ?? result.status, ...warnings };
   }
 
-  return { tool, status: "failed", errorCode: result.errorCode ?? "capability_execution_failed" };
+  return { tool, status: "failed", errorCode: result.errorCode ?? "capability_execution_failed", ...warnings };
 }

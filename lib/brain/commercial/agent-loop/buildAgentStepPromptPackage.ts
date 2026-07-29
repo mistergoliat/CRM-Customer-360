@@ -8,6 +8,16 @@ import { renderSalesAgentIdentityPrompt } from "./renderSalesAgentIdentityPrompt
 export type AgentLoopToolDescription = {
   name: string;
   description: string;
+  /**
+   * ACS-R1-05.1-T02.6.1. Optional JSON Schema for this tool's `arguments`,
+   * sourced from CapabilityGatewayDefinition.inputSchema (runAgentToolLoop.ts
+   * #buildToolDescriptions) - the single canonical schema, never redefined
+   * here or in the provider. Rendered verbatim so the model sees the exact
+   * required shape instead of inferring it from the free-text description
+   * alone (root cause of ACS-R1-05.1-T02.6's real incident: a model sent
+   * {orderBy, orderDirection} instead of {sort:{by, direction}}).
+   */
+  inputSchema?: Record<string, unknown>;
 };
 
 export type AgentLoopPromptInput = {
@@ -132,6 +142,29 @@ function buildLoopContractLines(phase: "gathering" | "finalization", stepsRemain
 }
 
 /**
+ * ACS-R1-05.1-T02.6.1. Renders the tool's canonical inputSchema (sourced from
+ * CapabilityGatewayDefinition.inputSchema, never redefined here) verbatim as
+ * JSON, so the model sees the exact required argument shape instead of only
+ * a free-text description. Absent for a tool with no declared schema (falls
+ * back to description-only, previous behavior).
+ */
+function renderToolLine(tool: AgentLoopToolDescription): string {
+  const schemaText = tool.inputSchema ? ` Arguments must satisfy exactly this JSON Schema (no properties beyond what it lists): ${JSON.stringify(tool.inputSchema)}` : "";
+  return `- ${tool.name}: ${tool.description}${schemaText}`;
+}
+
+/**
+ * ACS-R1-05.1-T02.6.1 (real incident: crm_capability_executions recorded
+ * execution_status=invalid_arguments after a model sent {orderBy,
+ * orderDirection} instead of the schema's {sort:{by,direction}}). A rejected
+ * tool call must be a recoverable, in-budget event, not an automatic
+ * handoff - the model is told explicitly it may retry once with corrected
+ * arguments before this turn's tool budget forces finalization.
+ */
+const INVALID_ARGUMENTS_RECOVERY_RULE_LINE =
+  'If a tool observation has status "blocked" with an errorCode indicating invalid arguments (e.g. sort_and_limit_required, price_range_invalid, limit_out_of_range), correct the arguments using that tool\'s JSON Schema shown below and try again once with different, corrected arguments - do not hand off to a human solely because one tool call was rejected while tool budget remains.';
+
+/**
  * Layer 2: immutable evidence/tool-usage rules - grounding invariants and,
  * for gathering only, the tool catalog. Never editable, never derived from
  * configuration.
@@ -156,7 +189,9 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
     ...EXPLORE_CATALOG_RULE_LINES,
     "You must never claim to have executed anything yourself - the platform executes tools, not you.",
-    `Available tools: ${availableTools.map((tool) => `${tool.name} - ${tool.description}`).join("; ") || "none"}.`
+    INVALID_ARGUMENTS_RECOVERY_RULE_LINE,
+    "Available tools:",
+    ...(availableTools.length > 0 ? availableTools.map(renderToolLine) : ["none"])
   ];
 }
 

@@ -322,6 +322,51 @@ test("[PR20] exhaustiveForScope governs absolute vs. bounded ranking language in
   }
 });
 
+test("[PR22] ACS-R1-05.1-T02.6.1: a tool's inputSchema is rendered verbatim in the gathering system prompt", () => {
+  const exploreSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["sort", "limit"],
+    properties: {
+      sort: { type: "object", required: ["by", "direction"], properties: { by: { type: "string", enum: ["price", "stock", "name"] }, direction: { type: "string", enum: ["asc", "desc"] } } },
+      limit: { type: "integer", minimum: 1, maximum: 10 }
+    }
+  };
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [{ name: "explore_catalog", description: "Find extremes and rankings.", inputSchema: exploreSchema }]
+  });
+
+  const system = messages[0].content;
+  assert.match(system, /explore_catalog: Find extremes and rankings\./);
+  assert.match(system, /Arguments must satisfy exactly this JSON Schema/);
+  assert.match(system, new RegExp(JSON.stringify(exploreSchema).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("[PR23] a tool without a declared inputSchema falls back to description-only, no schema text invented", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [{ name: "search_company_knowledge", description: "Search company knowledge." }]
+  });
+
+  const system = messages[0].content;
+  assert.match(system, /search_company_knowledge: Search company knowledge\./);
+  assert.doesNotMatch(system, /search_company_knowledge:[^\n]*Arguments must satisfy/);
+});
+
+test("[PR24] the invalid-arguments recovery rule is present in gathering (where tools are offered) and absent in finalization (where they are not)", () => {
+  const gathering = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig() });
+  const finalization = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+
+  assert.match(gathering.messages[0].content, /correct the arguments using that tool's JSON Schema shown below and try again once/);
+  assert.match(gathering.messages[0].content, /do not hand off to a human solely because one tool call was rejected while tool budget remains/);
+  assert.doesNotMatch(finalization.messages[0].content, /correct the arguments using that tool's JSON Schema/);
+});
+
 test("[PR21] the model must never invent categoryId/categorySlug and must never leak internal implementation terms", () => {
   const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
   const system = messages[0].content;
