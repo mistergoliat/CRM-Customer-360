@@ -7,8 +7,9 @@ import { buildAgentStepPromptPackage, type AgentLoopToolDescription } from "./bu
 import { buildToolObservation } from "./buildToolObservation";
 import { validateAgentStep } from "./validateAgentStep";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
-import type { AgentLoopResult, AgentLoopStepRecord, AgentLoopTerminalReason, AgentStepUseTool, ToolObservation } from "./agentStepTypes";
+import type { AgentLoopProviderFailure, AgentLoopResult, AgentLoopStepRecord, AgentLoopTerminalReason, AgentStepUseTool, ToolObservation } from "./agentStepTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
+import { classifyAgentLoopProviderFailure, logAgentLoopProviderFailure } from "./providers/providerFailureClassification";
 
 /**
  * ACS-R1-05.1-T02.1 (spec section 5). Fixed, backend-owned pool for this
@@ -59,7 +60,7 @@ async function invokeProviderWithDeadline(
   correlationId: string,
   deadlineMs: number,
   externalSignal: AbortSignal | null | undefined
-): Promise<{ kind: "success"; rawOutput: unknown } | { kind: "timeout" } | { kind: "error"; error: unknown }> {
+): Promise<{ kind: "success"; rawOutput: unknown } | { kind: "timeout" } | { kind: "error"; error: unknown; elapsedMs: number }> {
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   if (externalSignal) {
@@ -69,17 +70,26 @@ async function invokeProviderWithDeadline(
 
   const remainingMs = Math.max(1, deadlineMs - Date.now());
   const timer = setTimeout(() => controller.abort(), remainingMs);
+  const startedAt = Date.now();
 
   try {
     const response = await provider.invoke({ messages, correlationId }, { signal: controller.signal, timeoutMs: remainingMs });
     return { kind: "success", rawOutput: response.rawOutput };
   } catch (error) {
     if (controller.signal.aborted) return { kind: "timeout" };
-    return { kind: "error", error };
+    return { kind: "error", error, elapsedMs: Date.now() - startedAt };
   } finally {
     clearTimeout(timer);
     if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
   }
+}
+
+/** Requirement 1-2 (see task doc): captures the sanitized cause before it collapses into "provider_unavailable", logs it, and hands it back to be preserved on the loop's terminal result. */
+function captureProviderFailure(provider: AgentLoopProvider, correlationId: string, error: unknown, elapsedMs: number): AgentLoopProviderFailure {
+  const cause = classifyAgentLoopProviderFailure(error);
+  const providerFailure: AgentLoopProviderFailure = { provider: provider.name ?? null, elapsedMs, ...cause };
+  logAgentLoopProviderFailure(correlationId, providerFailure);
+  return providerFailure;
 }
 
 /** Recursively sorts object keys so two semantically identical argument sets (keys in a different order) always produce the same dedupe key. */
@@ -188,14 +198,15 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   const executedCalls = new Set<string>();
   let toolExecutionCount = 0;
 
-  const finalize = (terminalReason: AgentLoopTerminalReason): AgentLoopResult => ({
+  const finalize = (terminalReason: AgentLoopTerminalReason, providerFailure?: AgentLoopProviderFailure | null): AgentLoopResult => ({
     ran: true,
     terminalReason,
     steps,
     toolExecutionCount,
     finalMessage: null,
     handoffReason: null,
-    warnings
+    warnings,
+    providerFailure: providerFailure ?? null
   });
 
   // ---- Phase 1: gathering ----
@@ -225,8 +236,9 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       return finalize("timeout");
     }
     if (invoked.kind === "error") {
-      warnings.push(`agent_loop_provider_error:${invoked.error instanceof Error ? invoked.error.message : "unknown"}`);
-      return finalize("provider_unavailable");
+      const providerFailure = captureProviderFailure(input.provider, input.correlationId, invoked.error, invoked.elapsedMs);
+      warnings.push(`agent_loop_provider_error:${providerFailure.normalizedReason}`);
+      return finalize("provider_unavailable", providerFailure);
     }
 
     const validation = validateAgentStep(invoked.rawOutput);
@@ -287,8 +299,9 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       return finalize("timeout");
     }
     if (invoked.kind === "error") {
-      warnings.push(`agent_loop_provider_error:${invoked.error instanceof Error ? invoked.error.message : "unknown"}`);
-      return finalize("provider_unavailable");
+      const providerFailure = captureProviderFailure(input.provider, input.correlationId, invoked.error, invoked.elapsedMs);
+      warnings.push(`agent_loop_provider_error:${providerFailure.normalizedReason}`);
+      return finalize("provider_unavailable", providerFailure);
     }
 
     const validation = validateAgentStep(invoked.rawOutput, FINALIZATION_ALLOWED_TYPES);

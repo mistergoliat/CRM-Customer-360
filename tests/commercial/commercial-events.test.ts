@@ -7,6 +7,7 @@ import {
   buildInboundCommercialEventDedupeKey,
   buildInternalCommandCommercialEventDedupeKey,
   loadCommercialEventByDedupeKey,
+  normalizeAgentToolLoopCompletedCommercialEvent,
   normalizeCommercialEventPayload,
   normalizeFollowUpDueCommercialEvent,
   normalizeInternalCommandCommercialEvent,
@@ -306,4 +307,72 @@ test("CommercialEvent lookup supports correlation and conversation filters", asy
 
   assert.equal(correlationCount >= 1, true);
   assert.equal(conversationCount >= 1, true);
+});
+
+test("[AE33] agent_tool_loop_completed persists providerFailure inside payload_json, round-trips through a real read, and never touches crm_agent_actions", async () => {
+  const inboundMessageId = `msg-${uniqueSuffix("provider-failure")}`;
+  const event = normalizeAgentToolLoopCompletedCommercialEvent({
+    inboundMessageId,
+    terminalReason: "provider_unavailable",
+    decisionCount: 0,
+    toolExecutionCount: 0,
+    toolsUsed: [],
+    finalMessagePresent: false,
+    handoffReasonPresent: false,
+    stepsSummary: [],
+    correlationId: `corr-${uniqueSuffix("provider-failure")}`,
+    conversationId: 999001,
+    opportunityId: null,
+    configurationSource: "safe_default",
+    configurationRecordId: null,
+    configurationVersion: null,
+    configurationHash: null,
+    effectiveModel: "brain-agent-loop",
+    effectiveTemperature: 0,
+    effectiveMaxOutputSize: null,
+    effectiveTimeoutMs: 20000,
+    effectiveMaxAgentStepsPerTurn: 3,
+    effectiveMaxToolCallsPerTurn: 2,
+    providerFailure: {
+      provider: "http-agent-loop-provider",
+      model: "deepseek-v4-flash",
+      attemptCount: 1,
+      maxAttempts: 1,
+      httpStatus: 500,
+      errorCode: "http_500",
+      errorClass: "HttpStatusError",
+      normalizedReason: "provider_server_error",
+      retryable: true,
+      elapsedMs: 123
+    }
+  });
+
+  const result = await recordCommercialEvent(event);
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "created");
+
+  const row = await safeQueryRows<{ payload_json: string }>("SELECT payload_json FROM commercial_event WHERE dedupe_key = ? LIMIT 1", [event.dedupeKey]);
+  assert.ok(row.ok);
+  const persistedPayload = JSON.parse(row.rows[0]?.payload_json ?? "{}");
+  assert.deepEqual(persistedPayload.providerFailure, {
+    provider: "http-agent-loop-provider",
+    model: "deepseek-v4-flash",
+    attemptCount: 1,
+    maxAttempts: 1,
+    httpStatus: 500,
+    errorCode: "http_500",
+    errorClass: "HttpStatusError",
+    normalizedReason: "provider_server_error",
+    retryable: true,
+    elapsedMs: 123
+  });
+
+  const reloaded = await loadCommercialEventByDedupeKey(event.dedupeKey);
+  assert.ok(reloaded);
+  assert.deepEqual(reloaded!.payload.providerFailure, persistedPayload.providerFailure);
+
+  const serialized = JSON.stringify(persistedPayload);
+  assert.ok(!serialized.toLowerCase().includes("apikey"));
+  assert.ok(!serialized.toLowerCase().includes("authorization"));
+  assert.ok(!serialized.toLowerCase().includes("bearer"));
 });

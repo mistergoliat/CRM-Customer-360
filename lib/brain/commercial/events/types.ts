@@ -190,6 +190,38 @@ export type AgentToolLoopStepSummary = {
 // same no-cross-module-import rationale as the rest of this file.
 export type AgentToolLoopConfigurationSource = "published" | "deployment_default" | "safe_default";
 
+// LLM provider error observability. Local literal union mirroring
+// agent-loop/agentStepTypes.ts#AgentLoopProviderFailureNormalizedReason - same
+// no-cross-module-import rationale as the rest of this file.
+export type AgentToolLoopProviderFailureNormalizedReason =
+  | "authentication_error"
+  | "rate_limited"
+  | "provider_timeout"
+  | "network_error"
+  | "model_unavailable"
+  | "invalid_response"
+  | "provider_server_error"
+  | "unknown_provider_error";
+
+/**
+ * Sanitized cause of a terminalReason "provider_unavailable" outcome - present
+ * only when a real provider error was caught (never fabricated for other
+ * terminal reasons). Never a raw error message, stack trace, prompt, API key,
+ * header or full provider response - see agent-loop/providers/providerFailureClassification.ts.
+ */
+export type AgentToolLoopProviderFailurePayload = {
+  provider: string | null;
+  model: string | null;
+  attemptCount: number;
+  maxAttempts: number | null;
+  httpStatus: number | null;
+  errorCode: string | null;
+  errorClass: string;
+  normalizedReason: AgentToolLoopProviderFailureNormalizedReason;
+  retryable: boolean;
+  elapsedMs: number | null;
+};
+
 export type AgentToolLoopCompletedRecordedPayload = {
   inboundMessageId: string | null;
   terminalReason: AgentToolLoopTerminalReason;
@@ -216,6 +248,8 @@ export type AgentToolLoopCompletedRecordedPayload = {
   effectiveTimeoutMs: number;
   effectiveMaxAgentStepsPerTurn: number;
   effectiveMaxToolCallsPerTurn: number;
+  /** Optional - present only for terminalReason "provider_unavailable" when a real cause was captured. */
+  providerFailure?: AgentToolLoopProviderFailurePayload | null;
 };
 
 export interface CommercialEventV1 {
