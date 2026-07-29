@@ -41,6 +41,14 @@ export type ToolObservation = {
   status: ToolObservationStatus;
   data?: unknown;
   errorCode?: string;
+  /**
+   * ACS-R1-05.1-T02.6.1. Fixed, sanitized string codes only (e.g.
+   * explore_catalog_legacy_sort_alias_used) - never raw values, never PII.
+   * Sourced from CapabilityExecutionOutcome.warnings via
+   * CapabilityGatewayResult.warnings (executeCapability.ts) - present only
+   * when the capability itself reported at least one.
+   */
+  warnings?: string[];
 };
 
 export const AGENT_LOOP_TERMINAL_REASONS = [

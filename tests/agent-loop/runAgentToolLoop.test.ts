@@ -1122,3 +1122,69 @@ test("I6 - falla del catalogo: explore_catalog failed observation, el agente res
   assert.equal(result.steps[0].observation?.status, "failed");
   assert.equal(result.terminalReason, "responded");
 });
+
+// --- ACS-R1-05.1-T02.6.1: tool schema + invalid_arguments recovery ---
+
+test("ACS-R1-05.1-T02.6.1: real incident regression - '¿Cual es el producto mas caro de la pagina?' with the legacy {orderBy, orderDirection} shape normalizes transparently and responds, never handoff", async () => {
+  catalogUpWithExplore(exploreResponsePayload());
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { orderBy: "price", orderDirection: "desc", limit: 1 } },
+      { type: "respond", message: "El producto mas caro disponible es la Camara Hiperbarica ST801 a $8.599.990." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "¿Cual es el producto mas caro de la pagina?", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.notEqual(result.terminalReason, "handoff");
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.steps[0].observation?.status, "completed");
+  const data = result.steps[0].observation?.data as { exhaustiveForScope?: boolean } | null;
+  assert.equal(data?.exhaustiveForScope, true);
+
+  // ACS-R1-05.1-T02.6.1: the legacy-alias warning must not vanish silently -
+  // visible on the tool observation (model-facing, sanitized) and folded
+  // into this turn's own warnings list (internal observability).
+  assert.deepEqual(result.steps[0].observation?.warnings, ["explore_catalog_legacy_sort_alias_used"]);
+  assert.ok(result.warnings.includes("agent_loop_tool_warning:explore_catalog:explore_catalog_legacy_sort_alias_used"));
+});
+
+test("invalid_arguments (missing limit) does not consume tool-execution budget - the model corrects and responds within budget, never handoff", async () => {
+  catalogUpWithExplore(exploreResponsePayload());
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "desc" } } },
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "desc" }, limit: 1 } },
+      { type: "respond", message: "El producto mas caro disponible es la Camara Hiperbarica ST801." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "¿Cual es el mas caro?", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.notEqual(result.terminalReason, "handoff");
+  assert.equal(result.steps[0].observation?.status, "blocked");
+  assert.equal(result.steps[0].observation?.errorCode, "sort_and_limit_required");
+  assert.equal(result.steps[1].observation?.status, "completed");
+  assert.equal(result.toolExecutionCount, 1, "only the corrected call counts toward the tool-execution budget");
+  assert.ok(result.warnings.some((warning) => warning.startsWith("agent_loop_tool_invalid_arguments:explore_catalog:")));
+});
+
+test("repeated invalid_arguments across the full decision budget never exceeds maxToolExecutions and never loops infinitely - falls safely into finalization", async () => {
+  catalogUpWithExplore(exploreResponsePayload());
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "desc" } } },
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "stock", direction: "desc" } } },
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "name", direction: "asc" } } },
+      { type: "respond", message: "No pude confirmar esa informacion en este momento." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.toolExecutionCount, 0, "none of the three malformed calls should ever count toward the execution budget");
+  assert.ok(result.steps.every((step) => step.observation?.status === "blocked" || step.phase === "finalization"));
+  assert.equal(result.terminalReason, "responded");
+});

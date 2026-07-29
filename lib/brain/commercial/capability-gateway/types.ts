@@ -100,6 +100,20 @@ export type CapabilityGatewayDefinition<TInput = Record<string, unknown>, TOutpu
   governance: CapabilityGovernanceMetadata;
   /** Bounded, capability-specific retry budget for retryable execution failures. */
   maxRetries: number;
+  /**
+   * ACS-R1-05.1-T02.6.1. Optional JSON Schema (opaque record - a subset of
+   * draft-07: type/properties/required/enum/additionalProperties/minimum/
+   * maximum is all this repo's tools currently need) describing this
+   * capability's `execute()` input, for agent-facing tools only. This is the
+   * single canonical source: the Agent Tool Loop's tool descriptions
+   * (runAgentToolLoop.ts#buildToolDescriptions) and the prompt
+   * (buildAgentStepPromptPackage.ts) both read it from here - never a second,
+   * duplicated schema anywhere else. Absent for capabilities the model never
+   * calls directly (e.g. identity capabilities) - never required, never
+   * enforced at this layer (the capability's own execute() remains the real
+   * runtime validator; this is what the model is told to aim for).
+   */
+  inputSchema?: Record<string, unknown>;
   checkAvailability(context: CapabilityGatewayContext): Promise<CapabilityAvailabilityResult>;
   execute(input: TInput, context: CapabilityGatewayContext): Promise<CapabilityExecutionOutcome<TOutput>>;
   /**

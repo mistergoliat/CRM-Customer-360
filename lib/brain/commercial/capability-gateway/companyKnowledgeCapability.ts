@@ -60,12 +60,23 @@ function asQueryText(value: unknown): string | null {
  * Always available (no external service), read_only/autonomous/low, same
  * governance shape as search_products/get_product_details.
  */
+/** ACS-R1-05.1-T02.6.1. Real audited contract: execute() requires exactly one string field, `query` (see asQueryText below). */
+export const SEARCH_COMPANY_KNOWLEDGE_INPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["query"],
+  properties: {
+    query: { type: "string" }
+  }
+} as const;
+
 export function companyKnowledgeCapability(): CapabilityGatewayDefinition<{ query: string }, CompanyKnowledgeSearchResult> {
   return {
     capability: "search_company_knowledge",
     version: CAPABILITY_GATEWAY_VERSION,
     description: "Search company-provided informational knowledge (hours, channels, coverage, payment methods, policies, dispatch, human contact) via a simple lexical fixture search.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
+    inputSchema: SEARCH_COMPANY_KNOWLEDGE_INPUT_SCHEMA,
     maxRetries: 0,
     async checkAvailability(_context: CapabilityGatewayContext) {
       return { status: "available", reason: null };
