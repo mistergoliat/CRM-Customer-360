@@ -12,12 +12,16 @@ import type { RecentCatalogContext } from "./recentCatalogContext";
 import { classifyAgentLoopProviderFailure, logAgentLoopProviderFailure } from "./providers/providerFailureClassification";
 
 /**
- * ACS-R1-05.1-T02.1 (spec section 5). Fixed, backend-owned pool for this
- * MVP - never derived from LLM output, never a second registry.
- * batch_get_products is deliberately excluded: it is internal, deterministic
- * hydration, never a decision the agent makes for itself.
+ * ACS-R1-05.1-T02.1 (spec section 5). Fixed, backend-owned pool - never
+ * derived from LLM output, never a second registry. batch_get_products is
+ * deliberately excluded: it is internal, deterministic hydration, never a
+ * decision the agent makes for itself.
+ *
+ * ACS-R1-05.1-T02.6 added `explore_catalog` (extremes/top-N/rankings/filtered
+ * browse) alongside the original three - an intentional expansion of this
+ * pool, not a replacement; every pre-existing tool name is preserved.
  */
-export const AGENT_LOOP_TOOL_POOL = ["search_products", "get_product_details", "search_company_knowledge"] as const;
+export const AGENT_LOOP_TOOL_POOL = ["search_products", "get_product_details", "search_company_knowledge", "explore_catalog"] as const;
 export type AgentLoopToolName = (typeof AGENT_LOOP_TOOL_POOL)[number];
 
 const DEFAULT_MAX_DECISIONS = 3;

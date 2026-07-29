@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildToolObservation } from "@/lib/brain/commercial/agent-loop/buildToolObservation";
 import type { CapabilityGatewayResult } from "@/lib/brain/commercial/capability-gateway/types";
-import type { CatalogProduct } from "@/lib/catalog";
+import type { CatalogExploreResult, CatalogProduct } from "@/lib/catalog";
 
 const FIXED_TIME = "2026-07-28T12:00:00.000Z";
 
@@ -153,4 +153,60 @@ test("search_products observation exposes at most five compact product results",
   assert.equal(data.items.length, 5);
   assert.deepEqual(Object.keys(data.items[0]).sort(), ["availability", "name", "productId", "stockQuantity"]);
   assert.doesNotMatch(JSON.stringify(data), /price|shortDescription|publicLink|https?:\/\//);
+});
+
+function exploreResult(overrides: Partial<CatalogExploreResult> = {}): CatalogExploreResult {
+  return {
+    scope: { availability: "available" },
+    sort: { by: "price", direction: "desc" },
+    totalMatched: 833,
+    exhaustiveForScope: true,
+    items: [{ productId: "1532", name: "Camara Hiperbarica ST801", price: 8599990, currency: "CLP", stockQuantity: 4, stockScope: "product", availability: "available" }],
+    provenance: { source: "catalog_service_http", retrievedAt: FIXED_TIME, cached: false },
+    ...overrides
+  };
+}
+
+test("ACS-R1-05.1-T02.6: explore_catalog observation preserves scope/sort/totalMatched/exhaustiveForScope/classificationSource and per-item stockScope", () => {
+  const observation = buildToolObservation(
+    "explore_catalog",
+    completed(exploreResult({ classificationSource: "category" }) as unknown as Record<string, unknown>)
+  );
+
+  assert.equal(observation.status, "completed");
+  const data = observation.data as Record<string, unknown>;
+  assert.deepEqual(data.scope, { availability: "available" });
+  assert.deepEqual(data.sort, { by: "price", direction: "desc" });
+  assert.equal(data.totalMatched, 833);
+  assert.equal(data.exhaustiveForScope, true);
+  assert.equal(data.classificationSource, "category");
+  const products = data.products as Array<Record<string, unknown>>;
+  assert.equal(products[0].stockScope, "product");
+});
+
+test("explore_catalog observation omits classificationSource when the capability did not report one", () => {
+  const observation = buildToolObservation("explore_catalog", completed(exploreResult() as unknown as Record<string, unknown>));
+  const data = observation.data as Record<string, unknown>;
+  assert.equal("classificationSource" in data, false);
+});
+
+test("explore_catalog observation caps products at 10, never more", () => {
+  const items = Array.from({ length: 15 }, (_unused, index) => ({
+    productId: String(index + 1),
+    name: `Producto ${index + 1}`,
+    price: 1000 + index,
+    currency: "CLP",
+    stockQuantity: index,
+    stockScope: "product" as const,
+    availability: "available"
+  }));
+  const observation = buildToolObservation("explore_catalog", completed(exploreResult({ items }) as unknown as Record<string, unknown>));
+  const data = observation.data as { products: Array<Record<string, unknown>> };
+  assert.equal(data.products.length, 10);
+});
+
+test("explore_catalog observation exposes only the allowlisted per-product fields, nothing beyond it", () => {
+  const observation = buildToolObservation("explore_catalog", completed(exploreResult() as unknown as Record<string, unknown>));
+  const data = observation.data as { products: Array<Record<string, unknown>> };
+  assert.deepEqual(Object.keys(data.products[0]).sort(), ["availability", "currency", "name", "price", "productId", "stockQuantity", "stockScope"]);
 });

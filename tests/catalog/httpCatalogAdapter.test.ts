@@ -392,6 +392,180 @@ test("batchGetProducts with an empty items array short-circuits without a networ
   assert.equal(requestCount, 0);
 });
 
+function exploreResponsePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    scope: { availability: "available" },
+    sort: { by: "price", direction: "desc" },
+    totalMatched: 833,
+    exhaustiveForScope: true,
+    products: [
+      { productId: "1532", name: "Camara Hiperbarica ST801", price: 8599990, currency: "CLP", stockQuantity: 4, stockScope: "product", availability: "available" }
+    ],
+    ...overrides
+  };
+}
+
+test("ACS-R1-05.1-T02.6: exploreCatalog POSTs to /v1/products/explore with an allowlisted body (nested price, no extra fields)", async () => {
+  let capturedBody: unknown;
+  handler = (req, res) => {
+    assert.equal(req.method, "POST");
+    assert.equal(req.url, "/v1/products/explore");
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      capturedBody = JSON.parse(raw);
+      sendJson(res, 200, exploreResponsePayload());
+    });
+  };
+
+  const result = await makeAdapter().exploreCatalog(
+    {
+      query: "jaula",
+      categoryId: "12",
+      categorySlug: "jaulas",
+      productType: "machine",
+      price: { min: 10000, max: 500000 },
+      availability: "available",
+      sort: { by: "price", direction: "desc" },
+      limit: 5
+    },
+    { correlationId: "corr-explore-1" }
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(capturedBody, {
+    sort: { by: "price", direction: "desc" },
+    limit: 5,
+    query: "jaula",
+    categoryId: "12",
+    categorySlug: "jaulas",
+    productType: "machine",
+    availability: "available",
+    price: { min: 10000, max: 500000 }
+  });
+  assert.equal(Object.keys(capturedBody as object).length, 8, "must never send a key beyond the closed, allowlisted schema");
+});
+
+test("exploreCatalog omits price/availability/query/category/productType entirely when not provided (never sends invented defaults)", async () => {
+  let capturedBody: unknown;
+  handler = (req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      capturedBody = JSON.parse(raw);
+      sendJson(res, 200, exploreResponsePayload());
+    });
+  };
+
+  await makeAdapter().exploreCatalog({ sort: { by: "name", direction: "asc" }, limit: 2 }, { correlationId: "corr-explore-2" });
+  assert.deepEqual(capturedBody, { sort: { by: "name", direction: "asc" }, limit: 2 });
+});
+
+test("exploreCatalog maps a valid response including scope/sort/totalMatched/exhaustiveForScope/classificationSource", async () => {
+  handler = (_req, res) => sendJson(res, 200, exploreResponsePayload({ classificationSource: "category" }));
+  const result = await makeAdapter().exploreCatalog({ sort: { by: "price", direction: "desc" }, limit: 1 }, { correlationId: "corr-explore-3" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.totalMatched, 833);
+  assert.equal(result.value.exhaustiveForScope, true);
+  assert.equal(result.value.classificationSource, "category");
+  assert.equal(result.value.scope.availability, "available");
+  assert.equal(result.value.sort.by, "price");
+  assert.equal(result.value.items.length, 1);
+  assert.equal(result.value.items[0].stockScope, "product");
+});
+
+test("exploreCatalog omits classificationSource when absent or when the upstream sends an unrecognized value", async () => {
+  handler = (_req, res) => sendJson(res, 200, exploreResponsePayload());
+  const withoutIt = await makeAdapter().exploreCatalog({ sort: { by: "price", direction: "desc" }, limit: 1 }, { correlationId: "corr-explore-4a" });
+  assert.equal(withoutIt.ok, true);
+  if (withoutIt.ok) assert.equal("classificationSource" in withoutIt.value, false);
+
+  handler = (_req, res) => sendJson(res, 200, exploreResponsePayload({ classificationSource: "not_a_real_source" }));
+  const withInvalid = await makeAdapter().exploreCatalog({ sort: { by: "price", direction: "desc" }, limit: 1 }, { correlationId: "corr-explore-4b" });
+  assert.equal(withInvalid.ok, true);
+  if (withInvalid.ok) assert.equal("classificationSource" in withInvalid.value, false);
+});
+
+test("exploreCatalog preserves stockScope=product_aggregate distinctly from product", async () => {
+  handler = (_req, res) =>
+    sendJson(res, 200, exploreResponsePayload({
+      products: [{ productId: "61", name: "Set combinado", price: 46990, currency: "CLP", stockQuantity: 12, stockScope: "product_aggregate", availability: "available" }]
+    }));
+  const result = await makeAdapter().exploreCatalog({ sort: { by: "stock", direction: "desc" }, limit: 1 }, { correlationId: "corr-explore-5" });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.value.items[0].stockScope, "product_aggregate");
+});
+
+test("exploreCatalog preserves exhaustiveForScope=false (partial scan, no absolute ranking claim allowed downstream)", async () => {
+  handler = (_req, res) => sendJson(res, 200, exploreResponsePayload({ exhaustiveForScope: false, totalMatched: 5000 }));
+  const result = await makeAdapter().exploreCatalog({ sort: { by: "price", direction: "asc" }, limit: 10 }, { correlationId: "corr-explore-6" });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.value.exhaustiveForScope, false);
+    assert.equal(result.value.totalMatched, 5000);
+  }
+});
+
+test("exploreCatalog preserves an item with price: null - never invented as zero", async () => {
+  handler = (_req, res) =>
+    sendJson(res, 200, exploreResponsePayload({
+      products: [{ productId: "9", name: "Producto sin precio", price: null, currency: "CLP", stockQuantity: 0, stockScope: "product", availability: "unknown" }]
+    }));
+  const result = await makeAdapter().exploreCatalog({ sort: { by: "price", direction: "asc" }, limit: 1 }, { correlationId: "corr-explore-7" });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.value.items[0].price, null);
+});
+
+test("exploreCatalog maps the explore-specific lower_snake error vocabulary (invalid_limit/invalid_sort/invalid_request) to invalid_input, not invalid_response", async () => {
+  for (const providerCode of ["invalid_limit", "invalid_sort", "invalid_request"]) {
+    handler = (_req, res) => sendJson(res, 400, { error: { code: providerCode, message: "Invalid request", correlationId: "c" } });
+    const result = await makeAdapter().exploreCatalog({ sort: { by: "price", direction: "asc" }, limit: 1 }, { correlationId: `corr-explore-err-${providerCode}` });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.error.code, "invalid_input", `${providerCode} must map to invalid_input`);
+      assert.equal(result.error.retryable, false);
+    }
+  }
+});
+
+test("exploreCatalog with a malformed response (missing sort/scope, products not an array) maps to invalid_response", async () => {
+  const malformedPayloads = [
+    { scope: { availability: "available" }, totalMatched: 1, exhaustiveForScope: true, products: [] },
+    { sort: { by: "price", direction: "asc" }, totalMatched: 1, exhaustiveForScope: true, products: [] },
+    { scope: { availability: "available" }, sort: { by: "price", direction: "asc" }, totalMatched: 1, exhaustiveForScope: true, products: "not-an-array" }
+  ];
+  for (const payload of malformedPayloads) {
+    handler = (_req, res) => sendJson(res, 200, payload);
+    const result = await makeAdapter().exploreCatalog({ sort: { by: "price", direction: "asc" }, limit: 1 }, { correlationId: "corr-explore-malformed" });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.code, "invalid_response");
+  }
+});
+
+test("exploreCatalog timeout/network failure is reported as retryable and never throws", async () => {
+  handler = (_req, res) => {
+    setTimeout(() => sendJson(res, 200, exploreResponsePayload()), 2000);
+  };
+  const result = await makeAdapter(50).exploreCatalog({ sort: { by: "price", direction: "asc" }, limit: 1 }, { correlationId: "corr-explore-timeout" });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error.code, "timeout");
+    assert.equal(result.error.retryable, true);
+  }
+});
+
+test("exploreCatalog never retries at the adapter level - exactly one physical HTTP call per invocation", async () => {
+  handler = (_req, res) => sendJson(res, 500, { error: { code: "CATALOG_QUERY_FAILED", message: "db down", correlationId: "c" } });
+  const result = await makeAdapter().exploreCatalog({ sort: { by: "price", direction: "asc" }, limit: 1 }, { correlationId: "corr-explore-5xx" });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error.code, "unavailable");
+    assert.equal(result.error.retryable, true);
+  }
+  assert.equal(requestCount, 1);
+});
+
 test("error messages never leak the configured API key", async () => {
   handler = (_req, res) => sendJson(res, 500, { error: { code: "INTERNAL_ERROR", message: "x-api-key=super-secret-value leaked in message", correlationId: "c" } });
   const result = await makeAdapter().searchProducts({ query: "q" }, { correlationId: "corr-11" });

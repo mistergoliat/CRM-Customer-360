@@ -1,9 +1,10 @@
 import type { CapabilityGatewayResult } from "../capability-gateway/types";
-import type { CatalogProduct, CatalogSearchResult } from "@/lib/catalog";
+import type { CatalogExploreResult, CatalogProduct, CatalogSearchResult } from "@/lib/catalog";
 import type { CompanyKnowledgeSearchResult } from "../capability-gateway/companyKnowledgeCapability";
 import type { ToolObservation } from "./agentStepTypes";
 
 const MAX_SEARCH_ITEMS = 5;
+const MAX_EXPLORE_ITEMS = 10;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -48,6 +49,35 @@ function projectProductDetails(data: unknown) {
   };
 }
 
+/**
+ * ACS-R1-05.1-T02.6. Keeps scope/sort/totalMatched/exhaustiveForScope/
+ * classificationSource - the model needs exhaustiveForScope to know whether
+ * it may use absolute ranking language, and stockScope to distinguish direct
+ * product stock from a variant-aggregated figure. Never the raw gateway
+ * payload - still capped and re-listed field by field like every other
+ * projection here.
+ */
+function projectExploreCatalog(data: unknown) {
+  if (!isRecord(data)) return null;
+  const result = data as CatalogExploreResult;
+  return {
+    scope: result.scope,
+    sort: result.sort,
+    totalMatched: result.totalMatched,
+    exhaustiveForScope: result.exhaustiveForScope,
+    ...(result.classificationSource ? { classificationSource: result.classificationSource } : {}),
+    products: (result.items ?? []).slice(0, MAX_EXPLORE_ITEMS).map((item) => ({
+      productId: item.productId,
+      name: item.name,
+      price: item.price,
+      currency: item.currency,
+      stockQuantity: item.stockQuantity,
+      stockScope: item.stockScope,
+      availability: item.availability
+    }))
+  };
+}
+
 function projectCompanyKnowledge(data: unknown) {
   if (!isRecord(data)) return { entries: [] };
   const result = data as CompanyKnowledgeSearchResult;
@@ -76,7 +106,9 @@ export function buildToolObservation(tool: string, result: CapabilityGatewayResu
           ? projectProductDetails(result.data)
           : tool === "search_company_knowledge"
             ? projectCompanyKnowledge(result.data)
-            : null;
+            : tool === "explore_catalog"
+              ? projectExploreCatalog(result.data)
+              : null;
     return { tool, status: "completed", data };
   }
 

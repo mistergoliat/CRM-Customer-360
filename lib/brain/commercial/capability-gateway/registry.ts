@@ -1,5 +1,16 @@
 import { createCatalogPort } from "@/lib/catalog";
-import type { CatalogBatchItemInput, CatalogBatchResult, CatalogPort, CatalogProduct, CatalogSearchResult } from "@/lib/catalog";
+import type {
+  CatalogBatchItemInput,
+  CatalogBatchResult,
+  CatalogExploreAvailabilityFilter,
+  CatalogExploreInput,
+  CatalogExplorePriceRange,
+  CatalogExploreResult,
+  CatalogExploreSort,
+  CatalogPort,
+  CatalogProduct,
+  CatalogSearchResult
+} from "@/lib/catalog";
 import type { CapabilityGatewayContext, CapabilityGatewayDefinition, CapabilityGovernanceMetadata } from "./types";
 import { CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS } from "./customerIdentityCapabilities";
 import { companyKnowledgeCapability } from "./companyKnowledgeCapability";
@@ -179,6 +190,104 @@ function batchGetProductsCapability(getPort: () => CatalogPort | null): Capabili
   };
 }
 
+function asOptionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asExploreSort(value: unknown): CatalogExploreSort | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const by = record.by;
+  const direction = record.direction;
+  if (by !== "price" && by !== "stock" && by !== "name") return null;
+  if (direction !== "asc" && direction !== "desc") return null;
+  return { by, direction };
+}
+
+function asExplorePriceRange(value: unknown): CatalogExplorePriceRange | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  const min = typeof record.min === "number" && Number.isFinite(record.min) ? record.min : undefined;
+  const max = typeof record.max === "number" && Number.isFinite(record.max) ? record.max : undefined;
+  if (min === undefined && max === undefined) return undefined;
+  return { ...(min !== undefined ? { min } : {}), ...(max !== undefined ? { max } : {}) };
+}
+
+function asExploreAvailability(value: unknown): CatalogExploreAvailabilityFilter | undefined {
+  return value === "available" || value === "unavailable" || value === "all" ? value : undefined;
+}
+
+/**
+ * ACS-R1-05.1-T02.6. Extremes/top-N/rankings/filtered browse - distinct from
+ * search_products (open-ended semantic/textual discovery) and get_product_details
+ * (expands one already-identified productId). "available" is the closed
+ * default (never "all") unless the model explicitly asks for another scope -
+ * see registry docs and buildAgentStepPromptPackage.ts rule lines.
+ */
+function exploreCatalogCapability(getPort: () => CatalogPort | null): CapabilityGatewayDefinition<Record<string, unknown>, CatalogExploreResult> {
+  return {
+    capability: "explore_catalog",
+    version: CAPABILITY_GATEWAY_VERSION,
+    description:
+      "Find extremes (cheapest/most expensive), top-N, rankings, or filtered/sorted views of the catalog by price, stock, or name - with optional filters by category, product type, price range, availability or text - via the catalog microservice. Not for open-ended semantic product discovery (use search_products) and not for expanding one already-identified product (use get_product_details).",
+    governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
+    maxRetries: 1,
+    async checkAvailability() {
+      if (catalogUnavailable(getPort())) {
+        return { status: "unavailable", reason: "catalog_service_not_configured" };
+      }
+      return { status: "available", reason: null };
+    },
+    async execute(input, context: CapabilityGatewayContext) {
+      const port = getPort();
+      if (catalogUnavailable(port)) {
+        return { status: "temporarily_blocked", data: null, errorCode: "catalog_service_not_configured", retryable: true, evidence: [] };
+      }
+
+      const sort = asExploreSort(input.sort);
+      const limit = typeof input.limit === "number" && Number.isFinite(input.limit) && input.limit >= 1 ? Math.trunc(input.limit) : null;
+      if (!sort || limit === null) {
+        return { status: "invalid_arguments", data: null, errorCode: "sort_and_limit_required", retryable: false, evidence: [] };
+      }
+
+      const price = asExplorePriceRange(input.price);
+      if (price && price.min !== undefined && price.max !== undefined && price.max < price.min) {
+        return { status: "invalid_arguments", data: null, errorCode: "price_range_invalid", retryable: false, evidence: [] };
+      }
+
+      const exploreInput: CatalogExploreInput = {
+        ...(asOptionalText(input.query) ? { query: asOptionalText(input.query) } : {}),
+        ...(asOptionalText(input.categoryId) ? { categoryId: asOptionalText(input.categoryId) } : {}),
+        ...(asOptionalText(input.categorySlug) ? { categorySlug: asOptionalText(input.categorySlug) } : {}),
+        ...(asOptionalText(input.productType) ? { productType: asOptionalText(input.productType) } : {}),
+        ...(price ? { price } : {}),
+        availability: asExploreAvailability(input.availability) ?? "available",
+        sort,
+        limit
+      };
+
+      const result = await port.exploreCatalog(exploreInput, { correlationId: context.correlationId });
+      if (!result.ok) {
+        return mapCatalogErrorToOutcome(result.error);
+      }
+
+      return {
+        status: "completed",
+        data: result.value,
+        errorCode: null,
+        retryable: false,
+        evidence: [
+          {
+            source: result.value.provenance.source,
+            summary: `explore_catalog matched ${result.value.totalMatched} item(s), returned ${result.value.items.length}, exhaustiveForScope=${result.value.exhaustiveForScope}.`,
+            capturedAt: result.value.provenance.retrievedAt
+          }
+        ]
+      };
+    }
+  };
+}
+
 function mapCatalogErrorToOutcome(error: { code: string; message: string; retryable: boolean }) {
   const evidence = [{ source: "catalog_service_http", summary: error.message, capturedAt: new Date().toISOString() }];
   switch (error.code) {
@@ -212,6 +321,7 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   searchProductsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   getProductDetailsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   batchGetProductsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
+  exploreCatalogCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   // ACS-R1-05.1-T02.1. Lexical fixture search, no external service - see
   // companyKnowledgeCapability.ts. Non-productive fixture content until the
   // business supplies verified copy (companyKnowledgeFixtures.ts).

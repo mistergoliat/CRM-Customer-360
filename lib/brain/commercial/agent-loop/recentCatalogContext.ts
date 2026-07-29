@@ -17,7 +17,8 @@ export type RecentCatalogContext = {
   interactions: Array<{
     inboundMessageId: string;
     completedAt: string;
-    sourceTool: "search_products" | "get_product_details";
+    /** ACS-R1-05.1-T02.6: explore_catalog reuses the same items-array shape as search_products (productId/name/position only - never price/stock/availability). */
+    sourceTool: "search_products" | "get_product_details" | "explore_catalog";
     products: RecentCatalogContextProduct[];
   }>;
 };
@@ -77,8 +78,8 @@ function asOptionalText(value: unknown): string | undefined {
   return text ?? undefined;
 }
 
-function isCatalogTool(value: unknown): value is "search_products" | "get_product_details" {
-  return value === "search_products" || value === "get_product_details";
+function isCatalogTool(value: unknown): value is "search_products" | "get_product_details" | "explore_catalog" {
+  return value === "search_products" || value === "get_product_details" || value === "explore_catalog";
 }
 
 function normalizeProductCandidate(input: {
@@ -101,6 +102,7 @@ function normalizeProductCandidate(input: {
   };
 }
 
+/** Shared by search_products and explore_catalog - both return {items: [{productId, name, ...}]} (ACS-R1-05.1-T02.6). */
 function productsFromSearchProducts(payload: Record<string, unknown>): RecentCatalogContextProduct[] {
   const items = Array.isArray(payload.items) ? payload.items : [];
   const products: RecentCatalogContextProduct[] = [];
@@ -144,7 +146,7 @@ function buildExecutionQuery(windowStart: string, currentTime: string) {
         ) AS inbound_message_id
       FROM crm_capability_executions e
       WHERE e.conversation_id = ?
-        AND e.capability_name IN ('search_products', 'get_product_details')
+        AND e.capability_name IN ('search_products', 'get_product_details', 'explore_catalog')
         AND e.execution_status = 'completed'
         AND e.response_summary_json IS NOT NULL
         AND e.completed_at >= ?
@@ -179,6 +181,7 @@ export async function loadRecentCatalogContext(input: LoadRecentCatalogContextIn
   const warnings: string[] = [];
   const interactions: RecentCatalogContext["interactions"] = [];
   let productCount = 0;
+  const seenProductIds = new Set<string>();
 
   for (const row of result.rows) {
     const sourceTool = row.capability_name;
@@ -202,9 +205,29 @@ export async function loadRecentCatalogContext(input: LoadRecentCatalogContextIn
       continue;
     }
 
-    const rawProducts = sourceTool === "search_products" ? productsFromSearchProducts(payload) : productsFromProductDetails(payload);
+    const rawProducts = sourceTool === "get_product_details" ? productsFromProductDetails(payload) : productsFromSearchProducts(payload);
+    if (rawProducts.length === 0) {
+      warnings.push("recent_catalog_context_no_valid_products");
+      continue;
+    }
+
+    // ACS-R1-05.1-T02.6: a productId already surfaced by a more recent
+    // interaction is skipped here - avoids spending the shared product
+    // budget on a repeat (e.g. explore_catalog returning the same top item
+    // across consecutive turns). Reuses the same accumulation loop, never a
+    // second, parallel memory.
+    const dedupedProducts = rawProducts.filter((product) => {
+      if (seenProductIds.has(product.productId)) return false;
+      seenProductIds.add(product.productId);
+      return true;
+    });
+    if (dedupedProducts.length === 0) {
+      warnings.push("recent_catalog_context_all_candidates_deduped");
+      continue;
+    }
+
     const remaining = RECENT_CATALOG_CONTEXT_MAX_PRODUCTS - productCount;
-    const products = rawProducts.slice(0, Math.max(remaining, 0));
+    const products = dedupedProducts.slice(0, Math.max(remaining, 0));
     if (products.length === 0) {
       warnings.push("recent_catalog_context_no_valid_products");
       continue;

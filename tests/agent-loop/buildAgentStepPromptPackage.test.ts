@@ -300,3 +300,32 @@ test("[PR18] adaptive product presentation policy does not force exactly one pro
   assert.doesNotMatch(system, /\b(?:must|always)\s+(?:show|present)\s+(?:every|all)\s+(?:available\s+)?(?:search\s+)?(?:result|results|product|products)\b/i);
   assert.doesNotMatch(system, /\bshow\s+all\s+results\b/i);
 });
+
+test("[PR19] ACS-R1-05.1-T02.6: explore_catalog differentiation rules are present in gathering and finalization", () => {
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase, identityConfiguration: pesasChileConfig() });
+    const system = messages[0].content;
+
+    assert.match(system, /Do not use search_products to claim a global maximum, minimum, top-N, or ranking/);
+    assert.match(system, /Use explore_catalog for extremes \(cheapest\/most expensive\), top-N, rankings, or filtered\/sorted views/);
+    assert.match(system, /Use get_product_details after explore_catalog \(or after search_products\)/);
+    assert.match(system, /explore_catalog is not sufficient evidence for a product link either/);
+  }
+});
+
+test("[PR20] exhaustiveForScope governs absolute vs. bounded ranking language in both phases", () => {
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase, identityConfiguration: pesasChileConfig() });
+    const system = messages[0].content;
+    assert.match(system, /exhaustiveForScope=true, you may use absolute language/);
+    assert.match(system, /exhaustiveForScope=false, you must say something equivalent to "among the results found"/);
+  }
+});
+
+test("[PR21] the model must never invent categoryId/categorySlug and must never leak internal implementation terms", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+  assert.match(system, /Never invent categoryId or categorySlug for explore_catalog/);
+  assert.match(system, /productType may be inferred from the customer's intent only for supported, documented values \(e\.g\. machine, bench\)/);
+  assert.match(system, /Never mention internal implementation terms to the customer: endpoint, tool, capability, exhaustiveForScope, stockScope/);
+});

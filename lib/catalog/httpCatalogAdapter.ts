@@ -7,11 +7,26 @@
  */
 import {
   CATALOG_ADAPTER_CONTRACT_VERSION,
+  CATALOG_EXPLORE_AVAILABILITY_FILTERS,
+  CATALOG_EXPLORE_CLASSIFICATION_SOURCES,
+  CATALOG_EXPLORE_SORT_DIRECTIONS,
+  CATALOG_EXPLORE_SORT_FIELDS,
+  CATALOG_EXPLORE_STOCK_SCOPES,
   type CatalogAttribute,
   type CatalogAvailabilityStatus,
   type CatalogBatchItemInput,
   type CatalogBatchItemResult,
   type CatalogBatchResult,
+  type CatalogExploreAvailabilityFilter,
+  type CatalogExploreClassificationSource,
+  type CatalogExploreInput,
+  type CatalogExploreItem,
+  type CatalogExploreResult,
+  type CatalogExploreScope,
+  type CatalogExploreSort,
+  type CatalogExploreSortDirection,
+  type CatalogExploreSortField,
+  type CatalogExploreStockScope,
   type CatalogPort,
   type CatalogPortError,
   type CatalogPortErrorCode,
@@ -147,6 +162,18 @@ function mapProviderErrorCode(providerCode: string | undefined, httpStatus: numb
     case "CATALOG_QUERY_FAILED":
     case "INTERNAL_ERROR":
       return { code: "unavailable", retryable: true };
+    // POST /v1/products/explore uses its own lower_snake error vocabulary
+    // (confirmed by probing the real service - never seen documented in a
+    // schema), distinct from the UPPER_SNAKE codes above used by
+    // search/details/batch. Without these, a 400 from a bad model-supplied
+    // sort/limit/price range fell through to the generic `invalid_response`
+    // branch below (wrong: that code means "unexpected payload shape", not
+    // "request rejected"), which the gateway then treats as a hard `failed`
+    // instead of a replannable `invalid_arguments`.
+    case "invalid_limit":
+    case "invalid_sort":
+    case "invalid_request":
+      return { code: "invalid_input", retryable: false };
     default:
       if (httpStatus >= 500) return { code: "unavailable", retryable: true };
       if (httpStatus === 401 || httpStatus === 403) return { code: "unauthorized", retryable: false };
@@ -323,6 +350,109 @@ function parseBatchResponse(payload: unknown, retrievedAt: string): CatalogBatch
   };
 }
 
+/**
+ * Explicit key-by-key allowlist - never spreads the caller's input object
+ * onto the request body. This is the closed schema the capability layer
+ * relies on: even if a caller's CatalogExploreInput somehow carried an extra
+ * property, it would never reach the real service (which itself tolerates
+ * unknown fields silently - see ACS-R1-05.1-T02.6 audit).
+ */
+function buildExploreRequestBody(input: CatalogExploreInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    sort: { by: input.sort.by, direction: input.sort.direction },
+    limit: input.limit
+  };
+  if (input.query !== undefined) body.query = input.query;
+  if (input.categoryId !== undefined) body.categoryId = input.categoryId;
+  if (input.categorySlug !== undefined) body.categorySlug = input.categorySlug;
+  if (input.productType !== undefined) body.productType = input.productType;
+  if (input.availability !== undefined) body.availability = input.availability;
+  if (input.price !== undefined) {
+    const price: Record<string, unknown> = {};
+    if (input.price.min !== undefined) price.min = input.price.min;
+    if (input.price.max !== undefined) price.max = input.price.max;
+    if (Object.keys(price).length > 0) body.price = price;
+  }
+  return body;
+}
+
+function parseExploreSort(value: unknown): CatalogExploreSort | null {
+  if (!isRecord(value)) return null;
+  const by = asString(value.by);
+  const direction = asString(value.direction);
+  if (by === null || !(CATALOG_EXPLORE_SORT_FIELDS as readonly string[]).includes(by)) return null;
+  if (direction === null || !(CATALOG_EXPLORE_SORT_DIRECTIONS as readonly string[]).includes(direction)) return null;
+  return { by: by as CatalogExploreSortField, direction: direction as CatalogExploreSortDirection };
+}
+
+function parseExploreScope(value: unknown): CatalogExploreScope | null {
+  if (!isRecord(value)) return null;
+  const availability = asString(value.availability);
+  if (availability === null || !(CATALOG_EXPLORE_AVAILABILITY_FILTERS as readonly string[]).includes(availability)) return null;
+  const query = asString(value.query);
+  const categoryId = asString(value.categoryId);
+  const categorySlug = asString(value.categorySlug);
+  const productType = asString(value.productType);
+  return {
+    ...(query !== null ? { query } : {}),
+    ...(categoryId !== null ? { categoryId } : {}),
+    ...(categorySlug !== null ? { categorySlug } : {}),
+    ...(productType !== null ? { productType } : {}),
+    availability: availability as CatalogExploreAvailabilityFilter
+  };
+}
+
+function parseExploreItem(value: unknown): CatalogExploreItem | null {
+  if (!isRecord(value)) return null;
+  // Unlike search/details/batch, the explore endpoint's own contract already
+  // sends productId as a string (confirmed against
+  // mistergoliat/MS-pesaschile-catalog-service main@147794b/feature@efc2f7e) -
+  // never re-coerced through asNumber.
+  const productId = asString(value.productId);
+  const name = asString(value.name);
+  const currency = asString(value.currency);
+  const availability = asString(value.availability);
+  const stockScope = asString(value.stockScope);
+  if (productId === null || name === null || currency === null || availability === null) return null;
+  if (stockScope === null || !(CATALOG_EXPLORE_STOCK_SCOPES as readonly string[]).includes(stockScope)) return null;
+  return {
+    productId,
+    name,
+    price: asNumber(value.price),
+    currency,
+    stockQuantity: asNumber(value.stockQuantity),
+    stockScope: stockScope as CatalogExploreStockScope,
+    availability
+  };
+}
+
+function parseExploreResponse(payload: unknown, retrievedAt: string): CatalogExploreResult | null {
+  if (!isRecord(payload) || !Array.isArray(payload.products)) return null;
+  const scope = parseExploreScope(payload.scope);
+  const sort = parseExploreSort(payload.sort);
+  const totalMatched = asNumber(payload.totalMatched);
+  if (scope === null || sort === null || totalMatched === null || typeof payload.exhaustiveForScope !== "boolean") return null;
+
+  const items = payload.products.map(parseExploreItem).filter((item): item is CatalogExploreItem => item !== null);
+  if (items.length !== payload.products.length) return null;
+
+  const classificationSource = asString(payload.classificationSource);
+  const validClassificationSource =
+    classificationSource !== null && (CATALOG_EXPLORE_CLASSIFICATION_SOURCES as readonly string[]).includes(classificationSource)
+      ? (classificationSource as CatalogExploreClassificationSource)
+      : null;
+
+  return {
+    scope,
+    sort,
+    totalMatched,
+    exhaustiveForScope: payload.exhaustiveForScope,
+    ...(validClassificationSource !== null ? { classificationSource: validClassificationSource } : {}),
+    items,
+    provenance: { source: "catalog_service_http", retrievedAt, cached: false }
+  };
+}
+
 async function fetchJson(
   config: HttpCatalogAdapterConfig,
   path: string,
@@ -427,6 +557,9 @@ export function createHttpCatalogAdapter(config: HttpCatalogAdapterConfig): Cata
         ...(item.quantity !== undefined ? { quantity: item.quantity } : {})
       }));
       return requestOnce(config, "/v1/products/batch", context, parseBatchResponse, { method: "POST", body: { items } });
+    },
+    async exploreCatalog(input, context) {
+      return requestOnce(config, "/v1/products/explore", context, parseExploreResponse, { method: "POST", body: buildExploreRequestBody(input) });
     }
   };
 }
