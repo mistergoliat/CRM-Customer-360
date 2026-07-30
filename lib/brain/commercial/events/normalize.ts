@@ -583,6 +583,8 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
   effectiveMaxToolCallsPerTurn: number;
   /** Optional - see AgentToolLoopCompletedRecordedPayload#providerFailure. */
   providerFailure?: AgentToolLoopCompletedRecordedPayload["providerFailure"];
+  /** Optional - see AgentToolLoopCompletedRecordedPayload#pendingCatalogAction. */
+  pendingCatalogAction?: AgentToolLoopCompletedRecordedPayload["pendingCatalogAction"];
   correlationId?: string | null;
   customerId?: string | number | null;
   conversationId?: string | number | null;
@@ -611,7 +613,8 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
     effectiveTimeoutMs: input.effectiveTimeoutMs,
     effectiveMaxAgentStepsPerTurn: input.effectiveMaxAgentStepsPerTurn,
     effectiveMaxToolCallsPerTurn: input.effectiveMaxToolCallsPerTurn,
-    ...(input.providerFailure ? { providerFailure: input.providerFailure } : {})
+    ...(input.providerFailure ? { providerFailure: input.providerFailure } : {}),
+    ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {})
   };
   return buildBaseEvent({
     eventType: "agent_tool_loop_completed",

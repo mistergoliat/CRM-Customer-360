@@ -28,6 +28,8 @@ import { createHttpAgentLoopProvider } from "../agent-loop/providers/httpAgentLo
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
 import { loadRecentCatalogContext } from "../agent-loop/recentCatalogContext";
 import type { RecentCatalogContextLoadResult } from "../agent-loop/recentCatalogContext";
+import { loadPendingCatalogAction } from "../agent-loop/pendingCatalogAction";
+import type { PendingCatalogActionLoadResult } from "../agent-loop/pendingCatalogAction";
 import { buildNativeBrainContextShim } from "./buildNativeBrainContextShim";
 import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
 import {
@@ -90,6 +92,8 @@ export type NativeAutonomousCycleInput = {
   agentLoopProvider?: AgentLoopProvider | null;
   /** Test-only injection point for the ephemeral RecentCatalogContext read model; production callers use crm_capability_executions. */
   loadRecentCatalogContext?: ((input: { conversationId: number; currentTime: string | Date }) => Promise<RecentCatalogContextLoadResult>) | null;
+  /** Test-only injection point for the ephemeral PendingCatalogAction read model; production callers use commercial_event. */
+  loadPendingCatalogAction?: ((input: { conversationId: number }) => Promise<PendingCatalogActionLoadResult>) | null;
 };
 
 /** ACS-R1-05-T06.2 (C2): the commercial need for this turn, read from already-loaded, persisted sources - never re-derived from free text, never invented. */
@@ -338,6 +342,17 @@ export async function runNativeAutonomousCycle(
       };
     }
 
+    const pendingCatalogActionLoader = input.loadPendingCatalogAction ?? loadPendingCatalogAction;
+    let pendingCatalogActionResult: PendingCatalogActionLoadResult;
+    try {
+      pendingCatalogActionResult = await pendingCatalogActionLoader({ conversationId: input.conversationId });
+    } catch (error) {
+      pendingCatalogActionResult = {
+        pendingCatalogAction: null,
+        warnings: [`pending_catalog_action_unexpected_failure:${error instanceof Error ? error.message : "unknown"}`]
+      };
+    }
+
     // ACS-R1-05.1-T02.3B: resolved exactly once per cycle. "Nothing
     // published" is not an error - resolveSalesAgentConfiguration() already
     // degrades that case on its own to a deployment/safe default, and the
@@ -381,6 +396,7 @@ export async function runNativeAutonomousCycle(
           ...customer360.warnings,
           ...session.warnings,
           ...recentCatalogContextResult.warnings,
+          ...pendingCatalogActionResult.warnings,
           ...agentLoopResult.loop.warnings,
           ...agentLoopResult.dispatch.warnings
         ])
@@ -405,6 +421,7 @@ export async function runNativeAutonomousCycle(
         }),
       trustedCustomerSession: session.execution,
       recentCatalogContext: recentCatalogContextResult.context,
+      pendingCatalogAction: pendingCatalogActionResult.pendingCatalogAction,
       abortSignal: input.abortSignal ?? null,
       resolvedSalesAgentConfiguration
     });
@@ -431,6 +448,7 @@ export async function runNativeAutonomousCycle(
         ...customer360.warnings,
         ...session.warnings,
         ...recentCatalogContextResult.warnings,
+        ...pendingCatalogActionResult.warnings,
         ...agentLoopResult.loop.warnings,
         ...agentLoopResult.dispatch.warnings
       ])

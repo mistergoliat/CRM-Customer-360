@@ -4,6 +4,7 @@ export * from "./agentLoopProviderTypes";
 export * from "./buildAgentStepPromptPackage";
 export * from "./buildToolObservation";
 export * from "./recentCatalogContext";
+export * from "./pendingCatalogAction";
 export * from "./runAgentToolLoop";
 export * from "./dispatchAgentLoopResponse";
 export * from "./runNativeAgentToolLoopCycle";

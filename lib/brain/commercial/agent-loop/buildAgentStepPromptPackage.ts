@@ -3,6 +3,7 @@ import { AGENT_STEP_TYPES } from "./agentStepTypes";
 import type { AgentLoopStepRecord } from "./agentStepTypes";
 import type { AgentLoopProviderMessage } from "./agentLoopProviderTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
+import type { PendingCatalogActionStep } from "./agentStepTypes";
 import { renderSalesAgentIdentityPrompt } from "./renderSalesAgentIdentityPrompt";
 import { describeStockDisclosure } from "./stockDisclosurePolicy";
 
@@ -32,6 +33,14 @@ export type AgentLoopPromptInput = {
    * facts must still be rehydrated with tools.
    */
   recentCatalogContext?: RecentCatalogContext | null;
+  /**
+   * ACS-R1-05.1-T02.7. Structured continuity for a catalog action the
+   * assistant's own immediately preceding reply already offered (e.g. "want
+   * the link?") - present only when one is still open for this exact
+   * customer turn. Never a source of current price/stock/availability/URL,
+   * same discipline as recentCatalogContext.
+   */
+  pendingCatalogAction?: PendingCatalogActionStep | null;
   availableTools: AgentLoopToolDescription[];
   /** This turn's own prior steps/observations only - never cross-turn state. */
   priorSteps: AgentLoopStepRecord[];
@@ -167,6 +176,30 @@ const COMMERCIAL_CLOSING_RULE_LINES = [
 ];
 
 /**
+ * ACS-R1-05.1-T02.7. pendingCatalogAction (present in the user payload only
+ * when one is open) is the structural record of a catalog action the
+ * assistant's own immediately preceding reply already offered - continuity
+ * that must not depend on the model re-reading and correctly recalling its
+ * own prior free-text message. Resolving which candidate the customer means
+ * (by name, by position, or by a plain "yes" when there is exactly one
+ * candidate) stays the model's job, same as every other reference
+ * resolution in this prompt (see RECENT_CATALOG_CONTEXT_RULE_LINES) - this
+ * block only governs what to do once that resolution is made, and how to
+ * keep or drop the pending action afterward.
+ */
+const PENDING_CATALOG_ACTION_RULE_LINES = [
+  "pendingCatalogAction, when present in the user payload, means your own immediately preceding reply already offered to send the link for one of pendingCatalogAction.candidateProductIds - this is given to you structurally, not something you need to recall from message history.",
+  "If the customer's current message unambiguously selects or confirms exactly one product from pendingCatalogAction.candidateProductIds (by name, by position such as \"the first\"/\"the last\", or by a plain confirmation like \"yes\"/\"send it\" when candidateProductIds has exactly one entry), immediately use get_product_details for that product and deliver the result per the rules above in this same reply - never ask again whether they want the link, and never first restate or re-present the product before delivering it.",
+  "If pendingCatalogAction.actionType is \"send_product_link\", the product was resolved, and get_product_details returns a failed or blocked observation, do not invent a URL, do not reuse any previous URL, say the link is temporarily unavailable, do not automatically offer the link again, omit pendingCatalogAction on your respond step, and let the action be consumed in this turn.",
+  "If the customer's message could match more than one candidate in pendingCatalogAction.candidateProductIds and does not clearly disambiguate, ask a short clarifying question naming only the ambiguous candidates, and include pendingCatalogAction again on your respond step with those same candidates - never guess.",
+  "If the customer's message clearly changes topic or intent instead of responding to the pending offer, answer the new message normally and omit pendingCatalogAction from your respond step.",
+  "Whenever your respond step's closing question is offering to send a product link (a first offer, or an unresolved ambiguous one carried forward per the rule above), include pendingCatalogAction on that same respond step with actionType \"send_product_link\" and every candidate productId the question refers to. Omit pendingCatalogAction from respond once the link was delivered, declared unavailable, or the offer no longer applies."
+];
+
+const RESPOND_STEP_SHAPE_WITH_PENDING_ACTION =
+  '{"type":"respond","message":"...","pendingCatalogAction":{"actionType":"send_product_link","candidateProductIds":["..."]}}. pendingCatalogAction is optional on respond - include it only per the pendingCatalogAction rules above';
+
+/**
  * Layer 1: the immutable Agent Tool Loop contract - what actions exist this
  * phase and the exact response shape. Never editable, never touched by
  * configuration.
@@ -177,7 +210,7 @@ function buildLoopContractLines(phase: "gathering" | "finalization", stepsRemain
       "This turn's tool budget is spent - no more tools are available.",
       "You must now either respond to the customer with what you already know, or hand off to a human if you genuinely cannot proceed.",
       RESPOND_JSON_INSTRUCTION,
-      'AgentStep shapes: {"type":"respond","message":"..."} | {"type":"handoff","reason":"..."}. use_tool is not available this turn.',
+      `AgentStep shapes: ${RESPOND_STEP_SHAPE_WITH_PENDING_ACTION} | {"type":"handoff","reason":"..."}. use_tool is not available this turn.`,
       "type must be one of: respond, handoff."
     ];
   }
@@ -186,7 +219,7 @@ function buildLoopContractLines(phase: "gathering" | "finalization", stepsRemain
     "You may only: request one read-only tool, respond to the customer, or hand off to a human.",
     `Steps remaining this turn: ${stepsRemaining}.`,
     RESPOND_JSON_INSTRUCTION,
-    'AgentStep shapes: {"type":"use_tool","tool":"<tool name>","arguments":{...}} | {"type":"respond","message":"..."} | {"type":"handoff","reason":"..."}.',
+    `AgentStep shapes: {"type":"use_tool","tool":"<tool name>","arguments":{...}} | ${RESPOND_STEP_SHAPE_WITH_PENDING_ACTION} | {"type":"handoff","reason":"..."}.`,
     `type must be one of: ${AGENT_STEP_TYPES.join(", ")}.`
   ];
 }
@@ -230,6 +263,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...EXPLORE_CATALOG_RULE_LINES,
       ...STOCK_DISCLOSURE_RULE_LINES,
       ...COMMERCIAL_CLOSING_RULE_LINES,
+      ...PENDING_CATALOG_ACTION_RULE_LINES,
       "You must never claim to have executed anything yourself - the platform executes tools, not you."
     ];
   }
@@ -242,6 +276,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...EXPLORE_CATALOG_RULE_LINES,
     ...STOCK_DISCLOSURE_RULE_LINES,
     ...COMMERCIAL_CLOSING_RULE_LINES,
+    ...PENDING_CATALOG_ACTION_RULE_LINES,
     "You must never claim to have executed anything yourself - the platform executes tools, not you.",
     INVALID_ARGUMENTS_RECOVERY_RULE_LINE,
     "Available tools:",
@@ -293,6 +328,7 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
     customerMessage: input.customerMessage,
     commercialContext: input.commercialContextSummary,
     recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
+    ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {}),
     priorStepsThisTurn: input.priorSteps.map(summarizeObservation),
     question: "What is the single next AgentStep?"
   };

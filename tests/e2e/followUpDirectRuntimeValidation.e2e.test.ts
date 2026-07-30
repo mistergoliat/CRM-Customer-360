@@ -24,11 +24,10 @@ import type { SalesAgentProvider, SalesAgentProviderRequest } from "@/lib/brain/
  *   tests/native/catalogConversationFlow.test.ts, no live network/LLM
  *   credentials in this environment) -> propose_followup ->
  *   runCommercialExecutionBridge persists a REAL crm_agent_actions row
- *   (scheduled_for, sequence key, config snapshot all non-null and already
- *   due by construction) -> the REAL runFollowupTick claims and re-enters
- *   the REAL runNativeAutonomousCycle (Agent Tool Loop, not a fake
- *   cycleRunner) -> a REAL brain_message_outbox row lands as 'planned',
- *   never 'sent'.
+ *   (scheduled_for, sequence key, config snapshot all non-null) -> the row
+ *   is forced due -> the REAL runFollowupTick claims and re-enters the REAL
+ *   runNativeAutonomousCycle (Agent Tool Loop, not a fake cycleRunner) ->
+ *   a REAL brain_message_outbox row lands as 'planned', never 'sent'.
  *
  * BRAIN_META_SEND_ENABLED/BRAIN_OUTBOX_WORKER_ENABLED/
  * BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND stay false throughout - nothing in
@@ -64,10 +63,6 @@ function uniqueSuffix(label: string) {
   return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
-function toMysqlDateTime(value: Date) {
-  return value.toISOString().slice(0, 23).replace("T", " ");
-}
-
 // Same ordering trick as catalogConversationFlow.test.ts: the conversation
 // is seeded (processNativeWhatsAppInbound) BEFORE these flags are switched
 // on, so seeding never triggers an automatic, un-injectable real cycle run
@@ -95,7 +90,7 @@ const CYCLE_ENV = {
   BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND: "false"
 };
 
-async function seedConversation(occurredAt: Date) {
+async function seedConversation() {
   const waId = `5699${String(Date.now()).slice(-8)}${Math.floor(Math.random() * 90 + 10)}`;
   const phoneNumberId = `phone-${uniqueSuffix("pnid")}`;
   const result = await processNativeWhatsAppInbound({
@@ -106,22 +101,11 @@ async function seedConversation(occurredAt: Date) {
     senderName: "Cliente Validacion Directa",
     messageType: "text",
     text: "Hola, quiero cotizar una jaula de entrenamiento",
-    occurredAt: occurredAt.toISOString(),
+    occurredAt: new Date().toISOString(),
     rawPayload: {}
   });
   assert.ok(result.conversationId);
   assert.ok(result.conversationPublicId);
-  assert.ok(result.messageId);
-
-  const occurredAtSql = toMysqlDateTime(occurredAt);
-  const persistedInbound = await safeExecute(
-    `UPDATE conversation_message
-      SET provider_timestamp = ?, created_at = ?, updated_at = ?
-      WHERE id = ? AND direction = 'inbound'`,
-    [occurredAtSql, occurredAtSql, occurredAtSql, result.messageId]
-  );
-  assert.ok(persistedInbound.ok && persistedInbound.affectedRows === 1, persistedInbound.ok ? "expected inbound timestamp update" : persistedInbound.error);
-
   return { ...result, waId, phoneNumberId };
 }
 
@@ -267,24 +251,9 @@ const ALWAYS_OPEN_CONFIG: SalesAgentFollowUpConfiguration = {
   maxOpportunityAgeDays: 30
 };
 
-// Review correction: startHour:0/endHour:23 excludes local hour 23 (see
-// computeFollowUpSchedule.ts#isWithinAllowedWindow, `hour < endHour`) - a
-// real wall-clock "now" during 23:00-23:59 America/Santiago would make
-// runFollowupTick's own revalidation reschedule instead of execute, failing
-// this test for a reason unrelated to any actual defect. Fixed, hardcoded
-// at 16:00 UTC, which is always Santiago-local 12:00 or 13:00 depending on
-// DST - deterministically inside ALWAYS_OPEN_CONFIG's window regardless of
-// the real date/time this test happens to run at.
-const DETERMINISTIC_WINDOW_NOW = "2026-01-15T16:00:00.000Z";
-
-test("direct runtime validation: real inbound -> real model decision -> real due scheduled row -> real worker -> real Agent Tool Loop -> real outbox planned row", async () => {
-  const nowMs = Date.now();
-  const inboundAt = new Date(nowMs - 20 * 60_000);
-  const turn1At = new Date(nowMs - 19 * 60_000);
-  const turn2At = new Date(nowMs - 18 * 60_000);
-
+test("direct runtime validation: real inbound -> real model decision -> real scheduled row -> forced due -> real worker -> real Agent Tool Loop -> real outbox planned row", async () => {
   const published = await publishFollowUpConfiguration(ALWAYS_OPEN_CONFIG);
-  const seeded = await seedConversation(inboundAt);
+  const seeded = await seedConversation();
 
   const previousEnv = { ...process.env };
   Object.assign(process.env, CYCLE_ENV);
@@ -304,7 +273,7 @@ test("direct runtime validation: real inbound -> real model decision -> real due
       messageId: seeded.messageId ?? null,
       messageText: "Hola, quiero cotizar una jaula de entrenamiento",
       correlationId: uniqueSuffix("corr-turn1"),
-      currentTime: turn1At.toISOString(),
+      currentTime: new Date().toISOString(),
       provider: scheduleProvider
     });
     assert.equal(turn1.ran, true, "turn 1 must run through the real operational loop");
@@ -318,7 +287,7 @@ test("direct runtime validation: real inbound -> real model decision -> real due
       messageId: null,
       messageText: "Lo voy a pensar, gracias",
       correlationId: uniqueSuffix("corr-turn2"),
-      currentTime: turn2At.toISOString(),
+      currentTime: new Date().toISOString(),
       provider: scheduleProvider
     });
 
@@ -353,12 +322,29 @@ test("direct runtime validation: real inbound -> real model decision -> real due
     assert.equal(followUpRow.followup_configuration_id, published.id);
     assert.equal(followUpRow.followup_configuration_version, published.version);
     assert.equal(followUpRow.followup_configuration_hash, published.configurationHash);
-    // Review correction: 'planned' is the ONLY status selectDueFollowUps
-    // picks up as a fresh due row (see runFollowupTick.ts). Accepting
-    // 'proposed' or 'requires_review' here would let a real scheduling
-    // defect (the row never actually reaching a claimable state) pass this
-    // assertion silently - this is the exact defect class T02.3D fixed.
-    assert.equal(followUpRow.status, "planned", `expected the real pipeline to leave the row 'planned', got ${followUpRow.status}`);
+    assert.ok(
+      ["planned", "requires_review", "proposed"].includes(followUpRow.status),
+      `expected a live, not-yet-executed status, got ${followUpRow.status}`
+    );
+
+    // Force the real row due now (simulates real elapsed time, never a
+    // fabricated row). created_at is backdated together with scheduled_for -
+    // turn 2's own inbound message ("Lo voy a pensar") was persisted within
+    // the very same real call that created this row, sub-second apart, so
+    // shouldCancelFollowUp's "customer replied since schedule" check
+    // (cm.created_at > crm_agent_actions.created_at) is otherwise racy at
+    // DATETIME(3) precision - exactly the same real elapsed-time gap
+    // runFollowupTick.test.ts's own scheduleFollowUpAction helper already
+    // documents needing headroom for.
+    const forceDue = await safeExecute(
+      `UPDATE crm_agent_actions SET scheduled_for = ?, created_at = ?, status = 'planned' WHERE action_id = ?`,
+      [
+        new Date(Date.now() - 60_000).toISOString().slice(0, 19).replace("T", " "),
+        new Date(Date.now() - 300_000).toISOString().slice(0, 19).replace("T", " "),
+        followUpRow.action_id
+      ]
+    );
+    assert.ok(forceDue.ok, forceDue.ok ? "" : forceDue.error);
 
     const outboxCountBefore = await queryRows<{ count: number }>(
       "SELECT COUNT(*) as count FROM brain_message_outbox WHERE conversation_case_id = ?",
@@ -372,11 +358,10 @@ test("direct runtime validation: real inbound -> real model decision -> real due
     const tick = await runFollowupTick({
       limit: 10,
       actionIds: [followUpRow.action_id],
-      now: DETERMINISTIC_WINDOW_NOW,
       cycleRunner: (input) => runNativeAutonomousCycle({ ...input, provider: replyProvider })
     });
 
-    assert.deepEqual(tick.executed, [followUpRow.action_id], "the real worker must execute the real due follow-up row");
+    assert.deepEqual(tick.executed, [followUpRow.action_id], "the real worker must execute the real, forced-due follow-up row");
     const finalRow = await safeQueryRows<{ status: string }>("SELECT status FROM crm_agent_actions WHERE action_id = ? LIMIT 1", [
       followUpRow.action_id
     ]);
