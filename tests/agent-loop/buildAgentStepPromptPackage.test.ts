@@ -3,6 +3,7 @@ import test from "node:test";
 import { buildAgentStepPromptPackage, type AgentLoopPromptInput } from "@/lib/brain/commercial/agent-loop/buildAgentStepPromptPackage";
 import { renderSalesAgentIdentityPrompt } from "@/lib/brain/commercial/agent-loop/renderSalesAgentIdentityPrompt";
 import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfiguration } from "@/lib/brain/commercial/sales-agent-configuration";
+import { describeStockDisclosure } from "@/lib/brain/commercial/agent-loop/stockDisclosurePolicy";
 
 function pesasChileConfig(overrides: Partial<SalesAgentPromptConfiguration> = {}): SalesAgentPromptConfiguration {
   return {
@@ -373,4 +374,70 @@ test("[PR21] the model must never invent categoryId/categorySlug and must never 
   assert.match(system, /Never invent categoryId or categorySlug for explore_catalog/);
   assert.match(system, /productType may be inferred from the customer's intent only for supported, documented values \(e\.g\. machine, bench\)/);
   assert.match(system, /Never mention internal implementation terms to the customer: endpoint, tool, capability, exhaustiveForScope, stockScope/);
+});
+
+// --- ACS-R1-05.1-T02.6.2: stock disclosure + commercial closing rules ---
+
+test("[PR25] stock disclosure rule is present in both phases with the exact bounded phrasings (incl. singular=1), generated from the tested function (zero drift), plus the no-enforcement disclaimer", () => {
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase, identityConfiguration: pesasChileConfig() });
+    const system = messages[0].content;
+
+    assert.match(system, /Never state the customer's stock as a raw number once it is 20 or more/);
+    assert.match(system, new RegExp(`stockQuantity <= 0: "${describeStockDisclosure(0)}"`));
+    assert.match(system, new RegExp(`stockQuantity = 1 \\(singular\\): "${describeStockDisclosure(1)}"`));
+    assert.match(system, new RegExp(`stockQuantity=2 -> "${describeStockDisclosure(2)}"`));
+    assert.match(system, new RegExp(`stockQuantity=4 -> "${describeStockDisclosure(4)}"`));
+    assert.match(system, new RegExp(`stockQuantity=20 -> "${describeStockDisclosure(20)}"`));
+    assert.match(system, new RegExp(`stockQuantity=99 -> "${describeStockDisclosure(99)}"`));
+    assert.match(system, new RegExp(`stockQuantity=100 -> "${describeStockDisclosure(100)}"`));
+    assert.match(system, new RegExp(`stockQuantity=101 -> "${describeStockDisclosure(101)}"`));
+    assert.match(system, /the runtime does not validate or rewrite what you actually say/);
+    assert.match(system, /never changes the real stockQuantity, the tool observation, or any persisted or audited data/);
+  }
+});
+
+test("[PR26] commercial closing rule (single product) is present with the exact phrasing and the no-repeat guidance", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+  assert.match(system, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
+  assert.match(system, /do not repeat "Este es el producto: <name>" if that product was already named in the sentence right before/);
+  assert.match(system, /You do not need to already know whether a public link exists to make this offer/);
+});
+
+test("[PR27] commercial closing rule (multiple products) always uses the fixed neutral phrasing, never gender agreement", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+  assert.match(system, /close with exactly: "¿Quieres que te envíe el link de alguno de estos productos\?"/);
+  assert.match(system, /never an attempt at grammatical gender agreement with a specific product name/);
+});
+
+test("[PR28] the commercial closing offer is explicitly withheld for every listed exception (publicLink availability is deliberately not one of them - see PR29)", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+  assert.match(system, /a public link was already delivered this turn/);
+  assert.match(system, /the customer explicitly asked for the link \(handled by the rule below instead\)/);
+  assert.match(system, /no concrete product was identified/);
+  assert.match(system, /your reply is a clarifying question/);
+  assert.match(system, /a tool failed or was blocked/);
+  assert.match(system, /you are handing off/);
+  assert.match(system, /you still need to ask the customer for a precision before recommending/);
+  assert.match(system, /your reply is not a commercial product presentation/);
+  assert.doesNotMatch(system, /Never add this closing offer when:[^\n]*publicLink is not available/);
+});
+
+test("[PR29] when the customer explicitly asks for or accepts the link, the model must run get_product_details and handle both publicLink outcomes without ever re-asking", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+  assert.match(system, /When the customer explicitly asks for or accepts the link: use get_product_details for that product\./);
+  assert.match(system, /If publicLink\.available is true, deliver the real canonical URL from publicLink\.canonicalUrl\./);
+  assert.match(system, /If it is not available, tell the customer no public link is available for that product right now - never invent a URL\./);
+  assert.match(system, /never ask again whether they want the link, and never turn that reply into another question/);
+});
+
+test("[PR30] stock disclosure and commercial closing rules are present in finalization too (where the model actually composes the final reply)", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  const system = messages[0].content;
+  assert.match(system, /Never state the customer's stock as a raw number once it is 20 or more/);
+  assert.match(system, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
 });

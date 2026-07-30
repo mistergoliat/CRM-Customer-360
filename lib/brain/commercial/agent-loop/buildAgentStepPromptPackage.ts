@@ -4,6 +4,7 @@ import type { AgentLoopStepRecord } from "./agentStepTypes";
 import type { AgentLoopProviderMessage } from "./agentLoopProviderTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
 import { renderSalesAgentIdentityPrompt } from "./renderSalesAgentIdentityPrompt";
+import { describeStockDisclosure } from "./stockDisclosurePolicy";
 
 export type AgentLoopToolDescription = {
   name: string;
@@ -117,6 +118,55 @@ const EXPLORE_CATALOG_RULE_LINES = [
 ];
 
 /**
+ * ACS-R1-05.1-T02.6.2. The real stockQuantity from a tool observation must
+ * never be stated verbatim to the customer once it is 20 or more (e.g. a raw
+ * "47171" reads as an inventory data leak, not a commercial statement) -
+ * only these phrasings, generated here from the same tested function the
+ * prompt shows as worked examples, so the rule text and the tested boundary
+ * logic can never drift apart. Applies to every stock mention to the
+ * customer: explore_catalog, get_product_details, search_products,
+ * comparisons, recommendations, rankings, single- or multi-product replies.
+ *
+ * No enforcement exists for this or any other rule in this block: the
+ * policy is applied through these immutable prompt instructions only - the
+ * runtime does not validate or deterministically rewrite the stock quantity
+ * (or anything else) the model actually states. It never changes the real
+ * stockQuantity, the tool observation, or any persisted or audited data.
+ */
+const STOCK_DISCLOSURE_RULE_LINES = [
+  "Never state the customer's stock as a raw number once it is 20 or more - translate the real stockQuantity from a tool observation into exactly one of these phrasings, never a number outside them:",
+  `stockQuantity <= 0: "${describeStockDisclosure(0)}"`,
+  `stockQuantity = 1 (singular): "${describeStockDisclosure(1)}"`,
+  `stockQuantity from 2 to 19 (state the exact number, plural): e.g. stockQuantity=2 -> "${describeStockDisclosure(2)}"; stockQuantity=4 -> "${describeStockDisclosure(4)}"`,
+  `stockQuantity from 20 to 100, inclusive (never the exact number): e.g. stockQuantity=20 -> "${describeStockDisclosure(20)}"; stockQuantity=99 -> "${describeStockDisclosure(99)}"; stockQuantity=100 -> "${describeStockDisclosure(100)}"`,
+  `stockQuantity greater than 100 (never the exact number): e.g. stockQuantity=101 -> "${describeStockDisclosure(101)}"`,
+  "This is a presentation rule applied only through this prompt instruction - the runtime does not validate or rewrite what you actually say; it never changes the real stockQuantity, the tool observation, or any persisted or audited data."
+];
+
+/**
+ * ACS-R1-05.1-T02.6.2. Closing rule aimed at the link, not just information -
+ * never hardcoded inside explore_catalog or get_product_details, always
+ * composed by the model per this immutable rule. No gender-agreement
+ * infrastructure exists in this system for product names, so the
+ * multi-product closing always uses one fixed, neutral phrasing - never an
+ * attempt to match grammatical gender to a specific product.
+ *
+ * The offer is deliberately gated only on having a resolvable productId, not
+ * on already knowing publicLink - explore_catalog and search_products never
+ * return publicLink at all (only get_product_details does), so requiring it
+ * up front would make the offer unreachable for a product only seen via
+ * explore_catalog/search_products. Whether a public link actually exists is
+ * discovered only when get_product_details runs, after the customer accepts
+ * or asks - see the last rule below for both outcomes of that check.
+ */
+const COMMERCIAL_CLOSING_RULE_LINES = [
+  'When your reply identifies exactly one concrete product (a resolvable productId, from explore_catalog, search_products, or get_product_details) and you have not already delivered its public link this turn, and the customer did not explicitly ask for the link, close with exactly: "¿Quieres que te envíe el link para revisarlo?" - do not repeat "Este es el producto: <name>" if that product was already named in the sentence right before. You do not need to already know whether a public link exists to make this offer.',
+  'When your reply presents more than one concrete product, close with exactly: "¿Quieres que te envíe el link de alguno de estos productos?" - always this neutral phrasing, never an attempt at grammatical gender agreement with a specific product name.',
+  "Never add this closing offer when: a public link was already delivered this turn; the customer explicitly asked for the link (handled by the rule below instead); no concrete product was identified; your reply is a clarifying question; a tool failed or was blocked; you are handing off; you still need to ask the customer for a precision before recommending; or your reply is not a commercial product presentation.",
+  "When the customer explicitly asks for or accepts the link: use get_product_details for that product. If publicLink.available is true, deliver the real canonical URL from publicLink.canonicalUrl. If it is not available, tell the customer no public link is available for that product right now - never invent a URL. Either way, never ask again whether they want the link, and never turn that reply into another question."
+];
+
+/**
  * Layer 1: the immutable Agent Tool Loop contract - what actions exist this
  * phase and the exact response shape. Never editable, never touched by
  * configuration.
@@ -178,6 +228,8 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...RECENT_CATALOG_CONTEXT_RULE_LINES,
       ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
       ...EXPLORE_CATALOG_RULE_LINES,
+      ...STOCK_DISCLOSURE_RULE_LINES,
+      ...COMMERCIAL_CLOSING_RULE_LINES,
       "You must never claim to have executed anything yourself - the platform executes tools, not you."
     ];
   }
@@ -188,6 +240,8 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...RECENT_CATALOG_CONTEXT_RULE_LINES,
     ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
     ...EXPLORE_CATALOG_RULE_LINES,
+    ...STOCK_DISCLOSURE_RULE_LINES,
+    ...COMMERCIAL_CLOSING_RULE_LINES,
     "You must never claim to have executed anything yourself - the platform executes tools, not you.",
     INVALID_ARGUMENTS_RECOVERY_RULE_LINE,
     "Available tools:",

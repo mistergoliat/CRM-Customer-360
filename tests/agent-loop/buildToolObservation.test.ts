@@ -245,3 +245,12 @@ test("a warning is also surfaced on a blocked observation (invalid_arguments), n
   assert.equal(observation.status, "blocked");
   assert.deepEqual(observation.warnings, ["some_sanitized_code"]);
 });
+
+test("ACS-R1-05.1-T02.6.2: the real stockQuantity is untouched in the observation - the stock disclosure policy is a prompt-only presentation rule, never a data transformation here", () => {
+  const observation = buildToolObservation(
+    "explore_catalog",
+    completed(exploreResult({ items: [{ productId: "9", name: "Producto con mucho stock", price: 1000, currency: "CLP", stockQuantity: 47171, stockScope: "product", availability: "available" }] }) as unknown as Record<string, unknown>)
+  );
+  const data = observation.data as { products: Array<Record<string, unknown>> };
+  assert.equal(data.products[0].stockQuantity, 47171);
+});
