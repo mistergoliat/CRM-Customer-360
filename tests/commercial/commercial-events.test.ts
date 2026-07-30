@@ -376,3 +376,88 @@ test("[AE33] agent_tool_loop_completed persists providerFailure inside payload_j
   assert.ok(!serialized.toLowerCase().includes("authorization"));
   assert.ok(!serialized.toLowerCase().includes("bearer"));
 });
+
+test("[AE34] ACS-R1-05.1-T02.7: agent_tool_loop_completed persists pendingCatalogAction inside payload_json and round-trips through a real read", async () => {
+  const inboundMessageId = `msg-${uniqueSuffix("pending-catalog-action")}`;
+  const conversationId = 999002;
+  const event = normalizeAgentToolLoopCompletedCommercialEvent({
+    inboundMessageId,
+    terminalReason: "responded",
+    decisionCount: 1,
+    toolExecutionCount: 0,
+    toolsUsed: [],
+    finalMessagePresent: true,
+    handoffReasonPresent: false,
+    stepsSummary: [],
+    correlationId: `corr-${uniqueSuffix("pending-catalog-action")}`,
+    conversationId,
+    opportunityId: null,
+    configurationSource: "safe_default",
+    configurationRecordId: null,
+    configurationVersion: null,
+    configurationHash: null,
+    effectiveModel: "brain-agent-loop",
+    effectiveTemperature: 0,
+    effectiveMaxOutputSize: null,
+    effectiveTimeoutMs: 20000,
+    effectiveMaxAgentStepsPerTurn: 3,
+    effectiveMaxToolCallsPerTurn: 2,
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["80", "2164"] }
+  });
+
+  const result = await recordCommercialEvent(event);
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "created");
+
+  const row = await safeQueryRows<{ payload_json: string }>("SELECT payload_json FROM commercial_event WHERE dedupe_key = ? LIMIT 1", [event.dedupeKey]);
+  assert.ok(row.ok);
+  const persistedPayload = JSON.parse(row.rows[0]?.payload_json ?? "{}");
+  assert.deepEqual(persistedPayload.pendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["80", "2164"] });
+
+  const reloaded = await loadCommercialEventByDedupeKey(event.dedupeKey);
+  assert.ok(reloaded);
+  assert.deepEqual(reloaded!.payload.pendingCatalogAction, persistedPayload.pendingCatalogAction);
+
+  // ACS-R1-05.1-T02.7: loadPendingCatalogAction reads this same row back as
+  // the most recent agent_tool_loop_completed event for the conversation -
+  // exercised here against a real row instead of only an injected fake, to
+  // confirm the SQL/column/JSON shape actually match in production.
+  const { loadPendingCatalogAction } = await import("@/lib/brain/commercial/agent-loop/pendingCatalogAction");
+  const loaded = await loadPendingCatalogAction({ conversationId });
+  assert.deepEqual(loaded.pendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["80", "2164"] });
+});
+
+test("[AE35] agent_tool_loop_completed omits pendingCatalogAction entirely when none is open (never a null placeholder in payload_json)", async () => {
+  const inboundMessageId = `msg-${uniqueSuffix("no-pending-catalog-action")}`;
+  const event = normalizeAgentToolLoopCompletedCommercialEvent({
+    inboundMessageId,
+    terminalReason: "responded",
+    decisionCount: 1,
+    toolExecutionCount: 0,
+    toolsUsed: [],
+    finalMessagePresent: true,
+    handoffReasonPresent: false,
+    stepsSummary: [],
+    correlationId: `corr-${uniqueSuffix("no-pending-catalog-action")}`,
+    conversationId: 999003,
+    opportunityId: null,
+    configurationSource: "safe_default",
+    configurationRecordId: null,
+    configurationVersion: null,
+    configurationHash: null,
+    effectiveModel: "brain-agent-loop",
+    effectiveTemperature: 0,
+    effectiveMaxOutputSize: null,
+    effectiveTimeoutMs: 20000,
+    effectiveMaxAgentStepsPerTurn: 3,
+    effectiveMaxToolCallsPerTurn: 2
+  });
+
+  const result = await recordCommercialEvent(event);
+  assert.equal(result.ok, true);
+
+  const row = await safeQueryRows<{ payload_json: string }>("SELECT payload_json FROM commercial_event WHERE dedupe_key = ? LIMIT 1", [event.dedupeKey]);
+  assert.ok(row.ok);
+  const persistedPayload = JSON.parse(row.rows[0]?.payload_json ?? "{}");
+  assert.equal("pendingCatalogAction" in persistedPayload, false);
+});

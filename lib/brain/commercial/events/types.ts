@@ -222,6 +222,16 @@ export type AgentToolLoopProviderFailurePayload = {
   elapsedMs: number | null;
 };
 
+// ACS-R1-05.1-T02.7. Local literal union mirroring
+// agent-loop/agentStepTypes.ts#PendingCatalogActionType - same
+// no-cross-module-import rationale as the rest of this file.
+export type AgentToolLoopPendingCatalogActionType = "send_product_link";
+
+export type AgentToolLoopPendingCatalogActionPayload = {
+  actionType: AgentToolLoopPendingCatalogActionType;
+  candidateProductIds: string[];
+};
+
 export type AgentToolLoopCompletedRecordedPayload = {
   inboundMessageId: string | null;
   terminalReason: AgentToolLoopTerminalReason;
@@ -250,6 +260,8 @@ export type AgentToolLoopCompletedRecordedPayload = {
   effectiveMaxToolCallsPerTurn: number;
   /** Optional - present only for terminalReason "provider_unavailable" when a real cause was captured. */
   providerFailure?: AgentToolLoopProviderFailurePayload | null;
+  /** ACS-R1-05.1-T02.7. Present only when this turn's own respond step left a catalog action open for the next customer turn - see PendingCatalogActionStep. */
+  pendingCatalogAction?: AgentToolLoopPendingCatalogActionPayload | null;
 };
 
 export interface CommercialEventV1 {

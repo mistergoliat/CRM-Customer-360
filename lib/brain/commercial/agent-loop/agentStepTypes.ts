@@ -16,9 +16,33 @@ export type AgentStepUseTool = {
   arguments: Record<string, unknown>;
 };
 
+/**
+ * ACS-R1-05.1-T02.7 (catalog action continuity). Structured, extensible
+ * record of a catalog action the assistant's reply just offered and is now
+ * waiting on the customer to pick a candidate for (e.g. "quieres que te
+ * envie el link de alguno de estos productos?"). Emitted by the model
+ * alongside `respond` - never inferred by the runtime from the free-text
+ * message - so the very next customer turn can resolve/continue it from
+ * structured data instead of the model having to re-read and correctly
+ * recall its own prior reply. Only `send_product_link` is implemented;
+ * `actionType` stays a literal union so a future action (e.g.
+ * show_product_details, compare_products) is a type addition, not a shape
+ * change.
+ */
+export const PENDING_CATALOG_ACTION_TYPES = ["send_product_link"] as const;
+export type PendingCatalogActionType = (typeof PENDING_CATALOG_ACTION_TYPES)[number];
+
+export type PendingCatalogActionStep = {
+  actionType: PendingCatalogActionType;
+  /** productIds the customer may choose between to resolve this action - never invented, sourced from this turn's own catalog evidence. */
+  candidateProductIds: string[];
+};
+
 export type AgentStepRespond = {
   type: "respond";
   message: string;
+  /** Present only when this reply introduces or renews a pending catalog action; absent means none is open after this turn. */
+  pendingCatalogAction?: PendingCatalogActionStep;
 };
 
 export type AgentStepHandoff = {
@@ -124,4 +148,6 @@ export type AgentLoopResult = {
   warnings: string[];
   /** Present only when terminalReason is "provider_unavailable" and a real provider error was caught (never fabricated). */
   providerFailure?: AgentLoopProviderFailure | null;
+  /** Mirrors the terminal respond step's own field (null for every other terminalReason, and null when that respond step carried none). */
+  finalPendingCatalogAction?: PendingCatalogActionStep | null;
 };

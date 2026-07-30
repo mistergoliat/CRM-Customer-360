@@ -1188,3 +1188,557 @@ test("repeated invalid_arguments across the full decision budget never exceeds m
   assert.ok(result.steps.every((step) => step.observation?.status === "blocked" || step.phase === "finalization"));
   assert.equal(result.terminalReason, "responded");
 });
+
+// ACS-R1-05.1-T02.7 - pendingCatalogAction continuity (catalog link
+// follow-up). The scripted steps below stand in for "what a correctly
+// behaving model does" - these tests verify the runtime threads the input
+// in, captures what the terminal respond step declares, and logs the
+// active/renewed/consumed transition, not model reasoning itself (already
+// covered by real-world evidence in the release notes and out of reach of a
+// scripted fake provider).
+
+test("pendingCatalogAction is threaded into the prompt payload seen by the provider", async () => {
+  let capturedPendingCatalogAction: unknown;
+  const provider: AgentLoopProvider = {
+    name: "capture-pending-catalog-action-provider",
+    async invoke(request) {
+      const user = request.messages.find((message) => message.role === "user");
+      capturedPendingCatalogAction = (JSON.parse(user?.content ?? "{}") as { pendingCatalogAction?: unknown }).pendingCatalogAction;
+      return { rawOutput: { type: "respond", message: "ok" } };
+    }
+  };
+
+  await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider
+  });
+
+  assert.deepEqual(capturedPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["501"] });
+});
+
+test("pendingCatalogAction: a fresh multi-product link offer is captured as finalPendingCatalogAction", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: "¿Quieres que te envíe el link de alguno de estos productos?",
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["80", "2164", "8"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "que opciones tienen en magnesio",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-products",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [
+            { position: 1, productId: "80", name: "Magnesio A" },
+            { position: 2, productId: "2164", name: "Magnesio B" },
+            { position: 3, productId: "8", name: "Magnesio C" }
+          ]
+        }
+      ]
+    },
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["80", "2164", "8"] });
+  assert.ok(result.warnings.some((warning) => warning.startsWith("pending_catalog_action_sanitized:send_product_link:")));
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("pending_catalog_action_renewed:")));
+});
+
+test("pendingCatalogAction: single candidate + plain confirmation resolves directly, no intermediate re-presentation turn", async () => {
+  const canonicalUrl = "https://pesaschile.cl/categories/501-magnesio.html";
+  catalogUpWithPublicLink({ canonicalUrl, scope: "exact_product", available: true, requiresVariantSelection: false, variantAttributeLabels: [] });
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: `Aqui tienes el enlace: ${canonicalUrl}` }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.steps.length, 2, "no intermediate re-presentation turn before delivering the link");
+  assert.equal(result.finalMessage, `Aqui tienes el enlace: ${canonicalUrl}`);
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.includes("pending_catalog_action_active:send_product_link:1"));
+  assert.ok(result.warnings.includes("pending_catalog_action_consumed:send_product_link"));
+});
+
+test("pendingCatalogAction: ambiguous selection keeps the action pending (renewed) instead of guessing", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: "Te refieres al Set 30kg o al Set 20kg de mancuernas?",
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["80", "81"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "el set de mancuernas",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-sets",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [
+            { position: 1, productId: "80", name: "Set 30kg de mancuernas" },
+            { position: 2, productId: "81", name: "Set 20kg de mancuernas" }
+          ]
+        }
+      ]
+    },
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["80", "81"] },
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 0);
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["80", "81"] });
+  assert.ok(result.warnings.includes("pending_catalog_action_active:send_product_link:2"));
+  assert.ok(result.warnings.includes("pending_catalog_action_renewed:send_product_link:2"));
+});
+
+test("pendingCatalogAction: multiple candidates plus plain confirmation asks for precision and renews sanitized candidates", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: "¿Te refieres al Magnesio en polvo o al Magnesio liquido?",
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["80", "2164", "999"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-magnesium",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [
+            { position: 1, productId: "80", name: "Magnesio en polvo" },
+            { position: 2, productId: "2164", name: "Magnesio liquido" }
+          ]
+        }
+      ]
+    },
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["80", "2164"] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 0);
+  assert.match(result.finalMessage ?? "", /Magnesio en polvo|Magnesio liquido/);
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["80", "2164"] });
+  assert.ok(result.warnings.some((warning) => warning.includes("candidateCountBefore=3:candidateCountAfter=2")));
+  assert.ok(result.warnings.includes("pending_catalog_action_renewed:send_product_link:2"));
+});
+
+test("pendingCatalogAction: final candidates are sanitized against current tool observations and the visible response stays intact", async () => {
+  catalogUp(1);
+  const visibleMessage = "¿Quieres que te envie el link de esta kettlebell?";
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+      {
+        type: "respond",
+        message: visibleMessage,
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501", "501", "999"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "busco kettlebell",
+    commercialContextSummary: {},
+    provider
+  });
+
+  assert.equal(result.finalMessage, visibleMessage);
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["501"] });
+  assert.ok(result.warnings.some((warning) => warning.includes("candidateCountBefore=3:candidateCountAfter=1")));
+});
+
+test("pendingCatalogAction: final action is dropped when all candidates are outside evidence, without changing the visible response", async () => {
+  const visibleMessage = "¿Quieres que te envie el link de este producto?";
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: visibleMessage,
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["999"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "busco magnesio",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-products",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "80", name: "Magnesio" }]
+        }
+      ]
+    },
+    provider
+  });
+
+  assert.equal(result.finalMessage, visibleMessage);
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.some((warning) => warning.startsWith("pending_catalog_action_dropped_no_candidates:send_product_link:")));
+});
+
+test("pendingCatalogAction: a message unrelated to the offer drops the pending action instead of resolving it", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [{ type: "respond", message: "Claro, el horario de despacho es de lunes a viernes." }]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "a que hora despachan?",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["80"] },
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 0);
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.includes("pending_catalog_action_consumed:send_product_link"));
+});
+
+test("pendingCatalogAction: link unavailable still consumes the action and never invents a URL", async () => {
+  catalogUpWithPublicLink({
+    canonicalUrl: null,
+    scope: "exact_product",
+    available: false,
+    unavailableReason: "missing_link_rewrite",
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "No tengo un enlace disponible para ese producto ahora." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dale",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.doesNotMatch(result.finalMessage ?? "", /https?:\/\//);
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.includes("pending_catalog_action_consumed:send_product_link"));
+});
+
+test("pendingCatalogAction: get_product_details failure consumes the action, never invents a URL and never re-offers automatically", async () => {
+  catalogDown();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "No puedo obtener el enlace en este momento. Probemos de nuevo mas tarde." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.steps.filter((record) => record.step.type === "use_tool" && record.step.tool === "get_product_details").length, 1);
+  assert.doesNotMatch(result.finalMessage ?? "", /https?:\/\//);
+  assert.doesNotMatch(result.finalMessage ?? "", /quieres.*link|envi[eé].*link/i);
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_tool_failed_consumed:send_product_link:")));
+  assert.ok(result.warnings.includes("pending_catalog_action_consumed:send_product_link"));
+});
+
+test("pendingCatalogAction: get_product_details failure suppresses a non-cooperative model renewal", async () => {
+  catalogDown();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      {
+        type: "respond",
+        message: "No puedo obtener el enlace en este momento.",
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "catalog-msg",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "501", name: "Kettlebell" }]
+        }
+      ]
+    },
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_tool_failed_consumed:send_product_link:")));
+  assert.ok(result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_model_renewal_suppressed:send_product_link:")));
+  assert.ok(result.warnings.includes("pending_catalog_action_consumed:send_product_link"));
+});
+
+test("pendingCatalogAction: blocked get_product_details suppresses a non-cooperative model renewal", async () => {
+  catalogUpWithPublicLink({
+    canonicalUrl: "https://pesaschile.cl/productos/501-kettlebell",
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      {
+        type: "respond",
+        message: "No puedo volver a obtener el enlace en este momento.",
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "catalog-msg",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "501", name: "Kettlebell" }]
+        }
+      ]
+    },
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider,
+    maxDecisions: 4,
+    maxToolExecutions: 2
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_tool_blocked_consumed:send_product_link:")));
+  assert.ok(result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_model_renewal_suppressed:send_product_link:")));
+  assert.ok(result.warnings.includes("pending_catalog_action_consumed:send_product_link"));
+});
+
+test("pendingCatalogAction: unrelated get_product_details failure does not consume the pending action", async () => {
+  catalogDown();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "777" } },
+      {
+        type: "respond",
+        message: "Sigo pendiente del link del producto anterior.",
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "catalog-msg",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "501", name: "Kettlebell" }]
+        }
+      ]
+    },
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["501"] });
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_tool_failed_consumed:")));
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_model_renewal_suppressed:")));
+});
+
+test("pendingCatalogAction: numeric tool productId matches string pending candidate on terminal failure", async () => {
+  catalogDown();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: 123 } },
+      {
+        type: "respond",
+        message: "No puedo obtener el enlace en este momento.",
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["123"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "catalog-msg",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "123", name: "Banco" }]
+        }
+      ]
+    },
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["123"] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_tool_failed_consumed:send_product_link:")));
+  assert.ok(result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_model_renewal_suppressed:send_product_link:")));
+});
+
+test("pendingCatalogAction: a different failing tool does not consume the pending action", async () => {
+  catalogDown();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "desc" }, limit: 1 } },
+      {
+        type: "respond",
+        message: "Sigo pendiente del link del producto anterior.",
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "catalog-msg",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "501", name: "Kettlebell" }]
+        }
+      ]
+    },
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["501"] });
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_tool_failed_consumed:")));
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_tool_blocked_consumed:")));
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_model_renewal_suppressed:")));
+});
+
+test("pendingCatalogAction: completed get_product_details does not force consumption when the model emits valid continuity", async () => {
+  catalogUpWithPublicLink({
+    canonicalUrl: "https://pesaschile.cl/productos/501-kettlebell",
+    scope: "exact_product",
+    available: true,
+    requiresVariantSelection: false,
+    variantAttributeLabels: []
+  });
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      {
+        type: "respond",
+        message: "Te dejo el link y puedo mantenerlo a mano si quieres.",
+        pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] }
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "si",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["501"] });
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_tool_failed_consumed:")));
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_tool_blocked_consumed:")));
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("pendingCatalogAction_model_renewal_suppressed:")));
+});
+
+test("pendingCatalogAction: a handoff terminal never carries a pending action forward", async () => {
+  const provider = createFakeAgentLoopProvider({ script: [{ type: "handoff", reason: "Requiere revision humana." }] });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "quiero hablar con una persona",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] },
+    provider
+  });
+
+  assert.equal(result.terminalReason, "handoff");
+  assert.equal(result.finalPendingCatalogAction, null);
+});

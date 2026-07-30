@@ -7,9 +7,10 @@ import { buildAgentStepPromptPackage, type AgentLoopToolDescription } from "./bu
 import { buildToolObservation } from "./buildToolObservation";
 import { validateAgentStep } from "./validateAgentStep";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
-import type { AgentLoopProviderFailure, AgentLoopResult, AgentLoopStepRecord, AgentLoopTerminalReason, AgentStepUseTool, ToolObservation } from "./agentStepTypes";
+import type { AgentLoopProviderFailure, AgentLoopResult, AgentLoopStepRecord, AgentLoopTerminalReason, AgentStepRespond, AgentStepUseTool, PendingCatalogActionStep, ToolObservation } from "./agentStepTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
 import { classifyAgentLoopProviderFailure, logAgentLoopProviderFailure } from "./providers/providerFailureClassification";
+import { normalizePendingCatalogActionForEvidence } from "./pendingCatalogAction";
 
 /**
  * ACS-R1-05.1-T02.1 (spec section 5). Fixed, backend-owned pool - never
@@ -41,6 +42,8 @@ export type RunAgentToolLoopInput = {
   commercialContextSummary: Record<string, unknown>;
   /** Ephemeral recent catalog product identity context. Never a source of current price, stock, availability or URLs. */
   recentCatalogContext?: RecentCatalogContext | null;
+  /** ACS-R1-05.1-T02.7. A catalog action this conversation's immediately preceding turn left open - see buildAgentStepPromptPackage.ts. */
+  pendingCatalogAction?: PendingCatalogActionStep | null;
   provider: AgentLoopProvider | null;
   trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
   maxDecisions?: number;
@@ -124,6 +127,42 @@ function extractBudgetMax(commercialContextSummary: Record<string, unknown>): nu
   if (!needProfile || typeof needProfile !== "object") return null;
   const budgetMax = (needProfile as Record<string, unknown>).budgetMax;
   return typeof budgetMax === "number" && Number.isFinite(budgetMax) ? budgetMax : null;
+}
+
+function asComparableProductId(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function getPendingCatalogActionTerminalFailure(input: {
+  step: AgentStepUseTool;
+  observation: ToolObservation;
+  pendingCatalogAction?: PendingCatalogActionStep | null;
+}): "failed" | "blocked" | null {
+  if (input.step.tool !== "get_product_details") return null;
+  if (input.observation.status !== "failed" && input.observation.status !== "blocked") return null;
+  const pendingCatalogAction = input.pendingCatalogAction;
+  if (!pendingCatalogAction || pendingCatalogAction.actionType !== "send_product_link") return null;
+
+  const requestedProductId = asComparableProductId(input.step.arguments.productId);
+  if (!requestedProductId) return null;
+  const candidateProductIds = new Set(pendingCatalogAction.candidateProductIds.map(asComparableProductId).filter((productId): productId is string => productId !== null));
+  return candidateProductIds.has(requestedProductId) ? input.observation.status : null;
+}
+
+function pendingCatalogActionWarningSuffix(input: {
+  actionType: string;
+  candidateCountBefore: number;
+  candidateCountAfter: number;
+  correlationId: string;
+}) {
+  return [
+    input.actionType,
+    `candidateCountBefore=${input.candidateCountBefore}`,
+    `candidateCountAfter=${input.candidateCountAfter}`,
+    `correlationId=${input.correlationId}`
+  ].join(":");
 }
 
 /**
@@ -215,7 +254,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   const warnings: string[] = [];
 
   if (!input.provider) {
-    return { ran: false, terminalReason: "provider_unavailable", steps: [], toolExecutionCount: 0, finalMessage: null, handoffReason: null, warnings: ["provider_unavailable"] };
+    return { ran: false, terminalReason: "provider_unavailable", steps: [], toolExecutionCount: 0, finalMessage: null, handoffReason: null, warnings: ["provider_unavailable"], finalPendingCatalogAction: null };
   }
 
   const toolDescriptions = buildToolDescriptions();
@@ -229,6 +268,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   const steps: AgentLoopStepRecord[] = [];
   const executedCalls = new Set<string>();
   let toolExecutionCount = 0;
+  let pendingCatalogActionTerminalFailure: "failed" | "blocked" | null = null;
 
   const finalize = (terminalReason: AgentLoopTerminalReason, providerFailure?: AgentLoopProviderFailure | null): AgentLoopResult => ({
     ran: true,
@@ -238,8 +278,56 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     finalMessage: null,
     handoffReason: null,
     warnings,
-    providerFailure: providerFailure ?? null
+    providerFailure: providerFailure ?? null,
+    finalPendingCatalogAction: null
   });
+
+  // ACS-R1-05.1-T02.7. Observability only - functional continuity comes
+  // entirely from what this turn's own terminal respond step does or does
+  // not carry (see the two "responded" branches below). A turn that started
+  // with a pending action but ends in handoff/timeout/provider_unavailable/
+  // invalid_output never re-persists it (no code path below sets a
+  // pendingCatalogAction from those branches), which is what actually
+  // expires it for the next turn - this warning just makes that visible in
+  // the same channel every other technical signal in this loop already uses.
+  if (input.pendingCatalogAction) {
+    warnings.push(`pending_catalog_action_active:${input.pendingCatalogAction.actionType}:${input.pendingCatalogAction.candidateProductIds.length}`);
+  }
+
+  /**
+   * Both phases finalize a "responded" terminal outcome identically: same
+   * warning bookkeeping (was a pending action carried into this turn, and
+   * did this turn's own respond step renew or drop it), same result shape.
+   * Kept as one shared closure instead of duplicating it at both call sites.
+   */
+  const respondedResult = (step: AgentStepRespond): AgentLoopResult => {
+    const normalizedPendingCatalogAction = normalizePendingCatalogActionForEvidence({
+      pendingCatalogAction: step.pendingCatalogAction ?? null,
+      recentCatalogContext: input.recentCatalogContext ?? null,
+      toolObservations: steps.map((record) => record.observation),
+      correlationId: input.correlationId
+    });
+    warnings.push(...normalizedPendingCatalogAction.warnings);
+    if (pendingCatalogActionTerminalFailure && normalizedPendingCatalogAction.pendingCatalogAction) {
+      warnings.push(
+        `pendingCatalogAction_model_renewal_suppressed:${pendingCatalogActionWarningSuffix({
+          actionType: normalizedPendingCatalogAction.pendingCatalogAction.actionType,
+          candidateCountBefore: normalizedPendingCatalogAction.pendingCatalogAction.candidateProductIds.length,
+          candidateCountAfter: 0,
+          correlationId: input.correlationId
+        })}`
+      );
+    }
+    const finalPendingCatalogAction = pendingCatalogActionTerminalFailure ? null : (normalizedPendingCatalogAction.pendingCatalogAction ?? null);
+    if (input.pendingCatalogAction) {
+      warnings.push(
+        finalPendingCatalogAction
+          ? `pending_catalog_action_renewed:${finalPendingCatalogAction.actionType}:${finalPendingCatalogAction.candidateProductIds.length}`
+          : `pending_catalog_action_consumed:${input.pendingCatalogAction.actionType}`
+      );
+    }
+    return { ran: true, terminalReason: "responded", steps, toolExecutionCount, finalMessage: step.message, handoffReason: null, warnings, finalPendingCatalogAction };
+  };
 
   // ---- Phase 1: gathering ----
   let decisionIndex = 0;
@@ -255,6 +343,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       customerMessage: input.customerMessage,
       commercialContextSummary: input.commercialContextSummary,
       recentCatalogContext: input.recentCatalogContext ?? null,
+      pendingCatalogAction: input.pendingCatalogAction ?? null,
       availableTools: toolDescriptions,
       priorSteps: steps,
       stepsRemaining: maxDecisions - decisionIndex,
@@ -291,17 +380,33 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
 
     if (step.type === "respond") {
       steps.push({ stepIndex: decisionIndex, step, governance: null, observation: null, phase: "gathering" });
-      return { ran: true, terminalReason: "responded", steps, toolExecutionCount, finalMessage: step.message, handoffReason: null, warnings };
+      return respondedResult(step);
     }
 
     if (step.type === "handoff") {
       steps.push({ stepIndex: decisionIndex, step, governance: null, observation: null, phase: "gathering" });
-      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings };
+      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings, finalPendingCatalogAction: null };
     }
 
     const result = await processUseToolStep(step, input.commercialContextSummary, executedCalls, gatewayContext, warnings);
     if (result.executed) toolExecutionCount += 1;
     steps.push({ stepIndex: decisionIndex, step: result.step, governance: result.governance, observation: result.observation, phase: "gathering" });
+    const terminalFailure = getPendingCatalogActionTerminalFailure({
+      step: result.step,
+      observation: result.observation,
+      pendingCatalogAction: input.pendingCatalogAction ?? null
+    });
+    if (!pendingCatalogActionTerminalFailure && terminalFailure) {
+      pendingCatalogActionTerminalFailure = terminalFailure;
+      warnings.push(
+        `pendingCatalogAction_tool_${terminalFailure}_consumed:${pendingCatalogActionWarningSuffix({
+          actionType: input.pendingCatalogAction?.actionType ?? "send_product_link",
+          candidateCountBefore: input.pendingCatalogAction?.candidateProductIds.length ?? 0,
+          candidateCountAfter: 0,
+          correlationId: input.correlationId
+        })}`
+      );
+    }
     decisionIndex += 1;
   }
 
@@ -318,6 +423,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       customerMessage: input.customerMessage,
       commercialContextSummary: input.commercialContextSummary,
       recentCatalogContext: input.recentCatalogContext ?? null,
+      pendingCatalogAction: input.pendingCatalogAction ?? null,
       availableTools: [],
       priorSteps: steps,
       stepsRemaining: 1,
@@ -348,10 +454,10 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     steps.push({ stepIndex: steps.length, step, governance: null, observation: null, phase: "finalization" });
 
     if (step.type === "respond") {
-      return { ran: true, terminalReason: "responded", steps, toolExecutionCount, finalMessage: step.message, handoffReason: null, warnings };
+      return respondedResult(step);
     }
     if (step.type === "handoff") {
-      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings };
+      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings, finalPendingCatalogAction: null };
     }
   }
 

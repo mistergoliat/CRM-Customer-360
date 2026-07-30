@@ -441,3 +441,55 @@ test("[PR30] stock disclosure and commercial closing rules are present in finali
   assert.match(system, /Never state the customer's stock as a raw number once it is 20 or more/);
   assert.match(system, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
 });
+
+// --- ACS-R1-05.1-T02.7: pendingCatalogAction continuity ---
+
+test("[PR31] pendingCatalogAction rule block is present in both phases: structural, not textual recall; resolve+deliver on unambiguous selection; never re-ask", () => {
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase, identityConfiguration: pesasChileConfig(), availableTools: [] });
+    const system = messages[0].content;
+    assert.match(system, /your own immediately preceding reply already offered to send the link/);
+    assert.match(system, /not something you need to recall from message history/);
+    assert.match(system, /immediately use get_product_details for that product and deliver the result/);
+    assert.match(system, /never ask again whether they want the link, and never first restate or re-present the product/);
+  }
+});
+
+test("[PR32] pendingCatalogAction rule covers ambiguous selection (renew, never guess) and unrelated messages (omit, never force a resolution)", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+  assert.match(system, /ask a short clarifying question naming only the ambiguous candidates, and include pendingCatalogAction again/);
+  assert.match(system, /never guess/);
+  assert.match(system, /answer the new message normally and omit pendingCatalogAction from your respond step/);
+});
+
+test("[PR32b] pendingCatalogAction send_product_link failure rule forbids invented or reused URLs and consumes the action", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+  assert.match(system, /get_product_details returns a failed or blocked observation/);
+  assert.match(system, /do not invent a URL/);
+  assert.match(system, /do not reuse any previous URL/);
+  assert.match(system, /omit pendingCatalogAction on your respond step/);
+});
+
+test("[PR33] the AgentStep respond shape documents pendingCatalogAction as an optional companion field, in both phases", () => {
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase, identityConfiguration: pesasChileConfig(), availableTools: [] });
+    const system = messages[0].content;
+    assert.match(system, /"pendingCatalogAction":\{"actionType":"send_product_link","candidateProductIds":\["\.\.\."\]\}/);
+    assert.match(system, /pendingCatalogAction is optional on respond/);
+  }
+});
+
+test("[PR34] pendingCatalogAction, when given, is serialized verbatim into the user payload", () => {
+  const pending = { actionType: "send_product_link" as const, candidateProductIds: ["80", "2164"] };
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig(), pendingCatalogAction: pending });
+  const userPayload = JSON.parse(messages[1].content) as { pendingCatalogAction?: unknown };
+  assert.deepEqual(userPayload.pendingCatalogAction, pending);
+});
+
+test("[PR35] pendingCatalogAction is absent from the user payload when none is open (never a null placeholder)", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const userPayload = JSON.parse(messages[1].content) as Record<string, unknown>;
+  assert.equal("pendingCatalogAction" in userPayload, false);
+});

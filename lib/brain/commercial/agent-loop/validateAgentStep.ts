@@ -1,9 +1,31 @@
-import { AGENT_STEP_TYPES, type AgentStep, type AgentStepType } from "./agentStepTypes";
+import { AGENT_STEP_TYPES, type AgentStep, type AgentStepType, type PendingCatalogActionStep } from "./agentStepTypes";
 
 const MAX_MESSAGE_LENGTH = 2000;
 const MAX_REASON_LENGTH = 500;
 const MAX_ARGUMENTS_BYTES = 4096;
 const MAX_TOOL_NAME_LENGTH = 100;
+const MAX_CANDIDATE_PRODUCT_IDS = 20;
+const MAX_PRODUCT_ID_LENGTH = 100;
+
+/**
+ * Lenient by design: an optional companion field on `respond` never fails
+ * the whole (otherwise valid) step over its own shape - a malformed
+ * pendingCatalogAction is simply dropped (treated as "none this turn"),
+ * same tolerance the rest of this validator gives to any single malformed
+ * optional value.
+ */
+function parsePendingCatalogAction(raw: unknown): PendingCatalogActionStep | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (raw.actionType !== "send_product_link") return undefined;
+  if (!Array.isArray(raw.candidateProductIds)) return undefined;
+
+  const candidateProductIds = raw.candidateProductIds
+    .filter((id): id is string => typeof id === "string" && id.trim().length > 0 && id.trim().length <= MAX_PRODUCT_ID_LENGTH)
+    .map((id) => id.trim())
+    .slice(0, MAX_CANDIDATE_PRODUCT_IDS);
+
+  return candidateProductIds.length > 0 ? { actionType: "send_product_link", candidateProductIds } : undefined;
+}
 
 export type AgentStepValidationResult =
   | { status: "valid"; step: AgentStep }
@@ -74,7 +96,8 @@ export function validateAgentStep(raw: unknown, allowedTypes: readonly AgentStep
       return { status: "invalid", reason: "AgentStep.message is required for respond." };
     }
     const trimmed = message.trim().slice(0, MAX_MESSAGE_LENGTH);
-    return { status: "valid", step: { type: "respond", message: trimmed } };
+    const pendingCatalogAction = parsePendingCatalogAction(raw.pendingCatalogAction);
+    return { status: "valid", step: { type: "respond", message: trimmed, ...(pendingCatalogAction ? { pendingCatalogAction } : {}) } };
   }
 
   const reason = raw.reason;

@@ -4,7 +4,7 @@ import { recordAgentToolLoopCompletedCommercialEvent } from "../events/service";
 import type { AgentToolLoopStepSummary } from "../events/types";
 import type { ContinuityFallbackContext } from "../continuity/buildContinuityFallbackMessage";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
-import type { AgentLoopResult } from "./agentStepTypes";
+import type { AgentLoopResult, PendingCatalogActionStep } from "./agentStepTypes";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session";
 import type { CommercialContextSnapshot } from "../context/buildNativeCommercialContext";
 import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
@@ -21,6 +21,8 @@ export type RunNativeAgentToolLoopCycleInput = {
   provider: AgentLoopProvider | null;
   trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
   recentCatalogContext?: RecentCatalogContext | null;
+  /** ACS-R1-05.1-T02.7. A catalog action this conversation's immediately preceding turn left open. */
+  pendingCatalogAction?: PendingCatalogActionStep | null;
   abortSignal?: AbortSignal | null;
   /**
    * ACS-R1-05.1-T02.3B. Resolved exactly once per cycle by the caller
@@ -91,7 +93,8 @@ function skippedResult(reason: string, humanOwnerActive: boolean, aiBlocked: boo
     toolExecutionCount: 0,
     finalMessage: null,
     handoffReason: reason,
-    warnings: [reason]
+    warnings: [reason],
+    finalPendingCatalogAction: null
   };
   return {
     loop,
@@ -166,7 +169,8 @@ export async function runNativeAgentToolLoopCycleConfigurationFailure(
     toolExecutionCount: 0,
     finalMessage: null,
     handoffReason: SALES_AGENT_CONFIGURATION_UNAVAILABLE_HANDOFF_REASON,
-    warnings: [input.technicalReason]
+    warnings: [input.technicalReason],
+    finalPendingCatalogAction: null
   };
 
   const dispatch = await dispatchAgentLoopResponse({
@@ -218,6 +222,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
       customerMessage: input.customerMessage
     }),
     recentCatalogContext: input.recentCatalogContext ?? null,
+    pendingCatalogAction: input.pendingCatalogAction ?? null,
     provider: input.provider,
     trustedCustomerSession: input.trustedCustomerSession,
     abortSignal: input.abortSignal,
@@ -240,6 +245,13 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     loop,
     commercialNeed: buildCommercialNeed(input.snapshot)
   });
+
+  const persistedPendingCatalogAction = dispatch.outboxWritten === true ? loop.finalPendingCatalogAction : undefined;
+  if (loop.finalPendingCatalogAction && !dispatch.outboxWritten) {
+    loop.warnings.push(
+      `pending_catalog_action_dropped_no_outbox:${loop.finalPendingCatalogAction.actionType}:candidateCountBefore=${loop.finalPendingCatalogAction.candidateProductIds.length}:candidateCountAfter=0:correlationId=${input.correlationId}`
+    );
+  }
 
   try {
     await recordAgentToolLoopCompletedCommercialEvent({
@@ -272,7 +284,8 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
       // AgentToolLoopProviderFailurePayload (events/types.ts) by construction -
       // never imported directly, same no-cross-module-import rationale the
       // events/ leaf module already documents for every other payload shape.
-      providerFailure: loop.providerFailure ?? undefined
+      providerFailure: loop.providerFailure ?? undefined,
+      pendingCatalogAction: persistedPendingCatalogAction ?? undefined
     });
   } catch (error) {
     // ACS-R1-05.1-T02.3B (correction). Never blocks the turn - the customer
