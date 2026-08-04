@@ -4,6 +4,7 @@ import { createCustomerOnboardingService } from "@/lib/domains/customer-onboardi
 import type { CustomerOnboardingService, CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
 import type { CustomerMasterProjectionReader, CustomerResolutionEvidence, ResolveCustomerInput } from "@/lib/domains/customer-service";
 import { executeGovernedCapability } from "../../capability-gateway/executeCapability";
+import { resolveMasterCustomerIdentity } from "../../identity/master-customer/resolveMasterCustomerIdentity";
 import { parseAllConsentEvidence } from "./consentEvidence";
 import { recordExternalIdentityResolution, recordIdentityCapabilityOutcome, recordLocalIdentityResolution, recordSessionWarnings } from "./identityAuditEvents";
 import { completeOnboardingWithCustomer, completeOnboardingWithVerifiedCustomer, landOnboardingInTerminalState } from "./onboardingTransitions";
@@ -267,17 +268,30 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
   const contextAccess = computeContextAccess(identity, onboarding);
   if (onboarding?.status === "temporarily_blocked") warnings.push("customer_onboarding_temporarily_blocked");
 
+  const sessionIdentity = {
+    status: identity.status,
+    customerId: identity.customerId,
+    source: identity.source,
+    localResolutionOutcome: localResult.status,
+    externalResolutionOutcome: externalOutcome
+  };
+
+  // ACS-R1-T10B8A. Computed once per turn, from this turn's own already-resolved
+  // identity - never a second identity resolution, never a Customer
+  // Profile/Catalog Service call. See resolveMasterCustomerIdentity.ts for why
+  // only identity.source === "customer_service" carries demonstrated
+  // provenance to master_customer.id.
+  const masterCustomerIdentity = await resolveMasterCustomerIdentity(
+    { nativeCustomerSession: { identity: sessionIdentity } },
+    { projectionReader }
+  );
+
   const execution: NativeCustomerSessionExecutionContext = {
     conversationId: input.conversationId,
     opportunityId: input.opportunityId,
     trustedInbound: input.trustedInbound,
-    identity: {
-      status: identity.status,
-      customerId: identity.customerId,
-      source: identity.source,
-      localResolutionOutcome: localResult.status,
-      externalResolutionOutcome: externalOutcome
-    },
+    identity: sessionIdentity,
+    masterCustomerIdentity,
     onboarding,
     contextAccess,
     currentTurnConsent,

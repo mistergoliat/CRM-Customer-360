@@ -1,5 +1,6 @@
 import type { CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
 import type { CustomerResolutionEvidence } from "@/lib/domains/customer-service";
+import type { MasterCustomerIdentityResolution } from "../../identity/master-customer/types";
 
 // ACS-R1-04-T06. Canonical contracts:
 // docs/data/customer-onboarding-identity-contract.md
@@ -54,6 +55,19 @@ export type NativeCustomerSessionExecutionContext = {
     localResolutionOutcome: string;
     externalResolutionOutcome: string | null;
   };
+
+  /**
+   * ACS-R1-T10B8A. A separate identity space from `identity.customerId`
+   * above - never a rename, never a replacement. `identity.customerId` is
+   * this turn's local/CRM identity (whatever space `identityService`/Customer
+   * Service produced); `masterCustomerIdentity` is the outcome of
+   * independently verifying whether that same turn's evidence also proves a
+   * `master_customer.id` (the id space Customer Profile/Catalog Service's
+   * SearchProducts V2 contractually require). The two commonly agree but are
+   * never assumed to - see
+   * lib/brain/commercial/identity/master-customer/resolveMasterCustomerIdentity.ts.
+   */
+  masterCustomerIdentity: MasterCustomerIdentityResolution;
 
   onboarding: CustomerOnboardingState | null;
 
