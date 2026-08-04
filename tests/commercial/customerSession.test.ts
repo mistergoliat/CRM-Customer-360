@@ -678,6 +678,81 @@ test("42: consecutive calls with an unrelated message never leak consent across 
   assert.doesNotMatch(JSON.stringify(result.decision), /autorizo/i);
 });
 
+// ---------------------------------------------------------------------------
+// Group 5: T10B8A non-blocking identity resolution (43-48). masterCustomerId
+// resolution is a personalization/context enhancement, never a gate - each
+// case below reuses an existing scenario's fixtures (tests 1/4/5/6/7/18) and
+// adds only the masterCustomerIdentity assertion, confirming every other
+// field of the returned execution/decision context is byte-identical to
+// that same pre-T10B8A scenario (see
+// docs/integrations/master-customer-identity-resolution.md#non-blocking-identity-resolution).
+// ---------------------------------------------------------------------------
+
+test("43: anonymous - resolveNativeCustomerSession returns normally, identity/contextAccess keep their pre-T10B8A semantics, masterCustomerIdentity is identity_unresolved/identity_absent", async () => {
+  const result = await resolveNativeCustomerSession(
+    baseInput({ dependencies: { identityService: identityServiceReturning(noMatchResult()), onboardingService: makeOnboardingFake(null).service } })
+  );
+  assert.equal(result.execution.identity.status, "anonymous");
+  assert.equal(result.execution.identity.customerId, null);
+  assert.equal(result.execution.contextAccess, "none");
+  assert.equal(result.decision.operations.canProposeCreateCustomer, false);
+  assert.deepEqual(result.execution.masterCustomerIdentity, { status: "identity_unresolved", reason: "identity_absent" });
+});
+
+test("44: identification_required - runtime continuity unchanged, masterCustomerIdentity is identity_unresolved/identity_not_verified", async () => {
+  const onboarding = makeOnboardingFake(onboardingRow({ status: "required" }));
+  const result = await resolveNativeCustomerSession(
+    baseInput({ dependencies: { identityService: identityServiceReturning(noMatchResult()), onboardingService: onboarding.service, resolveCustomerExternal: async () => noMatchEvidence() } })
+  );
+  assert.equal(result.execution.identity.status, "identification_required");
+  assert.deepEqual(result.execution.masterCustomerIdentity, { status: "identity_unresolved", reason: "identity_not_verified" });
+});
+
+test("45: identity source unsupported (external_identity) - identity.customerId stays populated and unchanged, masterCustomerIdentity is independently identity_unresolved/identity_source_unsupported", async () => {
+  const onboarding = makeOnboardingFake(null);
+  const result = await resolveNativeCustomerSession(
+    baseInput({ dependencies: { identityService: identityServiceReturning(identifiedResult("100", "external_identity")), onboardingService: onboarding.service } })
+  );
+  assert.equal(result.execution.identity.status, "identified");
+  assert.equal(result.execution.identity.customerId, "100");
+  assert.equal(result.execution.identity.source, "external_identity");
+  assert.deepEqual(result.execution.masterCustomerIdentity, { status: "identity_unresolved", reason: "identity_source_unsupported" });
+});
+
+test("46: identity conflict - no id anywhere in masterCustomerIdentity, no throw, no new global block beyond the pre-existing conflict warning", async () => {
+  const onboarding = makeOnboardingFake(null);
+  const result = await resolveNativeCustomerSession(
+    baseInput({ dependencies: { identityService: identityServiceReturning(conflictResult()), onboardingService: onboarding.service } })
+  );
+  assert.equal(result.execution.identity.status, "conflict");
+  assert.equal(result.execution.identity.customerId, null);
+  assert.ok(result.warnings.includes("customer_identity_conflict"));
+  assert.deepEqual(result.execution.masterCustomerIdentity, { status: "identity_unresolved", reason: "identity_conflict" });
+  assert.equal(JSON.stringify(result.execution.masterCustomerIdentity).match(/\d/), null);
+});
+
+test("47: temporarily_unavailable - the turn is still processable (no fatal error), masterCustomerIdentity is identity_unresolved/identity_temporarily_unavailable", async () => {
+  const onboarding = makeOnboardingFake(null);
+  const result = await resolveNativeCustomerSession(
+    baseInput({ dependencies: { identityService: identityServiceReturning(unavailableResult()), onboardingService: onboarding.service } })
+  );
+  assert.equal(result.execution.identity.status, "temporarily_unavailable");
+  assert.ok(result.warnings.includes("customer_identity_unavailable"));
+  assert.deepEqual(result.execution.masterCustomerIdentity, { status: "identity_unresolved", reason: "identity_temporarily_unavailable" });
+});
+
+test("48: resolved via customer_service - masterCustomerIdentity carries the verified id end-to-end through the real integration point, not just in isolated resolver tests", async () => {
+  const onboarding = makeOnboardingFake(onboardingRow({ status: "required" }));
+  const result = await resolveNativeCustomerSession(
+    baseInput({
+      dependencies: { identityService: identityServiceReturning(noMatchResult()), onboardingService: onboarding.service, resolveCustomerExternal: async () => resolvedEvidence("300") }
+    })
+  );
+  assert.equal(result.execution.identity.status, "identified");
+  assert.equal(result.execution.identity.customerId, "300");
+  assert.deepEqual(result.execution.masterCustomerIdentity, { status: "resolved", masterCustomerId: "300", source: "native_session_verified_projection" });
+});
+
 // Test 11's un-injected default dependency path opens a real MariaDB pool
 // connection (Capability Gateway execution log) and never closes it,
 // leaving a live keep-alive socket that blocks the process from exiting.

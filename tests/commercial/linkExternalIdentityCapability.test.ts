@@ -140,6 +140,7 @@ function session(overrides: Partial<NativeCustomerSessionExecutionContext> = {})
     opportunityId: null,
     trustedInbound: { channel: "whatsapp", externalId: "56911112222", normalizedPhone: "56911112222", messageId: "wamid.1", receivedAt: "2026-07-09T12:00:00.000Z" },
     identity: { status: "identified", customerId: "700", source: "external_identity", localResolutionOutcome: "identified", externalResolutionOutcome: null },
+    masterCustomerIdentity: { status: "identity_unresolved", reason: "identity_source_unsupported" },
     onboarding: onboardingRow({ status: "completed", customerId: "700", completedAt: "2026-07-01T00:00:00.000Z" }),
     contextAccess: "commercial_history",
     currentTurnConsent: {
