@@ -64,8 +64,15 @@ function buildCommercialContextSummary(
   };
 }
 
-/** ACS-R1-05.1-T02.1 (post-smoke fix, point 8). Bounded structural summary only - never raw arguments or observation data. */
-function buildStepsSummary(loop: AgentLoopResult): AgentToolLoopStepSummary[] {
+/**
+ * ACS-R1-05.1-T02.1 (post-smoke fix, point 8). Bounded structural summary
+ * only - never raw arguments or observation data. Exported (CP-R1-T10B8C
+ * minor fix) so a DB-free test can verify the real
+ * `agent_tool_loop_completed` step-summary/normalization path accepts a
+ * `recommend_catalog_products` "skipped" observation without a real
+ * MariaDB - never a second, reimplemented copy of this mapping.
+ */
+export function buildStepsSummary(loop: AgentLoopResult): AgentToolLoopStepSummary[] {
   return loop.steps.map((record) => ({
     stepIndex: record.stepIndex,
     type: record.step.type,

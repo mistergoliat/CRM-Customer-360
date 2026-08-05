@@ -242,7 +242,11 @@ export function recommendCatalogProductsCapability(getCapability: () => CatalogR
   return {
     capability: "recommend_catalog_products",
     version: CAPABILITY_GATEWAY_VERSION,
-    description: "Internal: request catalog product recommendations for a known source product via SearchProducts V2. Not yet exposed to the model.",
+    // CP-R1-T10B8C: model-facing description (this capability is now in
+    // AGENT_LOOP_TOOL_POOL) - no microservice names, endpoints, ownership or
+    // Gateway details, see docs/integrations/recommend-catalog-products-agent-tool.md.
+    description:
+      "Recommend catalog products related to an already-identified source product. Requires sourceProduct.productId and, optionally, sourceProduct.combinationId - it does not search from free text (use search_products or explore_catalog for that), and should be used after search_products or get_product_details already identified a productId. Works without an identified customer. Set explicitRepurchaseRequested to true only when the customer expresses current intent to buy that same product again. excludedProducts lists products to exclude from the current recommendations. The result is a set of candidates, not confirmed commercial facts - use get_product_details before presenting price, stock, or a link for any recommended product.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: RECOMMEND_CATALOG_PRODUCTS_INPUT_SCHEMA,
     // Preference per task section 14: avoid duplicated recommendation calls;

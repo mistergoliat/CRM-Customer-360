@@ -52,7 +52,13 @@ export type AgentStepHandoff = {
 
 export type AgentStep = AgentStepUseTool | AgentStepRespond | AgentStepHandoff;
 
-export const TOOL_OBSERVATION_STATUSES = ["completed", "failed", "blocked"] as const;
+/**
+ * CP-R1-T10B8C added "skipped" - exclusive to recommend_catalog_products, for
+ * the Gateway's own "completed with data.status=skipped" mapping (CP-R1-T10B8B).
+ * Distinct from "blocked": a skipped request never reached any external
+ * service, and is never retryable, never a handoff signal.
+ */
+export const TOOL_OBSERVATION_STATUSES = ["completed", "failed", "blocked", "skipped"] as const;
 export type ToolObservationStatus = (typeof TOOL_OBSERVATION_STATUSES)[number];
 
 /**
@@ -65,6 +71,12 @@ export type ToolObservation = {
   status: ToolObservationStatus;
   data?: unknown;
   errorCode?: string;
+  /** CP-R1-T10B8C. recommend_catalog_products "skipped" observations only - the verbatim BuildSearchProductsV2RequestSkipReason, never retryable, never a handoff signal. */
+  reason?: string;
+  /** CP-R1-T10B8C. recommend_catalog_products "failed" observations only - mirrors CapabilityGatewayResult.retryable, safe to surface (no PII). */
+  retryable?: boolean;
+  /** CP-R1-T10B8C. recommend_catalog_products "failed" observations only - the real service's own closed error code (e.g. SOURCE_PRODUCT_NOT_FOUND) when present, never a raw message/stack/body. */
+  providerErrorCode?: string;
   /**
    * ACS-R1-05.1-T02.6.1. Fixed, sanitized string codes only (e.g.
    * explore_catalog_legacy_sort_alias_used) - never raw values, never PII.
