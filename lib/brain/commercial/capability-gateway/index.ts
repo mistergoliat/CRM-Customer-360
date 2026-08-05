@@ -26,3 +26,9 @@ export {
 } from "./toolAliases";
 export { deriveIdentityCapabilityBusinessOutcome } from "./identityCapabilityOutcome";
 export type { IdentityCapabilityName } from "./identityCapabilityOutcome";
+export {
+  recommendCatalogProductsCapability,
+  getSharedCatalogRecommendationCapability,
+  resetCatalogRecommendationCapabilityForTests
+} from "./catalogRecommendationGatewayAdapter";
+export type { RecommendCatalogProductsGatewayInput } from "./catalogRecommendationGatewayAdapter";

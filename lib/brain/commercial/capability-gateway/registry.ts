@@ -14,6 +14,7 @@ import type {
 import type { CapabilityGatewayContext, CapabilityGatewayDefinition, CapabilityGovernanceMetadata } from "./types";
 import { CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS } from "./customerIdentityCapabilities";
 import { companyKnowledgeCapability } from "./companyKnowledgeCapability";
+import { getSharedCatalogRecommendationCapability, recommendCatalogProductsCapability } from "./catalogRecommendationGatewayAdapter";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -420,7 +421,11 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   companyKnowledgeCapability() as CapabilityGatewayDefinition,
   // ACS-R1-04-T06. record_customer_interest is deliberately not registered:
   // no operational persistence exists yet (docs/CAPABILITY_MATRIX.md).
-  ...CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS
+  ...CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS,
+  // CP-R1-T10B8B: registered so it is auditable via executeGovernedCapability,
+  // deliberately NOT added to AGENT_LOOP_TOOL_POOL - see
+  // docs/releases/CP-R1-T10B8B-catalog-recommendation-gateway-adapter.md.
+  recommendCatalogProductsCapability(getSharedCatalogRecommendationCapability)
 ];
 
 const CAPABILITIES_BY_NAME = new Map(CAPABILITY_GATEWAY_REGISTRY.map((definition) => [definition.capability, definition]));

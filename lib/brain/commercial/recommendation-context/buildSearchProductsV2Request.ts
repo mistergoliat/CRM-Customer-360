@@ -201,8 +201,12 @@ export function buildSearchProductsV2Request(input: BuildSearchProductsV2Request
 
   // v1-frozen rule: explicit repurchase only ever targets the exact source
   // product - never derived from ownership, matchingPurchases, or repeat
-  // purchase behavior.
-  const explicitRepurchaseRequested = input.recommendationContext?.recommendationIntent.explicitRepurchaseRequested ?? false;
+  // purchase behavior. CP-R1-T10B8B correction: same duplicated-source merge
+  // as explicitExcludedProducts above - true from either the top-level flag
+  // or recommendationContext applies (OR, never a mismatch check), so a
+  // caller with no recommendationContext at all (generic mode) can still
+  // request repurchase without fabricating one.
+  const explicitRepurchaseRequested = Boolean(input.recommendationContext?.recommendationIntent.explicitRepurchaseRequested) || Boolean(input.explicitRepurchaseRequested);
   const explicitRepurchaseProducts = explicitRepurchaseRequested ? [sourceProductIdentity] : [];
 
   // Contradiction: the source product (the repurchase target) is also in

@@ -24,8 +24,20 @@ import type { CustomerRecommendationContext, ProductReference } from "./types";
  * silently picking one - see "Architecture" in that document for the exact
  * resolution rule.
  *
- * There is deliberately no top-level `explicitRepurchaseRequested` flag:
- * that signal only exists inside a built `recommendationContext`.
+ * `explicitRepurchaseRequested` follows the exact same duplicated-source
+ * shape as `explicitExcludedProducts` above: a top-level flag AND
+ * `recommendationContext.recommendationIntent.explicitRepurchaseRequested`
+ * are both legitimate, independent sources and are merged with a logical OR
+ * (true from either side applies) - never compared for disagreement, never
+ * requiring `recommendationContext`/`masterCustomerId` to be present. This
+ * lets a caller with no `CustomerRecommendationContext` at all (generic
+ * mode - no identity, no Customer Profile evidence) still express "repurchase
+ * exactly this source product" without fabricating one (CP-R1-T10B8B
+ * correction: `CustomerRecommendationContext.masterCustomerId` is
+ * required-non-null, so a context can never be built for generic mode in the
+ * first place - the earlier "no top-level flag" design forced every explicit
+ * repurchase caller through identified mode, which was never a deliberate
+ * product requirement).
  */
 export type BuildSearchProductsV2RequestInput = {
   masterCustomerId?: string | null;
@@ -33,6 +45,7 @@ export type BuildSearchProductsV2RequestInput = {
   recommendationContext?: CustomerRecommendationContext | null;
   query?: string | null;
   explicitExcludedProducts?: readonly ProductReference[];
+  explicitRepurchaseRequested?: boolean;
   correlationId?: string | null;
   limit?: number;
   inStockOnly?: boolean;
