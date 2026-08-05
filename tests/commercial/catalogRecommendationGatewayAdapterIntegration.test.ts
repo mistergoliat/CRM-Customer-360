@@ -493,9 +493,9 @@ test("integration: a skipped result's persisted responseSummary is distinguishab
   assert.equal("recommendations" in (row!.responseSummary as Record<string, unknown>), false, "a skipped payload must never fabricate a recommendations key");
 });
 
-// 14. Not visible in the Agent Tool Loop
-test("integration: recommend_catalog_products is executable via the Gateway but not in AGENT_LOOP_TOOL_POOL", () => {
-  assert.equal((AGENT_LOOP_TOOL_POOL as readonly string[]).includes("recommend_catalog_products"), false);
+// 14. Visible in the Agent Tool Loop as of CP-R1-T10B8C
+test("integration: recommend_catalog_products is executable via the Gateway and is in AGENT_LOOP_TOOL_POOL (CP-R1-T10B8C)", () => {
+  assert.equal((AGENT_LOOP_TOOL_POOL as readonly string[]).includes("recommend_catalog_products"), true);
 });
 
 // Availability: reflects real T10B5 configuration, no HTTP call

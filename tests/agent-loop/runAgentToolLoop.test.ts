@@ -982,7 +982,10 @@ function exploreResponsePayload(overrides: Record<string, unknown> = {}) {
 }
 
 test("I0 - el pool conserva las 4 tools previas mas explore_catalog (expansion intencional, nada eliminado)", () => {
-  assert.deepEqual([...AGENT_LOOP_TOOL_POOL].sort(), ["explore_catalog", "get_product_details", "search_company_knowledge", "search_products"].sort());
+  assert.deepEqual(
+    [...AGENT_LOOP_TOOL_POOL].sort(),
+    ["explore_catalog", "get_product_details", "recommend_catalog_products", "search_company_knowledge", "search_products"].sort()
+  );
 });
 
 test("I - 'producto mas caro de la pagina': explore_catalog resuelve el extremo global, nunca search_products", async () => {

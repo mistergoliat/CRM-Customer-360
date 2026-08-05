@@ -182,7 +182,9 @@ export type AgentToolLoopStepSummary = {
   phase: "gathering" | "finalization";
   tool?: string;
   governance?: "authorized" | "blocked_unregistered" | "blocked_duplicate";
-  observationStatus?: "completed" | "failed" | "blocked";
+  // CP-R1-T10B8C added "skipped" - exclusive to recommend_catalog_products,
+  // mirrors agent-loop/agentStepTypes.ts#ToolObservationStatus.
+  observationStatus?: "completed" | "failed" | "blocked" | "skipped";
 };
 
 // ACS-R1-05.1-T02.3B. Local literal union mirroring

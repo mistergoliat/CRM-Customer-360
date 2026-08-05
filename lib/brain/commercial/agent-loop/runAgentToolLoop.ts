@@ -21,8 +21,15 @@ import { normalizePendingCatalogActionForEvidence } from "./pendingCatalogAction
  * ACS-R1-05.1-T02.6 added `explore_catalog` (extremes/top-N/rankings/filtered
  * browse) alongside the original three - an intentional expansion of this
  * pool, not a replacement; every pre-existing tool name is preserved.
+ *
+ * CP-R1-T10B8C added `recommend_catalog_products` - the capability was
+ * already registered in the Capability Gateway (CP-R1-T10B8B) but excluded
+ * from this pool until now. sourceProduct is not yet validated against
+ * recentCatalogContext (CP-R1-T10B8D) and no continuity to
+ * get_product_details is wired yet (also CP-R1-T10B8D) - see
+ * docs/integrations/recommend-catalog-products-agent-tool.md.
  */
-export const AGENT_LOOP_TOOL_POOL = ["search_products", "get_product_details", "search_company_knowledge", "explore_catalog"] as const;
+export const AGENT_LOOP_TOOL_POOL = ["search_products", "get_product_details", "search_company_knowledge", "explore_catalog", "recommend_catalog_products"] as const;
 export type AgentLoopToolName = (typeof AGENT_LOOP_TOOL_POOL)[number];
 
 const DEFAULT_MAX_DECISIONS = 3;

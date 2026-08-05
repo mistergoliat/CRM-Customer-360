@@ -617,18 +617,20 @@ test("registry: recommend_catalog_products is registered in the Capability Gatew
   assert.ok(resolveCapabilityGatewayDefinition("recommend_catalog_products"));
 });
 
-test("Agent Loop visibility: recommend_catalog_products is never in AGENT_LOOP_TOOL_POOL", () => {
-  assert.equal((AGENT_LOOP_TOOL_POOL as readonly string[]).includes("recommend_catalog_products"), false);
+test("Agent Loop visibility (CP-R1-T10B8C): recommend_catalog_products is now in AGENT_LOOP_TOOL_POOL", () => {
+  assert.equal((AGENT_LOOP_TOOL_POOL as readonly string[]).includes("recommend_catalog_products"), true);
 });
 
-test("registry: recommend_catalog_products carries a real inputSchema (strict, sourceProduct required) for future agent-facing reuse", () => {
+test("registry: recommend_catalog_products carries a real inputSchema (strict, sourceProduct required) for agent-facing use", () => {
   const definition = resolveCapabilityGatewayDefinition("recommend_catalog_products");
   assert.ok(definition?.inputSchema);
   assert.equal((definition!.inputSchema as Record<string, unknown>).additionalProperties, false);
   assert.deepEqual((definition!.inputSchema as Record<string, unknown>).required, ["sourceProduct"]);
 });
 
-test("Agent Loop visibility: buildToolDescriptions() never includes recommend_catalog_products, even though it now has an inputSchema (schema presence alone never exposes a capability - only AGENT_LOOP_TOOL_POOL membership does)", () => {
+test("Agent Loop visibility (CP-R1-T10B8C): buildToolDescriptions() now includes recommend_catalog_products with its real inputSchema", () => {
   const descriptions = buildToolDescriptions();
-  assert.equal(descriptions.some((d) => d.name === "recommend_catalog_products"), false);
+  const description = descriptions.find((d) => d.name === "recommend_catalog_products");
+  assert.ok(description, "recommend_catalog_products must be exposed to the Agent Tool Loop as of CP-R1-T10B8C");
+  assert.equal(description!.inputSchema, resolveCapabilityGatewayDefinition("recommend_catalog_products")!.inputSchema);
 });
