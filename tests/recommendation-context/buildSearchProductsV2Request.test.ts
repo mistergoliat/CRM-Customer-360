@@ -341,6 +341,74 @@ test("explicit repurchase: ownership/history signals on the context never activa
   assert.equal(result.metadata.explicitRepurchaseApplied, false);
 });
 
+// CP-R1-T10B8B correction: top-level explicitRepurchaseRequested, merged
+// (OR) with the recommendationContext-nested signal, never requiring a
+// CustomerRecommendationContext / masterCustomerId - same duplicated-source
+// shape as explicitExcludedProducts.
+
+test("explicit repurchase (top-level): true with no recommendationContext at all (generic mode) still targets the source product", () => {
+  const result = assertReady(buildSearchProductsV2Request({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: true }));
+  assert.deepEqual(result.request.context?.explicitRepurchaseProducts, [{ productId: "100" }]);
+  assert.equal(result.metadata.explicitRepurchaseApplied, true);
+  assert.equal(result.metadata.customerMode, "generic");
+  assert.equal("customer" in result.request, false);
+});
+
+test("explicit repurchase (top-level): true with a variant source product and no context targets exactly that variant", () => {
+  const result = assertReady(buildSearchProductsV2Request({ sourceProduct: { productId: 100, combinationId: 7 }, explicitRepurchaseRequested: true }));
+  assert.deepEqual(result.request.context?.explicitRepurchaseProducts, [{ productId: "100", combinationId: "7" }]);
+});
+
+test("explicit repurchase (top-level): false/undefined never adds explicitRepurchaseProducts", () => {
+  const resultFalse = assertReady(buildSearchProductsV2Request({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: false }));
+  assert.equal(resultFalse.request.context?.explicitRepurchaseProducts, undefined);
+  const resultUndefined = assertReady(buildSearchProductsV2Request({ sourceProduct: { productId: 100 } }));
+  assert.equal(resultUndefined.request.context?.explicitRepurchaseProducts, undefined);
+});
+
+test("explicit repurchase: top-level false and context-nested false (both explicit) never adds explicitRepurchaseProducts - completes the truth table's last untested row", () => {
+  const result = assertReady(
+    buildSearchProductsV2Request({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: false, recommendationContext: contextFixture({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: false }) })
+  );
+  assert.equal(result.request.context?.explicitRepurchaseProducts, undefined);
+  assert.equal(result.metadata.explicitRepurchaseApplied, false);
+});
+
+test("explicit repurchase: top-level true and context-nested false still applies (OR, never a mismatch)", () => {
+  const result = assertReady(
+    buildSearchProductsV2Request({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: true, recommendationContext: contextFixture({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: false }) })
+  );
+  assert.deepEqual(result.request.context?.explicitRepurchaseProducts, [{ productId: "100" }]);
+});
+
+test("explicit repurchase: top-level false and context-nested true still applies (OR, never a mismatch)", () => {
+  const result = assertReady(
+    buildSearchProductsV2Request({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: false, recommendationContext: contextFixture({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: true }) })
+  );
+  assert.deepEqual(result.request.context?.explicitRepurchaseProducts, [{ productId: "100" }]);
+});
+
+test("explicit repurchase: top-level true and context-nested true never duplicates the entry", () => {
+  const result = assertReady(
+    buildSearchProductsV2Request({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: true, recommendationContext: contextFixture({ sourceProduct: { productId: 100 }, explicitRepurchaseRequested: true }) })
+  );
+  assert.deepEqual(result.request.context?.explicitRepurchaseProducts, [{ productId: "100" }]);
+});
+
+test("explicit repurchase (top-level): identified mode (masterCustomerId present, no recommendationContext) still targets the source product", () => {
+  const result = assertReady(buildSearchProductsV2Request({ sourceProduct: { productId: 100 }, masterCustomerId: "555", explicitRepurchaseRequested: true }));
+  assert.deepEqual(result.request.context?.explicitRepurchaseProducts, [{ productId: "100" }]);
+  assert.equal(result.metadata.customerMode, "identified");
+  assert.equal(result.request.customer?.customerId, "555");
+});
+
+test("contradictions (top-level): source product excluded (top-level explicitExcludedProducts) + top-level explicit repurchase is skipped, zero context needed", () => {
+  assertSkipped(
+    buildSearchProductsV2Request({ sourceProduct: { productId: 100 }, explicitExcludedProducts: [{ productId: 100 }], explicitRepurchaseRequested: true }),
+    "contradictory_product_context"
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Preferred products (always omitted in v1)
 // ---------------------------------------------------------------------------
