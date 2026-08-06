@@ -1,4 +1,6 @@
 import type { CustomerCommercialHistoryContext } from "./types";
+import type { CustomerHistoryCommercialSignal } from "./commercial-signals";
+import type { CustomerHistoryCommercialGuidance } from "./commercial-policy";
 
 export function buildCustomerPurchaseHistorySummary(context: CustomerCommercialHistoryContext): Record<string, unknown> {
   const summary: Record<string, unknown> = {
@@ -85,4 +87,33 @@ export function buildCustomerPurchaseHistorySummary(context: CustomerCommercialH
   }
 
   return summary;
+}
+
+/**
+ * CP-R1-T12D (spec section 10). Compact by construction: signals are already
+ * bounded/deduplicated/relevance-filtered by the time they reach here (see
+ * relevance.ts#filterRelevantCustomerHistorySignals) - this function only
+ * shapes them for the prompt payload, never widens what's included. Never
+ * product names, spend figures, personal data, raw payloads, HTTP status
+ * codes, or stack traces - allowedStatements/prohibitedStatements are
+ * deliberately omitted here (already covered in English prose by
+ * CUSTOMER_HISTORY_COMMERCIAL_POLICY_RULE_LINES in the prompt itself - never
+ * duplicated in both places).
+ */
+export function buildCustomerHistoryCommercialSignalsSummary(input: { signals: readonly CustomerHistoryCommercialSignal[]; guidance: CustomerHistoryCommercialGuidance }): Record<string, unknown> {
+  return {
+    signals: input.signals.map((signal) => ({ ...signal })),
+    guidance: {
+      acknowledgeHistory: input.guidance.acknowledgeHistory,
+      mentionPreviousPurchase: input.guidance.mentionPreviousPurchase,
+      askReorderClarification: input.guidance.askReorderClarification,
+      explainComplementRelationship: input.guidance.explainComplementRelationship,
+      avoidRedundantRecommendation: input.guidance.avoidRedundantRecommendation,
+      preserveCatalogOrdering: true,
+      autoExcludePurchasedProducts: false,
+      inferCustomerSegment: false,
+      inferPurchasingPower: false,
+      reasonCodes: input.guidance.reasonCodes
+    }
+  };
 }

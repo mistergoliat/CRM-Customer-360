@@ -12,11 +12,18 @@ import type { RecentCatalogContext } from "./recentCatalogContext";
 import { createProductionCustomerProfileCapabilities } from "../capabilities/customer-profile";
 import {
   buildCatalogHistoryComparisons,
+  buildCustomerHistoryCommercialGuidance,
+  buildCustomerHistoryCommercialSignalsSummary,
   buildCustomerPurchaseHistorySummary,
+  deriveCustomerHistoryCommercialSignals,
   deriveCustomerHistoryNeeds,
+  filterRelevantCustomerHistorySignals,
   loadCustomerCommercialHistoryContext,
+  readCustomerHistoryCommercialPolicyConfig,
   readCustomerProfileContextConfig,
-  type CustomerCommercialHistoryContext
+  type CustomerCommercialHistoryContext,
+  type CustomerHistoryCommercialPolicyConfig,
+  type CustomerHistoryCommercialSignal
 } from "../customer-profile-context";
 
 export type RunNativeAgentToolLoopCycleInput = {
@@ -49,6 +56,8 @@ export type RunNativeAgentToolLoopCycleInput = {
     pendingCatalogAction?: PendingCatalogActionStep | null;
     requestId?: string;
   }) => Promise<CustomerCommercialHistoryContext>) | null;
+  /** Test-only injection point for T12D; production callers rely on readCustomerHistoryCommercialPolicyConfig() reading the real environment. */
+  customerHistoryCommercialPolicyConfig?: CustomerHistoryCommercialPolicyConfig | null;
 };
 
 export type NativeAgentToolLoopCycleResult = {
@@ -61,7 +70,9 @@ export type NativeAgentToolLoopCycleResult = {
 function buildCommercialContextSummary(
   snapshot: CommercialContextSnapshot,
   currentTurn: { inboundMessageId: string; customerMessage: string },
-  customerProfileContext: CustomerCommercialHistoryContext | null
+  customerProfileContext: CustomerCommercialHistoryContext | null,
+  /** CP-R1-T12D. Already relevance-filtered and capped - null whenever the policy is disabled (default) or no signal cleared relevance this turn, so the key is simply absent, same discipline as customerPurchaseHistory above. */
+  customerHistoryCommercialSignalsSummary: Record<string, unknown> | null
 ): Record<string, unknown> {
   const recentMessages = snapshot.recentMessages.filter((message, index, messages) => {
     if (message.id === currentTurn.inboundMessageId) return false;
@@ -85,6 +96,10 @@ function buildCommercialContextSummary(
 
   if (customerProfileContext) {
     summary.customerPurchaseHistory = buildCustomerPurchaseHistorySummary(customerProfileContext);
+  }
+
+  if (customerHistoryCommercialSignalsSummary) {
+    summary.customerHistoryCommercialSignals = customerHistoryCommercialSignalsSummary;
   }
 
   return summary;
@@ -388,6 +403,47 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     });
   }
 
+  /**
+   * CP-R1-T12D. Independent flag from T12C's `contextEnabled` above - when
+   * this stays at its default `false`, `customerHistoryCommercialSignalsSummary`
+   * is never computed and `buildCommercialContextSummary` receives `null`,
+   * so the prompt payload is byte-for-byte what T12C already produced.
+   */
+  const commercialPolicyConfig = input.customerHistoryCommercialPolicyConfig ?? readCustomerHistoryCommercialPolicyConfig();
+  let customerHistoryCommercialSignalsSummary: Record<string, unknown> | null = null;
+
+  if (commercialPolicyConfig.enabled && customerProfileContext) {
+    const commercialSignalsStartedAt = Date.now();
+    const derivedSignals: CustomerHistoryCommercialSignal[] = deriveCustomerHistoryCommercialSignals({
+      context: customerProfileContext,
+      referenceTime: input.currentTime,
+      recentPurchaseWindowDays: commercialPolicyConfig.recentPurchaseWindowDays
+    });
+    const exposedSignals = filterRelevantCustomerHistorySignals(derivedSignals, commercialPolicyConfig.maxSignals);
+    const guidance = buildCustomerHistoryCommercialGuidance(exposedSignals);
+    if (exposedSignals.length > 0) {
+      customerHistoryCommercialSignalsSummary = buildCustomerHistoryCommercialSignalsSummary({ signals: exposedSignals, guidance });
+    }
+
+    // Never product names, spend figures, personal data, or customerId/productId as labels - only enum-like signal types, counts, and reason codes.
+    console.info({
+      event: "customer_history_commercial_policy_evaluated",
+      customerHistoryPolicyEnabled: true,
+      historyStatus: customerProfileContext.status,
+      derivedSignalTypes: [...new Set(derivedSignals.map((signal) => signal.type))],
+      exposedSignalTypes: exposedSignals.map((signal) => signal.type),
+      suppressedSignalCount: derivedSignals.length - exposedSignals.length,
+      sameProductMatchCount: exposedSignals.filter((signal) => signal.type === "PRODUCT_PREVIOUSLY_PURCHASED").length,
+      sameVariantMatchCount: exposedSignals.filter((signal) => signal.type === "VARIANT_PREVIOUSLY_PURCHASED").length,
+      possibleReorderCount: exposedSignals.filter((signal) => signal.type === "POSSIBLE_REORDER").length,
+      possibleComplementCount: exposedSignals.filter((signal) => signal.type === "POSSIBLE_COMPLEMENT").length,
+      historyMentionRecommended: customerHistoryCommercialSignalsSummary !== null,
+      reasonCodes: guidance.reasonCodes,
+      durationMs: Date.now() - commercialSignalsStartedAt,
+      requestId: input.correlationId
+    });
+  }
+
   const loop = await runAgentToolLoop({
     correlationId: input.correlationId,
     conversationId: input.conversationId,
@@ -397,7 +453,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     commercialContextSummary: buildCommercialContextSummary(input.snapshot, {
       inboundMessageId: input.inboundMessageId,
       customerMessage: input.customerMessage
-    }, customerProfileContext),
+    }, customerProfileContext, customerHistoryCommercialSignalsSummary),
     recentCatalogContext: input.recentCatalogContext ?? null,
     pendingCatalogAction: input.pendingCatalogAction ?? null,
     provider: input.provider,
