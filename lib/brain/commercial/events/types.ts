@@ -229,9 +229,17 @@ export type AgentToolLoopProviderFailurePayload = {
 // no-cross-module-import rationale as the rest of this file.
 export type AgentToolLoopPendingCatalogActionType = "send_product_link";
 
+// CP-R1-T10B8D. Local mirror of agent-loop/agentStepTypes.ts#PendingCatalogActionCandidateProduct.
+export type AgentToolLoopPendingCatalogActionCandidateProduct = {
+  productId: string;
+  combinationId?: string;
+};
+
 export type AgentToolLoopPendingCatalogActionPayload = {
   actionType: AgentToolLoopPendingCatalogActionType;
   candidateProductIds: string[];
+  /** CP-R1-T10B8D. Present only when this action originates from recommend_catalog_products - see PendingCatalogActionStep#candidateProducts. */
+  candidateProducts?: AgentToolLoopPendingCatalogActionCandidateProduct[];
 };
 
 export type AgentToolLoopCompletedRecordedPayload = {

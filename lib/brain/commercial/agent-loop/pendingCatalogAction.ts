@@ -1,5 +1,5 @@
 import { safeQueryRows } from "@/lib/db";
-import type { PendingCatalogActionStep, ToolObservation } from "./agentStepTypes";
+import type { PendingCatalogActionCandidateProduct, PendingCatalogActionStep, ToolObservation } from "./agentStepTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
 
 const MAX_CANDIDATE_PRODUCT_IDS = 20;
@@ -39,6 +39,31 @@ function asProductId(value: unknown): string | null {
   return null;
 }
 
+/**
+ * CP-R1-T10B8D. Cross-checked against `allowedProductIds` (the already-parsed
+ * `candidateProductIds`) so a `candidateProducts` entry can never smuggle in a
+ * productId absent from the flat list - the two arrays always agree on which
+ * products are candidates, `candidateProducts` only adds variant identity.
+ * Absent/malformed input (legacy events, model-emitted actions) -> undefined,
+ * never an empty array.
+ */
+function parseCandidateProducts(value: unknown, allowedProductIds: ReadonlySet<string>): PendingCatalogActionCandidateProduct[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const candidateProducts: PendingCatalogActionCandidateProduct[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    const productId = asProductId(record.productId);
+    if (!productId || !allowedProductIds.has(productId) || seen.has(productId)) continue;
+    seen.add(productId);
+    const combinationId = asProductId(record.combinationId);
+    candidateProducts.push({ productId, ...(combinationId ? { combinationId } : {}) });
+    if (candidateProducts.length >= MAX_CANDIDATE_PRODUCT_IDS) break;
+  }
+  return candidateProducts.length > 0 ? candidateProducts : undefined;
+}
+
 function parsePendingCatalogAction(value: unknown): PendingCatalogActionStep | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -54,8 +79,58 @@ function parsePendingCatalogAction(value: unknown): PendingCatalogActionStep | n
     candidateProductIds.push(productId);
     if (candidateProductIds.length >= MAX_CANDIDATE_PRODUCT_IDS) break;
   }
+  if (candidateProductIds.length === 0) return null;
 
-  return candidateProductIds.length > 0 ? { actionType: "send_product_link", candidateProductIds } : null;
+  const candidateProducts = parseCandidateProducts(record.candidateProducts, new Set(candidateProductIds));
+  return { actionType: "send_product_link", candidateProductIds, ...(candidateProducts ? { candidateProducts } : {}) };
+}
+
+/**
+ * CP-R1-T10B8D. Exact productId match required; when the candidate carries a
+ * combinationId, the request must match it exactly (a bare productId request
+ * never matches a variant-specific candidate - "no usar solo productId
+ * cuando existe informacion de variante"). When the candidate has no
+ * combinationId, any request for that productId matches - current catalog
+ * semantics, never a fabricated variant.
+ */
+export function matchesPendingCatalogActionCandidate(candidate: PendingCatalogActionCandidateProduct, requested: { productId: string; combinationId?: string }): boolean {
+  if (candidate.productId !== requested.productId) return false;
+  if (candidate.combinationId === undefined) return true;
+  return requested.combinationId !== undefined && requested.combinationId === candidate.combinationId;
+}
+
+/**
+ * CP-R1-T10B8D. Builds a recommendation-origin pendingCatalogAction directly
+ * from a completed recommend_catalog_products ToolObservation - only the
+ * candidates actually projected to the model (buildToolObservation.ts already
+ * capped this at MAX_RECOMMENDATIONS before this function ever sees it).
+ * Never score, rank, ownership, personalization, or any other field. Returns
+ * null for a non-completed/non-recommend_catalog_products observation or one
+ * with zero candidates (empty) - callers decide what null means (no action,
+ * or invalidating a prior one).
+ */
+export function buildPendingCatalogActionFromRecommendation(observation: ToolObservation): PendingCatalogActionStep | null {
+  if (observation.tool !== "recommend_catalog_products" || observation.status !== "completed") return null;
+  const data = observation.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const recommendations = (data as Record<string, unknown>).recommendations;
+  if (!Array.isArray(recommendations)) return null;
+
+  const seen = new Set<string>();
+  const candidateProductIds: string[] = [];
+  const candidateProducts: PendingCatalogActionCandidateProduct[] = [];
+  for (const recommendation of recommendations) {
+    if (!recommendation || typeof recommendation !== "object" || Array.isArray(recommendation)) continue;
+    const record = recommendation as Record<string, unknown>;
+    const productId = asProductId(record.productId);
+    if (!productId || seen.has(productId)) continue;
+    seen.add(productId);
+    const combinationId = asProductId(record.combinationId);
+    candidateProductIds.push(productId);
+    candidateProducts.push({ productId, ...(combinationId ? { combinationId } : {}) });
+  }
+
+  return candidateProductIds.length > 0 ? { actionType: "send_product_link", candidateProductIds, candidateProducts } : null;
 }
 
 function addAllowedProductId(target: string[], seen: Set<string>, value: unknown) {
@@ -65,7 +140,14 @@ function addAllowedProductId(target: string[], seen: Set<string>, value: unknown
   target.push(productId);
 }
 
-function collectAllowedProductIds(input: {
+/**
+ * CP-R1-T10B8D: also reused directly by runAgentToolLoop.ts as the "evidencia
+ * valida existente del flujo previo" fallback for get_product_details gating
+ * - a productId-only, permissive check (no variant precision needed for that
+ * secondary path; the strict, variant-aware boundary is
+ * matchesPendingCatalogActionCandidate against candidateProducts).
+ */
+export function collectAllowedProductIds(input: {
   recentCatalogContext?: RecentCatalogContext | null;
   toolObservations?: Array<ToolObservation | null | undefined>;
 }): string[] {
@@ -102,6 +184,18 @@ function collectAllowedProductIds(input: {
 
     if (observation.tool === "get_product_details") {
       addAllowedProductId(allowed, seen, record.productId);
+    }
+
+    // CP-R1-T10B8D: recommend_catalog_products candidates are legitimate
+    // evidence for a pendingCatalogAction the model offers this same turn
+    // (e.g. "quieres el link de alguno de estos productos recomendados?") -
+    // same treatment as search_products/explore_catalog above, never a
+    // second allow-list.
+    if (observation.tool === "recommend_catalog_products" && Array.isArray(record.recommendations)) {
+      for (const recommendation of record.recommendations) {
+        if (!recommendation || typeof recommendation !== "object" || Array.isArray(recommendation)) continue;
+        addAllowedProductId(allowed, seen, (recommendation as Record<string, unknown>).productId);
+      }
     }
   }
 

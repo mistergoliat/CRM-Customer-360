@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test, { after } from "node:test";
 import { getPool, safeExecute, safeQueryRows } from "@/lib/db";
 import {
+  buildPendingCatalogActionFromRecommendation,
   loadPendingCatalogAction,
+  matchesPendingCatalogActionCandidate,
   normalizePendingCatalogActionForEvidence
 } from "@/lib/brain/commercial/agent-loop/pendingCatalogAction";
+import type { ToolObservation } from "@/lib/brain/commercial/agent-loop/agentStepTypes";
 import { normalizeAgentToolLoopCompletedCommercialEvent, recordCommercialEvent } from "@/lib/brain/commercial/events";
 
 Object.assign(process.env, {
@@ -37,6 +40,17 @@ function eventRow(payload: Record<string, unknown>) {
 
 function uniqueSuffix(label: string) {
   return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+/** Recursive Object.freeze - a shallow freeze would leave nested arrays/objects writable. */
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      deepFreeze((value as Record<string, unknown>)[key]);
+    }
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function baseAgentToolLoopEvent(input: {
@@ -344,6 +358,23 @@ test("collects allowed candidates from search_products, explore_catalog and get_
   assert.deepEqual(result.pendingCatalogAction?.candidateProductIds, ["501", "1532", "777"]);
 });
 
+test("CP-R1-T10B8D: collects allowed candidates from a recommend_catalog_products observation too, same treatment as the other catalog tools", () => {
+  const result = normalizePendingCatalogActionForEvidence({
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["801", "802", "999"] },
+    recentCatalogContext: null,
+    toolObservations: [
+      {
+        tool: "recommend_catalog_products",
+        status: "completed",
+        data: { recommendations: [{ productId: "801", name: "Recomendado 801", rank: 1, score: 0.9 }, { productId: "802", name: "Recomendado 802", rank: 2, score: 0.8 }] }
+      }
+    ],
+    correlationId: "corr-recommend-observations"
+  });
+
+  assert.deepEqual(result.pendingCatalogAction?.candidateProductIds, ["801", "802"]);
+});
+
 test("caps normalized candidates at 20 after evidence intersection", () => {
   const ids = Array.from({ length: 25 }, (_, index) => `p-${index}`);
   const result = normalizePendingCatalogActionForEvidence({
@@ -363,4 +394,201 @@ test("caps normalized candidates at 20 after evidence intersection", () => {
 
   assert.equal(result.pendingCatalogAction?.candidateProductIds.length, 20);
   assert.deepEqual(result.pendingCatalogAction?.candidateProductIds.slice(0, 3), ["p-0", "p-1", "p-2"]);
+});
+
+// --- CP-R1-T10B8D: get_product_details continuity ---
+
+function recommendationObservation(recommendations: Array<{ productId: string; combinationId?: string; name?: string }>, overrides: Partial<ToolObservation> = {}): ToolObservation {
+  return {
+    tool: "recommend_catalog_products",
+    status: "completed",
+    data: { recommendations: recommendations.map((r) => ({ name: "Producto", rank: 1, score: 0.5, ...r })) },
+    ...overrides
+  };
+}
+
+test("buildPendingCatalogActionFromRecommendation: completed with candidates builds candidateProductIds and candidateProducts, order preserved", () => {
+  const result = buildPendingCatalogActionFromRecommendation(recommendationObservation([{ productId: "801" }, { productId: "802", combinationId: "11" }]));
+  assert.deepEqual(result, {
+    actionType: "send_product_link",
+    candidateProductIds: ["801", "802"],
+    candidateProducts: [{ productId: "801" }, { productId: "802", combinationId: "11" }]
+  });
+});
+
+test("buildPendingCatalogActionFromRecommendation: never carries score, rank, ownership, or any field beyond productId/combinationId", () => {
+  const result = buildPendingCatalogActionFromRecommendation({
+    tool: "recommend_catalog_products",
+    status: "completed",
+    data: {
+      recommendations: [
+        { productId: "801", name: "X", rank: 1, score: 0.9, ownership: { previouslyPurchased: true }, reasons: ["STRONG_COMMERCIAL_RELEVANCE"] }
+      ]
+    }
+  });
+  assert.deepEqual(result, { actionType: "send_product_link", candidateProductIds: ["801"], candidateProducts: [{ productId: "801" }] });
+  const serialized = JSON.stringify(result);
+  assert.doesNotMatch(serialized, /score|rank|ownership|previouslyPurchased|reasons/i);
+});
+
+test("buildPendingCatalogActionFromRecommendation: empty recommendations returns null", () => {
+  assert.equal(buildPendingCatalogActionFromRecommendation(recommendationObservation([])), null);
+});
+
+test("buildPendingCatalogActionFromRecommendation: skipped/failed/blocked observations return null", () => {
+  assert.equal(buildPendingCatalogActionFromRecommendation({ tool: "recommend_catalog_products", status: "skipped", reason: "source_product_invalid" }), null);
+  assert.equal(buildPendingCatalogActionFromRecommendation({ tool: "recommend_catalog_products", status: "failed", errorCode: "catalog_service_error" }), null);
+  assert.equal(buildPendingCatalogActionFromRecommendation({ tool: "recommend_catalog_products", status: "blocked", errorCode: "source_product_not_observed" }), null);
+});
+
+test("buildPendingCatalogActionFromRecommendation: a different tool's completed observation returns null", () => {
+  assert.equal(buildPendingCatalogActionFromRecommendation({ tool: "search_products", status: "completed", data: { items: [] } }), null);
+});
+
+test("buildPendingCatalogActionFromRecommendation: deduplicates repeated productIds", () => {
+  const result = buildPendingCatalogActionFromRecommendation(recommendationObservation([{ productId: "801" }, { productId: "801" }, { productId: "802" }]));
+  assert.deepEqual(result?.candidateProductIds, ["801", "802"]);
+});
+
+test("matchesPendingCatalogActionCandidate: exact productId, no combinationId on either side matches", () => {
+  assert.equal(matchesPendingCatalogActionCandidate({ productId: "501" }, { productId: "501" }), true);
+});
+
+test("matchesPendingCatalogActionCandidate: different productId never matches", () => {
+  assert.equal(matchesPendingCatalogActionCandidate({ productId: "501" }, { productId: "502" }), false);
+});
+
+test("matchesPendingCatalogActionCandidate: candidate with combinationId requires an exact combinationId match", () => {
+  assert.equal(matchesPendingCatalogActionCandidate({ productId: "501", combinationId: "10" }, { productId: "501", combinationId: "10" }), true);
+  assert.equal(matchesPendingCatalogActionCandidate({ productId: "501", combinationId: "10" }, { productId: "501", combinationId: "11" }), false);
+});
+
+test("matchesPendingCatalogActionCandidate: a bare productId request never matches a variant-specific candidate", () => {
+  assert.equal(matchesPendingCatalogActionCandidate({ productId: "501", combinationId: "10" }, { productId: "501" }), false);
+});
+
+test("matchesPendingCatalogActionCandidate: candidate without combinationId matches any requested combinationId - never fabricates a variant", () => {
+  assert.equal(matchesPendingCatalogActionCandidate({ productId: "501" }, { productId: "501", combinationId: "10" }), true);
+});
+
+// --- Immutability (post-audit, closure-audit Minor-2) ---
+//
+// Fixtures are deep-frozen where the function under test only ever needs to
+// read them - Object.freeze + strict-mode ESM turns any attempted write into
+// an immediate TypeError, so a passing test is proof, not assumption, that
+// nothing here mutates its input.
+
+test("buildPendingCatalogActionFromRecommendation: creation does not mutate the input observation", () => {
+  const observation = deepFreeze(recommendationObservation([{ productId: "801" }, { productId: "802", combinationId: "11" }]));
+  const snapshot = JSON.parse(JSON.stringify(observation));
+
+  const result = buildPendingCatalogActionFromRecommendation(observation);
+
+  assert.ok(result);
+  assert.deepEqual(observation, snapshot, "the input ToolObservation must never be mutated by creation");
+});
+
+test("buildPendingCatalogActionFromRecommendation: renewal (a later call for a different recommendation) never mutates an earlier call's result", () => {
+  const first = buildPendingCatalogActionFromRecommendation(recommendationObservation([{ productId: "801" }]));
+  const firstSnapshot = JSON.parse(JSON.stringify(first));
+
+  const second = buildPendingCatalogActionFromRecommendation(recommendationObservation([{ productId: "900", combinationId: "5" }]));
+
+  assert.deepEqual(first, firstSnapshot, "an earlier action must be unaffected by building a later, unrelated one - no shared mutable state");
+  assert.deepEqual(second, { actionType: "send_product_link", candidateProductIds: ["900"], candidateProducts: [{ productId: "900", combinationId: "5" }] });
+});
+
+test("matchesPendingCatalogActionCandidate: consumption check never mutates candidateProductIds or candidateProducts", () => {
+  const pendingCatalogAction = deepFreeze({
+    actionType: "send_product_link" as const,
+    candidateProductIds: ["801", "802"],
+    candidateProducts: [{ productId: "801" }, { productId: "802", combinationId: "11" }]
+  });
+  const snapshot = JSON.parse(JSON.stringify(pendingCatalogAction));
+
+  // Same shape as runAgentToolLoop.ts's own consumption check: `.some()` over `candidateProducts`.
+  const matched = pendingCatalogAction.candidateProducts.some((candidate) => matchesPendingCatalogActionCandidate(candidate, { productId: "802", combinationId: "11" }));
+
+  assert.equal(matched, true);
+  assert.deepEqual(pendingCatalogAction, snapshot, "checking a candidate for consumption must never mutate candidateProductIds or candidateProducts");
+});
+
+test("buildPendingCatalogActionFromRecommendation: mutating the returned action never alters the original observation's recommendations (result uses new arrays/objects)", () => {
+  const observation = recommendationObservation([{ productId: "801" }, { productId: "802", combinationId: "11" }]);
+  const originalRecommendations = (observation.data as { recommendations: unknown[] }).recommendations;
+  const originalSnapshot = JSON.parse(JSON.stringify(originalRecommendations));
+
+  const result = buildPendingCatalogActionFromRecommendation(observation)!;
+  result.candidateProductIds.push("999");
+  result.candidateProducts![0].productId = "corrupted";
+  result.candidateProducts!.push({ productId: "999" });
+
+  assert.deepEqual(originalRecommendations, originalSnapshot, "mutating the result must never alter the original observation fixture");
+});
+
+test("legacy compatibility: an event with candidateProductIds but no candidateProducts still loads (pre-T10B8D payload)", async () => {
+  const result = await loadPendingCatalogAction({
+    conversationId: 7,
+    dataAccess: {
+      async queryRows() {
+        return { ok: true, rows: [{ payload_json: JSON.stringify({ pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["80", "2164"] } }) }] };
+      }
+    }
+  });
+  assert.deepEqual(result.pendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["80", "2164"] });
+  assert.equal("candidateProducts" in (result.pendingCatalogAction ?? {}), false);
+});
+
+test("loadPendingCatalogAction parses candidateProducts when present, preserving combinationId", async () => {
+  const result = await loadPendingCatalogAction({
+    conversationId: 7,
+    dataAccess: {
+      async queryRows() {
+        return {
+          ok: true,
+          rows: [
+            {
+              payload_json: JSON.stringify({
+                pendingCatalogAction: {
+                  actionType: "send_product_link",
+                  candidateProductIds: ["801", "802"],
+                  candidateProducts: [{ productId: "801" }, { productId: "802", combinationId: "11" }]
+                }
+              })
+            }
+          ]
+        };
+      }
+    }
+  });
+  assert.deepEqual(result.pendingCatalogAction, {
+    actionType: "send_product_link",
+    candidateProductIds: ["801", "802"],
+    candidateProducts: [{ productId: "801" }, { productId: "802", combinationId: "11" }]
+  });
+});
+
+test("loadPendingCatalogAction drops candidateProducts entries whose productId is not in candidateProductIds (defense in depth)", async () => {
+  const result = await loadPendingCatalogAction({
+    conversationId: 7,
+    dataAccess: {
+      async queryRows() {
+        return {
+          ok: true,
+          rows: [
+            {
+              payload_json: JSON.stringify({
+                pendingCatalogAction: {
+                  actionType: "send_product_link",
+                  candidateProductIds: ["801"],
+                  candidateProducts: [{ productId: "801" }, { productId: "999" }]
+                }
+              })
+            }
+          ]
+        };
+      }
+    }
+  });
+  assert.deepEqual(result.pendingCatalogAction?.candidateProducts, [{ productId: "801" }]);
 });

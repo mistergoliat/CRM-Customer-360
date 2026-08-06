@@ -7,7 +7,8 @@ import type { ToolObservation } from "./agentStepTypes";
 
 const MAX_SEARCH_ITEMS = 5;
 const MAX_EXPLORE_ITEMS = 10;
-const MAX_RECOMMENDATIONS = 5;
+/** CP-R1-T10B8D: exported so recentCatalogContext.ts can slice recommend_catalog_products history at the exact same count the model observed live - "observed by the model" must equal "eligible for continuity" (see spec section 11). */
+export const MAX_RECOMMENDATIONS = 5;
 const MAX_REASONS_PER_RECOMMENDATION = 5;
 const MAX_RECOMMENDATION_WARNINGS = 10;
 

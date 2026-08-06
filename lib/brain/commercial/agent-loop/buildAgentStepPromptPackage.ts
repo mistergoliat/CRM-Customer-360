@@ -127,6 +127,20 @@ const EXPLORE_CATALOG_RULE_LINES = [
 ];
 
 /**
+ * CP-R1-T10B8D (spec section 26 - minimal tool policy only, no commercial
+ * strategy yet). recommend_catalog_products now validates sourceProduct
+ * against this conversation's own observed evidence before calling the
+ * Catalog Service; a blocked observation here means evidence, not a
+ * technical failure, and the model can recover within budget by observing a
+ * real product first - never a reason to hand off.
+ */
+const RECOMMEND_CATALOG_PRODUCTS_RULE_LINES = [
+  "recommend_catalog_products requires sourceProduct.productId (and sourceProduct.combinationId, only when you mean one specific variant) to be a product already observed this conversation via search_products, get_product_details, or explore_catalog - never invent sourceProduct.productId or combinationId, and never use a recommend_catalog_products candidate as the sourceProduct for another recommend_catalog_products call.",
+  "If a recommend_catalog_products observation has status \"blocked\", first use search_products or get_product_details to observe a real product, then retry recommend_catalog_products with that product's productId - do not hand off solely because one recommend_catalog_products call was rejected while tool budget remains.",
+  "After recommend_catalog_products returns candidates, get_product_details is only guaranteed for one of those exact candidate productIds (with the exact combinationId a candidate specified, if any) - if get_product_details comes back blocked, use the productId of one of the candidates you actually observed instead of inventing or guessing one."
+];
+
+/**
  * ACS-R1-05.1-T02.6.2. The real stockQuantity from a tool observation must
  * never be stated verbatim to the customer once it is 20 or more (e.g. a raw
  * "47171" reads as an inventory data leak, not a commercial statement) -
@@ -261,6 +275,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...RECENT_CATALOG_CONTEXT_RULE_LINES,
       ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
       ...EXPLORE_CATALOG_RULE_LINES,
+      ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,
       ...STOCK_DISCLOSURE_RULE_LINES,
       ...COMMERCIAL_CLOSING_RULE_LINES,
       ...PENDING_CATALOG_ACTION_RULE_LINES,
@@ -274,6 +289,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...RECENT_CATALOG_CONTEXT_RULE_LINES,
     ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
     ...EXPLORE_CATALOG_RULE_LINES,
+    ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,
     ...STOCK_DISCLOSURE_RULE_LINES,
     ...COMMERCIAL_CLOSING_RULE_LINES,
     ...PENDING_CATALOG_ACTION_RULE_LINES,

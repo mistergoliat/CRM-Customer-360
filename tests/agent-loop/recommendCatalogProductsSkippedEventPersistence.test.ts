@@ -84,6 +84,10 @@ test("real chain: a recommend_catalog_products skip survives buildStepsSummary a
     currentTime: "2026-08-05T15:00:00.000Z",
     customerMessage: "algo mas?",
     commercialContextSummary: {},
+    // CP-R1-T10B8D: productId -1 must be "observed" for this call to even
+    // reach T10B6's own syntactic rejection - see the sibling comment in
+    // recommendCatalogProductsAgentLoopIntegration.test.ts test 7.
+    recentCatalogContext: { interactions: [{ inboundMessageId: "msg-prior-search", completedAt: "2026-08-05T14:59:00.000Z", sourceTool: "search_products", products: [{ position: 1, productId: "-1", name: "Producto fuente invalido" }] }] },
     provider
   });
 
