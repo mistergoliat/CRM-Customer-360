@@ -32,10 +32,29 @@ export type AgentStepUseTool = {
 export const PENDING_CATALOG_ACTION_TYPES = ["send_product_link"] as const;
 export type PendingCatalogActionType = (typeof PENDING_CATALOG_ACTION_TYPES)[number];
 
+/**
+ * CP-R1-T10B8D. Variant-aware candidate identity - `combinationId` present
+ * only when the source (a recommend_catalog_products candidate) carried one.
+ */
+export type PendingCatalogActionCandidateProduct = {
+  productId: string;
+  combinationId?: string;
+};
+
 export type PendingCatalogActionStep = {
   actionType: PendingCatalogActionType;
   /** productIds the customer may choose between to resolve this action - never invented, sourced from this turn's own catalog evidence. */
   candidateProductIds: string[];
+  /**
+   * CP-R1-T10B8D. Optional, richer mirror of `candidateProductIds` with
+   * variant identity - populated only when this action originates from a
+   * completed recommend_catalog_products result (runtime-built, never
+   * emitted by the model - AgentStepRespond#pendingCatalogAction never
+   * includes it). Absent on model-emitted send_product_link actions and on
+   * legacy events persisted before this field existed - both remain fully
+   * valid with `candidateProductIds` alone.
+   */
+  candidateProducts?: PendingCatalogActionCandidateProduct[];
 };
 
 export type AgentStepRespond = {
@@ -86,6 +105,33 @@ export type ToolObservation = {
    */
   warnings?: string[];
 };
+
+/**
+ * CP-R1-T10B8D. recommend_catalog_products' sourceProduct must cite a
+ * product this conversation actually observed (search_products,
+ * get_product_details, explore_catalog, or - across turns -
+ * recentCatalogContext) - never an invented or otherwise-sourced productId.
+ * Surfaced as ToolObservation.errorCode on a "blocked" observation, the same
+ * generic field every other blocked reason in this file already uses (no
+ * second, tool-specific field). Reused, never duplicated, by
+ * resolveObservedRecommendationSourceProduct.ts.
+ */
+export const RECOMMENDATION_SOURCE_PRODUCT_BLOCKED_REASONS = [
+  "source_product_not_observed",
+  "source_product_variant_not_observed",
+  "recent_catalog_context_unavailable"
+] as const;
+export type RecommendationSourceProductBlockedReason = (typeof RECOMMENDATION_SOURCE_PRODUCT_BLOCKED_REASONS)[number];
+
+/**
+ * CP-R1-T10B8D. get_product_details is blocked with this reason only when an
+ * active recommendation-origin pendingCatalogAction exists (candidateProducts
+ * populated) and the requested product matches neither its candidates nor
+ * any other observed evidence. No active recommendation pendingCatalogAction
+ * means get_product_details is never gated - its pre-existing, unconditioned
+ * authorization is unchanged.
+ */
+export const GET_PRODUCT_DETAILS_PENDING_CATALOG_BLOCKED_REASON = "product_not_in_pending_catalog_candidates" as const;
 
 export const AGENT_LOOP_TERMINAL_REASONS = [
   "responded",

@@ -7,10 +7,12 @@ import { buildAgentStepPromptPackage, type AgentLoopToolDescription } from "./bu
 import { buildToolObservation } from "./buildToolObservation";
 import { validateAgentStep } from "./validateAgentStep";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
+import { GET_PRODUCT_DETAILS_PENDING_CATALOG_BLOCKED_REASON } from "./agentStepTypes";
 import type { AgentLoopProviderFailure, AgentLoopResult, AgentLoopStepRecord, AgentLoopTerminalReason, AgentStepRespond, AgentStepUseTool, PendingCatalogActionStep, ToolObservation } from "./agentStepTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
 import { classifyAgentLoopProviderFailure, logAgentLoopProviderFailure } from "./providers/providerFailureClassification";
-import { normalizePendingCatalogActionForEvidence } from "./pendingCatalogAction";
+import { buildPendingCatalogActionFromRecommendation, collectAllowedProductIds, matchesPendingCatalogActionCandidate, normalizePendingCatalogActionForEvidence } from "./pendingCatalogAction";
+import { resolveObservedRecommendationSourceProduct } from "./resolveObservedRecommendationSourceProduct";
 
 /**
  * ACS-R1-05.1-T02.1 (spec section 5). Fixed, backend-owned pool - never
@@ -186,6 +188,27 @@ function enrichToolArguments(tool: string, args: Record<string, unknown>, commer
 }
 
 /**
+ * CP-R1-T10B8D. The "evidencia valida existente del flujo previo" fallback
+ * for get_product_details must never include recommend_catalog_products
+ * observations - those are exactly what candidateProducts (checked first,
+ * strictly, with variant precision) already governs. Reusing them here too
+ * would let a wrong-variant request for an otherwise-recommended product
+ * slip through this permissive, productId-only fallback, defeating the
+ * variant check entirely. Independent corroboration only: search_products,
+ * get_product_details, explore_catalog - same allowlist philosophy as
+ * resolveObservedRecommendationSourceProduct.ts, applied here to a flat
+ * productId-only check (reusing collectAllowedProductIds, never a second
+ * evidence collector).
+ */
+function collectNonRecommendationEvidenceProductIds(input: { recentCatalogContext: RecentCatalogContext | null; toolObservationsThisTurn: ToolObservation[] }): string[] {
+  const filteredContext: RecentCatalogContext | null = input.recentCatalogContext
+    ? { interactions: input.recentCatalogContext.interactions.filter((interaction) => interaction.sourceTool !== "recommend_catalog_products") }
+    : null;
+  const filteredObservations = input.toolObservationsThisTurn.filter((observation) => observation.tool !== "recommend_catalog_products");
+  return collectAllowedProductIds({ recentCatalogContext: filteredContext, toolObservations: filteredObservations });
+}
+
+/**
  * Runs one governed use_tool decision: dedup, registry/authorization check,
  * execution, observation. Shared by the gathering and finalization phases
  * would be overkill (finalization never allows use_tool), so this is called
@@ -196,7 +219,13 @@ async function processUseToolStep(
   commercialContextSummary: Record<string, unknown>,
   executedCalls: Set<string>,
   gatewayContext: CapabilityGatewayContext,
-  warnings: string[]
+  warnings: string[],
+  continuity: {
+    recentCatalogContext: RecentCatalogContext | null;
+    toolObservationsThisTurn: ToolObservation[];
+    /** CP-R1-T10B8D. Already null when consumed - callers only ever pass an action still active for this exact call. */
+    activeRecommendationPendingAction: PendingCatalogActionStep | null;
+  }
 ): Promise<{ step: AgentStepUseTool; governance: "authorized" | "blocked_unregistered" | "blocked_duplicate"; observation: ToolObservation; executed: boolean }> {
   const effectiveArguments = enrichToolArguments(step.tool, step.arguments, commercialContextSummary);
   const enrichedStep: AgentStepUseTool = { ...step, arguments: effectiveArguments };
@@ -213,6 +242,59 @@ async function processUseToolStep(
   }
 
   executedCalls.add(dedupeKey);
+
+  // CP-R1-T10B8D. Evidence must be checked before the Gateway is ever called
+  // (spec section 7) - a sourceProduct this conversation never observed must
+  // produce zero HTTP calls to the Catalog Service, not a failed/skipped
+  // execution from T10B6/T10B7/T10B8B. A rejected-before-any-real-work call
+  // never consumes maxToolExecutions budget, same as invalid_arguments below.
+  if (step.tool === "recommend_catalog_products") {
+    const evidence = resolveObservedRecommendationSourceProduct({
+      requestedSourceProduct: effectiveArguments.sourceProduct as { productId?: unknown; combinationId?: unknown } | null | undefined,
+      recentCatalogContext: continuity.recentCatalogContext,
+      toolObservations: continuity.toolObservationsThisTurn
+    });
+    if (evidence.status === "blocked") {
+      warnings.push(`agent_loop_tool_blocked_evidence:${step.tool}:${evidence.reason}`);
+      return { step: enrichedStep, governance: "authorized", observation: { tool: step.tool, status: "blocked", errorCode: evidence.reason }, executed: false };
+    }
+  }
+
+  // CP-R1-T10B8D. get_product_details keeps its pre-existing, unconditioned
+  // authorization whenever no recommendation continuity is open
+  // (activeRecommendationPendingAction null) - this block never runs then,
+  // so every pre-T10B8D flow (search -> details, or details with zero
+  // evidence at all) is unaffected. Only while a recommendation's candidates
+  // are the active continuity window does an unmatched, unevidenced product
+  // get rejected before the Gateway - "evidencia valida existente del flujo
+  // previo" (recentCatalogContext/this turn's own observations) still
+  // authorizes it even then, so a model that legitimately moved on to a
+  // different, already-observed product is never blocked.
+  if (step.tool === "get_product_details" && continuity.activeRecommendationPendingAction) {
+    const requestedProductId = asComparableProductId(effectiveArguments.productId);
+    const requestedCombinationId = asComparableProductId(effectiveArguments.combinationId) ?? undefined;
+    const matchesCandidate = requestedProductId
+      ? (continuity.activeRecommendationPendingAction.candidateProducts ?? []).some((candidate) =>
+          matchesPendingCatalogActionCandidate(candidate, { productId: requestedProductId, combinationId: requestedCombinationId })
+        )
+      : false;
+
+    if (!matchesCandidate) {
+      const observedElsewhere = requestedProductId
+        ? collectNonRecommendationEvidenceProductIds({ recentCatalogContext: continuity.recentCatalogContext, toolObservationsThisTurn: continuity.toolObservationsThisTurn }).includes(requestedProductId)
+        : false;
+      if (!observedElsewhere) {
+        warnings.push(`agent_loop_tool_blocked_pending_catalog:${step.tool}`);
+        return {
+          step: enrichedStep,
+          governance: "authorized",
+          observation: { tool: step.tool, status: "blocked", errorCode: GET_PRODUCT_DETAILS_PENDING_CATALOG_BLOCKED_REASON },
+          executed: false
+        };
+      }
+    }
+  }
+
   const gatewayResult = await executeGovernedCapability(step.tool, effectiveArguments, gatewayContext);
 
   // ACS-R1-05.1-T02.6.1 (spec section 7). A call rejected before any real
@@ -277,6 +359,18 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   let toolExecutionCount = 0;
   let pendingCatalogActionTerminalFailure: "failed" | "blocked" | null = null;
 
+  // CP-R1-T10B8D. Recommendation-origin continuity, tracked separately from
+  // pendingCatalogActionTerminalFailure above (which only ever concerns the
+  // model-emitted send_product_link mechanism keyed off input.pendingCatalogAction
+  // as originally carried into this turn). Seeded from input.pendingCatalogAction
+  // only when it already carries candidateProducts (i.e. it really is a
+  // recommendation action persisted by a prior turn) - a plain, legacy, or
+  // model-emitted send_product_link action never sets this, so it never gates
+  // get_product_details (spec: "no reducir autorizaciones existentes").
+  let activeRecommendationPendingAction: PendingCatalogActionStep | null =
+    input.pendingCatalogAction?.candidateProducts?.length ? input.pendingCatalogAction : null;
+  let recommendationPendingActionConsumed = false;
+
   const finalize = (terminalReason: AgentLoopTerminalReason, providerFailure?: AgentLoopProviderFailure | null): AgentLoopResult => ({
     ran: true,
     terminalReason,
@@ -325,14 +419,26 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
         })}`
       );
     }
-    const finalPendingCatalogAction = pendingCatalogActionTerminalFailure ? null : (normalizedPendingCatalogAction.pendingCatalogAction ?? null);
+    const modelPendingCatalogAction = pendingCatalogActionTerminalFailure ? null : (normalizedPendingCatalogAction.pendingCatalogAction ?? null);
     if (input.pendingCatalogAction) {
       warnings.push(
-        finalPendingCatalogAction
-          ? `pending_catalog_action_renewed:${finalPendingCatalogAction.actionType}:${finalPendingCatalogAction.candidateProductIds.length}`
+        modelPendingCatalogAction
+          ? `pending_catalog_action_renewed:${modelPendingCatalogAction.actionType}:${modelPendingCatalogAction.candidateProductIds.length}`
           : `pending_catalog_action_consumed:${input.pendingCatalogAction.actionType}`
       );
     }
+
+    // CP-R1-T10B8D. The model's own explicit respond.pendingCatalogAction
+    // always wins when present (zero change to any pre-existing
+    // send_product_link behavior/test). Only when the model left it out does
+    // an active, unconsumed recommendation continuity survive automatically -
+    // the model never has to know about candidateProducts to keep it open.
+    const recommendationPendingCatalogAction = recommendationPendingActionConsumed ? null : activeRecommendationPendingAction;
+    if (!modelPendingCatalogAction && recommendationPendingCatalogAction) {
+      warnings.push(`recommendation_pending_catalog_action_carried_forward:candidateCount=${recommendationPendingCatalogAction.candidateProductIds.length}`);
+    }
+    const finalPendingCatalogAction = modelPendingCatalogAction ?? recommendationPendingCatalogAction;
+
     return { ran: true, terminalReason: "responded", steps, toolExecutionCount, finalMessage: step.message, handoffReason: null, warnings, finalPendingCatalogAction };
   };
 
@@ -395,7 +501,12 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings, finalPendingCatalogAction: null };
     }
 
-    const result = await processUseToolStep(step, input.commercialContextSummary, executedCalls, gatewayContext, warnings);
+    const toolObservationsThisTurn = steps.map((record) => record.observation).filter((observation): observation is ToolObservation => observation !== null);
+    const result = await processUseToolStep(step, input.commercialContextSummary, executedCalls, gatewayContext, warnings, {
+      recentCatalogContext: input.recentCatalogContext ?? null,
+      toolObservationsThisTurn,
+      activeRecommendationPendingAction: recommendationPendingActionConsumed ? null : activeRecommendationPendingAction
+    });
     if (result.executed) toolExecutionCount += 1;
     steps.push({ stepIndex: decisionIndex, step: result.step, governance: result.governance, observation: result.observation, phase: "gathering" });
     const terminalFailure = getPendingCatalogActionTerminalFailure({
@@ -414,6 +525,46 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
         })}`
       );
     }
+
+    // CP-R1-T10B8D. Renewal: a completed recommend_catalog_products result
+    // this turn always wins over whatever was active before (latest
+    // successful recommendation wins) - empty candidates invalidate a prior
+    // active recommendation action instead of leaving a stale one open.
+    // skipped/failed/blocked (evidence-blocked or otherwise) never touch it -
+    // no result to render latest, so the prior action (if any) stays intact.
+    if (result.step.tool === "recommend_catalog_products" && result.observation.status === "completed") {
+      const renewed = buildPendingCatalogActionFromRecommendation(result.observation);
+      if (renewed) {
+        activeRecommendationPendingAction = renewed;
+        warnings.push(`recommendation_pending_catalog_action_set:candidateCount=${renewed.candidateProductIds.length}`);
+      } else if (activeRecommendationPendingAction) {
+        warnings.push("recommendation_pending_catalog_action_invalidated_empty");
+        activeRecommendationPendingAction = null;
+      }
+      recommendationPendingActionConsumed = false;
+    }
+
+    // CP-R1-T10B8D. Consumption: only for a get_product_details request that
+    // actually matched a recommendation candidate (never "producto no
+    // candidato", never another tool, never twice for an already-consumed
+    // action) - completed/failed/blocked all consume, mirroring the
+    // historical failed/blocked rule above and extending it to completed,
+    // which send_product_link never auto-consumed on (the model decides
+    // there) but this runtime-managed continuity always does.
+    if (result.step.tool === "get_product_details" && activeRecommendationPendingAction && !recommendationPendingActionConsumed) {
+      const requestedProductId = asComparableProductId(result.step.arguments.productId);
+      const requestedCombinationId = asComparableProductId(result.step.arguments.combinationId) ?? undefined;
+      const matchedCandidate = requestedProductId
+        ? (activeRecommendationPendingAction.candidateProducts ?? []).some((candidate) =>
+            matchesPendingCatalogActionCandidate(candidate, { productId: requestedProductId, combinationId: requestedCombinationId })
+          )
+        : false;
+      if (matchedCandidate && (result.observation.status === "completed" || result.observation.status === "failed" || result.observation.status === "blocked")) {
+        recommendationPendingActionConsumed = true;
+        warnings.push(`recommendation_pending_catalog_action_consumed:${result.observation.status}`);
+      }
+    }
+
     decisionIndex += 1;
   }
 

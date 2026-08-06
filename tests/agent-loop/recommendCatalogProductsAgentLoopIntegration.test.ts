@@ -97,11 +97,32 @@ function baseResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * CP-R1-T10B8D: recommend_catalog_products now validates sourceProduct
+ * against observed evidence before calling the Gateway - every scripted
+ * `sourceProduct: { productId: 100 }` call in this file needs productId
+ * "100" to already be observed evidence, or the new gate blocks it before it
+ * ever reaches the real HTTP chain this file exists to exercise. A one-item
+ * recentCatalogContext (as if search_products had surfaced it) is the
+ * minimal fixture that keeps every test's original intent intact.
+ */
+const OBSERVED_SOURCE_PRODUCT_CONTEXT = {
+  interactions: [
+    {
+      inboundMessageId: "msg-prior-search",
+      completedAt: "2026-08-05T14:59:00.000Z",
+      sourceTool: "search_products" as const,
+      products: [{ position: 1, productId: "100", name: "Producto fuente" }]
+    }
+  ]
+};
+
 const baseInput = {
   correlationId: "corr-t10b8c-1",
   conversationId: 1,
   opportunityId: null,
-  currentTime: "2026-08-05T15:00:00.000Z"
+  currentTime: "2026-08-05T15:00:00.000Z",
+  recentCatalogContext: OBSERVED_SOURCE_PRODUCT_CONTEXT
 };
 
 function session(overrides: Partial<NativeCustomerSessionExecutionContext> = {}): NativeCustomerSessionExecutionContext {
@@ -207,6 +228,12 @@ test("6. a degraded real execution stays completed with degraded=true", async ()
 });
 
 // 7. Skipped
+// CP-R1-T10B8D: this test isolates the Gateway's own (T10B6) rejection of a
+// syntactically-invalid sourceProduct - so productId -1 is given as evidence
+// here (unrealistic in production - a real search never returns a negative
+// id - but the only way to get an evidence-authorized call to still reach
+// T10B6's own validation) rather than let T10B8D's own evidence gate block
+// it first, which is covered separately by resolveObservedRecommendationSourceProduct.test.ts.
 test("7. an invalid sourceProduct never reaches the real server and surfaces as skipped, never a fabricated empty completed", async () => {
   let called = false;
   handler = (_req, res) => {
@@ -215,7 +242,13 @@ test("7. an invalid sourceProduct never reaches the real server and surfaces as 
   };
   const provider = createFakeAgentLoopProvider({ script: RECOMMEND_THEN_RESPOND("No pude generar una recomendacion en este momento.", { sourceProduct: { productId: -1 } }) });
 
-  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "algo mas?", commercialContextSummary: {}, provider });
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    recentCatalogContext: { interactions: [{ inboundMessageId: "msg-prior-search", completedAt: "2026-08-05T14:59:00.000Z", sourceTool: "search_products", products: [{ position: 1, productId: "-1", name: "Producto fuente invalido" }] }] },
+    customerMessage: "algo mas?",
+    commercialContextSummary: {},
+    provider
+  });
 
   assert.equal(result.terminalReason, "responded");
   const observation = toolStepOf(result)!.observation!;
@@ -339,12 +372,423 @@ test("13. the tool pool exposed for this run still carries every prior tool, not
   }
 });
 
-// 14. pendingCatalogAction is never touched by this tool
-test("14. recommend_catalog_products never introduces or mutates pendingCatalogAction continuity", async () => {
+// 14. CP-R1-T10B8D: this test's original T10B8C assertion ("never
+// introduces or mutates pendingCatalogAction") documented the exact gap
+// T10B8D closes - updated to the now-intended behavior: a completed
+// recommendation automatically becomes the active continuity window
+// (candidateProducts), even though the model's own respond step never sets
+// pendingCatalogAction itself. See tests 22+ below for the full
+// creation/renewal/consumption suite.
+test("14. a completed recommend_catalog_products result automatically becomes the active pendingCatalogAction continuity", async () => {
   handler = (_req, res) => sendJson(res, 200, baseResponse());
   const provider = createFakeAgentLoopProvider({ script: RECOMMEND_THEN_RESPOND("Aqui tienes una recomendacion.") });
 
   const result = await runAgentToolLoop({ ...baseInput, customerMessage: "algo mas?", commercialContextSummary: {}, provider });
 
+  assert.deepEqual(result.finalPendingCatalogAction, {
+    actionType: "send_product_link",
+    candidateProductIds: ["200"],
+    candidateProducts: [{ productId: "200" }]
+  });
+});
+
+// --- CP-R1-T10B8D: source product evidence gating and recommendation continuity ---
+
+// 15. Blocked: sourceProduct never observed anywhere -> zero HTTP calls
+test("15. a sourceProduct never observed by this conversation is blocked before any HTTP call, and never consumes tool budget", async () => {
+  let called = false;
+  handler = (_req, res) => {
+    called = true;
+    sendJson(res, 200, baseResponse());
+  };
+  const provider = createFakeAgentLoopProvider({ script: RECOMMEND_THEN_RESPOND("No puedo recomendar sobre ese producto todavia.", { sourceProduct: { productId: 555 } }) });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "recomiendame algo parecido a otra cosa", commercialContextSummary: {}, provider });
+
+  assert.equal(called, false, "the evidence gate must block before the Gateway/HTTP chain is ever reached");
+  assert.equal(result.toolExecutionCount, 0);
+  assert.equal(result.terminalReason, "responded");
+  const observation = toolStepOf(result)!.observation!;
+  assert.equal(observation.status, "blocked");
+  assert.equal(observation.errorCode, "source_product_not_observed");
+});
+
+// 16. Blocked: productId observed, but this exact combinationId was not
+test("16. a sourceProduct combinationId never observed is blocked even though the base productId was observed", async () => {
+  let called = false;
+  handler = (_req, res) => {
+    called = true;
+    sendJson(res, 200, baseResponse());
+  };
+  const provider = createFakeAgentLoopProvider({ script: RECOMMEND_THEN_RESPOND("No puedo confirmar esa variante todavia.", { sourceProduct: { productId: 100, combinationId: 999 } }) });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "algo mas de esa variante?", commercialContextSummary: {}, provider });
+
+  assert.equal(called, false);
+  const observation = toolStepOf(result)!.observation!;
+  assert.equal(observation.status, "blocked");
+  assert.equal(observation.errorCode, "source_product_variant_not_observed");
+});
+
+// 17. Authorized via this-turn live evidence (search_products), not recentCatalogContext
+test("17. a sourceProduct observed by this same turn's own search_products call authorizes recommend_catalog_products, no recentCatalogContext needed", async () => {
+  handler = (req, res) => {
+    if (req.url?.startsWith("/v1/products/search")) {
+      return sendJson(res, 200, { query: "kettlebell", items: [{ productId: 100, combinationId: 1, sku: "KB", name: "Producto fuente", variantLabel: null, shortDescription: null, physicalQuantity: 5, available: true, matchType: "exact_name" }], freshness: { cached: false } });
+    }
+    return sendJson(res, 200, baseResponse());
+  };
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 100 } } },
+      { type: "respond", message: "Aqui tienes una recomendacion basada en tu busqueda." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, recentCatalogContext: null, customerMessage: "que me recomiendas?", commercialContextSummary: {}, provider });
+
+  assert.equal(result.toolExecutionCount, 2);
+  assert.equal(result.terminalReason, "responded");
+  const recommendStep = result.steps.find((step) => step.step.type === "use_tool" && step.step.tool === "recommend_catalog_products");
+  assert.equal(recommendStep?.observation?.status, "completed");
+});
+
+// 18. Anti-chaining: a recommend_catalog_products candidate never authorizes a second recommend_catalog_products call
+test("18. a recommend_catalog_products candidate cannot be used as the sourceProduct for a second recommend_catalog_products call", async () => {
+  let requestsToRecommendEndpoint = 0;
+  handler = (req, res) => {
+    if (req.url === "/api/v2/recommendations/search-products") requestsToRecommendEndpoint += 1;
+    sendJson(res, 200, baseResponse());
+  };
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 100 } } },
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 200 } } },
+      { type: "respond", message: "Listo." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "y algo relacionado con ese recomendado?", commercialContextSummary: {}, maxToolExecutions: 3, provider });
+
+  assert.equal(requestsToRecommendEndpoint, 1, "the second (chained) recommend_catalog_products call must never reach the real service");
+  const secondStep = result.steps.filter((step) => step.step.type === "use_tool" && step.step.tool === "recommend_catalog_products")[1];
+  assert.equal(secondStep?.observation?.status, "blocked");
+  assert.equal(secondStep?.observation?.errorCode, "source_product_not_observed");
+});
+
+// 19-20. End-to-end continuity: search_products -> recommend_catalog_products -> get_product_details,
+// each id sourced from the previous observation, no id fabricated, no code-driven candidate selection.
+test("19-20. search_products -> recommend_catalog_products -> get_product_details chains on real, observed identity within one turn, no new search required", async () => {
+  handler = (req, res) => {
+    if (req.url?.startsWith("/v1/products/search")) {
+      return sendJson(res, 200, { query: "kettlebell", items: [{ productId: 100, combinationId: 1, sku: "KB", name: "Producto fuente", variantLabel: null, shortDescription: null, physicalQuantity: 5, available: true, matchType: "exact_name" }], freshness: { cached: false } });
+    }
+    if (req.url === "/api/v2/recommendations/search-products") {
+      return sendJson(res, 200, baseResponse());
+    }
+    if (req.url?.startsWith("/v1/products/200")) {
+      return sendJson(res, 200, {
+        product: { productId: 200, name: "Recomendado", sku: null, shortDescription: null, longDescription: null, active: true },
+        variants: [],
+        selectedVariant: null,
+        pricing: { effectiveUnitPrice: 19990, currency: "CLP", taxIncluded: true, discountApplied: false },
+        stock: { available: true, physicalQuantity: 3 },
+        freshness: { cached: false }
+      });
+    }
+    return sendJson(res, 404, { error: "not_found" });
+  };
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 100 } } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "200" } },
+      { type: "respond", message: "Te recomiendo este producto adicional, aqui el detalle." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, recentCatalogContext: null, customerMessage: "que me recomiendas junto a esto?", commercialContextSummary: {}, maxToolExecutions: 3, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 3);
+  const [searchStep, recommendStep, detailStep] = result.steps.filter((step) => step.step.type === "use_tool");
+  assert.equal(searchStep.observation?.status, "completed");
+  assert.equal(recommendStep.observation?.status, "completed");
+  const recommendData = recommendStep.observation?.data as { recommendations: Array<{ productId: string }> };
+  assert.deepEqual(recommendData.recommendations.map((r) => r.productId), ["200"]);
+  assert.equal(detailStep.observation?.status, "completed");
+  assert.equal((detailStep.observation?.data as { productId: string }).productId, "200");
+});
+
+// 21. Concurrency: two conversations' evidence never cross
+test("21. two conversations' evidence never cross - one conversation's observed product never authorizes another conversation's identical sourceProduct request", async () => {
+  handler = (_req, res) => sendJson(res, 200, baseResponse());
+  const providerA = createFakeAgentLoopProvider({ script: RECOMMEND_THEN_RESPOND("Recomendacion A.", { sourceProduct: { productId: 100 } }) });
+  const providerB = createFakeAgentLoopProvider({ script: RECOMMEND_THEN_RESPOND("Recomendacion B.", { sourceProduct: { productId: 100 } }) });
+
+  const contextB = {
+    interactions: [{ inboundMessageId: "msg-b", completedAt: "2026-08-05T14:59:00.000Z", sourceTool: "search_products" as const, products: [{ position: 1, productId: "999", name: "Otro producto" }] }]
+  };
+
+  const [resultA, resultB] = await Promise.all([
+    runAgentToolLoop({ ...baseInput, conversationId: 1, customerMessage: "a", commercialContextSummary: {}, provider: providerA }),
+    runAgentToolLoop({ ...baseInput, conversationId: 2, recentCatalogContext: contextB, customerMessage: "b", commercialContextSummary: {}, provider: providerB })
+  ]);
+
+  assert.equal(toolStepOf(resultA)!.observation!.status, "completed", "conversation A observed productId 100, its own request must be authorized");
+  assert.equal(toolStepOf(resultB)!.observation!.status, "blocked", "conversation B never observed productId 100 - conversation A's evidence must never leak in");
+  assert.equal(toolStepOf(resultB)!.observation!.errorCode, "source_product_not_observed");
+});
+
+// --- CP-R1-T10B8D (correction pass): get_product_details continuity end-to-end, sourced from a real recommend_catalog_products result ---
+
+function searchItemsResponse(items: Array<{ productId: number; name: string }>) {
+  return {
+    query: "x",
+    items: items.map((item) => ({ productId: item.productId, combinationId: 1, sku: `SKU-${item.productId}`, name: item.name, variantLabel: null, shortDescription: null, physicalQuantity: 5, available: true, matchType: "exact_name" })),
+    freshness: { cached: false }
+  };
+}
+
+function productDetailsResponse(productId: number, name: string) {
+  return {
+    product: { productId, name, sku: null, shortDescription: null, longDescription: null, active: true },
+    variants: [],
+    selectedVariant: null,
+    pricing: { effectiveUnitPrice: 19990, currency: "CLP", taxIncluded: true, discountApplied: false },
+    stock: { available: true, physicalQuantity: 3 },
+    freshness: { cached: false }
+  };
+}
+
+// 22. E2E cross-turn continuity
+test("22. E2E cross-turn: a real recommend_catalog_products result creates pendingCatalogAction, a later turn's get_product_details(B) is authorized and consumes it", async () => {
+  handler = (req, res) => {
+    if (req.url === "/api/v2/recommendations/search-products") return sendJson(res, 200, baseResponse());
+    if (req.url?.startsWith("/v1/products/200")) return sendJson(res, 200, productDetailsResponse(200, "Recomendado"));
+    return sendJson(res, 404, { error: "not_found" });
+  };
+
+  const turn1Provider = createFakeAgentLoopProvider({ script: RECOMMEND_THEN_RESPOND("Aqui una recomendacion.") });
+  const turn1 = await runAgentToolLoop({ ...baseInput, customerMessage: "algo mas?", commercialContextSummary: {}, provider: turn1Provider });
+
+  assert.deepEqual(turn1.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["200"], candidateProducts: [{ productId: "200" }] });
+
+  const turn2Provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "200" } },
+      { type: "respond", message: "Aqui el detalle." }
+    ]
+  });
+  const turn2 = await runAgentToolLoop({
+    ...baseInput,
+    recentCatalogContext: null,
+    pendingCatalogAction: turn1.finalPendingCatalogAction,
+    customerMessage: "si, ese",
+    commercialContextSummary: {},
+    provider: turn2Provider
+  });
+
+  assert.equal(turn2.toolExecutionCount, 1);
+  assert.equal(turn2.steps[0].observation?.status, "completed");
+  assert.equal((turn2.steps[0].observation?.data as { productId: string }).productId, "200");
+  assert.equal(turn2.finalPendingCatalogAction, null);
+});
+
+// 23. Blocked candidate: get_product_details(D) for a non-candidate product
+test("23. after a recommendation, get_product_details for a non-candidate product is blocked, zero HTTP to the detail endpoint, pendingCatalogAction intact", async () => {
+  let detailEndpointCalled = false;
+  handler = (req, res) => {
+    if (req.url === "/api/v2/recommendations/search-products") return sendJson(res, 200, baseResponse());
+    if (req.url?.startsWith("/v1/products/")) {
+      detailEndpointCalled = true;
+      return sendJson(res, 200, { error: "must never be reached" });
+    }
+    return sendJson(res, 404, { error: "not_found" });
+  };
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 100 } } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "555" } },
+      { type: "respond", message: "No pude confirmar ese producto." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "y el producto 555?", commercialContextSummary: {}, maxToolExecutions: 2, provider });
+
+  assert.equal(detailEndpointCalled, false);
+  const detailStep = result.steps.filter((step) => step.step.type === "use_tool")[1];
+  assert.equal(detailStep.observation?.status, "blocked");
+  assert.equal(detailStep.observation?.errorCode, "product_not_in_pending_catalog_candidates");
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["200"], candidateProducts: [{ productId: "200" }] });
+});
+
+// 24. Variant: candidate B/combinationId=10 -> request B/10 permitted, request B/11 blocked
+test("24. a recommended candidate with combinationId only authorizes get_product_details for that exact variant", async () => {
+  const variantRecommendation = baseResponse({
+    recommendations: [
+      {
+        product: productSummary({ productId: "200", name: "Recomendado", combinationId: "10" }),
+        rank: 1,
+        score: 0.8,
+        commercialScore: 0.8,
+        affinityScore: 0.5,
+        affinityConfidence: "medium",
+        ranking: { rank: 1, score: 0.8 },
+        relationship: { type: "frequently_bought_together", reliability: 0.6, evidence: { jointCount: 4, support: 0.1, confidence: 0.5, lift: 1.2 } },
+        commercialReason: { code: "FREQUENTLY_BOUGHT_TOGETHER", label: "Comprado frecuentemente junto al producto consultado" },
+        reasons: [{ code: "STRONG_COMMERCIAL_RELEVANCE", source: "commercial" }],
+        warnings: []
+      }
+    ]
+  });
+
+  // 24a. B/10 permitted
+  handler = (req, res) => {
+    if (req.url === "/api/v2/recommendations/search-products") return sendJson(res, 200, variantRecommendation);
+    if (req.url?.startsWith("/v1/products/200")) return sendJson(res, 200, productDetailsResponse(200, "Recomendado"));
+    return sendJson(res, 404, { error: "not_found" });
+  };
+  const allowedProvider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 100 } } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "200", combinationId: "10" } },
+      { type: "respond", message: "Aqui esa variante." }
+    ]
+  });
+  const allowedResult = await runAgentToolLoop({ ...baseInput, customerMessage: "esa variante", commercialContextSummary: {}, maxToolExecutions: 2, provider: allowedProvider });
+  const allowedDetailStep = allowedResult.steps.filter((step) => step.step.type === "use_tool")[1];
+  assert.equal(allowedDetailStep.observation?.status, "completed");
+  assert.equal(allowedResult.finalPendingCatalogAction, null);
+
+  // 24b. B/11 blocked
+  let detailEndpointCalled = false;
+  handler = (req, res) => {
+    if (req.url === "/api/v2/recommendations/search-products") return sendJson(res, 200, variantRecommendation);
+    if (req.url?.startsWith("/v1/products/")) {
+      detailEndpointCalled = true;
+      return sendJson(res, 200, { error: "must never be reached" });
+    }
+    return sendJson(res, 404, { error: "not_found" });
+  };
+  const blockedProvider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 100 } } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "200", combinationId: "11" } },
+      { type: "respond", message: "..." }
+    ]
+  });
+  const blockedResult = await runAgentToolLoop({ ...baseInput, customerMessage: "otra variante", commercialContextSummary: {}, maxToolExecutions: 2, provider: blockedProvider });
+  assert.equal(detailEndpointCalled, false);
+  const blockedDetailStep = blockedResult.steps.filter((step) => step.step.type === "use_tool")[1];
+  assert.equal(blockedDetailStep.observation?.status, "blocked");
+  assert.equal(blockedDetailStep.observation?.errorCode, "product_not_in_pending_catalog_candidates");
+});
+
+// 25. identity_unresolved -> same continuity flow, generic mode
+test("25. an unresolved trustedCustomerSession still gets full recommendation continuity, generic mode, never blocked or handed off", async () => {
+  handler = (req, res) => {
+    if (req.url === "/api/v2/recommendations/search-products") return sendJson(res, 200, baseResponse());
+    if (req.url?.startsWith("/v1/products/200")) return sendJson(res, 200, productDetailsResponse(200, "Recomendado"));
+    return sendJson(res, 404, { error: "not_found" });
+  };
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 100 } } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "200" } },
+      { type: "respond", message: "Aqui el detalle." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "algo mas?",
+    commercialContextSummary: {},
+    trustedCustomerSession: session({ masterCustomerIdentity: { status: "identity_unresolved", reason: "identity_not_verified" } }),
+    maxToolExecutions: 2,
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  const [recommendStep, detailStep] = result.steps.filter((step) => step.step.type === "use_tool");
+  assert.equal((recommendStep.observation?.data as { customerMode: string }).customerMode, "generic");
+  assert.equal(detailStep.observation?.status, "completed");
   assert.equal(result.finalPendingCatalogAction, null);
+});
+
+// 26. Empty invalidates a prior active recommendation pendingCatalogAction
+test("26. a completed recommendation with empty candidates invalidates a prior active recommendation pendingCatalogAction", async () => {
+  handler = (req, res) => {
+    if (req.url?.startsWith("/v1/products/search")) return sendJson(res, 200, searchItemsResponse([{ productId: 100, name: "Producto A" }, { productId: 300, name: "Producto C" }]));
+    if (req.url === "/api/v2/recommendations/search-products") {
+      const parsed = JSON.parse(lastBody) as { sourceProduct?: { productId?: string } };
+      if (parsed.sourceProduct?.productId === "300") return sendJson(res, 200, baseResponse({ recommendations: [] }));
+      return sendJson(res, 200, baseResponse());
+    }
+    return sendJson(res, 404, { error: "not_found" });
+  };
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "x" } },
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 100 } } },
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 300 } } },
+      { type: "respond", message: "No encontre una recomendacion clara para eso." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, recentCatalogContext: null, customerMessage: "y para el producto C?", commercialContextSummary: {}, maxDecisions: 5, maxToolExecutions: 4, provider });
+
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.includes("recommendation_pending_catalog_action_invalidated_empty"));
+});
+
+// 27. Renewal: latest successful recommendation replaces prior candidates entirely, no merging
+test("27. the latest successful recommendation replaces prior candidates entirely, never merges across recommendations", async () => {
+  handler = (req, res) => {
+    if (req.url?.startsWith("/v1/products/search")) return sendJson(res, 200, searchItemsResponse([{ productId: 100, name: "Producto A" }, { productId: 300, name: "Producto C" }]));
+    if (req.url === "/api/v2/recommendations/search-products") {
+      const parsed = JSON.parse(lastBody) as { sourceProduct?: { productId?: string } };
+      if (parsed.sourceProduct?.productId === "300") {
+        return sendJson(
+          res,
+          200,
+          baseResponse({
+            recommendations: [
+              {
+                product: productSummary({ productId: "400", name: "Otro recomendado" }),
+                rank: 1,
+                score: 0.7,
+                commercialScore: 0.7,
+                affinityScore: 0.4,
+                affinityConfidence: "low",
+                ranking: { rank: 1, score: 0.7 },
+                relationship: { type: "frequently_bought_together", reliability: 0.5, evidence: { jointCount: 1, support: 0.1, confidence: 0.4, lift: 1 } },
+                commercialReason: { code: "FREQUENTLY_BOUGHT_TOGETHER", label: "Comprado frecuentemente junto al producto consultado" },
+                reasons: [{ code: "STRONG_COMMERCIAL_RELEVANCE", source: "commercial" }],
+                warnings: []
+              }
+            ]
+          })
+        );
+      }
+      return sendJson(res, 200, baseResponse());
+    }
+    return sendJson(res, 404, { error: "not_found" });
+  };
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "x" } },
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 100 } } },
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 300 } } },
+      { type: "respond", message: "Aqui una mejor recomendacion." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, recentCatalogContext: null, customerMessage: "y para el producto C?", commercialContextSummary: {}, maxDecisions: 5, maxToolExecutions: 4, provider });
+
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["400"], candidateProducts: [{ productId: "400" }] });
 });

@@ -1745,3 +1745,216 @@ test("pendingCatalogAction: a handoff terminal never carries a pending action fo
   assert.equal(result.terminalReason, "handoff");
   assert.equal(result.finalPendingCatalogAction, null);
 });
+
+// --- CP-R1-T10B8D: get_product_details continuity gating against a recommendation-origin pendingCatalogAction ---
+// A pendingCatalogAction WITHOUT candidateProducts (every pre-existing test above) never triggers any of this -
+// get_product_details keeps its pre-existing, unconditioned authorization. Only candidateProducts turns it on.
+
+test("get_product_details continuity: a matching recommendation candidate is authorized and consumes the action on completion", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "Aqui el detalle." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "el primero",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501" }] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.steps[0].observation?.status, "completed");
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.includes("recommendation_pending_catalog_action_consumed:completed"));
+});
+
+test("get_product_details continuity: a non-candidate product with no other evidence is blocked before any HTTP call, action stays intact", async () => {
+  let called = false;
+  handler = (_req, res) => {
+    called = true;
+    sendJson(res, 200, { error: "must never be reached" });
+  };
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "999" } },
+      { type: "respond", message: "No pude confirmar ese producto." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dame el detalle de otro",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501" }] },
+    provider
+  });
+
+  assert.equal(called, false, "the gate must block before any HTTP call reaches the catalog service");
+  assert.equal(result.toolExecutionCount, 0);
+  const observation = result.steps.find((step) => step.step.type === "use_tool")?.observation;
+  assert.equal(observation?.status, "blocked");
+  assert.equal(observation?.errorCode, "product_not_in_pending_catalog_candidates");
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501" }] });
+});
+
+test("get_product_details continuity: exact combinationId match against the candidate is authorized", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501", combinationId: "10" } },
+      { type: "respond", message: "Aqui esa variante." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "esa variante",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501", combinationId: "10" }] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.steps[0].observation?.status, "completed");
+});
+
+test("get_product_details continuity: a different combinationId of the same candidate product is blocked, never silently resolved to the base product", async () => {
+  let called = false;
+  handler = (_req, res) => {
+    called = true;
+    sendJson(res, 200, { error: "must never be reached" });
+  };
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501", combinationId: "11" } },
+      { type: "respond", message: "..." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "otra variante",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501", combinationId: "10" }] },
+    provider
+  });
+
+  assert.equal(called, false);
+  const observation = result.steps.find((step) => step.step.type === "use_tool")?.observation;
+  assert.equal(observation?.status, "blocked");
+  assert.equal(observation?.errorCode, "product_not_in_pending_catalog_candidates");
+});
+
+test("get_product_details continuity: a related (candidate) failure still consumes the action - the complementary case to the unrelated test above", async () => {
+  catalogDown();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "No pude confirmar ese producto ahora." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "dame el detalle",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501" }] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.steps[0].observation?.status, "failed");
+  assert.equal(result.finalPendingCatalogAction, null);
+  assert.ok(result.warnings.includes("recommendation_pending_catalog_action_consumed:failed"));
+});
+
+/**
+ * CP-R1-T10B8D. "blocked" and "completed" are OR'd into the exact same
+ * consumption condition (see runAgentToolLoop.ts) - there is no code path in
+ * this loop that can put a first-touch get_product_details call for an
+ * already-authorized candidate into a governance "blocked" state (the only
+ * reachable governance block, duplicate-call detection, requires an
+ * identical prior call, which - being for the same matching candidate -
+ * already consumed the action via completed/failed before the duplicate is
+ * even attempted). This test verifies the observable, always-true invariant
+ * instead: touching a candidate via get_product_details in any way this
+ * turn, completed or blocked-duplicate, always ends with the action
+ * consumed and never resurrected.
+ */
+test("get_product_details continuity: a duplicate call to an already-consumed candidate never resurrects the action", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "..." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "...",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501" }] },
+    maxDecisions: 4,
+    maxToolExecutions: 2,
+    provider
+  });
+
+  assert.equal(result.steps[0].observation?.status, "completed");
+  assert.equal(result.steps[1].observation?.status, "blocked");
+  assert.equal(result.steps[1].observation?.errorCode, "duplicate_tool_call");
+  assert.equal(result.finalPendingCatalogAction, null);
+});
+
+test("get_product_details continuity: another tool never consumes the recommendation action", async () => {
+  catalogDown();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "desc" }, limit: 1 } },
+      { type: "respond", message: "Sigo con la recomendacion anterior." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "algo mas",
+    commercialContextSummary: {},
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501" }] },
+    provider
+  });
+
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501" }] });
+});
+
+test("get_product_details continuity: a non-candidate product backed by this turn's own search_products evidence is authorized but does not consume the action", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "Aqui otro producto que encontre." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "y busca otra cosa tambien",
+    commercialContextSummary: {},
+    // The active recommendation continuity is for a DIFFERENT product (777) -
+    // 501 only becomes reachable via this turn's own search_products evidence.
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["777"], candidateProducts: [{ productId: "777" }] },
+    maxToolExecutions: 2,
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 2);
+  const detailStep = result.steps.filter((step) => step.step.type === "use_tool")[1];
+  assert.equal(detailStep.observation?.status, "completed");
+  assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["777"], candidateProducts: [{ productId: "777" }] });
+});
