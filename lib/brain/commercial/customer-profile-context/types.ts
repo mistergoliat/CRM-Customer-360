@@ -199,3 +199,10 @@ export type DeriveCustomerHistoryNeedsInput = {
   readonly recentCatalogContext?: RecentCatalogContext | null;
   readonly pendingCatalogAction?: PendingCatalogActionStep | null;
 };
+
+/** CP-R1-T12D. Independent of `CustomerProfileContextConfig` - see config.ts#readCustomerHistoryCommercialPolicyConfig. */
+export type CustomerHistoryCommercialPolicyConfig = {
+  readonly enabled: boolean;
+  readonly recentPurchaseWindowDays: number;
+  readonly maxSignals: number;
+};

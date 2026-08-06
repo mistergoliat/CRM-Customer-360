@@ -108,6 +108,27 @@ const CUSTOMER_PURCHASE_HISTORY_RULE_LINES = [
   "reasonCodes inside customerPurchaseHistory are internal structured evidence, not customer-facing wording."
 ];
 
+/**
+ * CP-R1-T12D. Governs commercialContext.customerHistoryCommercialSignals -
+ * the deterministic signals derived from customerPurchaseHistory (see
+ * lib/brain/commercial/customer-profile-context/commercial-signals.ts).
+ * Present regardless of whether the field is populated this turn (same
+ * discipline as CUSTOMER_PURCHASE_HISTORY_RULE_LINES above) - when the
+ * feature flag is off or no signal cleared relevance, the field is simply
+ * absent and these rules describe an empty case.
+ */
+const CUSTOMER_HISTORY_COMMERCIAL_POLICY_RULE_LINES = [
+  "Use commercialContext.customerHistoryCommercialSignals only when it changes or improves your answer - never mention it merely to demonstrate that history is available.",
+  "When a recommended or discussed product was previously purchased (PRODUCT_PREVIOUSLY_PURCHASED or VARIANT_PREVIOUSLY_PURCHASED): do not remove it automatically, do not assume the customer no longer needs it, and consider reorder, replacement, an additional unit, or an expansion as possibilities.",
+  "Ask a clarifying question about a previous purchase only when the distinction materially changes your recommendation - otherwise present the option directly and contextually.",
+  "Treat a POSSIBLE_REORDER signal strictly as a hypothesis (confidence LOW or MEDIUM, never certain) - never state that the customer is reordering as a confirmed fact.",
+  "Treat a POSSIBLE_COMPLEMENT signal as Catalog-backed evidence for a concrete relationship you may explain - never invent product compatibility beyond what the signal states.",
+  "A PRODUCT_PURCHASE_REPEATED signal describes a purchase pattern only - never classify the product as consumable, a replacement item, or due for renewal from that alone.",
+  "Never infer RFM segment, VIP status, purchasing power, lifetime value, price sensitivity, loyalty, or churn risk from these signals.",
+  "Never alter Catalog ordering or automatically exclude a previously purchased product because of these signals.",
+  "A HISTORY_UNAVAILABLE signal is an internal constraint, not a customer-facing fact - continue with the current request and Catalog evidence, and never claim the customer has no purchase history."
+];
+
 const ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES = [
   "Adapt how many products you present to the customer's intent and the clarity of the catalog evidence.",
   "Do not always present a single option, and do not automatically present every available search result.",
@@ -286,6 +307,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...PRODUCT_PUBLIC_LINK_RULE_LINES,
       ...RECENT_CATALOG_CONTEXT_RULE_LINES,
       ...CUSTOMER_PURCHASE_HISTORY_RULE_LINES,
+      ...CUSTOMER_HISTORY_COMMERCIAL_POLICY_RULE_LINES,
       ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
       ...EXPLORE_CATALOG_RULE_LINES,
       ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,
@@ -301,6 +323,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...PRODUCT_PUBLIC_LINK_RULE_LINES,
     ...RECENT_CATALOG_CONTEXT_RULE_LINES,
     ...CUSTOMER_PURCHASE_HISTORY_RULE_LINES,
+    ...CUSTOMER_HISTORY_COMMERCIAL_POLICY_RULE_LINES,
     ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
     ...EXPLORE_CATALOG_RULE_LINES,
     ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,
