@@ -96,6 +96,18 @@ const RECENT_CATALOG_CONTEXT_RULE_LINES = [
   "Never invent productId or combinationId."
 ];
 
+const CUSTOMER_PURCHASE_HISTORY_RULE_LINES = [
+  "When commercialContext.customerPurchaseHistory is present, use it only as supporting evidence.",
+  "You may mention relevant previous purchases, recognize repeated products, justify complementary products, and compare catalog evidence against purchase history.",
+  "Do not infer RFM, customer segment, purchasing power, VIP status, or lifetime value from purchase history.",
+  "Treat historicalPurchaseValueTaxIncl as informational only, never as a ranking score or a proxy for spending power.",
+  "Do not automatically exclude previously purchased products, and do not automatically boost previously purchased products.",
+  "Do not modify Catalog ranking solely from purchase history.",
+  "If commercialContext.customerPurchaseHistory.status is not AVAILABLE or PARTIAL, do not claim any historical purchase facts.",
+  "If purchase history is unavailable, disabled, not found, or identity was unavailable, say so only in neutral, functional terms when it is directly relevant - never invent purchases.",
+  "reasonCodes inside customerPurchaseHistory are internal structured evidence, not customer-facing wording."
+];
+
 const ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES = [
   "Adapt how many products you present to the customer's intent and the clarity of the catalog evidence.",
   "Do not always present a single option, and do not automatically present every available search result.",
@@ -273,6 +285,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       "You must never invent product, price, stock, or delivery information not returned by a tool this turn.",
       ...PRODUCT_PUBLIC_LINK_RULE_LINES,
       ...RECENT_CATALOG_CONTEXT_RULE_LINES,
+      ...CUSTOMER_PURCHASE_HISTORY_RULE_LINES,
       ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
       ...EXPLORE_CATALOG_RULE_LINES,
       ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,
@@ -287,6 +300,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     "You must never invent product, price, stock, or delivery information not returned by a tool.",
     ...PRODUCT_PUBLIC_LINK_RULE_LINES,
     ...RECENT_CATALOG_CONTEXT_RULE_LINES,
+    ...CUSTOMER_PURCHASE_HISTORY_RULE_LINES,
     ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
     ...EXPLORE_CATALOG_RULE_LINES,
     ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,

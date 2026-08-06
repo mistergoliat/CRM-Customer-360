@@ -9,6 +9,15 @@ import type { NativeCustomerSessionExecutionContext } from "../native-cycle/cust
 import type { CommercialContextSnapshot } from "../context/buildNativeCommercialContext";
 import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
 import type { RecentCatalogContext } from "./recentCatalogContext";
+import { createProductionCustomerProfileCapabilities } from "../capabilities/customer-profile";
+import {
+  buildCatalogHistoryComparisons,
+  buildCustomerPurchaseHistorySummary,
+  deriveCustomerHistoryNeeds,
+  loadCustomerCommercialHistoryContext,
+  readCustomerProfileContextConfig,
+  type CustomerCommercialHistoryContext
+} from "../customer-profile-context";
 
 export type RunNativeAgentToolLoopCycleInput = {
   conversationId: number;
@@ -30,6 +39,16 @@ export type RunNativeAgentToolLoopCycleInput = {
    * resolveSalesAgentConfiguration() itself, and never touches the database.
    */
   resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
+  /** Test-only injection point for T12C; production callers use the shared Customer Profile capability wrapper. */
+  loadCustomerProfileContext?: ((input: {
+    customerId: number | null;
+    commercialIntent: boolean;
+    customerMessage: string;
+    snapshot: CommercialContextSnapshot;
+    recentCatalogContext?: RecentCatalogContext | null;
+    pendingCatalogAction?: PendingCatalogActionStep | null;
+    requestId?: string;
+  }) => Promise<CustomerCommercialHistoryContext>) | null;
 };
 
 export type NativeAgentToolLoopCycleResult = {
@@ -41,7 +60,8 @@ export type NativeAgentToolLoopCycleResult = {
 
 function buildCommercialContextSummary(
   snapshot: CommercialContextSnapshot,
-  currentTurn: { inboundMessageId: string; customerMessage: string }
+  currentTurn: { inboundMessageId: string; customerMessage: string },
+  customerProfileContext: CustomerCommercialHistoryContext | null
 ): Record<string, unknown> {
   const recentMessages = snapshot.recentMessages.filter((message, index, messages) => {
     if (message.id === currentTurn.inboundMessageId) return false;
@@ -50,7 +70,7 @@ function buildCommercialContextSummary(
     return true;
   });
 
-  return {
+  const summary: Record<string, unknown> = {
     opportunityStatus: snapshot.opportunity?.status ?? null,
     opportunityStage: snapshot.opportunity?.stage ?? null,
     needProfile: snapshot.needProfile
@@ -62,6 +82,12 @@ function buildCommercialContextSummary(
       : null,
     recentMessages: recentMessages.slice(-5).map((message) => ({ direction: message.direction, body: message.body }))
   };
+
+  if (customerProfileContext) {
+    summary.customerPurchaseHistory = buildCustomerPurchaseHistorySummary(customerProfileContext);
+  }
+
+  return summary;
 }
 
 /**
@@ -89,6 +115,94 @@ function buildCommercialNeed(snapshot: CommercialContextSnapshot): ContinuityFal
     usage: snapshot.needProfile?.useCase ?? null,
     budgetMax: snapshot.needProfile?.budgetMax ?? null,
     currency: null
+  };
+}
+
+function parseTrustedCustomerId(session: NativeCustomerSessionExecutionContext | null | undefined): number | null {
+  const raw = session?.identity.customerId?.trim();
+  if (!raw) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function buildCustomerProfileComparisonCandidates(input: {
+  recentCatalogContext?: RecentCatalogContext | null;
+  pendingCatalogAction?: PendingCatalogActionStep | null;
+}) {
+  const candidates = new Map<string, { productId: number; productAttributeId: number | null; name: string | null }>();
+
+  for (const interaction of input.recentCatalogContext?.interactions ?? []) {
+    for (const product of interaction.products) {
+      const productId = Number.parseInt(product.productId, 10);
+      if (!Number.isSafeInteger(productId) || productId <= 0) continue;
+      const productAttributeId =
+        typeof product.combinationId === "string" && product.combinationId.trim().length > 0
+          ? Number.parseInt(product.combinationId, 10)
+          : null;
+      const key = `${productId}:${productAttributeId ?? "none"}`;
+      if (!candidates.has(key)) {
+        candidates.set(key, {
+          productId,
+          productAttributeId: typeof productAttributeId === "number" && Number.isSafeInteger(productAttributeId) && productAttributeId >= 0 ? productAttributeId : null,
+          name: product.name
+        });
+      }
+    }
+  }
+
+  for (const productIdRaw of input.pendingCatalogAction?.candidateProductIds ?? []) {
+    const productId = Number.parseInt(productIdRaw, 10);
+    if (!Number.isSafeInteger(productId) || productId <= 0) continue;
+    const key = `${productId}:none`;
+    if (!candidates.has(key)) {
+      candidates.set(key, { productId, productAttributeId: null, name: null });
+    }
+  }
+
+  return [...candidates.values()];
+}
+
+async function defaultLoadCustomerProfileContext(input: {
+  customerId: number | null;
+  commercialIntent: boolean;
+  customerMessage: string;
+  snapshot: CommercialContextSnapshot;
+  recentCatalogContext?: RecentCatalogContext | null;
+  pendingCatalogAction?: PendingCatalogActionStep | null;
+  requestId?: string;
+}): Promise<CustomerCommercialHistoryContext | null> {
+  const config = readCustomerProfileContextConfig();
+  if (!config.contextEnabled) return null;
+
+  const historyNeeds = deriveCustomerHistoryNeeds({
+    snapshot: input.snapshot,
+    customerMessage: input.customerMessage,
+    recentCatalogContext: input.recentCatalogContext ?? null,
+    pendingCatalogAction: input.pendingCatalogAction ?? null
+  });
+
+  const context = await loadCustomerCommercialHistoryContext({
+    customerId: input.customerId,
+    commercialIntent: input.commercialIntent,
+    historyNeeds,
+    requestId: input.requestId,
+    config,
+    customerProfileCapabilities: createProductionCustomerProfileCapabilities()
+  });
+
+  const comparisonCandidates = buildCustomerProfileComparisonCandidates({
+    recentCatalogContext: input.recentCatalogContext ?? null,
+    pendingCatalogAction: input.pendingCatalogAction ?? null
+  });
+
+  const recommendationHistoryMatches = buildCatalogHistoryComparisons({
+    purchasedProducts: context.status === "AVAILABLE" || context.status === "PARTIAL" ? context.purchasedProducts : null,
+    candidates: comparisonCandidates
+  });
+
+  return {
+    ...context,
+    recommendationHistoryMatches
   };
 }
 
@@ -217,6 +331,62 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
   const opportunityId = typeof input.snapshot.opportunity?.id === "number" ? input.snapshot.opportunity.id : null;
   const conversationCaseId = input.snapshot.opportunity?.conversationCaseId ?? input.conversationId;
   const { configuration: identityConfiguration, effectiveModelConfiguration, effectiveLoopConfiguration } = input.resolvedSalesAgentConfiguration;
+  const loadCustomerProfileContext = input.loadCustomerProfileContext ?? defaultLoadCustomerProfileContext;
+  const customerProfileStartedAt = Date.now();
+  let customerProfileContext: CustomerCommercialHistoryContext | null = null;
+
+  try {
+    customerProfileContext = await loadCustomerProfileContext({
+      customerId: parseTrustedCustomerId(input.trustedCustomerSession),
+      commercialIntent: true,
+      customerMessage: input.customerMessage,
+      snapshot: input.snapshot,
+      recentCatalogContext: input.recentCatalogContext ?? null,
+      pendingCatalogAction: input.pendingCatalogAction ?? null,
+      requestId: input.correlationId
+    });
+  } catch {
+    customerProfileContext = {
+      status: "UNAVAILABLE",
+      customerId: parseTrustedCustomerId(input.trustedCustomerSession),
+      summary: null,
+      recentOrders: [],
+      purchasedProducts: [],
+      purchaseBehavior: null,
+      provenance: null,
+      recommendationHistoryMatches: [],
+      constraints: {
+        rfmAvailable: false,
+        monetarySegmentAvailable: false,
+        mayAlterCatalogRanking: false,
+        mayAutoExcludePurchasedProducts: false
+      },
+      observations: [{ capability: "context", status: "UNAVAILABLE", reasonCode: "CUSTOMER_PROFILE_UNAVAILABLE" }]
+    };
+  }
+
+  if (customerProfileContext) {
+    const loadedCapabilities = customerProfileContext.observations
+      .filter((observation) => observation.capability !== "context" && observation.status === "AVAILABLE")
+      .map((observation) => observation.capability);
+    const failedCapabilities = customerProfileContext.observations
+      .filter((observation) => observation.capability !== "context" && observation.status !== "AVAILABLE")
+      .map((observation) => observation.capability);
+    console.info({
+      event: "customer_profile_context_loaded",
+      customerProfileContextStatus: customerProfileContext.status,
+      customerId: customerProfileContext.customerId,
+      requestedCapabilities: [...new Set(customerProfileContext.observations.filter((observation) => observation.capability !== "context").map((observation) => observation.capability))],
+      loadedCapabilities,
+      failedCapabilities,
+      reasonCodes: customerProfileContext.observations.map((observation) => observation.reasonCode),
+      durationMs: Date.now() - customerProfileStartedAt,
+      contractVersion: customerProfileContext.provenance?.contractVersion ?? null,
+      historyItemCount: customerProfileContext.purchasedProducts.length,
+      recommendationMatchCount: customerProfileContext.recommendationHistoryMatches.length,
+      requestId: input.correlationId
+    });
+  }
 
   const loop = await runAgentToolLoop({
     correlationId: input.correlationId,
@@ -227,7 +397,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     commercialContextSummary: buildCommercialContextSummary(input.snapshot, {
       inboundMessageId: input.inboundMessageId,
       customerMessage: input.customerMessage
-    }),
+    }, customerProfileContext),
     recentCatalogContext: input.recentCatalogContext ?? null,
     pendingCatalogAction: input.pendingCatalogAction ?? null,
     provider: input.provider,
