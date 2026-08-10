@@ -94,6 +94,26 @@ function projectSetShippingDestination(data: unknown) {
   return isRecord(data) ? data : null;
 }
 
+/**
+ * CRM-R1-T13E.2. select_products' own `data` (status/items/changed) is
+ * already the small, bounded shape agreed at the capability layer - passed
+ * through as-is, same pattern as projectSetShippingDestination.
+ */
+function projectSelectProducts(data: unknown) {
+  return isRecord(data) ? data : null;
+}
+
+/**
+ * CRM-R1-T13E.2. calculate_shipping's own `data` (status plus, only on
+ * "available"/"no_shipping_options", destination/totalWeightKg/totalBoleta/
+ * options - all already normalized from the real Carrier MS response by
+ * calculateShippingCapability.ts) is passed through as-is - the raw Carrier
+ * MS payload, pc_pos tables, or any HTTP detail never reach this point.
+ */
+function projectCalculateShipping(data: unknown) {
+  return isRecord(data) ? data : null;
+}
+
 function projectCompanyKnowledge(data: unknown) {
   if (!isRecord(data)) return { entries: [] };
   const result = data as CompanyKnowledgeSearchResult;
@@ -247,7 +267,11 @@ export function buildToolObservation(tool: string, result: CapabilityGatewayResu
               ? projectExploreCatalog(result.data)
               : tool === "set_shipping_destination"
                 ? projectSetShippingDestination(result.data)
-                : null;
+                : tool === "select_products"
+                  ? projectSelectProducts(result.data)
+                  : tool === "calculate_shipping"
+                    ? projectCalculateShipping(result.data)
+                    : null;
     return { tool, status: "completed", data, ...warnings };
   }
 

@@ -1,13 +1,15 @@
 ---
-title: CRM-R1-T13E.1 — Shipping Calculation Domain + Carrier Coverage Resolution
+title: CRM-R1-T13E — Shipping Calculation (T13E.1 domain groundwork + T13E.2 Carrier MS integration)
 doc_id: release-crm-r1-t13e-shipping-calculation
-status: implemented_partial
+status: implemented_pending_real_smoke
 owner: architecture
 last_reviewed: 2026-08-10
 source_of_truth_for:
-  - shipping-calculation domain contract (calculateShipping)
-  - ShippingCoverageProvider / ShippingRateProvider port contracts
-  - pc_pos.carriers / pc_pos.carrier_coverage / pc_pos.carrier_rangos_dd schema and semantics evidence
+  - shipping-calculation domain contract (weight/subtotal aggregation)
+  - commercial-line-items durable selection contract
+  - CarrierService port + real Carrier MS HTTP contract
+  - calculate_shipping / select_products capability contracts
+  - pc_pos.carriers / pc_pos.carrier_coverage / pc_pos.carrier_rangos_dd schema and semantics evidence (T13E.1, superseded as productive rate/coverage source by T13E.2)
   - CatalogProduct.weightKg client contract
 depends_on:
   - ./CRM-R1-T13C-canonical-commune-resolution.md
@@ -23,6 +25,8 @@ tags:
 ---
 
 # CRM-R1-T13E.1 — Shipping Calculation Domain + Carrier Coverage Resolution
+
+**Superseded by T13E.2 below for coverage/rate.** This section is preserved as-is (historical record of the pc_pos audit and the domain groundwork it produced) - `ShippingCoverageProvider`/`ShippingRateProvider`/`shipping-coverage-adapter.ts` described here were removed in T13E.2 once Carrier MS was confirmed as the real, reachable shipping authority. `weight.ts` (weight validation/aggregation) and the `CatalogProduct.weightKg` client integration remain exactly as described here and are still in productive use. Jump to "## T13E.2 — Carrier MS Shipping Capability" for the current, productive architecture.
 
 Implements the pure shipping-calculation domain (weight totaling, carrier coverage combination, all failure states) and a real, live-verified `pc_pos` carrier coverage adapter, plus closes a gap in this repo's own Catalog Service client (`weightKg` was never read). Does **not** wire `calculate_shipping` into the Capability Gateway or Agent Tool Loop, and does **not** implement a shipping rate/price calculation — both are explicit, evidenced deferrals, not oversights. This is `T13E.1` of the two-part split the task brief itself anticipates (section 6) when no backend-authoritative commercial line-item selection exists yet — `T13E.2` (line-item selection wiring) and full capability wiring remain open.
 
@@ -157,3 +161,152 @@ Confirmado:
 ## Siguiente tarea
 
 No decidido aquí. Candidatas, en orden de dependencia: (1) `T13E.2` — diseñar y construir una fuente durable, autoritativa y alcanzable desde el runtime nativo de líneas de producto seleccionadas (`productId`/`combinationId`/`quantity`), siguiendo el mismo patrón `crm_request_facts` que T13D ya estableció para `shipping_destination`; (2) una vez (1) exista, cablear `calculate_shipping` al Capability Gateway/`AGENT_LOOP_TOOL_POOL` consumiendo el dominio de este incremento tal cual; (3) resolver con autoridad de producto/operaciones la semántica real de `carrier_rangos_dd` (unidad de `rango_ini`/`rango_fin`, moneda/IVA de `precio`, a qué carrier aplica) antes de implementar `ShippingRateProvider` — posiblemente requiere a alguien con acceso al sistema que puebla esa tabla, no solo lectura SQL.
+
+---
+
+# T13E.2 — Carrier MS Shipping Capability
+
+Conecta CRM-Customer-360 al microservicio Carrier real (`http://ms.pesaschile.cl`) y expone `calculate_shipping` de verdad al Native Agent Tool Loop. Cambio de arquitectura respecto de T13E.1: **Carrier MS es la única autoridad sobre cobertura, carriers y tarifas** — CRM no vuelve a calcular nada de eso. También cierra el gap que T13E.1 dejó explícitamente abierto: no existía ninguna fuente backend-autoritativa de selección comercial (`productId`/`combinationId`/`quantity`) alcanzable desde el runtime nativo — esta tarea la construye (`select_products`).
+
+## A. Git inicial/final
+
+- Base: `develop@97826ff` (merge de PR #88, `feat/crm-r1-t13e-shipping-calculation`, T13E.1 ya integrado).
+- Branch de trabajo: `feat/crm-r1-t13e2-carrier-ms-shipping-capability`.
+- Sin merge todavía al momento de este documento.
+
+## B. Arquitectura de selección de línea existente (auditada)
+
+Confirmado antes de escribir código, con evidencia citada (mismo hallazgo que T13E.1 ya había documentado, reverificado aquí): `RecentCatalogContext` no tiene `quantity`; `crm_sales_need_profiles`/`SalesNeedProfile` pertenecen al motor legacy `sales-consultative` (deshabilitado por defecto); `crm_quotes`/`QuoteItem` tiene `quantity` pero no `combinationId`, y su único importador productivo real es el runtime multi-request no canónico; `crm_opportunities` solo tiene `product_interests_json` (interés, no compromiso). **No existía ninguna representación reutilizable** — se construyó una nueva, siguiendo el patrón `crm_request_facts` ya validado por T13D.
+
+## C. Diseño de selección durable elegido
+
+`lib/domains/commercial-line-items/` — mismo patrón exacto que `lib/domains/shipping-destination/` (T13D):
+
+- `fact_key`: `commercial_line_items`.
+- `anchor`: `opportunity:<id>` (mismo anchor que `shipping_destination` — `crm_request_facts` permite múltiples `fact_key` bajo el mismo `request_id`, sin colisión).
+- `value`: `{items: [{productId, combinationId, quantity}]}` — nunca precio, peso, subtotal, carrier ni tarifa (esos se hidratan cuando se necesitan, nunca se cachean en el fact).
+- `status`: `"confirmed"` directamente — una selección evidence-grounded no necesita una segunda confirmación (misma política que T13D).
+- **Reemplazo completo, no delta**: cada llamada a `select_products` reemplaza la selección activa entera — el modelo debe enviar la lista completa deseada, no solo lo que cambió. Decisión explícita, documentada en el dominio y en las reglas de prompt.
+- **Merge de duplicados**: pares `(productId, combinationId)` repetidos dentro de una misma llamada se fusionan sumando `quantity`, en vez de rechazarse o mantenerse como líneas separadas.
+
+## D. Campos exactos de Catalog usados
+
+- **Precio**: `CatalogProduct.price.amount` (existente desde antes de T13E) — pasado tal cual lo reporta Catalog Service, sin transformación. No existe un campo separado neto/bruto en el contrato para elegir entre ellos — documentado, no fabricado. `price.amount === null` → `price_unavailable`, nunca se inventa un valor.
+- **Peso**: `CatalogProduct.weightKg` (agregado en T13E.1) — `null` → `weight_unavailable` (falla cerrado toda la operación), `0` preservado literalmente, negativo/no-finito → `technical_error`.
+- Hidratación vía `CatalogPort.batchGetProducts` (batch existente, no un endpoint nuevo) — un solo call por cálculo, `quantity` incluido en el request para poder correlacionar sin depender únicamente del echo del servidor (se usa `result.input.productId`/`combinationId` solo para la correlación de identidad; la cantidad real siempre viene de `commercial_line_items`, nunca del echo).
+
+## E. Cálculo de agregados
+
+- `totalWeightKg = Σ(weightKg × quantity)` — `lib/domains/shipping-calculation/weight.ts#validateAndSumWeightKg` (T13E.1, reutilizado sin cambios). Suma con escalado entero (kg×1000), nunca acumula error de coma flotante.
+- `total_boleta = Σ(unitPrice × quantity)` — nuevo `lib/domains/shipping-calculation/subtotal.ts#validateAndSumTotalBoleta`, mismo patrón (CLP no tiene submúltiplo, así que redondea a peso entero por línea, suma entera). **Nunca incluye el costo de envío** — es estrictamente el subtotal de los productos seleccionados.
+
+Ambas funciones fallan cerrado en la primera línea inválida — nunca un total parcial.
+
+## F. Request exacto a Carrier MS
+
+Capturado en vivo contra el servicio real antes de escribir el adapter (nunca diseñado por hipótesis):
+
+```
+GET /api/pc-carrier/carrier/v1/all?destino=<canonical>&alto=1&ancho=1&largo=1&kilos=<n>&total_boleta=<n>
+```
+
+- `destino` = `shippingDestination.canonicalName` (T13D) — nunca `communeId`, nunca texto crudo de conversación, nunca `ps_address.city`.
+- `alto`/`ancho`/`largo` = constantes contractuales (`CARRIER_DEFAULT_HEIGHT/WIDTH/LENGTH = 1`), hardcodeadas únicamente en `lib/integrations/carrier-service/httpCarrierServiceAdapter.ts` — el dominio (`CarrierQuoteInput`) ni siquiera tiene esos campos, así que ningún caller puede sobreescribirlos.
+- `kilos`/`total_boleta` = los agregados de la sección E.
+- Sin autenticación — confirmado en vivo (requests reales sin ningún header de auth devolvieron cotizaciones reales). No se inventó ninguna API key.
+- `URLSearchParams` construye el query — encoding seguro, nunca concatenación manual (verificado con `destino="isla de pascua"`, espacios correctamente codificados).
+
+## G. Respuesta real capturada
+
+Contra `http://ms.pesaschile.cl` real, antes de fijar el contrato normalizado (nunca hipótesis):
+
+```json
+// éxito, HTTP 202 (no 200 - cualquier 2xx se trata como éxito)
+{"options":[{"carrier_name":"Blue Express","service_type":"EXPRESS","total_cost":20994,"estimated_delivery":"17-08-2026"}]}
+
+// sin cobertura - sigue siendo 2xx, NUNCA un error
+{"options":[]}
+
+// error de cliente, HTTP 400
+{"error":"destination is required"}
+```
+
+`estimated_delivery` es un string opaco — a veces una fecha (`"17-08-2026"`), a veces texto libre (`"1 a 2 días hábiles"` para Pesas Chile) — nunca parseado como fecha.
+
+**Hallazgo confirmado en vivo, cierra T13E.1's `RATE_SOURCE_SEMANTICS_UNCONFIRMED`**: se ejecutó el script de smoke (`--cases`, ver sección L) variando `kilos` de 0 a 500 con `total_boleta` fijo en 150.000 — el precio de Pesas Chile/despacho directo fue **idéntico ($1) en los 5 casos**. El peso no tiene ningún efecto sobre esa tarifa. Variando `total_boleta` exactamente en los 6 límites de `carrier_rangos_dd` con peso fijo (10kg), el precio de Pesas Chile reprodujo exactamente los 6 valores de `precio` de la tabla. Esto confirma con evidencia empírica (no solo estructural) que `carrier_rangos_dd` es un tarifario por monto de compra, nunca por peso — y ya no importa para CRM, porque Carrier MS es quien lo consume, no este repositorio.
+
+## H. Contrato normalizado
+
+```ts
+type CarrierOption = { carrierName: string; serviceType: string; totalCost: number; estimatedDelivery: string };
+type CarrierQuoteResult =
+  | { ok: true; options: CarrierOption[] }
+  | { ok: false; reason: "carrier_service_unavailable" | "carrier_service_timeout" | "carrier_invalid_response"; detail: string };
+```
+
+`lib/domains/carrier-service/` (puro, sin HTTP) + `lib/integrations/carrier-service/httpCarrierServiceAdapter.ts` (el único adapter real). Un item malformado en `options[]` invalida la respuesta completa (fail closed, nunca una lista parcial no verificada). El payload crudo del proveedor nunca llega al LLM.
+
+## I. Wiring de `calculate_shipping` (Gateway/runtime)
+
+- `lib/brain/commercial/capability-gateway/calculateShippingCapability.ts` — registrado en `CAPABILITY_GATEWAY_REGISTRY` y en `AGENT_LOOP_TOOL_POOL` (8 tools ahora, ninguno removido).
+- `inputSchema: {type:"object", properties:{}, additionalProperties:false}` — el modelo no puede enviar ningún argumento; el executor arma todo desde `context.opportunityId`.
+- Pipeline real: `opportunityId` → `getActiveShippingDestinationForOpportunity` (T13D) → `getActiveCommercialLineItemsForOpportunity` (sección C) → `CatalogPort.batchGetProducts` → agregados (sección E) → `CarrierService.quoteAll()` → resultado normalizado.
+- Fail-closed tipado en cada paso: `no_active_opportunity` (denied) · `shipping_destination_required`/`commercial_items_required`/`catalog_product_unavailable`/`weight_unavailable`/`price_unavailable`/`no_shipping_options` (completed, respuesta de negocio) · `catalog_unavailable`/`carrier_service_unavailable`/`carrier_service_timeout` (temporarily_blocked, retryable) · `carrier_invalid_response` (failed, no retryable).
+- `ToolObservation`: pass-through del `data` ya acotado de la capability (mismo patrón que `set_shipping_destination`) — nunca el payload crudo de Carrier MS, nunca SQL, nunca tablas de `pc_pos`.
+- Reglas de prompt nuevas (`SELECT_PRODUCTS_RULE_LINES`, `CALCULATE_SHIPPING_RULE_LINES`) agregadas a **ambas** fases (`gathering` y `finalization`) — al hacerlo se corrigió también un gap preexistente real: `SHIPPING_DESTINATION_RULE_LINES` (T13D) solo estaba en `finalization`, la fase donde nunca se ofrecen tools, así que esa regla nunca llegaba a influir una decisión real de `use_tool`. Corregido en el mismo cambio.
+- `CommercialContextSnapshot.commercialLineItems` (nuevo, mismo patrón que `shippingDestination`) rehidrata la selección activa en cada construcción de contexto y se resume en el prompt para que el agente no vuelva a preguntar innecesariamente.
+
+## J. Qué se mantuvo/eliminó de T13E.1 y por qué
+
+**Mantenido, sin cambios de lógica:**
+- `lib/catalog/types.ts#CatalogProduct.weightKg` + su parseo en `httpCatalogAdapter.ts`.
+- `lib/domains/shipping-calculation/weight.ts#validateAndSumWeightKg` (peso).
+- Los tests de `weight.ts`.
+- Toda la documentación de auditoría de T13E.1 (permanece arriba en este mismo documento).
+
+**Eliminado (código muerto tras el cambio de arquitectura, confirmado sin otro consumidor antes de borrar):**
+- `lib/integrations/logistics/shipping-coverage-adapter.ts` (`ShippingCoverageProvider` sobre `pc_pos.carriers`/`carrier_coverage`) + `tests/integrations/pcPosShippingCoverage.test.ts`.
+- `lib/domains/shipping-calculation/ports.ts` (`ShippingCoverageProvider`/`ShippingRateProvider`) y `calculator.ts` (`calculateShipping`, la orquestación de cobertura+tarifa) + `tests/domains/shippingCalculationCalculator.test.ts`.
+- Los tipos `CarrierCoverageStatus`/`CarrierOption`/`ShippingCalculationResult`/etc. de `lib/domains/shipping-calculation/types.ts`, reemplazados por los tipos, más simples, de `lib/domains/carrier-service/types.ts`.
+
+`lib/integrations/logistics/` queda con un único propósito: `pc_pos.comuna` para resolución canónica de destino (T13C, vía `set_shipping_destination`) — ninguna otra tabla de `pc_pos` se lee desde CRM.
+
+## K. Tests
+
+51 tests nuevos:
+
+- `tests/domains/commercialLineItems.test.ts` (15) — selección de producto, combinación, quantity>0, selección repetida idempotente, cambio de cantidad/combinación, reemplazo completo (no merge), merge de duplicados dentro de una llamada, rehidratación, sin inferencia desde `RecentCatalogContext`.
+- `tests/domains/shippingCalculationSubtotal.test.ts` (10) — agregación de precios, casos límite (cero preservado, null falla cerrado, negativo/no-finito es error técnico, cantidad inválida, arreglo vacío, primera línea inválida detiene todo).
+- `tests/integrations/httpCarrierServiceAdapter.test.ts` (13) — query exacto codificado, dimensiones siempre 1/1/1, respuestas reales capturadas (single/multi-option, `estimated_delivery` no-fecha), `options:[]` es éxito, 400/500/timeout/JSON malformado/opción malformada fallan cerrado, fallo de red.
+- `tests/commercial/selectProductsCapability.test.ts` (10) — registro en el Gateway, persistencia, combinación preservada, reemplazo completo, cantidad inválida, arreglo vacío, productId en blanco, sin oportunidad activa (denied), imposibilidad estructural de argumentos falsos, proyección de `ToolObservation`.
+- `tests/commercial/calculateShippingCapability.test.ts` (16) — pipeline completo con agregación exacta verificada (10kg×2+5kg×3=35kg, 50.000×2+20.000×3=160.000), destino exacto enviado, peso/precio null, producto no disponible en catálogo, Catalog Service no disponible, sin destino/sin selección, sin oportunidad activa, timeout/respuesta malformada de Carrier MS, cero opciones, `weightKg=0` preservado.
+- `tests/agent-loop/runAgentToolLoop.test.ts` (+2) — el evidence gate de `select_products` bloquea un item nunca observado (**este test encontró un bug real**: `resolveObservedRecommendationSourceProduct` exige `productId` numérico porque el schema de `recommend_catalog_products` lo tipa `number`, pero `select_products` — como todas las demás tools de catálogo — lo tipa `string`; sin una conversión `Number()` local en el punto de la llamada, **toda** llamada real a `select_products` habría sido bloqueada sin importar la evidencia real. Corregido antes de este documento) y lo autoriza cuando sí fue observado vía `search_products`.
+- 5 fixtures de test existentes actualizados con `commercialLineItems: null` (mismo patrón que T13D exigió con `shippingDestination: null`).
+
+## L. Casos de smoke en vivo y outputs
+
+`scripts/manual-test/shipping-calculation-smoke.ts` — nunca escribe en ninguna base de datos (sin `opportunityId`, sin fila de `crm_request_facts`). Dos modos: `--items=` (hidrata productos reales desde Catalog Service) y `--kilos=`/`--total-boleta=` directo (para comparación de límites exactos); `--cases` corre automáticamente la matriz completa de la sección 23 del brief.
+
+Ejecutado en esta sesión contra `http://ms.pesaschile.cl` real (`--cases`, evidencia completa en el log de la sesión):
+
+- **Límites de `total_boleta`** (Ñuñoa, 10kg fijo): Pesas Chile reprodujo exactamente `4193 → 5034 → 5034 → 1 → 1 → 8395 → 8395 → 20160 → 20160 → 46210` en los 10 puntos de prueba (justo en/entre cada límite de `carrier_rangos_dd`) — Blue Express varía con un patrón distinto e independiente (su propia tarifa externa).
+- **Variación de peso** (Ñuñoa, `total_boleta=150.000` fijo, 0/1/20/100/500 kg): Pesas Chile = `1` CLP en los 5 casos (sin efecto del peso, confirma sección G). Blue Express sí varía con el peso (4075 → 4075 → 7230 → 20140 → 59700).
+- **Variación de destino** (10kg, `total_boleta=150.000`): Ñuñoa y Las Condes → Pesas Chile + Blue Express disponibles; Isla de Pascua → solo Blue Express (Pesas Chile no cubre fuera de RM, consistente con T13E.1); destino inexistente → `options: []` (`no_shipping_options`, no un error).
+- **Modo directo con resolución de comuna real**: `--destino="nunoa" --kilos=10 --total-boleta=150000` → `commune resolution: {"status":"resolved","communeId":99,"canonicalName":"Ñuñoa","matchedVia":"direct"}` → mismo resultado que el caso `destino=Ñuñoa` de arriba, confirmando que T13C/T13D alimentan correctamente el pipeline hasta Carrier MS.
+- **Modo `--items`**: no se pudo ejecutar en esta sesión — no hay una instancia de Catalog Service local disponible (`CATALOG_SERVICE_BASE_URL=http://127.0.0.1:4010` no responde en este entorno) — limitación de entorno ya documentada en tareas previas, no de este código. `tests/commercial/calculateShippingCapability.test.ts` cubre el pipeline completo (incluida la hidratación de Catalog Service) contra un `CatalogPort` fake real, con la aritmética de agregación verificada exactamente.
+
+## M. Comandos de validación
+
+- `npx tsc --noEmit`: limpio.
+- `npm run lint`: 0 errores, 34 warnings preexistentes (mismo conteo que T13C/T13D/T13E.1, ninguno en archivos de esta tarea).
+- `npm run build`: limpio.
+- `npm test`: 2837 tests, 2806 pass / 31 fail. Comparado explícitamente contra un baseline limpio (`git stash` sobre esta misma rama, árbol idéntico a `develop@97826ff`): 2791 tests, 2758 pass / 33 fail. El conjunto de fallos de esta rama es un **subconjunto estricto** del conjunto de fallos del baseline (verificado por diff de nombres de test) — cero fallos nuevos introducidos por esta tarea.
+
+## N. Confirmación de alcance
+
+- Sin lógica de tarifa duplicada en CRM — `carrier_rangos_dd` no se vuelve a leer desde este repositorio.
+- Sin cálculo directo de tarifa desde `carrier_rangos_dd` — Carrier MS es la única autoridad.
+- Sin selección de carrier inventada por CRM — `options[]` se devuelve tal cual, sin ranking ni preferencia.
+- Sin escritura en `pc_pos` — el único acceso restante es la lectura read-only ya existente de T13C (`pc_pos.comuna`).
+- Sin peso/precio/destino suministrado por el LLM — `calculate_shipping` no acepta argumentos; `select_products` solo acepta ids ya evidence-grounded, nunca precio ni peso ni dimensiones.
+- Sin checkout, sin creación de orden, sin booking de carrier, sin labels/tracking.

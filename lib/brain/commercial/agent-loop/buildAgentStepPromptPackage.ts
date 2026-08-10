@@ -258,6 +258,41 @@ const SHIPPING_DESTINATION_RULE_LINES = [
   "set_shipping_destination establishes only which commune to ship to for pricing/coverage purposes - it never means a full delivery address (street, number, recipient) is known; do not claim one exists from this alone."
 ];
 
+/**
+ * CRM-R1-T13E.2. select_products records the customer's confirmed product
+ * selection as durable state - the backend (runAgentToolLoop.ts's evidence
+ * gate) is the only enforcement that every productId/combinationId was
+ * actually observed; the model must still only ever supply ids it really
+ * saw via search_products/get_product_details/explore_catalog.
+ */
+const SELECT_PRODUCTS_RULE_LINES = [
+  "Use select_products only once the customer has confirmed which product(s) they want to buy and in what quantity - not merely while discussing, comparing, or recommending options.",
+  "Every item's productId (and combinationId, when the customer means one specific variant) must be one already observed this conversation via search_products, get_product_details, or explore_catalog - never invent one, and never use a recommend_catalog_products candidate that was not separately observed by one of those three tools.",
+  "Each select_products call must include the customer's complete desired selection (every product and quantity they want), never only the items being added or changed - it replaces the entire previous selection.",
+  "If commercialContext.commercialLineItems already reflects what the customer wants and nothing changed this turn, reuse it silently - do not call select_products again for the same selection.",
+  "If a select_products observation has status \"blocked\", the referenced product was not actually observed this conversation - use search_products or get_product_details to observe the real product first, then retry with that exact productId/combinationId.",
+  "quantity must be a whole number greater than zero - ask the customer to clarify an unclear or non-numeric quantity instead of guessing one."
+];
+
+/**
+ * CRM-R1-T13E.2. calculate_shipping takes no arguments - destination,
+ * products and quantities are already backend state (set_shipping_destination/
+ * select_products). Carrier MS is the sole authority over coverage, carriers
+ * and rates - the model must never compute, estimate, or restate a shipping
+ * cost that did not come from this tool's own observation.
+ */
+const CALCULATE_SHIPPING_RULE_LINES = [
+  "Use calculate_shipping only after the destination (set_shipping_destination) and the product selection (select_products) are both already confirmed - it takes no arguments and reads that state itself.",
+  "Never calculate, estimate, or state a shipping cost yourself - the only valid shipping costs are the totalCost values inside a calculate_shipping observation's data.options.",
+  "Never mention or offer a carrier, service type, cost, or estimated delivery that is not present in the most recent calculate_shipping observation's data.options.",
+  "A calculate_shipping observation with data.status \"shipping_destination_required\" means no destination is confirmed yet - ask the customer for their comuna (or use set_shipping_destination if they already stated one this turn) before retrying.",
+  "A calculate_shipping observation with data.status \"commercial_items_required\" means no product selection is confirmed yet - complete the selection (use select_products once the customer confirms products/quantities) before retrying.",
+  "A calculate_shipping observation with data.status \"catalog_product_unavailable\", \"weight_unavailable\", or \"price_unavailable\" means one selected product's commercial data could not be resolved right now - tell the customer you cannot calculate shipping for that product at the moment, never estimate a substitute value.",
+  "A calculate_shipping observation with data.status \"no_shipping_options\" means Carrier MS found no carrier serving that destination - tell the customer honestly, never claim a carrier covers it and never invent a workaround.",
+  "If a calculate_shipping observation has status \"blocked\" or \"failed\" (a technical failure, not a business result), tell the customer shipping could not be calculated right now and offer to try again shortly - never reinterpret a technical failure as \"we don't ship there\".",
+  "Never mention Carrier MS, pc_pos, kilos, total_boleta, or any other internal field/system name to the customer - refer to shipping/delivery options in plain commercial language only."
+];
+
 const RESPOND_STEP_SHAPE_WITH_PENDING_ACTION =
   '{"type":"respond","message":"...","pendingCatalogAction":{"actionType":"send_product_link","candidateProductIds":["..."]}}. pendingCatalogAction is optional on respond - include it only per the pendingCatalogAction rules above';
 
@@ -327,6 +362,8 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...EXPLORE_CATALOG_RULE_LINES,
       ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,
       ...SHIPPING_DESTINATION_RULE_LINES,
+      ...SELECT_PRODUCTS_RULE_LINES,
+      ...CALCULATE_SHIPPING_RULE_LINES,
       ...STOCK_DISCLOSURE_RULE_LINES,
       ...COMMERCIAL_CLOSING_RULE_LINES,
       ...PENDING_CATALOG_ACTION_RULE_LINES,
@@ -343,6 +380,13 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
     ...EXPLORE_CATALOG_RULE_LINES,
     ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,
+    // CRM-R1-T13E.2 (fixes a pre-existing gap: SHIPPING_DESTINATION_RULE_LINES
+    // was only ever in the finalization branch above, where tools are never
+    // offered - the gathering phase, where set_shipping_destination is
+    // actually callable, never saw it).
+    ...SHIPPING_DESTINATION_RULE_LINES,
+    ...SELECT_PRODUCTS_RULE_LINES,
+    ...CALCULATE_SHIPPING_RULE_LINES,
     ...STOCK_DISCLOSURE_RULE_LINES,
     ...COMMERCIAL_CLOSING_RULE_LINES,
     ...PENDING_CATALOG_ACTION_RULE_LINES,

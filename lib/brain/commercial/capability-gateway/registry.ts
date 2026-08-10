@@ -16,6 +16,8 @@ import { CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS } from "./customerIdentityCapa
 import { companyKnowledgeCapability } from "./companyKnowledgeCapability";
 import { getSharedCatalogRecommendationCapability, recommendCatalogProductsCapability } from "./catalogRecommendationGatewayAdapter";
 import { setShippingDestinationCapability } from "./shippingDestinationCapability";
+import { selectProductsCapability } from "./selectProductsCapability";
+import { calculateShippingCapability } from "./calculateShippingCapability";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -431,7 +433,18 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   // canonical pc_pos.comuna catalog (T13C) and persists it as the
   // opportunity's durable shipping destination - see
   // lib/domains/shipping-destination/service.ts.
-  setShippingDestinationCapability() as CapabilityGatewayDefinition
+  setShippingDestinationCapability() as CapabilityGatewayDefinition,
+  // CRM-R1-T13E.2: records the customer's evidence-grounded product
+  // selection (productId/combinationId/quantity) as the opportunity's
+  // durable commercial line items - see
+  // lib/domains/commercial-line-items/service.ts. Evidence gating itself
+  // happens in runAgentToolLoop.ts, before this capability ever runs.
+  selectProductsCapability() as CapabilityGatewayDefinition,
+  // CRM-R1-T13E.2: calculates real shipping alternatives via Carrier MS
+  // (the sole authority over coverage/carriers/rates) from the durable
+  // shipping_destination (T13D) and commercial_line_items (above), hydrated
+  // through Catalog Service - see calculateShippingCapability.ts.
+  calculateShippingCapability() as CapabilityGatewayDefinition
 ];
 
 const CAPABILITIES_BY_NAME = new Map(CAPABILITY_GATEWAY_REGISTRY.map((definition) => [definition.capability, definition]));

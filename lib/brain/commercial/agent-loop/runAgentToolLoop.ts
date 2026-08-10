@@ -36,6 +36,14 @@ import { resolveObservedRecommendationSourceProduct } from "./resolveObservedRec
  * catalog (T13C) and persists it as the current opportunity's durable
  * shipping destination. See lib/brain/commercial/capability-gateway/
  * shippingDestinationCapability.ts.
+ *
+ * CRM-R1-T13E.2 added `select_products` (records an evidence-grounded
+ * product selection as the opportunity's durable commercial line items -
+ * see selectProductsCapability.ts and the evidence gate in
+ * processUseToolStep below) and `calculate_shipping` (real shipping
+ * alternatives via Carrier MS, the sole authority over coverage/carriers/
+ * rates - takes no arguments, everything is backend state - see
+ * calculateShippingCapability.ts).
  */
 export const AGENT_LOOP_TOOL_POOL = [
   "search_products",
@@ -43,7 +51,9 @@ export const AGENT_LOOP_TOOL_POOL = [
   "search_company_knowledge",
   "explore_catalog",
   "recommend_catalog_products",
-  "set_shipping_destination"
+  "set_shipping_destination",
+  "select_products",
+  "calculate_shipping"
 ] as const;
 export type AgentLoopToolName = (typeof AGENT_LOOP_TOOL_POOL)[number];
 
@@ -270,6 +280,41 @@ async function processUseToolStep(
     if (evidence.status === "blocked") {
       warnings.push(`agent_loop_tool_blocked_evidence:${step.tool}:${evidence.reason}`);
       return { step: enrichedStep, governance: "authorized", observation: { tool: step.tool, status: "blocked", errorCode: evidence.reason }, executed: false };
+    }
+  }
+
+  // CRM-R1-T13E.2. Every item's (productId, combinationId) must have been
+  // actually observed this conversation - reuses the same evidence
+  // machinery as recommend_catalog_products' sourceProduct above (only the
+  // function name is recommendation-flavored; its logic is generic: "was
+  // this product+variant observed"). resolveObservedRecommendationSourceProduct
+  // requires a numeric productId/combinationId (recommend_catalog_products'
+  // own schema types them `number`) while select_products' schema - like
+  // every other catalog tool (search_products/get_product_details) - types
+  // them `string`; both ultimately name the same real, numeric Catalog
+  // Service ids, so converting via Number() here is a safe, local shape
+  // adapter, never a semantic change (a non-numeric string correctly fails
+  // evidence, since no real productId is ever non-numeric). Fails the WHOLE
+  // call closed on the first unevidenced item - never a partial selection
+  // persisted from a mix of real and fabricated items. Quantity is not
+  // evidence-checked here (evidence only concerns product identity) -
+  // selectProductsCapability's own execute() validates quantity.
+  if (step.tool === "select_products") {
+    const items = Array.isArray(effectiveArguments.items) ? effectiveArguments.items : [];
+    for (const item of items) {
+      const record = item as { productId?: unknown; combinationId?: unknown };
+      const evidence = resolveObservedRecommendationSourceProduct({
+        requestedSourceProduct: {
+          productId: typeof record.productId === "string" ? Number(record.productId) : record.productId,
+          combinationId: typeof record.combinationId === "string" ? Number(record.combinationId) : record.combinationId
+        },
+        recentCatalogContext: continuity.recentCatalogContext,
+        toolObservations: continuity.toolObservationsThisTurn
+      });
+      if (evidence.status === "blocked") {
+        warnings.push(`agent_loop_tool_blocked_evidence:${step.tool}:${evidence.reason}`);
+        return { step: enrichedStep, governance: "authorized", observation: { tool: step.tool, status: "blocked", errorCode: evidence.reason }, executed: false };
+      }
     }
   }
 
