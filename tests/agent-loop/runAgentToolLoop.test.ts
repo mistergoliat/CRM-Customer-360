@@ -981,10 +981,10 @@ function exploreResponsePayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("I0 - el pool conserva las 4 tools previas mas explore_catalog (expansion intencional, nada eliminado)", () => {
+test("I0 - el pool conserva las tools previas mas explore_catalog/set_shipping_destination (expansion intencional, nada eliminado)", () => {
   assert.deepEqual(
     [...AGENT_LOOP_TOOL_POOL].sort(),
-    ["explore_catalog", "get_product_details", "recommend_catalog_products", "search_company_knowledge", "search_products"].sort()
+    ["explore_catalog", "get_product_details", "recommend_catalog_products", "search_company_knowledge", "search_products", "set_shipping_destination"].sort()
   );
 });
 

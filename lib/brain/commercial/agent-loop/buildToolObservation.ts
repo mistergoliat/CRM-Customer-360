@@ -84,6 +84,16 @@ function projectExploreCatalog(data: unknown) {
   };
 }
 
+/**
+ * CRM-R1-T13D. The capability's own `data` is already the small, bounded
+ * shape agreed for this tool (status/destination/input/reason) - passed
+ * through as-is, never re-derived here, so this projection can never drift
+ * from lib/brain/commercial/capability-gateway/shippingDestinationCapability.ts.
+ */
+function projectSetShippingDestination(data: unknown) {
+  return isRecord(data) ? data : null;
+}
+
 function projectCompanyKnowledge(data: unknown) {
   if (!isRecord(data)) return { entries: [] };
   const result = data as CompanyKnowledgeSearchResult;
@@ -235,7 +245,9 @@ export function buildToolObservation(tool: string, result: CapabilityGatewayResu
             ? projectCompanyKnowledge(result.data)
             : tool === "explore_catalog"
               ? projectExploreCatalog(result.data)
-              : null;
+              : tool === "set_shipping_destination"
+                ? projectSetShippingDestination(result.data)
+                : null;
     return { tool, status: "completed", data, ...warnings };
   }
 

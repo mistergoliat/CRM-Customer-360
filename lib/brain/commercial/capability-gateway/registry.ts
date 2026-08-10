@@ -15,6 +15,7 @@ import type { CapabilityGatewayContext, CapabilityGatewayDefinition, CapabilityG
 import { CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS } from "./customerIdentityCapabilities";
 import { companyKnowledgeCapability } from "./companyKnowledgeCapability";
 import { getSharedCatalogRecommendationCapability, recommendCatalogProductsCapability } from "./catalogRecommendationGatewayAdapter";
+import { setShippingDestinationCapability } from "./shippingDestinationCapability";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -425,7 +426,12 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   // CP-R1-T10B8B: registered so it is auditable via executeGovernedCapability,
   // deliberately NOT added to AGENT_LOOP_TOOL_POOL - see
   // docs/releases/CP-R1-T10B8B-catalog-recommendation-gateway-adapter.md.
-  recommendCatalogProductsCapability(getSharedCatalogRecommendationCapability)
+  recommendCatalogProductsCapability(getSharedCatalogRecommendationCapability),
+  // CRM-R1-T13D: resolves customer-stated destination text against the
+  // canonical pc_pos.comuna catalog (T13C) and persists it as the
+  // opportunity's durable shipping destination - see
+  // lib/domains/shipping-destination/service.ts.
+  setShippingDestinationCapability() as CapabilityGatewayDefinition
 ];
 
 const CAPABILITIES_BY_NAME = new Map(CAPABILITY_GATEWAY_REGISTRY.map((definition) => [definition.capability, definition]));

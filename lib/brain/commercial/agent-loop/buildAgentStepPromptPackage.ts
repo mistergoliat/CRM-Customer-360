@@ -243,6 +243,21 @@ const PENDING_CATALOG_ACTION_RULE_LINES = [
   "Whenever your respond step's closing question is offering to send a product link (a first offer, or an unresolved ambiguous one carried forward per the rule above), include pendingCatalogAction on that same respond step with actionType \"send_product_link\" and every candidate productId the question refers to. Omit pendingCatalogAction from respond once the link was delivered, declared unavailable, or the offer no longer applies."
 ];
 
+/**
+ * CRM-R1-T13D. set_shipping_destination resolves and persists a durable
+ * per-opportunity shipping destination (commune only, never a full address) -
+ * the backend (CommuneResolver over pc_pos.comuna) is the only source of
+ * `communeId`, the model only ever supplies the raw destination text.
+ */
+const SHIPPING_DESTINATION_RULE_LINES = [
+  "Use set_shipping_destination when the customer states or changes where they want their order delivered, passing exactly the destination text they used as `destination` - never a communeId, never a full street address, never text you invented or corrected yourself.",
+  "If commercialContext.shippingDestination is already present and the customer has not stated a different destination this turn, reuse it silently - do not call set_shipping_destination again for the same destination and do not ask the customer to repeat or confirm it.",
+  "A set_shipping_destination observation with data.status \"resolved\" is already the confirmed destination - never ask the customer to confirm it a second time (e.g. never ask \"is Ñuñoa correct?\").",
+  "A set_shipping_destination observation with data.status \"needs_clarification\" means the text named a city, region, or another ambiguous area, not one specific commune (e.g. \"Santiago\") - ask the customer for the exact commune, never guess one yourself.",
+  "A set_shipping_destination observation with data.status \"not_found\" means the text did not match any known commune - tell the customer and ask them to restate it, never assume the closest-sounding commune.",
+  "set_shipping_destination establishes only which commune to ship to for pricing/coverage purposes - it never means a full delivery address (street, number, recipient) is known; do not claim one exists from this alone."
+];
+
 const RESPOND_STEP_SHAPE_WITH_PENDING_ACTION =
   '{"type":"respond","message":"...","pendingCatalogAction":{"actionType":"send_product_link","candidateProductIds":["..."]}}. pendingCatalogAction is optional on respond - include it only per the pendingCatalogAction rules above';
 
@@ -311,6 +326,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
       ...EXPLORE_CATALOG_RULE_LINES,
       ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,
+      ...SHIPPING_DESTINATION_RULE_LINES,
       ...STOCK_DISCLOSURE_RULE_LINES,
       ...COMMERCIAL_CLOSING_RULE_LINES,
       ...PENDING_CATALOG_ACTION_RULE_LINES,

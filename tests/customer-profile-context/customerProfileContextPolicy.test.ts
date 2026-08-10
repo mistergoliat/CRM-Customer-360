@@ -26,6 +26,7 @@ function buildSnapshot(): CommercialContextSnapshot {
       identityConflict: false
     },
     identityConflict: null,
+    shippingDestination: null,
     availableCapabilities: [],
     warnings: [],
     customer360: null,

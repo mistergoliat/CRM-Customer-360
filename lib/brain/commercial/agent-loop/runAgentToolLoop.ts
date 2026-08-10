@@ -30,8 +30,21 @@ import { resolveObservedRecommendationSourceProduct } from "./resolveObservedRec
  * recentCatalogContext (CP-R1-T10B8D) and no continuity to
  * get_product_details is wired yet (also CP-R1-T10B8D) - see
  * docs/integrations/recommend-catalog-products-agent-tool.md.
+ *
+ * CRM-R1-T13D added `set_shipping_destination` - resolves a customer-stated
+ * destination commune (free text only) against the canonical pc_pos.comuna
+ * catalog (T13C) and persists it as the current opportunity's durable
+ * shipping destination. See lib/brain/commercial/capability-gateway/
+ * shippingDestinationCapability.ts.
  */
-export const AGENT_LOOP_TOOL_POOL = ["search_products", "get_product_details", "search_company_knowledge", "explore_catalog", "recommend_catalog_products"] as const;
+export const AGENT_LOOP_TOOL_POOL = [
+  "search_products",
+  "get_product_details",
+  "search_company_knowledge",
+  "explore_catalog",
+  "recommend_catalog_products",
+  "set_shipping_destination"
+] as const;
 export type AgentLoopToolName = (typeof AGENT_LOOP_TOOL_POOL)[number];
 
 const DEFAULT_MAX_DECISIONS = 3;
