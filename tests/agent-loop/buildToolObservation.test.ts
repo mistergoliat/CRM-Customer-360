@@ -38,6 +38,7 @@ function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
     price: { amount: 19990, currency: "CLP", taxIncluded: true, discountApplied: false },
     availability: "in_stock",
     stockQuantity: 4,
+    weightKg: null,
     provenance: { source: "catalog_service_http", retrievedAt: FIXED_TIME, cached: false },
     ...overrides
   };
