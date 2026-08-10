@@ -91,6 +91,10 @@ function buildCommercialContextSummary(
           requiredFeatures: snapshot.needProfile.requiredFeatures
         }
       : null,
+    // CRM-R1-T13D. Durable, rehydrated state - never derived from recentMessages.
+    shippingDestination: snapshot.shippingDestination
+      ? { communeId: snapshot.shippingDestination.communeId, canonicalName: snapshot.shippingDestination.canonicalName }
+      : null,
     recentMessages: recentMessages.slice(-5).map((message) => ({ direction: message.direction, body: message.body }))
   };
 

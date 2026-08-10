@@ -160,6 +160,102 @@ test("reports human_owner_active and ai_blocked signals without mutating state",
   assert.ok(snapshot.warnings.includes("ai_blocked"));
 });
 
+function fixtureOpportunity(id: number) {
+  return {
+    id,
+    opportunityKey: `opp-${id}`,
+    status: "open",
+    stage: "discovery",
+    primaryIntent: "unknown",
+    currentSummary: null,
+    nextActionType: null,
+    nextActionDueAt: null,
+    waitingFor: null,
+    humanOwnerActive: false,
+    aiBlocked: false,
+    customerCandidateId: null,
+    customerMasterId: null,
+    leadId: null,
+    conversationCaseId: null,
+    waId: null,
+    requirements: [],
+    missingRequirements: [],
+    productInterests: [],
+    objections: [],
+    signals: [],
+    version: 1,
+    lastActivityAt: new Date().toISOString(),
+    closedAt: null
+  };
+}
+
+// CRM-R1-T13D.
+test("CRM-R1-T13D: rehydrates shippingDestination for the snapshot's opportunity via the injectable loader", async () => {
+  const currentTime = new Date().toISOString();
+  const snapshot = await buildNativeCommercialContext({
+    conversationPublicId: "conv-shipping-destination",
+    currentTime,
+    loadConversationDetail: async () => ({
+      conversation: {
+        id: 4,
+        public_id: "conv-shipping-destination",
+        channel: "whatsapp",
+        provider: "meta",
+        external_contact_id: "56900000003",
+        status: "open",
+        ai_enabled: 1,
+        human_owner_active: 0,
+        last_message_at: currentTime
+      },
+      customer: null,
+      messages: [],
+      opportunity: fixtureOpportunity(4242),
+      profile: null,
+      actions: []
+    }),
+    loadShippingDestination: async (opportunityId) => {
+      assert.equal(opportunityId, 4242);
+      return { communeId: 99, canonicalName: "Ñuñoa", matchedVia: "direct", factId: "fact-fixture", updatedAt: currentTime };
+    }
+  });
+
+  assert.deepEqual(snapshot.shippingDestination, { communeId: 99, canonicalName: "Ñuñoa", matchedVia: "direct", factId: "fact-fixture", updatedAt: currentTime });
+});
+
+test("CRM-R1-T13D: never calls the shipping destination loader when there is no opportunity yet", async () => {
+  const currentTime = new Date().toISOString();
+  let loaderCalled = false;
+  const snapshot = await buildNativeCommercialContext({
+    conversationPublicId: "conv-no-opportunity",
+    currentTime,
+    loadConversationDetail: async () => ({
+      conversation: {
+        id: 5,
+        public_id: "conv-no-opportunity",
+        channel: "whatsapp",
+        provider: "meta",
+        external_contact_id: "56900000004",
+        status: "open",
+        ai_enabled: 1,
+        human_owner_active: 0,
+        last_message_at: currentTime
+      },
+      customer: null,
+      messages: [],
+      opportunity: null,
+      profile: null,
+      actions: []
+    }),
+    loadShippingDestination: async () => {
+      loaderCalled = true;
+      return null;
+    }
+  });
+
+  assert.equal(loaderCalled, false);
+  assert.equal(snapshot.shippingDestination, null);
+});
+
 test("integration: builds a complete-enough snapshot from a real native inbound thread", async () => {
   const providerMessageId = `wamid.${uniqueSuffix("context")}`;
   const waId = `5697${String(Date.now()).slice(-8)}`;

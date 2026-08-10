@@ -1,5 +1,7 @@
 import { loadNativeConversationDetailByPublicId } from "@/lib/brain/native-whatsapp";
 import { findDistinctCustomersByNormalizedValue } from "@/lib/integrations/customer-external-identity";
+import { getActiveShippingDestinationForOpportunity } from "@/lib/domains/shipping-destination";
+import type { ShippingDestination } from "@/lib/domains/shipping-destination";
 import type { SalesConsultativeOpportunity, SalesNeedProfile } from "../sales-consultative/types";
 import { COMMERCIAL_CONTEXT_MAX_RECENT_MESSAGES } from "../constants";
 import { hasStaleCommercialContext } from "./adapters";
@@ -93,6 +95,13 @@ export type CommercialContextSnapshot = {
   actions: NativeCommercialContextAction[];
   signals: NativeCommercialContextSignals;
   identityConflict: NativeCommercialContextIdentityConflict | null;
+  /**
+   * CRM-R1-T13D. Durable per-opportunity shipping destination, rehydrated
+   * from crm_request_facts on every load - never reconstructed from
+   * conversation text or an ephemeral tool observation. Null whenever no
+   * opportunity exists yet, or no destination has been confirmed for it.
+   */
+  shippingDestination: ShippingDestination | null;
   availableCapabilities: string[];
   warnings: NativeCommercialContextWarning[];
   /**
@@ -163,12 +172,15 @@ type DistinctCustomersLookup = (
   normalizedValue: string
 ) => Promise<{ ok: boolean; customerIds: number[] }>;
 
+type ShippingDestinationLoader = (opportunityId: number) => Promise<ShippingDestination | null>;
+
 export type BuildNativeCommercialContextInput = {
   conversationPublicId: string;
   currentTime: string | Date;
   availableCapabilities?: string[];
   loadConversationDetail?: ConversationDetailLoader;
   findDistinctCustomers?: DistinctCustomersLookup;
+  loadShippingDestination?: ShippingDestinationLoader;
 };
 
 function toIsoOrNull(value: string | Date): string | null {
@@ -224,6 +236,7 @@ function buildEmptySnapshot(input: {
       identityConflict: false
     },
     identityConflict: null,
+    shippingDestination: null,
     availableCapabilities: input.availableCapabilities,
     warnings: input.warnings,
     customer360: null,
@@ -315,6 +328,13 @@ export async function buildNativeCommercialContext(input: BuildNativeCommercialC
   const opportunity = detail.opportunity;
   const needProfile = detail.profile;
 
+  // CRM-R1-T13D. Durable state, not conversational memory: rehydrated fresh
+  // from crm_request_facts every load, keyed by the real opportunity id -
+  // never inferred from recentMessages or a prior turn's tool observation.
+  const loadShippingDestination = input.loadShippingDestination ?? getActiveShippingDestinationForOpportunity;
+  const opportunityIdForShipping = typeof opportunity?.id === "number" ? opportunity.id : null;
+  const shippingDestination = opportunityIdForShipping !== null ? await loadShippingDestination(opportunityIdForShipping) : null;
+
   const actions: NativeCommercialContextAction[] = detail.actions.map((action) => ({
     id: String(action.id),
     actionId: action.actionId,
@@ -394,6 +414,7 @@ export async function buildNativeCommercialContext(input: BuildNativeCommercialC
     actions,
     signals,
     identityConflict,
+    shippingDestination,
     availableCapabilities,
     warnings,
     customer360: null,
