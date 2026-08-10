@@ -16,6 +16,7 @@ function makeProduct(overrides: Partial<CatalogProduct> & { productId: string; a
     price: overrides.amount === null ? null : { amount: overrides.amount, currency: overrides.currency ?? "CLP", taxIncluded: true, discountApplied: false },
     availability: overrides.availability ?? "in_stock",
     stockQuantity: overrides.stockQuantity ?? 5,
+    weightKg: overrides.weightKg ?? null,
     provenance: { source: "catalog_service_http", retrievedAt: "2026-07-17T00:00:00.000Z", cached: false }
   };
 }

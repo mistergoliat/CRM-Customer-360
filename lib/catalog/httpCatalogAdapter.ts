@@ -283,6 +283,9 @@ function parseProductResponse(payload: unknown, retrievedAt: string): CatalogPro
 
   const freshness = isRecord(payload.freshness) ? payload.freshness : {};
   const publicLink = parsePublicLink(payload.publicLink);
+  // CRM-R1-T13E: sibling of pricing/stock on the payload, not nested under
+  // `product` - matches MS-Stock/services CAT-R1-T13B contract exactly.
+  const weightKg = asNumber(payload.weightKg);
 
   return {
     productId: String(productId),
@@ -296,6 +299,7 @@ function parseProductResponse(payload: unknown, retrievedAt: string): CatalogPro
     price,
     availability,
     stockQuantity,
+    weightKg,
     ...(publicLink !== undefined ? { publicLink } : {}),
     provenance: { source: "catalog_service_http", retrievedAt, cached: asBoolean(freshness.cached) }
   };

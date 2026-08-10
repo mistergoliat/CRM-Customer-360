@@ -25,8 +25,8 @@ export function getLogisticsQueryExecutor(): LogisticsQueryExecutor | null {
 
   const connectionPool = getPool(config.host, config.port, config.user, config.password, config.database);
   return {
-    async queryRows(sql) {
-      const [rows] = await connectionPool.query(sql);
+    async queryRows(sql, params) {
+      const [rows] = await connectionPool.query(sql, params as unknown[] | undefined);
       return rows as never[];
     }
   };

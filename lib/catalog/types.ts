@@ -66,6 +66,15 @@ export type CatalogProduct = {
   price: CatalogProductPrice | null;
   availability: CatalogAvailabilityStatus;
   stockQuantity: number | null;
+  /**
+   * CRM-R1-T13E: base product weight + combination delta, rounded to 3
+   * decimals by the upstream service. 0 is a real, preserved value (never
+   * coerced to null); null means the service could not resolve a weight for
+   * the selected variant (same "no resoluble" case as price/stock, not a
+   * missing-field default). Never negative - the upstream service fails the
+   * whole request closed (503) before a negative value could reach here.
+   */
+  weightKg: number | null;
   publicLink?: ProductPublicLink;
   provenance: CatalogProvenance;
 };

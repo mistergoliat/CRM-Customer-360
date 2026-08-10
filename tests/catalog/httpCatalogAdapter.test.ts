@@ -115,6 +115,39 @@ test("getProductDetails maps a successful response including price and stock", a
   assert.equal(result.value.stockQuantity, 2);
 });
 
+test("CRM-R1-T13E: getProductDetails maps a numeric weightKg sibling of pricing/stock", async () => {
+  handler = (_req, res) => sendJson(res, 200, productDetailPayload({ weightKg: 20.123 }));
+  const result = await makeAdapter().getProductDetails({ productId: "7" }, { correlationId: "corr-w1" });
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.value) return assert.fail("expected a product");
+  assert.equal(result.value.weightKg, 20.123);
+});
+
+test("CRM-R1-T13E: getProductDetails preserves weightKg: 0 literally, never coerces to null", async () => {
+  handler = (_req, res) => sendJson(res, 200, productDetailPayload({ weightKg: 0 }));
+  const result = await makeAdapter().getProductDetails({ productId: "7" }, { correlationId: "corr-w2" });
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.value) return assert.fail("expected a product");
+  assert.equal(result.value.weightKg, 0);
+});
+
+test("CRM-R1-T13E: getProductDetails maps weightKg: null (unresolvable combination) to null, not zero", async () => {
+  handler = (_req, res) => sendJson(res, 200, productDetailPayload({ weightKg: null }));
+  const result = await makeAdapter().getProductDetails({ productId: "7" }, { correlationId: "corr-w3" });
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.value) return assert.fail("expected a product");
+  assert.equal(result.value.weightKg, null);
+});
+
+test("CRM-R1-T13E: getProductDetails maps a missing weightKg field to null (older/uncached upstream response), never throws", async () => {
+  const payload = productDetailPayload();
+  handler = (_req, res) => sendJson(res, 200, payload);
+  const result = await makeAdapter().getProductDetails({ productId: "7" }, { correlationId: "corr-w4" });
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.value) return assert.fail("expected a product");
+  assert.equal(result.value.weightKg, null);
+});
+
 test("getProductDetails preserves a valid exact_product publicLink", async () => {
   const canonicalUrl = "https://pesaschile.cl/categories/7-pack-4-bandas-de-resistencia-hwm.html";
   handler = (_req, res) => {
