@@ -95,6 +95,8 @@ function buildCommercialContextSummary(
     shippingDestination: snapshot.shippingDestination
       ? { communeId: snapshot.shippingDestination.communeId, canonicalName: snapshot.shippingDestination.canonicalName }
       : null,
+    // CRM-R1-T13E.2. Same discipline as shippingDestination above.
+    commercialLineItems: snapshot.commercialLineItems ? { items: snapshot.commercialLineItems.items } : null,
     recentMessages: recentMessages.slice(-5).map((message) => ({ direction: message.direction, body: message.body }))
   };
 

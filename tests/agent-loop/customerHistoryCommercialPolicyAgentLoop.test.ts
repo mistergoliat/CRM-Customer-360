@@ -75,6 +75,7 @@ function buildSnapshot(signalOverrides: Partial<CommercialContextSnapshot["signa
     },
     identityConflict: null,
     shippingDestination: null,
+    commercialLineItems: null,
     availableCapabilities: [],
     warnings: [],
     customer360: null,

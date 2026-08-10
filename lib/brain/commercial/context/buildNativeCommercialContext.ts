@@ -2,6 +2,8 @@ import { loadNativeConversationDetailByPublicId } from "@/lib/brain/native-whats
 import { findDistinctCustomersByNormalizedValue } from "@/lib/integrations/customer-external-identity";
 import { getActiveShippingDestinationForOpportunity } from "@/lib/domains/shipping-destination";
 import type { ShippingDestination } from "@/lib/domains/shipping-destination";
+import { getActiveCommercialLineItemsForOpportunity } from "@/lib/domains/commercial-line-items";
+import type { CommercialLineItemSelection } from "@/lib/domains/commercial-line-items";
 import type { SalesConsultativeOpportunity, SalesNeedProfile } from "../sales-consultative/types";
 import { COMMERCIAL_CONTEXT_MAX_RECENT_MESSAGES } from "../constants";
 import { hasStaleCommercialContext } from "./adapters";
@@ -102,6 +104,13 @@ export type CommercialContextSnapshot = {
    * opportunity exists yet, or no destination has been confirmed for it.
    */
   shippingDestination: ShippingDestination | null;
+  /**
+   * CRM-R1-T13E.2. Durable per-opportunity commercial line-item selection,
+   * rehydrated from crm_request_facts on every load - same discipline as
+   * shippingDestination above. Null whenever no opportunity exists yet, or
+   * no selection has been confirmed for it.
+   */
+  commercialLineItems: CommercialLineItemSelection | null;
   availableCapabilities: string[];
   warnings: NativeCommercialContextWarning[];
   /**
@@ -173,6 +182,7 @@ type DistinctCustomersLookup = (
 ) => Promise<{ ok: boolean; customerIds: number[] }>;
 
 type ShippingDestinationLoader = (opportunityId: number) => Promise<ShippingDestination | null>;
+type CommercialLineItemsLoader = (opportunityId: number) => Promise<CommercialLineItemSelection | null>;
 
 export type BuildNativeCommercialContextInput = {
   conversationPublicId: string;
@@ -181,6 +191,7 @@ export type BuildNativeCommercialContextInput = {
   loadConversationDetail?: ConversationDetailLoader;
   findDistinctCustomers?: DistinctCustomersLookup;
   loadShippingDestination?: ShippingDestinationLoader;
+  loadCommercialLineItems?: CommercialLineItemsLoader;
 };
 
 function toIsoOrNull(value: string | Date): string | null {
@@ -237,6 +248,7 @@ function buildEmptySnapshot(input: {
     },
     identityConflict: null,
     shippingDestination: null,
+    commercialLineItems: null,
     availableCapabilities: input.availableCapabilities,
     warnings: input.warnings,
     customer360: null,
@@ -335,6 +347,12 @@ export async function buildNativeCommercialContext(input: BuildNativeCommercialC
   const opportunityIdForShipping = typeof opportunity?.id === "number" ? opportunity.id : null;
   const shippingDestination = opportunityIdForShipping !== null ? await loadShippingDestination(opportunityIdForShipping) : null;
 
+  // CRM-R1-T13E.2. Same discipline as shippingDestination above: durable
+  // state rehydrated fresh from crm_request_facts every load, never
+  // inferred from recentMessages or a prior turn's tool observation.
+  const loadCommercialLineItems = input.loadCommercialLineItems ?? getActiveCommercialLineItemsForOpportunity;
+  const commercialLineItems = opportunityIdForShipping !== null ? await loadCommercialLineItems(opportunityIdForShipping) : null;
+
   const actions: NativeCommercialContextAction[] = detail.actions.map((action) => ({
     id: String(action.id),
     actionId: action.actionId,
@@ -415,6 +433,7 @@ export async function buildNativeCommercialContext(input: BuildNativeCommercialC
     signals,
     identityConflict,
     shippingDestination,
+    commercialLineItems,
     availableCapabilities,
     warnings,
     customer360: null,

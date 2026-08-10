@@ -981,11 +981,76 @@ function exploreResponsePayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("I0 - el pool conserva las tools previas mas explore_catalog/set_shipping_destination (expansion intencional, nada eliminado)", () => {
+test("I0 - el pool conserva las tools previas mas explore_catalog/set_shipping_destination/select_products/calculate_shipping (expansion intencional, nada eliminado)", () => {
   assert.deepEqual(
     [...AGENT_LOOP_TOOL_POOL].sort(),
-    ["explore_catalog", "get_product_details", "recommend_catalog_products", "search_company_knowledge", "search_products", "set_shipping_destination"].sort()
+    [
+      "calculate_shipping",
+      "explore_catalog",
+      "get_product_details",
+      "recommend_catalog_products",
+      "search_company_knowledge",
+      "search_products",
+      "select_products",
+      "set_shipping_destination"
+    ].sort()
   );
+});
+
+// --- CRM-R1-T13E.2: select_products evidence gate ---
+
+test("select_products: an item never observed this conversation is blocked before the capability ever runs (no persistence attempted)", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "999", quantity: 1 }] } },
+      { type: "respond", message: "No pude confirmar ese producto." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "quiero 1 del producto 999",
+    commercialContextSummary: {},
+    // Present but empty, so the gate reports the precise "not observed"
+    // reason rather than "no evidence source available at all".
+    recentCatalogContext: { interactions: [] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 0, "a call blocked by the evidence gate must never reach the Gateway/count toward the tool budget");
+  const observation = result.steps.find((step) => step.step.type === "use_tool")?.observation;
+  assert.equal(observation?.status, "blocked");
+  assert.equal(observation?.errorCode, "source_product_not_observed");
+});
+
+test("select_products: an item observed via search_products this conversation clears the evidence gate and reaches the Gateway", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } },
+      { type: "respond", message: "Listo, agregue el producto." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "quiero 2 del kettlebell",
+    commercialContextSummary: {},
+    recentCatalogContext: {
+      interactions: [
+        {
+          inboundMessageId: "msg-search",
+          completedAt: "2026-07-21T14:59:00.000Z",
+          sourceTool: "search_products",
+          products: [{ position: 1, productId: "501", name: "Kettlebell 16kg" }]
+        }
+      ]
+    },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1, "an evidence-grounded call must reach the Gateway, not be blocked by the evidence gate");
+  const observation = result.steps.find((step) => step.step.type === "use_tool")?.observation;
+  assert.notEqual(observation?.errorCode, "source_product_not_observed");
 });
 
 test("I - 'producto mas caro de la pagina': explore_catalog resuelve el extremo global, nunca search_products", async () => {

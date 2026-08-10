@@ -22,9 +22,9 @@ const FIXED_TIME = "2026-08-05T12:00:00.000Z";
 // Tool pool / description / schema exposure
 // ---------------------------------------------------------------------------
 
-test("pool: recommend_catalog_products is visible, pool has exactly 6 tools (CRM-R1-T13D added set_shipping_destination), nothing prior removed", () => {
+test("pool: recommend_catalog_products is visible, pool has exactly 8 tools (CRM-R1-T13E.2 added select_products/calculate_shipping), nothing prior removed", () => {
   assert.equal((AGENT_LOOP_TOOL_POOL as readonly string[]).includes("recommend_catalog_products"), true);
-  assert.equal(AGENT_LOOP_TOOL_POOL.length, 6);
+  assert.equal(AGENT_LOOP_TOOL_POOL.length, 8);
   for (const priorTool of ["search_products", "get_product_details", "search_company_knowledge", "explore_catalog"]) {
     assert.ok((AGENT_LOOP_TOOL_POOL as readonly string[]).includes(priorTool), `${priorTool} must still be in the pool`);
   }
