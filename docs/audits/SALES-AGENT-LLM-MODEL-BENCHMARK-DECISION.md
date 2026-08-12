@@ -105,7 +105,7 @@ Confirmado en la seccion 11: el numero de rondas LLM por turno (1-3 en el corpus
 ```text
 LLM-R1-T05: DONE
 Branch: feat/llm-r1-t05-model-benchmark
-Commit: <ver docs/releases/LLM-R1-T05-production-measurement-model-benchmark.md tras el commit>
+Commit: 6353bf6
 Corpus cases: 12
 Offline benchmark: PASS
 Live benchmark executed: NO
