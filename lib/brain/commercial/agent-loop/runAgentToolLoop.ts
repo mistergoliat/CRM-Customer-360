@@ -3,7 +3,7 @@ import { resolveCapabilityGatewayDefinition } from "../capability-gateway/regist
 import type { CapabilityGatewayContext } from "../capability-gateway/types";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfiguration } from "../sales-agent-configuration";
-import { buildAgentStepPromptPackage, type AgentLoopToolDescription } from "./buildAgentStepPromptPackage";
+import { buildAgentStepPromptPackage, type AgentLoopPriorAttemptFailure, type AgentLoopToolDescription } from "./buildAgentStepPromptPackage";
 import { buildToolObservation } from "./buildToolObservation";
 import { validateAgentStep } from "./validateAgentStep";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
@@ -614,6 +614,17 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   let gatheringStructuredRecoveryUsed = false;
   /** LLM-R1-T02. Counts provider calls within the current decisionIndex slot (0 = first call, 1+ = a retry of that same slot) - reset to 0 every time decisionIndex actually advances, below. */
   let gatheringAttemptIndex = 0;
+  /**
+   * LLM-R1-T04. What to tell the model went wrong on the immediately
+   * preceding call, for the very next call only - set right before a
+   * structured-recovery or schema-invalid `continue` below, always consumed
+   * (read into promptPackage, then reset to null) at the very top of the
+   * next iteration, regardless of how that iteration turns out. Never
+   * survives past the one call it was set for - a success, a different
+   * failure, decisionIndex advancing, or falling through to finalization
+   * all leave it null again.
+   */
+  let gatheringPendingRepairSignal: AgentLoopPriorAttemptFailure | null = null;
   while (decisionIndex < maxDecisions && toolExecutionCount < maxToolExecutions) {
     if (Date.now() > deadline) {
       warnings.push("agent_loop_timeout");
@@ -630,8 +641,12 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       priorSteps: steps,
       stepsRemaining: maxDecisions - decisionIndex,
       phase: "gathering",
-      identityConfiguration
+      identityConfiguration,
+      priorAttemptFailure: gatheringPendingRepairSignal
     });
+    // LLM-R1-T04. Consumed immediately - this exact signal is for this one
+    // call only, never for whatever call happens next.
+    gatheringPendingRepairSignal = null;
 
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);
     // LLM-R1-T02. Captured once, before branching, so every branch below
@@ -659,6 +674,9 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       // LLM-R1-T04), then fail closed like every other reason.
       if (providerFailure.normalizedReason === "invalid_response" && !gatheringStructuredRecoveryUsed) {
         gatheringStructuredRecoveryUsed = true;
+        // LLM-R1-T04. The one-shot recovery call T01 already grants gets a
+        // guided repair instruction instead of a blind resend.
+        gatheringPendingRepairSignal = { kind: "invalid_response" };
         warnings.push("agent_loop_structured_recovery_attempted:gathering");
         continue;
       }
@@ -678,6 +696,11 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
         break;
       }
       gatheringRetryUsed = true;
+      // LLM-R1-T04. Guided repair: the retry sees validateAgentStep's own
+      // bounded reasonCode, never the free-text `reason` above (that string
+      // is only ever logged internally, in `warnings`) and never the raw
+      // rawOutput that failed validation.
+      gatheringPendingRepairSignal = { kind: "invalid_agent_step", reasonCode: validation.reasonCode };
       continue;
     }
 
@@ -764,6 +787,13 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
 
   // ---- Phase 2: finalization (spec points 3-6) ----
   warnings.push("agent_loop_finalization_entered");
+  /**
+   * LLM-R1-T04. Same one-shot-consumption discipline as
+   * gatheringPendingRepairSignal above - set right before a `continue`
+   * below, always consumed (read into promptPackage, then reset to null) at
+   * the top of the very next attempt, never surviving past it.
+   */
+  let finalizationPendingRepairSignal: AgentLoopPriorAttemptFailure | null = null;
   for (let attempt = 0; attempt < FINALIZATION_MAX_ATTEMPTS; attempt += 1) {
     if (Date.now() > deadline) {
       warnings.push("agent_loop_timeout");
@@ -780,8 +810,11 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       priorSteps: steps,
       stepsRemaining: 1,
       phase: "finalization",
-      identityConfiguration
+      identityConfiguration,
+      priorAttemptFailure: finalizationPendingRepairSignal
     });
+    // LLM-R1-T04. Consumed immediately - see the matching comment in gathering above.
+    finalizationPendingRepairSignal = null;
 
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);
     if (invoked.kind === "timeout") {
@@ -800,6 +833,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       // attempt, unchanged from before this task - this branch only ever
       // widens what happens for "invalid_response", nothing else.
       if (providerFailure.normalizedReason === "invalid_response" && attempt < FINALIZATION_MAX_ATTEMPTS - 1) {
+        // LLM-R1-T04. Guided repair for the one remaining attempt.
+        finalizationPendingRepairSignal = { kind: "invalid_response" };
         warnings.push("agent_loop_structured_recovery_attempted:finalization");
         continue;
       }
@@ -811,7 +846,12 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     const validation = validateAgentStep(invoked.rawOutput, FINALIZATION_ALLOWED_TYPES);
     if (validation.status === "invalid") {
       warnings.push(`agent_step_invalid:${validation.reason}`);
-      if (attempt < FINALIZATION_MAX_ATTEMPTS - 1) continue;
+      if (attempt < FINALIZATION_MAX_ATTEMPTS - 1) {
+        // LLM-R1-T04. Guided repair: bounded reasonCode only, never the
+        // free-text reason or the raw rawOutput that failed validation.
+        finalizationPendingRepairSignal = { kind: "invalid_agent_step", reasonCode: validation.reasonCode };
+        continue;
+      }
       warnings.push("agent_loop_finalization_failed");
       return finalize("invalid_output");
     }

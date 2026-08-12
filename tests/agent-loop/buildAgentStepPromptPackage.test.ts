@@ -4,6 +4,7 @@ import { buildAgentStepPromptPackage, type AgentLoopPromptInput } from "@/lib/br
 import { renderSalesAgentIdentityPrompt } from "@/lib/brain/commercial/agent-loop/renderSalesAgentIdentityPrompt";
 import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfiguration } from "@/lib/brain/commercial/sales-agent-configuration";
 import { describeStockDisclosure } from "@/lib/brain/commercial/agent-loop/stockDisclosurePolicy";
+import { AGENT_STEP_VALIDATION_REASON_CODES } from "@/lib/brain/commercial/agent-loop/validateAgentStep";
 
 function pesasChileConfig(overrides: Partial<SalesAgentPromptConfiguration> = {}): SalesAgentPromptConfiguration {
   return {
@@ -628,4 +629,139 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt is objectively smaller than
   // The user prompt is untouched by this task - finalization never gained or
   // lost any user-message content.
   assert.equal(messages[1].content.length, 205, "finalization userPrompt.length must be unchanged by this task");
+});
+
+// ---------------------------------------------------------------------------
+// LLM-R1-T04: guided structured repair (priorAttemptFailure). See
+// docs/releases/LLM-R1-T04-guided-structured-repair.md.
+// ---------------------------------------------------------------------------
+
+const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 16034;
+const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 19783;
+
+test("[LLM-R1-T04 Caso 1] a normal call (no priorAttemptFailure) is byte-identical to before this task - no repair instruction present", () => {
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({
+      ...baseInput,
+      phase,
+      identityConfiguration: pesasChileConfig(),
+      availableTools: phase === "gathering" ? [{ name: "explore_catalog", description: "d" }] : []
+    });
+    assert.doesNotMatch(messages[0].content, /previous response was structurally invalid/);
+    assert.doesNotMatch(messages[0].content, /previous AgentStep was rejected/);
+  }
+  const gathering = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig(), availableTools: [{ name: "explore_catalog", description: "d" }] });
+  const finalization = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  assert.equal(gathering.messages[0].content.length, GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04);
+  assert.equal(finalization.messages[0].content.length, FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04);
+});
+
+test("[LLM-R1-T04] priorAttemptFailure: null behaves identically to omitting it entirely (both produce no repair instruction)", () => {
+  const omitted = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
+  const explicitNull = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig(), priorAttemptFailure: null });
+  assert.equal(omitted.messages[0].content, explicitNull.messages[0].content);
+});
+
+test("[LLM-R1-T04 Caso 2/3] invalid_response repair instruction is explicit and present in both phases when requested", () => {
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({
+      ...baseInput,
+      phase,
+      identityConfiguration: pesasChileConfig(),
+      availableTools: phase === "gathering" ? [{ name: "explore_catalog", description: "d" }] : [],
+      priorAttemptFailure: { kind: "invalid_response" }
+    });
+    const system = messages[0].content;
+    assert.match(system, /Your previous response was structurally invalid or empty/);
+    assert.match(system, /Return exactly one valid JSON object matching the AgentStep contract/);
+    assert.match(system, /Do not include markdown, prose, explanations, or any text outside the JSON object/);
+  }
+});
+
+test("[LLM-R1-T04 Caso 4] a schema-mismatch repair includes the sanitized reasonCode for every possible validateAgentStep rejection", () => {
+  for (const reasonCode of AGENT_STEP_VALIDATION_REASON_CODES) {
+    const { messages } = buildAgentStepPromptPackage({
+      ...baseInput,
+      identityConfiguration: pesasChileConfig(),
+      priorAttemptFailure: { kind: "invalid_agent_step", reasonCode }
+    });
+    const system = messages[0].content;
+    assert.match(system, new RegExp(`Your previous AgentStep was rejected: reason=${reasonCode}\\.`));
+    assert.match(system, /Return exactly one valid AgentStep for the current phase, correcting that specific problem/);
+  }
+});
+
+test("[LLM-R1-T04 Caso 5] the repair instruction never carries raw model output - only the fixed invalid_response label or a bounded reasonCode reach the prompt", () => {
+  const SECRET = "SECRET_RAW_MODEL_OUTPUT_123";
+  // The type system itself only accepts {kind:"invalid_response"} or
+  // {kind:"invalid_agent_step", reasonCode: <bounded enum>} - there is no
+  // field a caller could even attempt to smuggle raw text through. This
+  // test proves the rendered text specifically, as the runtime artifact
+  // that actually reaches the provider.
+  const invalidResponseRepair = buildAgentStepPromptPackage({
+    ...baseInput,
+    identityConfiguration: pesasChileConfig(),
+    priorAttemptFailure: { kind: "invalid_response" }
+  });
+  const schemaRepair = buildAgentStepPromptPackage({
+    ...baseInput,
+    identityConfiguration: pesasChileConfig(),
+    priorAttemptFailure: { kind: "invalid_agent_step", reasonCode: "invalid_type" }
+  });
+  assert.ok(!invalidResponseRepair.messages[0].content.includes(SECRET));
+  assert.ok(!invalidResponseRepair.messages[1].content.includes(SECRET));
+  assert.ok(!schemaRepair.messages[0].content.includes(SECRET));
+  assert.ok(!schemaRepair.messages[1].content.includes(SECRET));
+});
+
+test("[LLM-R1-T04 Metrica estatica] the repair prompt is only slightly larger than the normal prompt, and the difference is exactly the repair instruction", () => {
+  const normal = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  const invalidResponseRepair = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [],
+    priorAttemptFailure: { kind: "invalid_response" }
+  });
+  const schemaRepair = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [],
+    priorAttemptFailure: { kind: "invalid_agent_step", reasonCode: "missing_required_field" }
+  });
+
+  const invalidResponseDelta = invalidResponseRepair.messages[0].content.length - normal.messages[0].content.length;
+  const schemaRepairDelta = schemaRepair.messages[0].content.length - normal.messages[0].content.length;
+
+  // Never a big context re-introduction (T03's reduction stays intact) -
+  // both deltas must stay well under a few hundred characters, and must
+  // equal exactly the length of the 3 (or 2) repair lines joined with "\n"
+  // plus one trailing "\n" that joins into the rest of the prompt - i.e.
+  // fully explained by the repair instruction alone, nothing else changed.
+  assert.ok(invalidResponseDelta > 0 && invalidResponseDelta < 300, `invalid_response repair delta out of expected range: ${invalidResponseDelta}`);
+  assert.ok(schemaRepairDelta > 0 && schemaRepairDelta < 200, `schema repair delta out of expected range: ${schemaRepairDelta}`);
+
+  // Every other line of the normal prompt still appears in both repaired
+  // versions, unchanged - the repair instruction is additive only.
+  assert.ok(invalidResponseRepair.messages[0].content.includes(normal.messages[0].content));
+  assert.ok(schemaRepair.messages[0].content.includes(normal.messages[0].content));
+});
+
+test("[LLM-R1-T04 Caso 9] a repaired finalization prompt still excludes the tool-invocation lines LLM-R1-T03 removed", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [],
+    priorAttemptFailure: { kind: "invalid_response" }
+  });
+  const system = messages[0].content;
+  assert.doesNotMatch(system, /Use select_products only once the customer has confirmed/);
+  assert.doesNotMatch(system, /Use calculate_shipping only after the destination/);
+  assert.doesNotMatch(system, /recommend_catalog_products requires sourceProduct\.productId/);
+  assert.doesNotMatch(system, /Use explore_catalog for extremes/);
+  // Grounding/closing rules T03 kept must still be there too.
+  assert.match(system, /You must never invent product, price, stock, or delivery information not returned by a tool this turn/);
+  assert.match(system, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
 });

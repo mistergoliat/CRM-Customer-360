@@ -6,6 +6,24 @@ import type { RecentCatalogContext } from "./recentCatalogContext";
 import type { PendingCatalogActionStep } from "./agentStepTypes";
 import { renderSalesAgentIdentityPrompt } from "./renderSalesAgentIdentityPrompt";
 import { describeStockDisclosure } from "./stockDisclosurePolicy";
+import type { AgentStepValidationReasonCode } from "./validateAgentStep";
+
+/**
+ * LLM-R1-T04. What went wrong on the immediately preceding provider call
+ * this exact decision slot/finalization attempt - present only on the one
+ * repair call it applies to (see runAgentToolLoop.ts's pendingRepairSignal),
+ * never on a normal first attempt, never carried into any later call. Never
+ * derived from raw model output: "invalid_response" is the provider-level
+ * classification already used by LLM-R1-T01/T02 (empty_response/
+ * invalid_model_json/invalid_json_response all normalize to it); "reasonCode"
+ * for a schema mismatch is validateAgentStep.ts's own fixed, bounded
+ * classification, assigned at the same call site as its free-text `reason`
+ * - never that free-text string itself, and never the raw JSON that failed
+ * validation.
+ */
+export type AgentLoopPriorAttemptFailure =
+  | { kind: "invalid_response" }
+  | { kind: "invalid_agent_step"; reasonCode: AgentStepValidationReasonCode };
 
 export type AgentLoopToolDescription = {
   name: string;
@@ -58,6 +76,14 @@ export type AgentLoopPromptInput = {
    * touches the database itself.
    */
   identityConfiguration: SalesAgentPromptConfiguration;
+  /**
+   * LLM-R1-T04. Present only on the one-shot repair call that follows a
+   * structural provider failure (LLM-R1-T01) or a schema-invalid AgentStep -
+   * absent on every normal first attempt, and never carried into any later
+   * call by this function itself (the loop is responsible for passing it
+   * exactly once - see runAgentToolLoop.ts's pendingRepairSignal).
+   */
+  priorAttemptFailure?: AgentLoopPriorAttemptFailure | null;
 };
 
 const RESPOND_JSON_INSTRUCTION = "Return exactly one JSON object matching AgentStep, nothing else, no markdown fence.";
@@ -483,25 +509,53 @@ function summarizeObservation(record: AgentLoopStepRecord) {
 }
 
 /**
+ * LLM-R1-T04. Absent (returns []) whenever priorAttemptFailure is absent -
+ * a normal first attempt's prompt is byte-identical to before this task.
+ * Never includes raw model output, a stack trace, or the free-text
+ * validateAgentStep `reason` string - only the fixed "invalid_response"
+ * classification or the bounded reasonCode enum, so this function can never
+ * leak anything the model itself produced back into a new prompt.
+ */
+function buildPriorAttemptFailureLines(priorAttemptFailure: AgentLoopPriorAttemptFailure | null | undefined): string[] {
+  if (!priorAttemptFailure) return [];
+  if (priorAttemptFailure.kind === "invalid_response") {
+    return [
+      "Your previous response was structurally invalid or empty.",
+      "Return exactly one valid JSON object matching the AgentStep contract below.",
+      "Do not include markdown, prose, explanations, or any text outside the JSON object."
+    ];
+  }
+  return [
+    `Your previous AgentStep was rejected: reason=${priorAttemptFailure.reasonCode}.`,
+    "Return exactly one valid AgentStep for the current phase, correcting that specific problem."
+  ];
+}
+
+/**
  * ACS-R1-05.1-T02.1/T02.3B (spec section 7). One question only: "what is the
  * next step?" - never analysis, policy assessment, rationale, a final
  * response, multiple tool requests, entity proposals, or full commercial
  * state in the same call. Deliberately much smaller than
  * buildSalesAgentPromptPackage.ts.
  *
- * Six layers, in order, never interleaved: (1) immutable loop contract,
- * (2) immutable evidence/tool rules, (3) editable identity
- * (renderSalesAgentIdentityPrompt.ts - the one shared renderer, called
- * identically from both phases below), (4) immutable closing boundary
- * (IMMUTABLE_CONFIGURATION_BOUNDARY_LINE - configuration can never override
- * layers 1-2 or platform policy), (5) dynamic per-turn context, (6) this
- * turn's own prior tool observations. Layers 5-6 travel in the `user`
- * message (unchanged shape) - layers 1-4 compose the `system` message.
+ * Six layers, in order, never interleaved: (0, LLM-R1-T04) an optional
+ * repair instruction, present only on the one-shot retry that follows a
+ * structural provider failure or a schema-invalid AgentStep - absent (and
+ * therefore byte-identical to before this task) on every normal first
+ * attempt; (1) immutable loop contract, (2) immutable evidence/tool rules,
+ * (3) editable identity (renderSalesAgentIdentityPrompt.ts - the one shared
+ * renderer, called identically from both phases below), (4) immutable
+ * closing boundary (IMMUTABLE_CONFIGURATION_BOUNDARY_LINE - configuration
+ * can never override layers 1-2 or platform policy), (5) dynamic per-turn
+ * context, (6) this turn's own prior tool observations. Layers 5-6 travel in
+ * the `user` message (unchanged shape) - layers 0-4 compose the `system`
+ * message.
  */
 export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { messages: AgentLoopProviderMessage[] } {
   const phase = input.phase ?? "gathering";
 
   const systemInstructions = [
+    ...buildPriorAttemptFailureLines(input.priorAttemptFailure),
     ...buildLoopContractLines(phase, input.stepsRemaining),
     ...buildEvidenceAndToolRulesLines(phase, input.availableTools),
     renderSalesAgentIdentityPrompt(input.identityConfiguration),

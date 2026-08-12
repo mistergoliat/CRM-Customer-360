@@ -1296,6 +1296,165 @@ test("[LLM-R1-T03 Caso 6] the actual finalization system prompt the provider rec
   assert.match(finalizationSystemPrompt!, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
 });
 
+// --- LLM-R1-T04: guided structured repair (the real retry prompt the
+// provider receives is guided by the prior failure, not a blind resend).
+// See docs/releases/LLM-R1-T04-guided-structured-repair.md.
+
+test("[LLM-R1-T04 Caso 2] gathering: the structured-recovery attempt's real prompt contains the guided repair instruction", async () => {
+  let capturedRepairSystemPrompt: string | null = null;
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "gathering-repair-capturing-provider",
+    async invoke(request) {
+      callCount += 1;
+      if (callCount === 1) throw invalidResponseFailure("invalid_model_json");
+      capturedRepairSystemPrompt = request.messages.find((message) => message.role === "system")?.content ?? null;
+      return { rawOutput: { type: "respond", message: "Recuperado con reparacion guiada." } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(callCount, 2, "exactly the 1 failed attempt + T01's 1 recovery attempt");
+  assert.ok(capturedRepairSystemPrompt, "the recovery call must have been reached and its system prompt captured");
+  assert.match(capturedRepairSystemPrompt!, /Your previous response was structurally invalid or empty/);
+  assert.match(capturedRepairSystemPrompt!, /Return exactly one valid JSON object matching the AgentStep contract/);
+});
+
+test("[LLM-R1-T04 Caso 1] gathering: the very first attempt's real prompt never contains a repair instruction", async () => {
+  let firstSystemPrompt: string | null = null;
+  const provider: AgentLoopProvider = {
+    name: "first-attempt-capturing-provider",
+    async invoke(request) {
+      firstSystemPrompt = request.messages.find((message) => message.role === "system")?.content ?? null;
+      return { rawOutput: { type: "respond", message: "hola" } };
+    }
+  };
+
+  await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.ok(firstSystemPrompt);
+  assert.doesNotMatch(firstSystemPrompt!, /previous response was structurally invalid/);
+  assert.doesNotMatch(firstSystemPrompt!, /previous AgentStep was rejected/);
+});
+
+test("[LLM-R1-T04 Caso 3] finalization: the recovery attempt's real prompt contains the guided repair instruction, and the turn still completes normally", async () => {
+  catalogUp(1);
+  let capturedRepairSystemPrompt: string | null = null;
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "finalization-repair-capturing-provider",
+    async invoke(request) {
+      callCount += 1;
+      if (callCount === 1) return { rawOutput: { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } } };
+      if (callCount === 2) return { rawOutput: { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } } };
+      if (callCount === 3) throw invalidResponseFailure("invalid_model_json");
+      capturedRepairSystemPrompt = request.messages.find((message) => message.role === "system")?.content ?? null;
+      return { rawOutput: { type: "respond", message: "Listo, agregue 2 unidades del Kettlebell 16kg." } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "dame 2 de las classic", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 2, "[Caso 7] both tools already completed before the structural failure - never re-run by the repair attempt");
+  assert.ok(capturedRepairSystemPrompt, "the finalization recovery call must have been reached and its system prompt captured");
+  assert.match(capturedRepairSystemPrompt!, /Your previous response was structurally invalid or empty/);
+
+  // [Caso 9] the repaired finalization prompt still excludes what LLM-R1-T03 removed.
+  assert.doesNotMatch(capturedRepairSystemPrompt!, /Use select_products only once the customer has confirmed/);
+  assert.doesNotMatch(capturedRepairSystemPrompt!, /recommend_catalog_products requires sourceProduct\.productId/);
+  assert.match(capturedRepairSystemPrompt!, /You must never invent product, price, stock, or delivery information not returned by a tool this turn/);
+
+  const toolNames = result.steps.filter((step) => step.step.type === "use_tool").map((step) => (step.step as { tool: string }).tool);
+  assert.deepEqual(toolNames, ["get_product_details", "select_products"], "[Caso 7] the mutating tool select_products still executes exactly once");
+});
+
+test("[LLM-R1-T04 Caso 4] gathering: a schema-invalid AgentStep retry's real prompt receives the sanitized reasonCode", async () => {
+  let capturedRepairSystemPrompt: string | null = null;
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "schema-repair-capturing-provider",
+    async invoke(request) {
+      callCount += 1;
+      // Missing `tool` for a use_tool step -> validateAgentStep rejects with reasonCode "missing_required_field".
+      if (callCount === 1) return { rawOutput: { type: "use_tool" } };
+      capturedRepairSystemPrompt = request.messages.find((message) => message.role === "system")?.content ?? null;
+      return { rawOutput: { type: "respond", message: "Recuperado tras reparacion de schema." } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(callCount, 2, "exactly the 1 failed attempt + the pre-existing 1 schema-invalid retry");
+  assert.ok(capturedRepairSystemPrompt);
+  assert.match(capturedRepairSystemPrompt!, /Your previous AgentStep was rejected: reason=missing_required_field\./);
+});
+
+test("[LLM-R1-T04 Caso 5] the schema-repair prompt never leaks the raw invalid output that failed validation", async () => {
+  const SECRET = "SECRET_RAW_MODEL_OUTPUT_123";
+  const capturedMessages: { role: string; content: string }[] = [];
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "no-leakage-provider",
+    async invoke(request) {
+      callCount += 1;
+      // An invalid `type` (never use_tool/respond/handoff) with the secret
+      // embedded in a field validateAgentStep never reads - reasonCode
+      // "missing_or_invalid_type", entirely independent of `note`'s value.
+      if (callCount === 1) return { rawOutput: { type: "not_a_real_agent_step_type", note: SECRET } };
+      capturedMessages.push(...request.messages);
+      return { rawOutput: { type: "respond", message: "Disculpa, reformulo mi respuesta." } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.ok(capturedMessages.length > 0, "the repair call must have been reached and its messages captured");
+  for (const message of capturedMessages) {
+    assert.ok(!message.content.includes(SECRET), `${message.role} message must never contain the raw invalid output`);
+  }
+});
+
+test("[LLM-R1-T04 Caso 6] the repair instruction never expands the recovery budget - still exactly one structured-recovery attempt, no third call", async () => {
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "always-invalid-response-with-repair-provider",
+    async invoke() {
+      callCount += 1;
+      throw invalidResponseFailure("empty_response");
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "provider_unavailable");
+  assert.equal(callCount, 2, "exactly 2 calls even with guided repair now attached - never a 3rd");
+});
+
+test("[LLM-R1-T04 Caso 8] T02 observability still records the failed attempt and the repaired attempt as two separate llmCalls entries", async () => {
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "repair-observability-provider",
+    async invoke() {
+      callCount += 1;
+      if (callCount === 1) throw invalidResponseFailure("invalid_model_json");
+      return { rawOutput: { type: "respond", message: "ok" } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.llmCalls.length, 2, "the guided repair attempt is still individually observable, exactly like before this task");
+  assert.equal(result.llmCalls[0].outcome, "invalid_response");
+  assert.equal(result.llmCalls[0].attempt, 0);
+  assert.equal(result.llmCalls[1].outcome, "success");
+  assert.equal(result.llmCalls[1].attempt, 1);
+});
+
 // --- ACS-R1-05.1-T02.6: explore_catalog ---
 
 function exploreResponsePayload(overrides: Record<string, unknown> = {}) {
