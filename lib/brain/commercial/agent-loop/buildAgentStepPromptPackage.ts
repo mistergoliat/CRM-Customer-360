@@ -160,12 +160,37 @@ const EXPLORE_CATALOG_RULE_LINES = [
 ];
 
 /**
+ * LLM-R1-T03. Finalization (availableTools=[], use_tool structurally
+ * rejected by validateAgentStep - see runAgentToolLoop.ts) never sees the
+ * tool-selection/argument-construction lines of EXPLORE_CATALOG_RULE_LINES
+ * above (indices 1/2/4: when to call explore_catalog vs search_products,
+ * sequencing into get_product_details, categoryId/categorySlug argument
+ * rules) - impossible to act on once no tool call can be made this turn.
+ * Only the grounding/result-interpretation lines survive, indexed directly
+ * into EXPLORE_CATALOG_RULE_LINES (never a duplicated copy, so the two can
+ * never drift out of sync):
+ * [0] "Do not use search_products to claim a global maximum..." - prevents overclaiming a ranking from search_products evidence already in this turn's observations.
+ * [3] "If a explore_catalog observation has exhaustiveForScope=true..." - governs absolute-vs-hedged wording in the final response itself.
+ * [5] "Never mention internal implementation terms..." - customer-facing jargon guardrail for the response text.
+ * See docs/releases/LLM-R1-T03-prompt-finalization-reduction.md for the full KEEP/REMOVE classification.
+ */
+const EXPLORE_CATALOG_FINALIZATION_RULE_LINES = [EXPLORE_CATALOG_RULE_LINES[0], EXPLORE_CATALOG_RULE_LINES[3], EXPLORE_CATALOG_RULE_LINES[5]];
+
+/**
  * CP-R1-T10B8D (spec section 26 - minimal tool policy only, no commercial
  * strategy yet). recommend_catalog_products now validates sourceProduct
  * against this conversation's own observed evidence before calling the
  * Catalog Service; a blocked observation here means evidence, not a
  * technical failure, and the model can recover within budget by observing a
  * real product first - never a reason to hand off.
+ *
+ * LLM-R1-T03. Gathering-only from here on - every line below is tool
+ * invocation/argument-chaining mechanics (which sourceProduct is valid, how
+ * to retry a blocked call within tool budget, which productId to chain into
+ * a follow-up get_product_details) with zero result-interpretation content
+ * for a response that has already been written some other way, so none of
+ * it survives into finalization's prompt (see buildEvidenceAndToolRulesLines
+ * below and docs/releases/LLM-R1-T03-prompt-finalization-reduction.md).
  */
 const RECOMMEND_CATALOG_PRODUCTS_RULE_LINES = [
   "recommend_catalog_products requires sourceProduct.productId (and sourceProduct.combinationId, only when you mean one specific variant) to be a product already observed this conversation via search_products, get_product_details, or explore_catalog - never invent sourceProduct.productId or combinationId, and never use a recommend_catalog_products candidate as the sourceProduct for another recommend_catalog_products call.",
@@ -259,6 +284,17 @@ const SHIPPING_DESTINATION_RULE_LINES = [
 ];
 
 /**
+ * LLM-R1-T03. Finalization drops only the first 2 lines above (when/how to
+ * call set_shipping_destination, and reuse-silently-instead-of-recalling -
+ * both impossible once no tool call can be made this turn). The remaining 4
+ * - what each observation status means and how that shapes the response,
+ * plus the "never claim a full address" grounding line - all govern the
+ * response text directly and must stay. A contiguous suffix of
+ * SHIPPING_DESTINATION_RULE_LINES (never a duplicated copy).
+ */
+const SHIPPING_DESTINATION_FINALIZATION_RULE_LINES = SHIPPING_DESTINATION_RULE_LINES.slice(2);
+
+/**
  * CRM-R1-T13E.2. select_products records the customer's confirmed product
  * selection as durable state - the backend (runAgentToolLoop.ts's evidence
  * gate) is the only enforcement that every productId/combinationId was
@@ -273,6 +309,18 @@ const SELECT_PRODUCTS_RULE_LINES = [
   "If a select_products observation has status \"blocked\", the referenced product was not actually observed this conversation - use search_products or get_product_details to observe the real product first, then retry with that exact productId/combinationId.",
   "quantity must be a whole number greater than zero - ask the customer to clarify an unclear or non-numeric quantity instead of guessing one."
 ];
+
+/**
+ * LLM-R1-T03. Finalization drops the first 4 lines above (when to call
+ * select_products, evidence for its arguments, full-replace call semantics,
+ * reuse-silently-instead-of-recalling - all impossible/moot once no tool
+ * call can be made this turn). The remaining 2 lines both stay actionable
+ * via `respond` itself: acknowledging a "blocked" selection honestly instead
+ * of implying it succeeded, and asking a clarifying question for an unclear
+ * quantity rather than guessing. A contiguous suffix of
+ * SELECT_PRODUCTS_RULE_LINES (never a duplicated copy).
+ */
+const SELECT_PRODUCTS_FINALIZATION_RULE_LINES = SELECT_PRODUCTS_RULE_LINES.slice(4);
 
 /**
  * CRM-R1-T13E.2. calculate_shipping takes no arguments - destination,
@@ -292,6 +340,20 @@ const CALCULATE_SHIPPING_RULE_LINES = [
   "If a calculate_shipping observation has status \"blocked\" or \"failed\" (a technical failure, not a business result), tell the customer shipping could not be calculated right now and offer to try again shortly - never reinterpret a technical failure as \"we don't ship there\".",
   "Never mention Carrier MS, pc_pos, kilos, total_boleta, or any other internal field/system name to the customer - refer to shipping/delivery options in plain commercial language only."
 ];
+
+/**
+ * LLM-R1-T03. Finalization drops only the first line above (when to call
+ * calculate_shipping - impossible once no tool call can be made this turn).
+ * Every remaining line is a grounding/anti-invention guardrail directly
+ * protecting the response text (never invent a cost, never invent a
+ * carrier, what each failure status means and how to say so honestly,
+ * never leak internal field/system names) - this is the block the audit's
+ * blanket "remove the whole thing" recommendation would have been wrong
+ * about; see docs/releases/LLM-R1-T03-prompt-finalization-reduction.md. A
+ * contiguous suffix of CALCULATE_SHIPPING_RULE_LINES (never a duplicated
+ * copy).
+ */
+const CALCULATE_SHIPPING_FINALIZATION_RULE_LINES = CALCULATE_SHIPPING_RULE_LINES.slice(1);
 
 const RESPOND_STEP_SHAPE_WITH_PENDING_ACTION =
   '{"type":"respond","message":"...","pendingCatalogAction":{"actionType":"send_product_link","candidateProductIds":["..."]}}. pendingCatalogAction is optional on respond - include it only per the pendingCatalogAction rules above';
@@ -351,6 +413,17 @@ const INVALID_ARGUMENTS_RECOVERY_RULE_LINE =
  */
 function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", availableTools: AgentLoopToolDescription[]): string[] {
   if (phase === "finalization") {
+    // LLM-R1-T03. availableTools=[] this phase and validateAgentStep rejects
+    // any use_tool step outright (runAgentToolLoop.ts) - no tool can ever be
+    // invoked here, so every line whose sole purpose is teaching how/when to
+    // invoke a capability is omitted below. recommend_catalog_products'
+    // rules are 100% invocation mechanics (see its own doc comment above) and
+    // are entirely absent - explore_catalog/shipping-destination/
+    // select_products/calculate_shipping keep only their grounding/
+    // result-interpretation subset (the ...*_FINALIZATION_RULE_LINES
+    // constants above, each a documented, never-duplicated slice of the same
+    // array gathering uses below). Full KEEP/REMOVE classification recorded
+    // in docs/releases/LLM-R1-T03-prompt-finalization-reduction.md.
     return [
       "Use the customer's already-confirmed context (product type, training type, goal, budget, and any tool results already returned this turn) - do not ask again for anything already provided, and do not broaden or change the product category the customer already stated.",
       "You must never invent product, price, stock, or delivery information not returned by a tool this turn.",
@@ -359,11 +432,10 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...CUSTOMER_PURCHASE_HISTORY_RULE_LINES,
       ...CUSTOMER_HISTORY_COMMERCIAL_POLICY_RULE_LINES,
       ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
-      ...EXPLORE_CATALOG_RULE_LINES,
-      ...RECOMMEND_CATALOG_PRODUCTS_RULE_LINES,
-      ...SHIPPING_DESTINATION_RULE_LINES,
-      ...SELECT_PRODUCTS_RULE_LINES,
-      ...CALCULATE_SHIPPING_RULE_LINES,
+      ...EXPLORE_CATALOG_FINALIZATION_RULE_LINES,
+      ...SHIPPING_DESTINATION_FINALIZATION_RULE_LINES,
+      ...SELECT_PRODUCTS_FINALIZATION_RULE_LINES,
+      ...CALCULATE_SHIPPING_FINALIZATION_RULE_LINES,
       ...STOCK_DISCLOSURE_RULE_LINES,
       ...COMMERCIAL_CLOSING_RULE_LINES,
       ...PENDING_CATALOG_ACTION_RULE_LINES,

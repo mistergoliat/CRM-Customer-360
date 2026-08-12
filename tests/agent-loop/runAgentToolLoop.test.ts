@@ -1264,6 +1264,38 @@ test("[LLM-R1-T02] llmCalls never carries rawOutput, prompt text, or any secret-
   assert.ok(!serialized.toLowerCase().includes("bearer"));
 });
 
+// --- LLM-R1-T03: the real finalization prompt sent to the provider reflects
+// the reduction (end-to-end, not just buildAgentStepPromptPackage in
+// isolation) - see docs/releases/LLM-R1-T03-prompt-finalization-reduction.md.
+
+test("[LLM-R1-T03 Caso 6] the actual finalization system prompt the provider receives omits removed tool-invocation lines while keeping grounding/closing/pending-action rules, and the turn still completes normally", async () => {
+  catalogUp(1);
+  let finalizationSystemPrompt: string | null = null;
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "finalization-prompt-capturing-provider",
+    async invoke(request) {
+      callCount += 1;
+      if (callCount === 1) return { rawOutput: { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } } };
+      if (callCount === 2) return { rawOutput: { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } } };
+      finalizationSystemPrompt = request.messages.find((message) => message.role === "system")?.content ?? null;
+      return { rawOutput: { type: "respond", message: "Listo, agregue 2 unidades del Kettlebell 16kg." } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "dame 2 de las classic", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded", "the turn must still complete normally - the reduced prompt changes tokens sent, never functional behavior");
+  assert.equal(result.toolExecutionCount, 2);
+  assert.ok(finalizationSystemPrompt, "the finalization call must have been reached and its system prompt captured");
+
+  assert.doesNotMatch(finalizationSystemPrompt!, /Use select_products only once the customer has confirmed/);
+  assert.doesNotMatch(finalizationSystemPrompt!, /Use calculate_shipping only after the destination/);
+  assert.doesNotMatch(finalizationSystemPrompt!, /recommend_catalog_products requires sourceProduct\.productId/);
+  assert.match(finalizationSystemPrompt!, /You must never invent product, price, stock, or delivery information not returned by a tool this turn/);
+  assert.match(finalizationSystemPrompt!, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
+});
+
 // --- ACS-R1-05.1-T02.6: explore_catalog ---
 
 function exploreResponsePayload(overrides: Record<string, unknown> = {}) {

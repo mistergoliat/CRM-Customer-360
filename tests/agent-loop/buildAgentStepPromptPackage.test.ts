@@ -302,16 +302,26 @@ test("[PR18] adaptive product presentation policy does not force exactly one pro
   assert.doesNotMatch(system, /\bshow\s+all\s+results\b/i);
 });
 
-test("[PR19] ACS-R1-05.1-T02.6: explore_catalog differentiation rules are present in gathering and finalization", () => {
-  for (const phase of ["gathering", "finalization"] as const) {
-    const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase, identityConfiguration: pesasChileConfig() });
-    const system = messages[0].content;
+test("[PR19] ACS-R1-05.1-T02.6: explore_catalog differentiation rules are present in gathering; LLM-R1-T03 keeps only the grounding subset in finalization", () => {
+  const gathering = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig() });
+  const finalization = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  const gatheringSystem = gathering.messages[0].content;
+  const finalizationSystem = finalization.messages[0].content;
 
-    assert.match(system, /Do not use search_products to claim a global maximum, minimum, top-N, or ranking/);
-    assert.match(system, /Use explore_catalog for extremes \(cheapest\/most expensive\), top-N, rankings, or filtered\/sorted views/);
-    assert.match(system, /Use get_product_details after explore_catalog \(or after search_products\)/);
-    assert.match(system, /explore_catalog is not sufficient evidence for a product link either/);
-  }
+  // Grounding: governs how to phrase the response from evidence already
+  // gathered - never invocation mechanics - so it stays in both phases.
+  assert.match(gatheringSystem, /Do not use search_products to claim a global maximum, minimum, top-N, or ranking/);
+  assert.match(finalizationSystem, /Do not use search_products to claim a global maximum, minimum, top-N, or ranking/);
+  assert.match(gatheringSystem, /explore_catalog is not sufficient evidence for a product link either/);
+  assert.match(finalizationSystem, /explore_catalog is not sufficient evidence for a product link either/);
+
+  // Tool-selection/sequencing mechanics: only meaningful while use_tool is a
+  // legal AgentStep (gathering) - impossible to act on in finalization
+  // (availableTools=[], use_tool structurally rejected - runAgentToolLoop.ts).
+  assert.match(gatheringSystem, /Use explore_catalog for extremes \(cheapest\/most expensive\), top-N, rankings, or filtered\/sorted views/);
+  assert.doesNotMatch(finalizationSystem, /Use explore_catalog for extremes/);
+  assert.match(gatheringSystem, /Use get_product_details after explore_catalog \(or after search_products\)/);
+  assert.doesNotMatch(finalizationSystem, /Use get_product_details after explore_catalog/);
 });
 
 test("[PR20] exhaustiveForScope governs absolute vs. bounded ranking language in both phases", () => {
@@ -492,4 +502,130 @@ test("[PR35] pendingCatalogAction is absent from the user payload when none is o
   const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
   const userPayload = JSON.parse(messages[1].content) as Record<string, unknown>;
   assert.equal("pendingCatalogAction" in userPayload, false);
+});
+
+// ---------------------------------------------------------------------------
+// LLM-R1-T03: finalization prompt reduction (removes tool-invocation-only
+// rule lines, structurally impossible to act on once availableTools=[] and
+// use_tool is rejected by validateAgentStep for this phase - never touches
+// gathering). See docs/releases/LLM-R1-T03-prompt-finalization-reduction.md
+// for the full KEEP/REMOVE classification.
+// ---------------------------------------------------------------------------
+
+test("[LLM-R1-T03 Caso 1] finalization contains none of the removed tool-invocation-only rule lines", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  const system = messages[0].content;
+
+  // select_products: when/how to call, argument evidence, full-replace semantics, dedup-before-calling.
+  assert.doesNotMatch(system, /Use select_products only once the customer has confirmed/);
+  assert.doesNotMatch(system, /Each select_products call must include the customer's complete desired selection/);
+  assert.doesNotMatch(system, /do not call select_products again for the same selection/);
+  // calculate_shipping: when to call.
+  assert.doesNotMatch(system, /Use calculate_shipping only after the destination/);
+  // explore_catalog: tool selection/sequencing/argument construction.
+  assert.doesNotMatch(system, /Use explore_catalog for extremes/);
+  assert.doesNotMatch(system, /Use get_product_details after explore_catalog/);
+  assert.doesNotMatch(system, /Never invent categoryId or categorySlug for explore_catalog/);
+  // recommend_catalog_products: entirely invocation/retry-chaining mechanics, absent wholesale.
+  assert.doesNotMatch(system, /recommend_catalog_products requires sourceProduct\.productId/);
+  assert.doesNotMatch(system, /do not hand off solely because one recommend_catalog_products call was rejected/);
+  assert.doesNotMatch(system, /get_product_details is only guaranteed for one of those exact candidate productIds/);
+  // set_shipping_destination: when/how to call, dedup-before-calling.
+  assert.doesNotMatch(system, /Use set_shipping_destination when the customer states or changes/);
+  assert.doesNotMatch(system, /do not call set_shipping_destination again for the same destination/);
+});
+
+test("[LLM-R1-T03 Caso 2] finalization still forbids inventing stock, tool results, links, carriers, or unobserved commercial/delivery data", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  const system = messages[0].content;
+
+  assert.match(system, /You must never invent product, price, stock, or delivery information not returned by a tool this turn/);
+  assert.match(system, /Never build, complete, guess, shorten, translate, or otherwise transform product URLs/);
+  assert.match(system, /Never state the customer's stock as a raw number once it is 20 or more/);
+  assert.match(system, /Never calculate, estimate, or state a shipping cost yourself/);
+  assert.match(system, /Never mention or offer a carrier, service type, cost, or estimated delivery that is not present/);
+  assert.match(system, /never claim a carrier covers it and never invent a workaround/);
+  assert.match(system, /never reinterpret a technical failure as "we don't ship there"/);
+  assert.match(system, /You must never claim to have executed anything yourself - the platform executes tools, not you/);
+});
+
+test("[LLM-R1-T03 Caso 3] finalization still contains COMMERCIAL_CLOSING_RULE_LINES", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  const system = messages[0].content;
+  assert.match(system, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
+  assert.match(system, /close with exactly: "¿Quieres que te envíe el link de alguno de estos productos\?"/);
+  assert.match(system, /Never add this closing offer when: a public link was already delivered this turn/);
+});
+
+test("[LLM-R1-T03 Caso 4] finalization still contains the pendingCatalogAction rules needed to compose the response", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  const system = messages[0].content;
+  assert.match(system, /your own immediately preceding reply already offered to send the link/);
+  assert.match(system, /ask a short clarifying question naming only the ambiguous candidates/);
+  assert.match(system, /include pendingCatalogAction on that same respond step/);
+  assert.match(system, /do not invent a URL/);
+  assert.match(system, /do not reuse any previous URL/);
+});
+
+test("[LLM-R1-T03 Caso 2/CALCULATE_SHIPPING] the audit's blanket 'remove the whole block' call would have been wrong here - result-interpretation/anti-invention lines for every calculate_shipping status survive in finalization", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  const system = messages[0].content;
+  assert.match(system, /"shipping_destination_required" means no destination is confirmed yet/);
+  assert.match(system, /"commercial_items_required" means no product selection is confirmed yet/);
+  assert.match(system, /never estimate a substitute value/);
+  assert.match(system, /means Carrier MS found no carrier serving that destination - tell the customer honestly/);
+  assert.match(system, /status "blocked" or "failed" \(a technical failure, not a business result\), tell the customer shipping could not be calculated right now/);
+  assert.match(system, /Never mention Carrier MS, pc_pos, kilos, total_boleta/);
+});
+
+test("[LLM-R1-T03 Caso 5] gathering is provably unaffected: every tool-invocation line removed from finalization is still present, unchanged, in gathering", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+
+  assert.match(system, /Use select_products only once the customer has confirmed/);
+  assert.match(system, /Use calculate_shipping only after the destination/);
+  assert.match(system, /Use explore_catalog for extremes/);
+  assert.match(system, /Use get_product_details after explore_catalog/);
+  assert.match(system, /Never invent categoryId or categorySlug for explore_catalog/);
+  assert.match(system, /recommend_catalog_products requires sourceProduct\.productId/);
+  assert.match(system, /Use set_shipping_destination when the customer states or changes/);
+});
+
+test("[LLM-R1-T03 Caso 5] gathering system/user prompt lengths are unchanged from before this task (measured against commit a7c4ac5 with this exact fixture)", () => {
+  // Measured via a temporary git worktree at a7c4ac5 (LLM-R1-T02's HEAD, the
+  // commit immediately before this task) using this file's own baseInput +
+  // pesasChileConfig() defaults, phase "gathering", availableTools:
+  // [{name:"explore_catalog", description:"d"}] - see
+  // docs/releases/LLM-R1-T03-prompt-finalization-reduction.md for the full
+  // before/after table. gathering's code path is untouched by this task (no
+  // edit ever lands inside buildEvidenceAndToolRulesLines's non-finalization
+  // branch), so these lengths are expected to be byte-for-byte identical,
+  // never merely "close".
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [{ name: "explore_catalog", description: "d" }]
+  });
+  assert.equal(messages[0].content.length, 19783, "gathering systemPrompt.length must be byte-identical to the pre-T03 measurement");
+  assert.equal(messages[1].content.length, 205, "gathering userPrompt.length must be byte-identical to the pre-T03 measurement");
+});
+
+test("[LLM-R1-T03 Caso 8] finalization system prompt is objectively smaller than before this task (measured against commit a7c4ac5 with this exact fixture)", () => {
+  // Same measurement methodology as the Caso 5 length test above, phase
+  // "finalization", availableTools: [] (already-established convention for
+  // finalization calls throughout this file). Before this task:
+  // systemPrompt.length was 19484; this test only asserts the "objectively
+  // smaller" invariant Caso 8 requires - never an arbitrary target
+  // percentage - the exact before/after/reduction numbers live in the
+  // release doc.
+  const FINALIZATION_SYSTEM_PROMPT_LENGTH_BEFORE_T03 = 19484;
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "finalization", identityConfiguration: pesasChileConfig(), availableTools: [] });
+  assert.ok(
+    messages[0].content.length < FINALIZATION_SYSTEM_PROMPT_LENGTH_BEFORE_T03,
+    `finalization systemPrompt.length (${messages[0].content.length}) must be less than the pre-T03 measurement (${FINALIZATION_SYSTEM_PROMPT_LENGTH_BEFORE_T03})`
+  );
+  // The user prompt is untouched by this task - finalization never gained or
+  // lost any user-message content.
+  assert.equal(messages[1].content.length, 205, "finalization userPrompt.length must be unchanged by this task");
 });
