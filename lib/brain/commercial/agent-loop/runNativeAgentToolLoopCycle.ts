@@ -1,7 +1,7 @@
 import { runAgentToolLoop } from "./runAgentToolLoop";
 import { dispatchAgentLoopResponse, type DispatchAgentLoopResponseResult } from "./dispatchAgentLoopResponse";
 import { recordAgentToolLoopCompletedCommercialEvent } from "../events/service";
-import type { AgentToolLoopStepSummary } from "../events/types";
+import type { AgentToolLoopLlmCallSummary, AgentToolLoopLlmMetricsPayload, AgentToolLoopStepSummary } from "../events/types";
 import type { ContinuityFallbackContext } from "../continuity/buildContinuityFallbackMessage";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
 import type { AgentLoopResult, PendingCatalogActionStep } from "./agentStepTypes";
@@ -130,6 +130,73 @@ export function buildStepsSummary(loop: AgentLoopResult): AgentToolLoopStepSumma
   }));
 }
 
+/**
+ * LLM-R1-T02. Bounded structural summary of every real LLM provider
+ * invocation this turn - never raw prompt/rawOutput. `inputSize`/`outputSize`
+ * (never `...Tokens...`) mirror the rename AgentToolLoopLlmCallSummary's own
+ * comment documents (events/types.ts) - the shared commercial_event
+ * sanitizer rejects any payload key matching /token/i.
+ */
+export function buildLlmCallsSummary(loop: AgentLoopResult): AgentToolLoopLlmCallSummary[] {
+  return loop.llmCalls.map((call) => ({
+    phase: call.phase,
+    attempt: call.attempt,
+    decisionIndex: call.decisionIndex,
+    elapsedMs: call.elapsedMs,
+    model: call.model,
+    providerRequestId: call.providerRequestId,
+    finishReason: call.finishReason,
+    inputSize: call.inputTokens,
+    outputSize: call.outputTokens,
+    outcome: call.outcome
+  }));
+}
+
+/**
+ * LLM-R1-T02. Turn-level rollup - `null` for accumulated sizes means no call
+ * this turn reported a usable value, never an invented `0`; `usageComplete`
+ * is `false` whenever at least one call is missing a known inputSize or
+ * outputSize, even when the (partial) sum is non-null. `null` overall when
+ * the loop never reached the provider at all this turn (e.g. no provider
+ * configured) - never a degenerate zeroed-out metrics object for a turn that
+ * made no LLM calls.
+ */
+export function buildLlmMetrics(loop: AgentLoopResult): AgentToolLoopLlmMetricsPayload | null {
+  if (loop.llmCalls.length === 0) return null;
+
+  let totalElapsedMs = 0;
+  let knownInputSum = 0;
+  let knownOutputSum = 0;
+  let hasKnownInput = false;
+  let hasKnownOutput = false;
+  let usageComplete = true;
+
+  for (const call of loop.llmCalls) {
+    totalElapsedMs += call.elapsedMs;
+    if (call.inputTokens === null) {
+      usageComplete = false;
+    } else {
+      knownInputSum += call.inputTokens;
+      hasKnownInput = true;
+    }
+    if (call.outputTokens === null) {
+      usageComplete = false;
+    } else {
+      knownOutputSum += call.outputTokens;
+      hasKnownOutput = true;
+    }
+  }
+
+  return {
+    callCount: loop.llmCalls.length,
+    totalElapsedMs,
+    inputSize: hasKnownInput ? knownInputSum : null,
+    outputSize: hasKnownOutput ? knownOutputSum : null,
+    usageComplete,
+    calls: buildLlmCallsSummary(loop)
+  };
+}
+
 function buildCommercialNeed(snapshot: CommercialContextSnapshot): ContinuityFallbackContext {
   return {
     productQuery: null,
@@ -236,7 +303,8 @@ function skippedResult(reason: string, humanOwnerActive: boolean, aiBlocked: boo
     finalMessage: null,
     handoffReason: reason,
     warnings: [reason],
-    finalPendingCatalogAction: null
+    finalPendingCatalogAction: null,
+    llmCalls: []
   };
   return {
     loop,
@@ -312,7 +380,8 @@ export async function runNativeAgentToolLoopCycleConfigurationFailure(
     finalMessage: null,
     handoffReason: SALES_AGENT_CONFIGURATION_UNAVAILABLE_HANDOFF_REASON,
     warnings: [input.technicalReason],
-    finalPendingCatalogAction: null
+    finalPendingCatalogAction: null,
+    llmCalls: []
   };
 
   const dispatch = await dispatchAgentLoopResponse({
@@ -524,7 +593,10 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
       // never imported directly, same no-cross-module-import rationale the
       // events/ leaf module already documents for every other payload shape.
       providerFailure: loop.providerFailure ?? undefined,
-      pendingCatalogAction: persistedPendingCatalogAction ?? undefined
+      pendingCatalogAction: persistedPendingCatalogAction ?? undefined,
+      // LLM-R1-T02. Per-call and turn-level LLM observability - never a raw
+      // prompt/rawOutput, only counts/ids/enums (see buildLlmMetrics).
+      llmMetrics: buildLlmMetrics(loop) ?? undefined
     });
   } catch (error) {
     // ACS-R1-05.1-T02.3B (correction). Never blocks the turn - the customer

@@ -194,6 +194,52 @@ export type AgentLoopProviderFailure = {
   normalizedReason: AgentLoopProviderFailureNormalizedReason;
   retryable: boolean;
   elapsedMs: number | null;
+  /**
+   * LLM-R1-T02. Populated only when a parsed provider response envelope was
+   * actually obtained before this failure was raised (today: empty_response,
+   * invalid_model_json - see httpAgentLoopProvider.ts) - undefined/null
+   * whenever the failure happened before any response body could be parsed
+   * (network_error, provider_timeout, a non-2xx status, invalid_json_response).
+   * Never inferred, estimated, or backfilled - absence means "not available",
+   * never "zero"/"stop".
+   */
+  finishReason?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  providerRequestId?: string | null;
+};
+
+/**
+ * LLM-R1-T02. "success" plus every AgentLoopProviderFailureNormalizedReason
+ * value above - deliberately not a separate enum, so an inference's outcome
+ * always reuses the loop's one existing failure taxonomy instead of a second,
+ * parallel one.
+ */
+export type AgentLoopInferenceOutcome = "success" | AgentLoopProviderFailureNormalizedReason;
+
+/**
+ * One record per real invocation of the AgentLoopProvider this turn -
+ * including a failed attempt later recovered from (LLM-R1-T01's
+ * structured-recovery attempt, or the pre-existing schema-invalid AgentStep
+ * retry) and a loop-level deadline timeout. Never raw prompt/rawOutput -
+ * only counts, ids and enums, same discipline as AgentLoopProviderFailure.
+ * See lib/brain/commercial/events/types.ts#AgentToolLoopLlmCallSummary for
+ * the persisted projection of this (renamed inputSize/outputSize - see that
+ * type's own comment for why).
+ */
+export type AgentLoopInferenceRecord = {
+  phase: AgentLoopStepPhase;
+  /** 0 = the first call for this phase/decision slot this turn; 1 (or more, in the rare worst case) = a retry of that exact same slot - schema-invalid AgentStep retry or LLM-R1-T01 structured recovery. */
+  attempt: number;
+  /** gathering only - which decision this call was for; null in finalization (finalization is not organized by decision). */
+  decisionIndex: number | null;
+  elapsedMs: number;
+  model: string | null;
+  providerRequestId: string | null;
+  finishReason: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  outcome: AgentLoopInferenceOutcome;
 };
 
 export type AgentLoopResult = {
@@ -208,4 +254,6 @@ export type AgentLoopResult = {
   providerFailure?: AgentLoopProviderFailure | null;
   /** Mirrors the terminal respond step's own field (null for every other terminalReason, and null when that respond step carried none). */
   finalPendingCatalogAction?: PendingCatalogActionStep | null;
+  /** LLM-R1-T02. One entry per real provider invocation this turn (success, structured recovery, schema retry, timeout, or terminal failure) - empty only when the loop never reached the provider at all (no provider configured). */
+  llmCalls: AgentLoopInferenceRecord[];
 };

@@ -224,6 +224,60 @@ export type AgentToolLoopProviderFailurePayload = {
   elapsedMs: number | null;
 };
 
+// LLM-R1-T02. "success" plus every AgentToolLoopProviderFailureNormalizedReason
+// value above - local literal union mirroring
+// agent-loop/agentStepTypes.ts#AgentLoopInferenceOutcome, same
+// no-cross-module-import rationale as the rest of this file. Never a second,
+// parallel taxonomy.
+export type AgentToolLoopLlmCallOutcome = "success" | AgentToolLoopProviderFailureNormalizedReason;
+
+/**
+ * One row per real LLM provider invocation this turn - including a failed
+ * attempt later recovered from (LLM-R1-T02/LLM-R1-T01's structured recovery,
+ * or the pre-existing schema-invalid AgentStep retry) and a loop-level
+ * deadline timeout. Mirrors agent-loop/agentStepTypes.ts#AgentLoopInferenceRecord,
+ * same no-cross-module-import rationale as the rest of this file - except
+ * `inputSize`/`outputSize` (never `...Tokens...`): this module's own
+ * assertPlainSerializable (normalize.ts) rejects any payload key matching
+ * `/token/i` (SENSITIVE_KEY_PATTERN, meant to catch auth tokens) as a
+ * forbidden key, so a field literally named `inputTokens`/`outputTokens`
+ * cannot be persisted here - the exact same reason `effectiveMaxOutputSize`
+ * above is not named `...maxOutputTokens`. Never raw prompt/rawOutput - only
+ * counts, ids and enums.
+ */
+export type AgentToolLoopLlmCallSummary = {
+  phase: "gathering" | "finalization";
+  /** 0 = the first call for this phase/decision slot this turn; 1+ = a retry of that exact same slot. */
+  attempt: number;
+  /** gathering only - which decision this call was for; null in finalization. */
+  decisionIndex: number | null;
+  elapsedMs: number;
+  model: string | null;
+  providerRequestId: string | null;
+  finishReason: string | null;
+  inputSize: number | null;
+  outputSize: number | null;
+  outcome: AgentToolLoopLlmCallOutcome;
+};
+
+/**
+ * Turn-level LLM rollup. `inputSize`/`outputSize` are the sum of every call's
+ * known value only (see AgentToolLoopLlmCallSummary for the naming note) -
+ * `null` means no call this turn reported a usable value, never an invented
+ * `0`. `usageComplete` is `false` whenever at least one call is missing
+ * `inputSize` or `outputSize`, even when the partial sum above is non-null -
+ * the only way to know whether the sum reflects every call or just some of
+ * them.
+ */
+export type AgentToolLoopLlmMetricsPayload = {
+  callCount: number;
+  totalElapsedMs: number;
+  inputSize: number | null;
+  outputSize: number | null;
+  usageComplete: boolean;
+  calls: AgentToolLoopLlmCallSummary[];
+};
+
 // ACS-R1-05.1-T02.7. Local literal union mirroring
 // agent-loop/agentStepTypes.ts#PendingCatalogActionType - same
 // no-cross-module-import rationale as the rest of this file.
@@ -272,6 +326,8 @@ export type AgentToolLoopCompletedRecordedPayload = {
   providerFailure?: AgentToolLoopProviderFailurePayload | null;
   /** ACS-R1-05.1-T02.7. Present only when this turn's own respond step left a catalog action open for the next customer turn - see PendingCatalogActionStep. */
   pendingCatalogAction?: AgentToolLoopPendingCatalogActionPayload | null;
+  /** LLM-R1-T02. Present only when at least one LLM provider call was attempted this turn - absent when the loop never reached the provider at all (e.g. no provider configured). */
+  llmMetrics?: AgentToolLoopLlmMetricsPayload | null;
 };
 
 export interface CommercialEventV1 {

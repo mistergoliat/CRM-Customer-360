@@ -144,7 +144,8 @@ test("regression: completed/failed/blocked/skipped all normalize side by side wi
     finalMessage: "listo",
     handoffReason: null,
     warnings: [],
-    finalPendingCatalogAction: null
+    finalPendingCatalogAction: null,
+    llmCalls: []
   };
 
   const stepsSummary = buildStepsSummary(loop);

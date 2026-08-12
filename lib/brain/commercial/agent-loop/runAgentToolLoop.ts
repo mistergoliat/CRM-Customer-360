@@ -8,7 +8,7 @@ import { buildToolObservation } from "./buildToolObservation";
 import { validateAgentStep } from "./validateAgentStep";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
 import { GET_PRODUCT_DETAILS_PENDING_CATALOG_BLOCKED_REASON } from "./agentStepTypes";
-import type { AgentLoopProviderFailure, AgentLoopResult, AgentLoopStepRecord, AgentLoopTerminalReason, AgentStepRespond, AgentStepUseTool, PendingCatalogActionStep, ToolObservation } from "./agentStepTypes";
+import type { AgentLoopInferenceRecord, AgentLoopProviderFailure, AgentLoopResult, AgentLoopStepRecord, AgentLoopStepPhase, AgentLoopTerminalReason, AgentStepRespond, AgentStepUseTool, PendingCatalogActionStep, ToolObservation } from "./agentStepTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
 import { classifyAgentLoopProviderFailure, logAgentLoopProviderFailure } from "./providers/providerFailureClassification";
 import { buildPendingCatalogActionFromRecommendation, collectAllowedProductIds, matchesPendingCatalogActionCandidate, normalizePendingCatalogActionForEvidence } from "./pendingCatalogAction";
@@ -99,13 +99,26 @@ export function buildToolDescriptions(): AgentLoopToolDescription[] {
   });
 }
 
+/** LLM-R1-T02. The safe, bounded subset of AgentLoopProviderResponse this loop is allowed to retain - never rawOutput, never a prompt. */
+type AgentLoopProviderCallMetadata = {
+  model: string | null;
+  providerRequestId: string | null;
+  finishReason: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+};
+
 async function invokeProviderWithDeadline(
   provider: AgentLoopProvider,
   messages: { role: "system" | "user"; content: string }[],
   correlationId: string,
   deadlineMs: number,
   externalSignal: AbortSignal | null | undefined
-): Promise<{ kind: "success"; rawOutput: unknown } | { kind: "timeout" } | { kind: "error"; error: unknown; elapsedMs: number }> {
+): Promise<
+  | { kind: "success"; rawOutput: unknown; elapsedMs: number; metadata: AgentLoopProviderCallMetadata }
+  | { kind: "timeout"; elapsedMs: number }
+  | { kind: "error"; error: unknown; elapsedMs: number }
+> {
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   if (externalSignal) {
@@ -119,10 +132,28 @@ async function invokeProviderWithDeadline(
 
   try {
     const response = await provider.invoke({ messages, correlationId }, { signal: controller.signal, timeoutMs: remainingMs });
-    return { kind: "success", rawOutput: response.rawOutput };
+    return {
+      kind: "success",
+      rawOutput: response.rawOutput,
+      // LLM-R1-T02. Previously discarded here - only rawOutput ever left
+      // this function on success, so elapsedMs/model/tokens/finishReason/
+      // providerRequestId for a call that worked were never observable
+      // anywhere (see docs/audits/SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md
+      // observability gaps). Purely additive - does not change what is
+      // returned to callers deciding the next AgentStep.
+      elapsedMs: Date.now() - startedAt,
+      metadata: {
+        model: response.model ?? null,
+        providerRequestId: response.providerRequestId ?? null,
+        finishReason: response.finishReason ?? null,
+        inputTokens: response.inputTokens ?? null,
+        outputTokens: response.outputTokens ?? null
+      }
+    };
   } catch (error) {
-    if (controller.signal.aborted) return { kind: "timeout" };
-    return { kind: "error", error, elapsedMs: Date.now() - startedAt };
+    const elapsedMs = Date.now() - startedAt;
+    if (controller.signal.aborted) return { kind: "timeout", elapsedMs };
+    return { kind: "error", error, elapsedMs };
   } finally {
     clearTimeout(timer);
     if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
@@ -135,6 +166,71 @@ function captureProviderFailure(provider: AgentLoopProvider, correlationId: stri
   const providerFailure: AgentLoopProviderFailure = { provider: provider.name ?? null, elapsedMs, ...cause };
   logAgentLoopProviderFailure(correlationId, providerFailure);
   return providerFailure;
+}
+
+/**
+ * LLM-R1-T02. Builds one AgentLoopInferenceRecord per real provider
+ * invocation - success, failure or loop-level timeout - so every attempt
+ * (including one later recovered from by LLM-R1-T01's structured recovery,
+ * or the pre-existing schema-invalid AgentStep retry) leaves its own
+ * observable evidence, never collapsed into just the turn's final outcome.
+ */
+function buildSuccessInferenceRecord(input: {
+  phase: AgentLoopStepPhase;
+  attempt: number;
+  decisionIndex: number | null;
+  elapsedMs: number;
+  metadata: AgentLoopProviderCallMetadata;
+}): AgentLoopInferenceRecord {
+  return {
+    phase: input.phase,
+    attempt: input.attempt,
+    decisionIndex: input.decisionIndex,
+    elapsedMs: input.elapsedMs,
+    model: input.metadata.model,
+    providerRequestId: input.metadata.providerRequestId,
+    finishReason: input.metadata.finishReason,
+    inputTokens: input.metadata.inputTokens,
+    outputTokens: input.metadata.outputTokens,
+    outcome: "success"
+  };
+}
+
+function buildFailureInferenceRecord(input: {
+  phase: AgentLoopStepPhase;
+  attempt: number;
+  decisionIndex: number | null;
+  elapsedMs: number;
+  providerFailure: AgentLoopProviderFailure;
+}): AgentLoopInferenceRecord {
+  return {
+    phase: input.phase,
+    attempt: input.attempt,
+    decisionIndex: input.decisionIndex,
+    elapsedMs: input.elapsedMs,
+    model: input.providerFailure.model,
+    providerRequestId: input.providerFailure.providerRequestId ?? null,
+    finishReason: input.providerFailure.finishReason ?? null,
+    inputTokens: input.providerFailure.inputTokens ?? null,
+    outputTokens: input.providerFailure.outputTokens ?? null,
+    outcome: input.providerFailure.normalizedReason
+  };
+}
+
+/** The loop's own external deadline fired (distinct from httpAgentLoopProvider's internal per-attempt timeout, which already surfaces as a classified "error" with normalizedReason provider_timeout) - no response envelope was ever obtained, so every metadata field is genuinely unknown. */
+function buildTimeoutInferenceRecord(input: { phase: AgentLoopStepPhase; attempt: number; decisionIndex: number | null; elapsedMs: number }): AgentLoopInferenceRecord {
+  return {
+    phase: input.phase,
+    attempt: input.attempt,
+    decisionIndex: input.decisionIndex,
+    elapsedMs: input.elapsedMs,
+    model: null,
+    providerRequestId: null,
+    finishReason: null,
+    inputTokens: null,
+    outputTokens: null,
+    outcome: "provider_timeout"
+  };
 }
 
 /** Recursively sorts object keys so two semantically identical argument sets (keys in a different order) always produce the same dedupe key. */
@@ -401,7 +497,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   const warnings: string[] = [];
 
   if (!input.provider) {
-    return { ran: false, terminalReason: "provider_unavailable", steps: [], toolExecutionCount: 0, finalMessage: null, handoffReason: null, warnings: ["provider_unavailable"], finalPendingCatalogAction: null };
+    return { ran: false, terminalReason: "provider_unavailable", steps: [], toolExecutionCount: 0, finalMessage: null, handoffReason: null, warnings: ["provider_unavailable"], finalPendingCatalogAction: null, llmCalls: [] };
   }
 
   const toolDescriptions = buildToolDescriptions();
@@ -413,6 +509,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   };
 
   const steps: AgentLoopStepRecord[] = [];
+  /** LLM-R1-T02. One entry per real provider invocation this turn - see AgentLoopInferenceRecord. */
+  const llmCalls: AgentLoopInferenceRecord[] = [];
   const executedCalls = new Set<string>();
   let toolExecutionCount = 0;
   let pendingCatalogActionTerminalFailure: "failed" | "blocked" | null = null;
@@ -438,7 +536,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     handoffReason: null,
     warnings,
     providerFailure: providerFailure ?? null,
-    finalPendingCatalogAction: null
+    finalPendingCatalogAction: null,
+    llmCalls
   });
 
   // ACS-R1-05.1-T02.7. Observability only - functional continuity comes
@@ -497,7 +596,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     }
     const finalPendingCatalogAction = modelPendingCatalogAction ?? recommendationPendingCatalogAction;
 
-    return { ran: true, terminalReason: "responded", steps, toolExecutionCount, finalMessage: step.message, handoffReason: null, warnings, finalPendingCatalogAction };
+    return { ran: true, terminalReason: "responded", steps, toolExecutionCount, finalMessage: step.message, handoffReason: null, warnings, finalPendingCatalogAction, llmCalls };
   };
 
   // ---- Phase 1: gathering ----
@@ -513,6 +612,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   // `invoked.kind === "error"` branch below and
   // docs/audits/SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md P0-1.
   let gatheringStructuredRecoveryUsed = false;
+  /** LLM-R1-T02. Counts provider calls within the current decisionIndex slot (0 = first call, 1+ = a retry of that same slot) - reset to 0 every time decisionIndex actually advances, below. */
+  let gatheringAttemptIndex = 0;
   while (decisionIndex < maxDecisions && toolExecutionCount < maxToolExecutions) {
     if (Date.now() > deadline) {
       warnings.push("agent_loop_timeout");
@@ -533,12 +634,20 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     });
 
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);
+    // LLM-R1-T02. Captured once, before branching, so every branch below
+    // (timeout/error/success) records the same attempt index for this call,
+    // and the counter always advances exactly once per real provider call.
+    const gatheringCallAttempt = gatheringAttemptIndex;
+    gatheringAttemptIndex += 1;
+
     if (invoked.kind === "timeout") {
+      llmCalls.push(buildTimeoutInferenceRecord({ phase: "gathering", attempt: gatheringCallAttempt, decisionIndex, elapsedMs: invoked.elapsedMs }));
       warnings.push("agent_loop_timeout");
       return finalize("timeout");
     }
     if (invoked.kind === "error") {
       const providerFailure = captureProviderFailure(input.provider, input.correlationId, invoked.error, invoked.elapsedMs);
+      llmCalls.push(buildFailureInferenceRecord({ phase: "gathering", attempt: gatheringCallAttempt, decisionIndex, elapsedMs: invoked.elapsedMs, providerFailure }));
       warnings.push(`agent_loop_provider_error:${providerFailure.normalizedReason}`);
       // LLM-R1-T01. `invalid_response` is the one normalizedReason where the
       // request itself was fine and only this one structural attempt at
@@ -555,6 +664,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       }
       return finalize("provider_unavailable", providerFailure);
     }
+
+    llmCalls.push(buildSuccessInferenceRecord({ phase: "gathering", attempt: gatheringCallAttempt, decisionIndex, elapsedMs: invoked.elapsedMs, metadata: invoked.metadata }));
 
     const validation = validateAgentStep(invoked.rawOutput);
     if (validation.status === "invalid") {
@@ -579,7 +690,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
 
     if (step.type === "handoff") {
       steps.push({ stepIndex: decisionIndex, step, governance: null, observation: null, phase: "gathering" });
-      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings, finalPendingCatalogAction: null };
+      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings, finalPendingCatalogAction: null, llmCalls };
     }
 
     const toolObservationsThisTurn = steps.map((record) => record.observation).filter((observation): observation is ToolObservation => observation !== null);
@@ -647,6 +758,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     }
 
     decisionIndex += 1;
+    // LLM-R1-T02. A new decision slot starts at attempt 0 again.
+    gatheringAttemptIndex = 0;
   }
 
   // ---- Phase 2: finalization (spec points 3-6) ----
@@ -672,11 +785,13 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
 
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);
     if (invoked.kind === "timeout") {
+      llmCalls.push(buildTimeoutInferenceRecord({ phase: "finalization", attempt, decisionIndex: null, elapsedMs: invoked.elapsedMs }));
       warnings.push("agent_loop_timeout");
       return finalize("timeout");
     }
     if (invoked.kind === "error") {
       const providerFailure = captureProviderFailure(input.provider, input.correlationId, invoked.error, invoked.elapsedMs);
+      llmCalls.push(buildFailureInferenceRecord({ phase: "finalization", attempt, decisionIndex: null, elapsedMs: invoked.elapsedMs, providerFailure }));
       warnings.push(`agent_loop_provider_error:${providerFailure.normalizedReason}`);
       // LLM-R1-T01. Same structural-recovery class as gathering above,
       // expressed here as "one more finalization attempt remains" instead of
@@ -690,6 +805,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       }
       return finalize("provider_unavailable", providerFailure);
     }
+
+    llmCalls.push(buildSuccessInferenceRecord({ phase: "finalization", attempt, decisionIndex: null, elapsedMs: invoked.elapsedMs, metadata: invoked.metadata }));
 
     const validation = validateAgentStep(invoked.rawOutput, FINALIZATION_ALLOWED_TYPES);
     if (validation.status === "invalid") {
@@ -706,7 +823,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       return respondedResult(step);
     }
     if (step.type === "handoff") {
-      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings, finalPendingCatalogAction: null };
+      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings, finalPendingCatalogAction: null, llmCalls };
     }
   }
 

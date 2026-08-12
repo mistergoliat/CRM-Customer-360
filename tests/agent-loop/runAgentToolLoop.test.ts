@@ -1102,6 +1102,168 @@ test("[LLM-R1-T01 Case 5] a non-structural provider error (authentication_error)
   assert.ok(!result.warnings.some((warning) => warning.startsWith("agent_loop_structured_recovery_attempted")), "a non-invalid_response failure must never trigger structured recovery");
 });
 
+// --- LLM-R1-T02: per-inference observability (llmCalls) ---
+// See docs/audits/SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md
+// and docs/releases/LLM-R1-T02-provider-observability.md.
+
+function networkErrorFailure(): Error {
+  return markAgentLoopProviderFailure(new TypeError("fetch failed"), {
+    model: "deepseek-v4-flash",
+    attemptCount: 1,
+    maxAttempts: 1,
+    httpStatus: null,
+    errorCode: "ECONNRESET",
+    errorClass: "TypeError",
+    normalizedReason: "network_error",
+    retryable: true
+  });
+}
+
+test("[LLM-R1-T02 Caso 1] a successful gathering call's llmCalls entry captures elapsedMs/model/finishReason/tokens/providerRequestId", async () => {
+  const provider = createFakeAgentLoopProvider({ script: [{ type: "respond", message: "hola" }] });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.llmCalls.length, 1);
+  const call = result.llmCalls[0];
+  assert.equal(call.phase, "gathering");
+  assert.equal(call.attempt, 0);
+  assert.equal(call.decisionIndex, 0);
+  assert.ok(call.elapsedMs >= 0, "elapsedMs must be a real measured duration");
+  assert.equal(call.model, "fake-agent-loop-model");
+  assert.equal(call.finishReason, "stop");
+  assert.equal(call.inputTokens, 32);
+  assert.equal(call.outputTokens, 64);
+  assert.ok(call.providerRequestId?.startsWith("fake-agent-loop-"));
+  assert.equal(call.outcome, "success");
+});
+
+test("[LLM-R1-T02 Caso 4] a network_error failure's llmCalls entry has elapsedMs captured but finishReason/tokens null, never fabricated", async () => {
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "network-error-provider",
+    async invoke() {
+      callCount += 1;
+      throw networkErrorFailure();
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "provider_unavailable");
+  assert.equal(callCount, 1, "network_error is not normalizedReason invalid_response - fails immediately, no structured recovery");
+  assert.equal(result.llmCalls.length, 1);
+  const call = result.llmCalls[0];
+  assert.equal(call.outcome, "network_error");
+  assert.ok(call.elapsedMs >= 0, "elapsedMs must still be captured even though the call failed");
+  assert.equal(call.finishReason, null);
+  assert.equal(call.inputTokens, null);
+  assert.equal(call.outputTokens, null);
+});
+
+test("[LLM-R1-T02 Caso 5] T01's gathering structured recovery produces two distinct, individually observable llmCalls entries", async () => {
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "flaky-gathering-provider",
+    async invoke() {
+      callCount += 1;
+      if (callCount === 1) throw invalidResponseFailure("invalid_model_json");
+      return { rawOutput: { type: "respond", message: "Recuperado tras invalid_response." }, model: "deepseek-v4-flash", finishReason: "stop", inputTokens: 40, outputTokens: 12, providerRequestId: "req-recovered" };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.llmCalls.length, 2, "llmCallCount=2 - both invocations individually observable");
+  assert.equal(result.llmCalls[0].phase, "gathering");
+  assert.equal(result.llmCalls[0].attempt, 0);
+  assert.equal(result.llmCalls[0].decisionIndex, 0);
+  assert.equal(result.llmCalls[0].outcome, "invalid_response");
+  assert.equal(result.llmCalls[1].phase, "gathering");
+  assert.equal(result.llmCalls[1].attempt, 1, "the recovery attempt is distinguished from the initial attempt by its attempt index");
+  assert.equal(result.llmCalls[1].decisionIndex, 0, "same decision slot as the failed attempt it recovered");
+  assert.equal(result.llmCalls[1].outcome, "success");
+  assert.equal(result.llmCalls[1].providerRequestId, "req-recovered");
+});
+
+test("[LLM-R1-T02 Caso 6] finalization structured recovery after tools already completed: correct llmCalls, toolExecutionCount unchanged, side effects never duplicated", async () => {
+  catalogUp(1);
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "structured-recovery-finalization-provider",
+    async invoke() {
+      callCount += 1;
+      if (callCount === 1) return { rawOutput: { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } } };
+      if (callCount === 2) return { rawOutput: { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } } };
+      if (callCount === 3) throw invalidResponseFailure("invalid_model_json");
+      return { rawOutput: { type: "respond", message: "Listo, agregue 2 unidades del Kettlebell 16kg." } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "dame 2 de las classic", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 2);
+  assert.equal(result.llmCalls.length, 4, "2 gathering decisions + 2 finalization attempts");
+  assert.deepEqual(
+    result.llmCalls.map((call) => [call.phase, call.attempt, call.decisionIndex, call.outcome]),
+    [
+      ["gathering", 0, 0, "success"],
+      ["gathering", 0, 1, "success"],
+      ["finalization", 0, null, "invalid_response"],
+      ["finalization", 1, null, "success"]
+    ]
+  );
+  const toolNames = result.steps.filter((step) => step.step.type === "use_tool").map((step) => (step.step as { tool: string }).tool);
+  assert.deepEqual(toolNames, ["get_product_details", "select_products"], "each tool - including the mutating select_products - still executes exactly once");
+});
+
+test("[LLM-R1-T02 Caso 8] a successful call with no usage data leaves that call's inputTokens/outputTokens null, never an invented 0", async () => {
+  const provider: AgentLoopProvider = {
+    name: "no-usage-provider",
+    async invoke() {
+      return { rawOutput: { type: "respond", message: "hola" }, model: "deepseek-v4-flash", finishReason: "stop" };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.llmCalls.length, 1);
+  assert.equal(result.llmCalls[0].inputTokens, null);
+  assert.equal(result.llmCalls[0].outputTokens, null);
+  assert.equal(result.llmCalls[0].finishReason, "stop", "a field the provider did supply must still be preserved, even when another is missing");
+});
+
+test("[LLM-R1-T02] llmCalls never carries rawOutput, prompt text, or any secret-shaped key", async () => {
+  catalogUp(1);
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "structured-recovery-finalization-provider",
+    async invoke() {
+      callCount += 1;
+      if (callCount === 1) return { rawOutput: { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } } };
+      if (callCount === 2) return { rawOutput: { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } } };
+      if (callCount === 3) throw invalidResponseFailure("invalid_model_json");
+      return { rawOutput: { type: "respond", message: "Listo." } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "dame 2 de las classic", commercialContextSummary: {}, provider });
+
+  const allowedKeys = new Set(["phase", "attempt", "decisionIndex", "elapsedMs", "model", "providerRequestId", "finishReason", "inputTokens", "outputTokens", "outcome"]);
+  for (const call of result.llmCalls) {
+    for (const key of Object.keys(call)) {
+      assert.ok(allowedKeys.has(key), `unexpected key leaked into an llmCalls entry: ${key}`);
+    }
+  }
+  const serialized = JSON.stringify(result.llmCalls);
+  assert.ok(!serialized.includes("get_product_details"), "no tool name/argument (rawOutput content) may leak into llmCalls");
+  assert.ok(!serialized.toLowerCase().includes("apikey"));
+  assert.ok(!serialized.toLowerCase().includes("authorization"));
+  assert.ok(!serialized.toLowerCase().includes("bearer"));
+});
+
 // --- ACS-R1-05.1-T02.6: explore_catalog ---
 
 function exploreResponsePayload(overrides: Record<string, unknown> = {}) {

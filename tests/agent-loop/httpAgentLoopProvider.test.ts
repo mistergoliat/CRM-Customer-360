@@ -392,6 +392,123 @@ test("[PF9] no endpoint/apiKey configured classifies without ever attempting a n
   );
 });
 
+// --- LLM-R1-T02: provider response/failure metadata (elapsedMs is measured
+// one layer up, in runAgentToolLoop.ts's invokeProviderWithDeadline - see
+// tests/agent-loop/runAgentToolLoop.test.ts for that). ---
+
+test("[LLM-R1-T02 Caso 1] a successful response's finish_reason/usage/id all reach AgentLoopProviderResponse", async () => {
+  handler = (_req, res) =>
+    sendJson(res, 200, {
+      id: "req-123",
+      model: "deepseek-v4-flash",
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ type: "respond", message: "hola" }) } }],
+      usage: { prompt_tokens: 100, completion_tokens: 20 }
+    });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  const result = await provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 });
+  assert.equal(result.finishReason, "stop");
+  assert.equal(result.inputTokens, 100);
+  assert.equal(result.outputTokens, 20);
+  assert.equal(result.providerRequestId, "req-123");
+  assert.equal(result.model, "deepseek-v4-flash");
+});
+
+test("[LLM-R1-T02 Caso 2] invalid_model_json preserves finish_reason/usage/id metadata when the envelope was parseable, without leaking the raw invalid content", async () => {
+  handler = (_req, res) =>
+    sendJson(res, 200, {
+      id: "req-500",
+      choices: [{ finish_reason: "length", message: { content: "not valid json content, truncated mid-object {" } }],
+      usage: { prompt_tokens: 500, completion_tokens: 1024 }
+    });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "invalid_response");
+      assert.equal(cause.errorCode, "invalid_model_json");
+      assert.equal(cause.finishReason, "length");
+      assert.equal(cause.inputTokens, 500);
+      assert.equal(cause.outputTokens, 1024);
+      assert.equal(cause.providerRequestId, "req-500");
+      assert.ok(!JSON.stringify(cause).includes("not valid json content"), "the raw invalid model content must never reach the classified cause");
+      return true;
+    }
+  );
+});
+
+test("[LLM-R1-T02 Caso 3] empty_response preserves finish_reason/usage/id metadata when the envelope was parseable", async () => {
+  handler = (_req, res) =>
+    sendJson(res, 200, {
+      id: "req-empty",
+      choices: [{ finish_reason: "length", message: { content: "" } }],
+      usage: { prompt_tokens: 300, completion_tokens: 0 }
+    });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "invalid_response");
+      assert.equal(cause.errorCode, "empty_response");
+      assert.equal(cause.finishReason, "length");
+      assert.equal(cause.inputTokens, 300);
+      assert.equal(cause.outputTokens, 0);
+      assert.equal(cause.providerRequestId, "req-empty");
+      return true;
+    }
+  );
+});
+
+test("[LLM-R1-T02 Caso 4] a failure before any response envelope was parsed never fabricates finishReason/tokens/providerRequestId", async () => {
+  // invalid_json_response: the HTTP envelope itself never parsed, so no
+  // choices/usage/id ever existed to read - these fields must stay absent
+  // (undefined), never null-as-if-checked-and-empty or an invented value.
+  handler = (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("this is not json {{{");
+  };
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "invalid_response");
+      assert.equal(cause.finishReason, undefined);
+      assert.equal(cause.inputTokens, undefined);
+      assert.equal(cause.outputTokens, undefined);
+      assert.equal(cause.providerRequestId, undefined);
+      return true;
+    }
+  );
+});
+
+test("[LLM-R1-T02] a network-level failure never fabricates finishReason/tokens either - same absence discipline as Caso 4", async () => {
+  const provider = createHttpAgentLoopProvider({
+    endpoint: baseUrl,
+    apiKey: "k",
+    maxModelRetries: 0,
+    fetchImpl: async () => {
+      const cause = new Error("read ECONNRESET") as Error & { code?: string };
+      cause.code = "ECONNRESET";
+      const error = new TypeError("fetch failed");
+      (error as TypeError & { cause?: unknown }).cause = cause;
+      throw error;
+    }
+  });
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "network_error");
+      assert.equal(cause.finishReason, undefined);
+      assert.equal(cause.inputTokens, undefined);
+      assert.equal(cause.outputTokens, undefined);
+      return true;
+    }
+  );
+});
+
 test("[PF10] the classified cause never carries the API key, Authorization header, or any secret-shaped value", async () => {
   handler = (_req, res) => sendJson(res, 401, { error: "unauthorized" });
   const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "sk-super-secret-key-value" });

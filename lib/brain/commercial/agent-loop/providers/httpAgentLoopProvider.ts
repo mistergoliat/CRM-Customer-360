@@ -240,6 +240,19 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
 
         const choice = data.choices?.[0];
         const content = choice?.message?.content;
+        // LLM-R1-T02. `data` (and `choice`, when present) is already a
+        // successfully parsed response envelope at this point, even on the
+        // empty_response/invalid_model_json failure paths below - the exact
+        // same usage/finish_reason/id fields the success return already
+        // reads are available here too, never re-fetched, never guessed.
+        // Absent (undefined) only above, at the invalid_json_response throw,
+        // where no envelope was ever parsed at all.
+        const availableResponseMetadata = {
+          finishReason: choice?.finish_reason ?? null,
+          inputTokens: data.usage?.prompt_tokens ?? null,
+          outputTokens: data.usage?.completion_tokens ?? null,
+          providerRequestId: data.id ?? response.headers.get("x-request-id")
+        };
         if (!content) {
           throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned an empty response."), {
             model,
@@ -249,7 +262,8 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
             errorCode: "empty_response",
             errorClass: "InvalidProviderResponseError",
             normalizedReason: "invalid_response",
-            retryable: false
+            retryable: false,
+            ...availableResponseMetadata
           });
         }
 
@@ -265,17 +279,18 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
             errorCode: "invalid_model_json",
             errorClass: "InvalidProviderResponseError",
             normalizedReason: "invalid_response",
-            retryable: false
+            retryable: false,
+            ...availableResponseMetadata
           });
         }
 
         return {
           rawOutput,
           model: data.model ?? model,
-          inputTokens: data.usage?.prompt_tokens ?? null,
-          outputTokens: data.usage?.completion_tokens ?? null,
-          providerRequestId: data.id ?? response.headers.get("x-request-id"),
-          finishReason: choice?.finish_reason ?? null
+          inputTokens: availableResponseMetadata.inputTokens,
+          outputTokens: availableResponseMetadata.outputTokens,
+          providerRequestId: availableResponseMetadata.providerRequestId,
+          finishReason: availableResponseMetadata.finishReason
         };
       }
     }
