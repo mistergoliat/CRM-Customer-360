@@ -968,6 +968,140 @@ test("[PF12] a provider error during finalization is also preserved (finalizatio
   assert.equal(result.providerFailure?.retryable, true);
 });
 
+// --- LLM-R1-T01: bounded structured-output recovery (normalizedReason "invalid_response" only) ---
+// See docs/audits/SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md (P0-1) and
+// docs/releases/LLM-R1-T01-structured-output-recovery.md.
+
+function invalidResponseFailure(errorCode: "empty_response" | "invalid_model_json" = "invalid_model_json"): Error {
+  return markAgentLoopProviderFailure(
+    new Error(errorCode === "empty_response" ? "Agent loop HTTP provider returned an empty response." : "Agent loop HTTP provider returned invalid response JSON."),
+    {
+      model: "deepseek-v4-flash",
+      attemptCount: 1,
+      maxAttempts: 1,
+      httpStatus: 200,
+      errorCode,
+      errorClass: "InvalidProviderResponseError",
+      normalizedReason: "invalid_response",
+      retryable: false
+    }
+  );
+}
+
+test("[LLM-R1-T01 Case 1] gathering recovers from a single invalid_response with exactly one structured-recovery attempt", async () => {
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "flaky-gathering-provider",
+    async invoke() {
+      callCount += 1;
+      if (callCount === 1) throw invalidResponseFailure("invalid_model_json");
+      return { rawOutput: { type: "respond", message: "Recuperado tras invalid_response." } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.finalMessage, "Recuperado tras invalid_response.");
+  assert.equal(callCount, 2, "exactly 2 provider calls: the failed attempt plus the one structured-recovery attempt");
+  assert.ok(result.warnings.includes("agent_loop_structured_recovery_attempted:gathering"));
+});
+
+test("[LLM-R1-T01 Case 2] gathering fails closed after a second consecutive invalid_response - never a third attempt", async () => {
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "always-invalid-response-gathering-provider",
+    async invoke() {
+      callCount += 1;
+      throw invalidResponseFailure("empty_response");
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "provider_unavailable");
+  assert.equal(callCount, 2, "exactly 2 provider calls: the original attempt plus the one structured-recovery attempt, never a third");
+  assert.equal(result.providerFailure?.normalizedReason, "invalid_response");
+  assert.equal(result.providerFailure?.errorCode, "empty_response");
+  assert.ok(result.warnings.includes("agent_loop_structured_recovery_attempted:gathering"));
+});
+
+test("[LLM-R1-T01 Case 3] finalization recovers after tools already completed - reproduces the reported incident (tools stay completed, final answer recovered instead of lost) and never re-executes the mutating tool", async () => {
+  catalogUp(1);
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "structured-recovery-finalization-provider",
+    async invoke() {
+      callCount += 1;
+      if (callCount === 1) return { rawOutput: { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } } };
+      if (callCount === 2) return { rawOutput: { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } } };
+      if (callCount === 3) throw invalidResponseFailure("invalid_model_json");
+      return { rawOutput: { type: "respond", message: "Listo, agregue 2 unidades del Kettlebell 16kg." } };
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "dame 2 de las classic", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.finalMessage, "Listo, agregue 2 unidades del Kettlebell 16kg.");
+  assert.equal(callCount, 4, "2 tool decisions + 1 failed finalization attempt + 1 recovered finalization attempt");
+  assert.equal(result.toolExecutionCount, 2, "both tools already completed before the structural failure - the recovery attempt must never re-run them");
+
+  const toolNames = result.steps.filter((step) => step.step.type === "use_tool").map((step) => (step.step as { tool: string }).tool);
+  assert.deepEqual(toolNames, ["get_product_details", "select_products"], "each tool - including the mutating select_products - appears exactly once in the full turn trace, never duplicated by the finalization structured-recovery attempt");
+  assert.ok(result.warnings.includes("agent_loop_structured_recovery_attempted:finalization"));
+});
+
+test("[LLM-R1-T01 Case 4] finalization fails closed after a second consecutive invalid_response - never a third finalization attempt", async () => {
+  catalogUp(1);
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "always-invalid-response-finalization-provider",
+    async invoke() {
+      callCount += 1;
+      if (callCount === 1) return { rawOutput: { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } } };
+      if (callCount === 2) return { rawOutput: { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } } };
+      throw invalidResponseFailure("empty_response");
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "dame 2 de las classic", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "provider_unavailable");
+  assert.equal(callCount, 4, "2 tool decisions + exactly 2 finalization attempts, never a third");
+  assert.equal(result.toolExecutionCount, 2, "tools already completed before finalization must never be re-run just because finalization itself failed twice");
+  assert.equal(result.providerFailure?.normalizedReason, "invalid_response");
+  assert.equal(result.providerFailure?.errorCode, "empty_response");
+  assert.ok(result.warnings.includes("agent_loop_structured_recovery_attempted:finalization"));
+});
+
+test("[LLM-R1-T01 Case 5] a non-structural provider error (authentication_error) still fails fast - never gets a structured-recovery attempt", async () => {
+  let callCount = 0;
+  const provider: AgentLoopProvider = {
+    name: "auth-error-provider",
+    async invoke() {
+      callCount += 1;
+      throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider failed with status 401."), {
+        model: "deepseek-v4-flash",
+        attemptCount: 1,
+        maxAttempts: 1,
+        httpStatus: 401,
+        errorCode: "http_401",
+        errorClass: "HttpStatusError",
+        normalizedReason: "authentication_error",
+        retryable: false
+      });
+    }
+  };
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "hola", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "provider_unavailable");
+  assert.equal(callCount, 1, "authentication_error is not normalizedReason invalid_response - must fail immediately, no structured-recovery attempt");
+  assert.equal(result.providerFailure?.normalizedReason, "authentication_error");
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("agent_loop_structured_recovery_attempted")), "a non-invalid_response failure must never trigger structured recovery");
+});
+
 // --- ACS-R1-05.1-T02.6: explore_catalog ---
 
 function exploreResponsePayload(overrides: Record<string, unknown> = {}) {

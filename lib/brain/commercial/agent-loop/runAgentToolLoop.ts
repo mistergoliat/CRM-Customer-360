@@ -503,6 +503,16 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   // ---- Phase 1: gathering ----
   let decisionIndex = 0;
   let gatheringRetryUsed = false;
+  // LLM-R1-T01. Deliberately a separate flag from gatheringRetryUsed above -
+  // never conflated. gatheringRetryUsed repairs a well-formed-but-invalid
+  // AgentStep (a model/contract problem); this repairs a provider-level
+  // structural failure (empty_response/invalid_model_json/invalid_json_response,
+  // normalizedReason "invalid_response" - a transport-adjacent problem the
+  // model never got a chance to answer at all). Each gets its own one-shot
+  // budget for the whole gathering phase, never per decision slot - see the
+  // `invoked.kind === "error"` branch below and
+  // docs/audits/SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md P0-1.
+  let gatheringStructuredRecoveryUsed = false;
   while (decisionIndex < maxDecisions && toolExecutionCount < maxToolExecutions) {
     if (Date.now() > deadline) {
       warnings.push("agent_loop_timeout");
@@ -530,6 +540,19 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     if (invoked.kind === "error") {
       const providerFailure = captureProviderFailure(input.provider, input.correlationId, invoked.error, invoked.elapsedMs);
       warnings.push(`agent_loop_provider_error:${providerFailure.normalizedReason}`);
+      // LLM-R1-T01. `invalid_response` is the one normalizedReason where the
+      // request itself was fine and only this one structural attempt at
+      // producing AgentStep JSON was bad (empty_response/invalid_model_json/
+      // invalid_json_response - never a retryable-at-transport concept like
+      // timeout/rate_limited/network_error, and never an unrecoverable one
+      // like authentication_error/model_unavailable). Exactly one same-slot
+      // recovery attempt (same prompt, no guided repair yet - that is
+      // LLM-R1-T04), then fail closed like every other reason.
+      if (providerFailure.normalizedReason === "invalid_response" && !gatheringStructuredRecoveryUsed) {
+        gatheringStructuredRecoveryUsed = true;
+        warnings.push("agent_loop_structured_recovery_attempted:gathering");
+        continue;
+      }
       return finalize("provider_unavailable", providerFailure);
     }
 
@@ -655,6 +678,16 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     if (invoked.kind === "error") {
       const providerFailure = captureProviderFailure(input.provider, input.correlationId, invoked.error, invoked.elapsedMs);
       warnings.push(`agent_loop_provider_error:${providerFailure.normalizedReason}`);
+      // LLM-R1-T01. Same structural-recovery class as gathering above,
+      // expressed here as "one more finalization attempt remains" instead of
+      // a second counter (reuses FINALIZATION_MAX_ATTEMPTS, never a parallel
+      // budget). Any other normalizedReason keeps failing fast on this exact
+      // attempt, unchanged from before this task - this branch only ever
+      // widens what happens for "invalid_response", nothing else.
+      if (providerFailure.normalizedReason === "invalid_response" && attempt < FINALIZATION_MAX_ATTEMPTS - 1) {
+        warnings.push("agent_loop_structured_recovery_attempted:finalization");
+        continue;
+      }
       return finalize("provider_unavailable", providerFailure);
     }
 
