@@ -17,6 +17,7 @@
  * --out=path.json  also write the full raw BenchmarkRunSummary as JSON
  */
 import { writeFile } from "node:fs/promises";
+import { getPool } from "../lib/db";
 import { loadLocalEnv } from "./db-utils";
 import { BENCHMARK_CORPUS } from "../tests/fixtures/agent-loop-benchmark/corpus";
 import { runCorpus } from "../lib/brain/commercial/agent-loop/benchmark/runCorpus";
@@ -81,56 +82,67 @@ async function main() {
   // hardcoding credentials here.
   await loadLocalEnv();
 
-  const runsPerCase = Math.max(1, Number.parseInt(readArg("runs") ?? "1", 10) || 1);
-  const wantsLive = readFlag("live");
-  const caseFilter = readArg("case")?.split(",").map((value) => value.trim());
-  const outPath = readArg("out");
+  try {
+    const runsPerCase = Math.max(1, Number.parseInt(readArg("runs") ?? "1", 10) || 1);
+    const wantsLive = readFlag("live");
+    const caseFilter = readArg("case")?.split(",").map((value) => value.trim());
+    const outPath = readArg("out");
 
-  const corpusValidation = validateBenchmarkCorpus(BENCHMARK_CORPUS);
-  if (!corpusValidation.ok) {
-    console.error("[benchmark] corpus fixture is invalid, refusing to run:");
-    for (const error of corpusValidation.errors) console.error(`  - ${error}`);
-    process.exitCode = 1;
-    return;
-  }
+    const corpusValidation = validateBenchmarkCorpus(BENCHMARK_CORPUS);
+    if (!corpusValidation.ok) {
+      console.error("[benchmark] corpus fixture is invalid, refusing to run:");
+      for (const error of corpusValidation.errors) console.error(`  - ${error}`);
+      process.exitCode = 1;
+      return;
+    }
 
-  const cases = caseFilter ? BENCHMARK_CORPUS.filter((testCase) => caseFilter.includes(testCase.caseId)) : BENCHMARK_CORPUS;
-  if (cases.length === 0) {
-    console.error(`No corpus cases matched --case=${caseFilter?.join(",")}`);
-    process.exitCode = 1;
-    return;
-  }
+    const cases = caseFilter ? BENCHMARK_CORPUS.filter((testCase) => caseFilter.includes(testCase.caseId)) : BENCHMARK_CORPUS;
+    if (cases.length === 0) {
+      console.error(`No corpus cases matched --case=${caseFilter?.join(",")}`);
+      process.exitCode = 1;
+      return;
+    }
 
-  if (!wantsLive) {
-    console.log(`[benchmark] mode=offline runsPerCase=${runsPerCase} cases=${cases.map((testCase) => testCase.caseId).join(",")}`);
-    const summary = await runCorpus(cases, { mode: "offline", runsPerCase });
-    printMetrics("OFFLINE aggregate", computeAggregateMetrics(summary.results));
+    if (!wantsLive) {
+      console.log(`[benchmark] mode=offline runsPerCase=${runsPerCase} cases=${cases.map((testCase) => testCase.caseId).join(",")}`);
+      const summary = await runCorpus(cases, { mode: "offline", runsPerCase });
+      printMetrics("OFFLINE aggregate", computeAggregateMetrics(summary.results));
+      for (const [caseId, metrics] of computeMetricsByCase(summary.results)) printMetrics(`case ${caseId}`, metrics);
+      if (outPath) await writeFile(outPath, JSON.stringify(summary, null, 2), "utf8");
+      return;
+    }
+
+    // LLM-R1-T05, Part D. Live mode is REJECTED unless the gate + full config
+    // resolve - never silently falls back to offline just because --live was
+    // passed without the environment actually authorizing it.
+    if (!isLiveBenchmarkEnabled()) {
+      console.error("[benchmark] --live was requested but BENCHMARK_LIVE_LLM_ENABLED is not \"true\" - REJECTED. Live LLM calls are opt-in only.");
+      process.exitCode = 1;
+      return;
+    }
+    const resolution = resolveLiveBenchmarkProviderConfig();
+    if (!resolution.ok) {
+      console.error(`[benchmark] --live REJECTED: ${resolution.reason}. Set BRAIN_MODEL_API_URL/BRAIN_MODEL_API_KEY and BENCHMARK_LIVE_LLM_MODEL (or BRAIN_MODEL_NAME).`);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log(`[benchmark] mode=live model=${resolution.config.model} runsPerCase=${runsPerCase} cases=${cases.map((testCase) => testCase.caseId).join(",")}`);
+    console.log("[benchmark] Catalog/Carrier/commune/DB stay fully isolated - only the LLM provider call is real.");
+    const summary = await runCorpus(cases, { mode: "live", runsPerCase, liveConfig: resolution.config });
+    printMetrics(`LIVE aggregate (${resolution.config.model})`, computeAggregateMetrics(summary.results));
     for (const [caseId, metrics] of computeMetricsByCase(summary.results)) printMetrics(`case ${caseId}`, metrics);
     if (outPath) await writeFile(outPath, JSON.stringify(summary, null, 2), "utf8");
-    return;
+  } finally {
+    // select_products/set_shipping_destination (via environment.ts) open a
+    // DB pool that otherwise keeps the process alive forever after the
+    // benchmark itself has finished - close it so this CLI actually exits.
+    try {
+      await getPool().end();
+    } catch {
+      // ignore pool teardown failures - the benchmark's own result already printed
+    }
   }
-
-  // LLM-R1-T05, Part D. Live mode is REJECTED unless the gate + full config
-  // resolve - never silently falls back to offline just because --live was
-  // passed without the environment actually authorizing it.
-  if (!isLiveBenchmarkEnabled()) {
-    console.error("[benchmark] --live was requested but BENCHMARK_LIVE_LLM_ENABLED is not \"true\" - REJECTED. Live LLM calls are opt-in only.");
-    process.exitCode = 1;
-    return;
-  }
-  const resolution = resolveLiveBenchmarkProviderConfig();
-  if (!resolution.ok) {
-    console.error(`[benchmark] --live REJECTED: ${resolution.reason}. Set BRAIN_MODEL_API_URL/BRAIN_MODEL_API_KEY and BENCHMARK_LIVE_LLM_MODEL (or BRAIN_MODEL_NAME).`);
-    process.exitCode = 1;
-    return;
-  }
-
-  console.log(`[benchmark] mode=live model=${resolution.config.model} runsPerCase=${runsPerCase} cases=${cases.map((testCase) => testCase.caseId).join(",")}`);
-  console.log("[benchmark] Catalog/Carrier/commune/DB stay fully isolated - only the LLM provider call is real.");
-  const summary = await runCorpus(cases, { mode: "live", runsPerCase, liveConfig: resolution.config });
-  printMetrics(`LIVE aggregate (${resolution.config.model})`, computeAggregateMetrics(summary.results));
-  for (const [caseId, metrics] of computeMetricsByCase(summary.results)) printMetrics(`case ${caseId}`, metrics);
-  if (outPath) await writeFile(outPath, JSON.stringify(summary, null, 2), "utf8");
 }
 
 main().catch((error) => {
