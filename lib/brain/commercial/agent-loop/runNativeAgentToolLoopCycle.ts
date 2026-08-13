@@ -1,4 +1,7 @@
 import { runAgentToolLoop } from "./runAgentToolLoop";
+import type { RunAgentToolLoopInput } from "./runAgentToolLoop";
+import { runCommercialMultiIntentLoop } from "../multi-intent/runCommercialMultiIntentLoop";
+import { buildMultiIntentPlannerFeatureFlags } from "../config/commercialCycleConfig";
 import { dispatchAgentLoopResponse, type DispatchAgentLoopResponseResult } from "./dispatchAgentLoopResponse";
 import { recordAgentToolLoopCompletedCommercialEvent } from "../events/service";
 import type { AgentToolLoopLlmCallSummary, AgentToolLoopLlmMetricsPayload, AgentToolLoopStepSummary } from "../events/types";
@@ -519,7 +522,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     });
   }
 
-  const loop = await runAgentToolLoop({
+  const agentToolLoopInput: RunAgentToolLoopInput = {
     correlationId: input.correlationId,
     conversationId: input.conversationId,
     opportunityId,
@@ -538,7 +541,13 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     maxDecisions: effectiveLoopConfiguration.maxAgentStepsPerTurn,
     maxToolExecutions: effectiveLoopConfiguration.maxToolCallsPerTurn,
     timeoutMs: effectiveModelConfiguration.timeoutMs
-  });
+  };
+  // LLM-R1-T09A. Default false: byte/semantically identical to before this
+  // task (Part 18). Both loops share the exact same input/output contract -
+  // only which one runs for this turn changes.
+  const loop = buildMultiIntentPlannerFeatureFlags().multiIntentPlannerEnabled
+    ? await runCommercialMultiIntentLoop(agentToolLoopInput)
+    : await runAgentToolLoop(agentToolLoopInput);
 
   const dispatch = await dispatchAgentLoopResponse({
     conversationId: input.conversationId,

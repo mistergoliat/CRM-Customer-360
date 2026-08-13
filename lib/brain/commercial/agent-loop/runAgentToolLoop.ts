@@ -72,7 +72,7 @@ const FINALIZATION_ALLOWED_TYPES = ["respond", "handoff"] as const;
  * loop already emits verbatim (e.g. buildAgentStepPromptPackage.ts's
  * COMMERCIAL_CLOSING_RULE_LINES).
  */
-const MUTATION_CLAIM_GUARD_FALLBACK_MESSAGE =
+export const MUTATION_CLAIM_GUARD_FALLBACK_MESSAGE =
   "Necesito un momento mas para confirmar tu seleccion antes de continuar - ¿puedes confirmarme nuevamente que producto y cantidad quieres?";
 
 export type RunAgentToolLoopInput = {
@@ -110,8 +110,14 @@ export function buildToolDescriptions(): AgentLoopToolDescription[] {
   });
 }
 
-/** LLM-R1-T02. The safe, bounded subset of AgentLoopProviderResponse this loop is allowed to retain - never rawOutput, never a prompt. */
-type AgentLoopProviderCallMetadata = {
+/**
+ * LLM-R1-T02. The safe, bounded subset of AgentLoopProviderResponse this loop is allowed to retain - never rawOutput, never a prompt.
+ * LLM-R1-T09A: exported so runCommercialMultiIntentLoop.ts (the backend
+ * multi-intent planner) can reuse the exact same provider-invocation/
+ * observability mechanics for its own planner/finalizer calls, instead of a
+ * second, parallel implementation of deadline/timeout/error-classification.
+ */
+export type AgentLoopProviderCallMetadata = {
   model: string | null;
   providerRequestId: string | null;
   finishReason: string | null;
@@ -121,7 +127,7 @@ type AgentLoopProviderCallMetadata = {
   reasoningTokens: number | null;
 };
 
-async function invokeProviderWithDeadline(
+export async function invokeProviderWithDeadline(
   provider: AgentLoopProvider,
   messages: { role: "system" | "user"; content: string }[],
   correlationId: string,
@@ -174,8 +180,8 @@ async function invokeProviderWithDeadline(
   }
 }
 
-/** Requirement 1-2 (see task doc): captures the sanitized cause before it collapses into "provider_unavailable", logs it, and hands it back to be preserved on the loop's terminal result. */
-function captureProviderFailure(provider: AgentLoopProvider, correlationId: string, error: unknown, elapsedMs: number): AgentLoopProviderFailure {
+/** Requirement 1-2 (see task doc): captures the sanitized cause before it collapses into "provider_unavailable", logs it, and hands it back to be preserved on the loop's terminal result. LLM-R1-T09A: exported, see AgentLoopProviderCallMetadata above. */
+export function captureProviderFailure(provider: AgentLoopProvider, correlationId: string, error: unknown, elapsedMs: number): AgentLoopProviderFailure {
   const cause = classifyAgentLoopProviderFailure(error);
   const providerFailure: AgentLoopProviderFailure = { provider: provider.name ?? null, elapsedMs, ...cause };
   logAgentLoopProviderFailure(correlationId, providerFailure);
@@ -188,8 +194,9 @@ function captureProviderFailure(provider: AgentLoopProvider, correlationId: stri
  * (including one later recovered from by LLM-R1-T01's structured recovery,
  * or the pre-existing schema-invalid AgentStep retry) leaves its own
  * observable evidence, never collapsed into just the turn's final outcome.
+ * LLM-R1-T09A: exported, see AgentLoopProviderCallMetadata above.
  */
-function buildSuccessInferenceRecord(input: {
+export function buildSuccessInferenceRecord(input: {
   phase: AgentLoopStepPhase;
   attempt: number;
   decisionIndex: number | null;
@@ -211,7 +218,7 @@ function buildSuccessInferenceRecord(input: {
   };
 }
 
-function buildFailureInferenceRecord(input: {
+export function buildFailureInferenceRecord(input: {
   phase: AgentLoopStepPhase;
   attempt: number;
   decisionIndex: number | null;
@@ -233,8 +240,8 @@ function buildFailureInferenceRecord(input: {
   };
 }
 
-/** The loop's own external deadline fired (distinct from httpAgentLoopProvider's internal per-attempt timeout, which already surfaces as a classified "error" with normalizedReason provider_timeout) - no response envelope was ever obtained, so every metadata field is genuinely unknown. */
-function buildTimeoutInferenceRecord(input: { phase: AgentLoopStepPhase; attempt: number; decisionIndex: number | null; elapsedMs: number }): AgentLoopInferenceRecord {
+/** The loop's own external deadline fired (distinct from httpAgentLoopProvider's internal per-attempt timeout, which already surfaces as a classified "error" with normalizedReason provider_timeout) - no response envelope was ever obtained, so every metadata field is genuinely unknown. LLM-R1-T09A: exported, see AgentLoopProviderCallMetadata above. */
+export function buildTimeoutInferenceRecord(input: { phase: AgentLoopStepPhase; attempt: number; decisionIndex: number | null; elapsedMs: number }): AgentLoopInferenceRecord {
   return {
     phase: input.phase,
     attempt: input.attempt,

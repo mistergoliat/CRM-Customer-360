@@ -652,7 +652,9 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt is objectively smaller than
 // SELECT_PRODUCTS_RULE_LINES that includes both new lines too.
 // LLM-R1-T08D (later): gathering +600 chars more (the multi-intent
 // tool-priority rule, gathering-only by design); finalization unchanged.
-const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 16690;
+// LLM-R1-T09A (later): finalization +1038 chars (MULTI_INTENT_PLAN_RULE_LINES,
+// finalization-only by design - see buildAgentStepPromptPackage.ts); gathering unchanged.
+const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 17728;
 const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 21039;
 
 test("[LLM-R1-T04 Caso 1] a normal call (no priorAttemptFailure) is byte-identical to before this task - no repair instruction present", () => {

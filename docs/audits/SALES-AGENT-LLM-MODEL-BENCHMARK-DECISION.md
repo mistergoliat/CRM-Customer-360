@@ -10,6 +10,7 @@ source_of_truth_for:
   - deepseek-v4-flash thinking vs. non-thinking verdict (KEEP_THINKING_ENABLED)
   - non-thinking prompt-repair verdict (PROMPT_FIX_PARTIAL)
   - Commercial Mutation Execution Guard verdict (MUTATION_GUARD_ONLY)
+  - Backend Multi-Intent Planning + Requirement Resolution architecture verdict (MULTI_INTENT_ARCHITECTURE_VALIDATED)
 depends_on:
   - ./SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md
   - ./SALES-AGENT-LLM-END-TO-END-LATENCY-AUDIT.md
@@ -24,6 +25,8 @@ depends_on:
   - ../releases/LLM-R1-T08B-deepseek-thinking-mode-benchmark.md
   - ../releases/LLM-R1-T08C-nonthinking-tool-execution-repair.md
   - ../releases/LLM-R1-T08D-multi-intent-tool-budget-and-mutation-guard.md
+  - ../releases/LLM-R1-T09A-multi-intent-planning-and-requirement-resolution.md
+  - ../architecture/commercial-multi-intent-planning.md
 tags:
   - audit
   - sales-agent
@@ -195,4 +198,46 @@ Offline benchmark: PASS
 Live benchmark executed: NO
 Model verdict: INSUFFICIENT_DATA
 Bounded Action Plan classification: FUTURE_OPTIMIZATION
+```
+
+---
+
+## 18. Backend Multi-Intent Planning + Requirement Resolution (`LLM-R1-T09A`)
+
+Pregunta distinta a las secciones 1-17: no es "¿el modelo es adecuado?" sino "¿se puede evitar que N sub-intenciones en un mismo mensaje dependan de N decisiones LLM independientes?". Auditoria completa, contrato, y evidencia de codigo en `docs/architecture/commercial-multi-intent-planning.md` y `docs/releases/LLM-R1-T09A-multi-intent-planning-and-requirement-resolution.md` - resumen aqui, sin reescribir las secciones 1-17.
+
+**Arquitectura**: nuevo runtime `lib/brain/commercial/multi-intent/runCommercialMultiIntentLoop.ts`, mismo contrato de entrada/salida que `runAgentToolLoop.ts` (`AgentLoopResult`), seleccionable detras de `BRAIN_MULTI_INTENT_PLANNER_ENABLED` (default `false`) en `runNativeAgentToolLoopCycle.ts`. Dos llamadas LLM reales por turno en el caso comun (planner de intenciones + finalizer que redacta), nunca una por decision: entre ambas, un `CommercialRequirementResolver` y un `CommercialExecutionPlanner` deterministas (sin LLM) resuelven que capability ejecutar y en que orden, reutilizando el mismo Capability Gateway/evidence gate/`buildToolObservation`/Commercial Mutation Execution Guard (`T08D`, seccion 17) que el loop legacy.
+
+**Resultado, benchmark focalizado live (MI01-MI06, `thinking=disabled`, `deepseek-v4-flash`)**:
+
+- Smoke inicial (1 run/caso): 6/6 pass.
+- Primera corrida de 5 runs/caso (30 turnos): `overallPassRate` 96.7% - un unico fallo real en MI02 (el planner extrajo la palabra "despacho" como si fuera un nombre de comuna cuando el cliente solo pregunto el costo de envio sin nombrar destino). **Hallazgo real de este benchmark, no un defecto del backend** - el resolver/planner/executor deterministas se comportaron exactamente como se diseñaron; el gap estaba en el prompt del planner.
+- Fix aplicado (una linea adicional en `buildIntentPlannerPromptPackage.ts`: nunca usar una palabra generica de envio como si fuera un lugar). Re-verificado: MI02 aislado 8/8, corpus completo 5 runs/caso (30 turnos) **30/30 (100%)**, `forbiddenToolInvocationRate` 0%, `unbackedCommercialMutationClaimRate` 0%, `timeoutRate` 0%.
+- Latencia: 2 llamadas LLM/turno (vs. hasta 5 en el loop legacy), `completeTurnLatencyMsP50` ~2.8-3.2s, p95 hasta ~3.7s segun el caso - operacionalmente razonable.
+
+**Veredicto: `MULTI_INTENT_ARCHITECTURE_VALIDATED`** - los seis criterios explicitos de la tarea se cumplen con evidencia live: MI01 completa correctamente, MI02 ejecuta la seleccion y pregunta solo por destino, la continuacion entre turnos funciona (verificado con DB real, no solo con un provider scripted), una intencion desconocida pide aclaracion sin inventar una tool, cero afirmaciones sin respaldo, 0% timeout, latencia razonable.
+
+**Produccion no cambio**: `BRAIN_MULTI_INTENT_PLANNER_ENABLED` sigue en `false` por default: el loop legacy (secciones 1-17 de este documento) sigue siendo el unico camino que atiende trafico real de WhatsApp. `thinking` de produccion no se toco (el nuevo runtime nunca configura ese campo - lo hace, como siempre, `runNativeAutonomousCycle.ts`, sin cambios). No se reescribe ningun resultado de las secciones 1-17.
+
+```text
+LLM-R1-T09A: DONE
+Branch: feat/llm-r1-t09a-multi-intent-planning
+Supported intents: select_products, get_shipping_quote
+Supported requirements: PRODUCT, QUANTITY, DESTINATION, PRODUCT_SELECTION
+MI01 multi-intent full resolution: PASS
+MI02 partial completion + missing destination: PASS
+Pending intent continuation: PASS
+Ambiguity handling: PASS
+Unknown intent clarification: PASS
+Required capability completion rate: 100% (final 30-run live corpus)
+Multi-intent resolution rate: 100% (final 30-run live corpus)
+Unbacked commercial mutation claim rate: 0%
+LLM calls/turn: avg=2.00 max=2
+Turn latency: p50=~2975ms p95=~3546ms (aggregate, final live run)
+Timeout rate: 0%
+Legacy path preserved: YES (526/526 agent-loop suite green, flag defaults false)
+Production feature flag enabled: NO
+Production thinking configuration changed: NO
+Verdict: MULTI_INTENT_ARCHITECTURE_VALIDATED
+Next: LLM-R1-T09B - enable BRAIN_MULTI_INTENT_PLANNER_ENABLED for BRAIN_AUTONOMOUS_TEST_WA_IDS only, real WhatsApp smoke
 ```
