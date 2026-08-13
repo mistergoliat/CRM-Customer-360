@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before } from "node:test";
 import { createHttpAgentLoopProvider } from "@/lib/brain/commercial/agent-loop/providers/httpAgentLoopProvider";
 import { classifyAgentLoopProviderFailure } from "@/lib/brain/commercial/agent-loop/providers/providerFailureClassification";
+import { runAgentToolLoop } from "@/lib/brain/commercial/agent-loop/runAgentToolLoop";
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
 let server: http.Server;
@@ -523,4 +525,100 @@ test("[PF10] the classified cause never carries the API key, Authorization heade
       return true;
     }
   );
+});
+
+// --- LLM-R1-T08A: the deadline must protect the whole attempt (fetch() AND
+// response.json()), not just fetch() - see docs/audits/
+// SALES-AGENT-LLM-END-TO-END-LATENCY-AUDIT.md section 8 for the confirmed
+// pre-fix defect (a real call ran 83641ms against a 20000ms deadline,
+// classified "success"). [HP14]/[PF5] above already cover "fetch itself
+// never completes -> timeout" and are unchanged by this fix; [HP15]-[HP19]
+// above already cover the existing technical-retry semantics and are
+// unchanged too - both are re-run as regression coverage, not duplicated
+// here.
+
+function sendHeadersThenDelayedBody(res: http.ServerResponse, delayMs: number, body: unknown) {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.flushHeaders();
+  setTimeout(() => res.end(JSON.stringify(body)), delayMs);
+}
+
+test("[HP24] fetch resolves quickly and response.json() resolves quickly -> success", async () => {
+  handler = (_req, res) => sendJson(res, 200, successResponse());
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  const result = await provider.invoke({ messages: baseMessages }, { timeoutMs: 2000 });
+  assert.deepEqual(result.rawOutput, { type: "respond", message: "hola" });
+});
+
+test("[HP25] fetch resolves headers but response.json() stays pending past the deadline -> provider_timeout, never invalid_json_response", async () => {
+  // Body deliberately withheld for 3000ms, well beyond the 200ms deadline
+  // below - simulates a non-streaming completion whose real generation time
+  // lives entirely after headers arrive (exactly the pre-fix gap).
+  handler = (_req, res) => sendHeadersThenDelayedBody(res, 3000, successResponse());
+  const controller = new AbortController();
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k", maxModelRetries: 0 });
+  const start = Date.now();
+  await assert.rejects(
+    () => provider.invoke({ messages: baseMessages }, { timeoutMs: 200, signal: controller.signal }),
+    (error: unknown) => {
+      const cause = classifyAgentLoopProviderFailure(error);
+      assert.equal(cause.normalizedReason, "provider_timeout");
+      assert.notEqual(cause.errorCode, "invalid_json_response", "a deadline firing mid-body-read must never be misclassified as a malformed response");
+      return true;
+    }
+  );
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 2000, `must abort around the 200ms deadline, not wait out the full 3000ms body delay (took ${elapsed}ms)`);
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0, "the attempt's abort listener on the external signal must be removed even on the timeout path");
+});
+
+test("[HP26] response body completes just before the deadline -> success, not aborted", async () => {
+  handler = (_req, res) => sendHeadersThenDelayedBody(res, 100, successResponse());
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  const result = await provider.invoke({ messages: baseMessages }, { timeoutMs: 1000 });
+  assert.deepEqual(result.rawOutput, { type: "respond", message: "hola" });
+});
+
+test("[HP27] cleanup runs exactly once per attempt: the external signal's abort listener never leaks across retries", async () => {
+  let callCount = 0;
+  handler = (_req, res) => {
+    callCount += 1;
+    if (callCount <= 2) {
+      sendJson(res, 503, { error: "unavailable" });
+      return;
+    }
+    sendJson(res, 200, successResponse());
+  };
+  const controller = new AbortController();
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k", maxModelRetries: 2 });
+  const result = await provider.invoke({ messages: baseMessages }, { timeoutMs: 10000, signal: controller.signal });
+  assert.equal(callCount, 3, "sanity: 2 retried attempts + 1 success = 3 real attempts, each with its own attemptSignal");
+  assert.deepEqual(result.rawOutput, { type: "respond", message: "hola" });
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0, "every attempt's abort listener on the shared external signal must be removed - none should leak across retries");
+});
+
+test("[HP28] LLM-R1-T02 observability: a deadline firing mid-body-read is recorded as outcome=provider_timeout with a bounded elapsedMs, through the real runAgentToolLoop", async () => {
+  // Body withheld for 5000ms - if the deadline did not actually protect
+  // response.json() (the pre-fix defect), this call - and the whole turn -
+  // would hang out that full duration instead of aborting near timeoutMs.
+  handler = (_req, res) => sendHeadersThenDelayedBody(res, 5000, successResponse());
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k", maxModelRetries: 0 });
+  const start = Date.now();
+  const result = await runAgentToolLoop({
+    correlationId: "corr-t08a",
+    conversationId: 1,
+    opportunityId: null,
+    currentTime: "2026-08-13T15:00:00.000Z",
+    customerMessage: "hola",
+    commercialContextSummary: {},
+    provider,
+    timeoutMs: 300
+  });
+  const elapsed = Date.now() - start;
+  assert.equal(result.terminalReason, "timeout");
+  assert.equal(result.llmCalls.length, 1);
+  assert.equal(result.llmCalls[0].phase, "gathering");
+  assert.equal(result.llmCalls[0].outcome, "provider_timeout");
+  assert.ok(result.llmCalls[0].elapsedMs < 2000, `elapsedMs must reflect the real deadline, not the withheld 5000ms body (got ${result.llmCalls[0].elapsedMs})`);
+  assert.ok(elapsed < 2000, `the whole turn must not wait out the withheld body (took ${elapsed}ms)`);
 });

@@ -160,6 +160,34 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
 
       const deadline = Date.now() + options.timeoutMs;
 
+      /**
+       * LLM-R1-T08A. Shared classification for a transport-level failure at
+       * ANY point within one attempt - fetch() itself, or consuming the
+       * response body (response.json()) once headers already arrived. An
+       * external (turn-level) abort is never retried - there is no time
+       * left, and the caller already treats this as a timeout - so it
+       * always rethrows as-is. Anything else is either retry-eligible
+       * (backs off, caller starts a fresh attempt) or a final classified
+       * throw (an AbortError here means the per-attempt deadline itself
+       * expired mid-flight - classifyRawProviderError maps that to
+       * normalizedReason "provider_timeout", never "invalid_response").
+       * Never called for a fully-received-but-malformed body
+       * (invalid_json_response/invalid_model_json/empty_response) - those
+       * are content problems, not transport ones, and stay non-retryable at
+       * their own call sites below, never routed through this.
+       */
+      async function handleTransportFailure(error: unknown, attempt: number): Promise<"retry"> {
+        if (isAbortError(error) && options.signal?.aborted) {
+          throw error;
+        }
+        const remainingBudget = deadline - Date.now();
+        if (attempt < maxModelRetries && remainingBudget > 0) {
+          await sleep(Math.min(computeBackoffMs(attempt), remainingBudget), options.signal);
+          return "retry";
+        }
+        throw markAgentLoopProviderFailure(error, classifyRawProviderError(error, { model, attemptCount: attempt + 1, maxAttempts: maxModelRetries + 1 }));
+      }
+
       for (let attempt = 0; ; attempt += 1) {
         // ACS-R1-05.1-T02.3B (correction). Never start a new attempt once
         // the deadline has already passed - the old Math.max(1, ...) clamp
@@ -173,125 +201,138 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
         }
         const attemptSignal = buildAttemptSignal(options.signal, remainingMs);
 
-        let response: Response;
+        // LLM-R1-T08A. attemptSignal must stay armed for the WHOLE attempt -
+        // fetch() AND response.json() - not just fetch(). Cleaning it up the
+        // moment fetch() resolves (the pre-T08A bug) tears down the deadline
+        // timer and the external-abort listener before the response body is
+        // ever read, so a slow/hung response.json() (where a non-streaming
+        // completion's real generation time actually lives) had zero timeout
+        // protection: a real call was observed running 83641ms against a
+        // 20000ms deadline, still classified "success" (see
+        // docs/audits/SALES-AGENT-LLM-END-TO-END-LATENCY-AUDIT.md section 8).
+        // cleanup() now runs exactly once per attempt, in this finally,
+        // covering every exit path below (success return, retry continue, or
+        // throw).
         try {
-          response = await fetchImpl(endpoint, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json"
-            },
-            signal: attemptSignal.signal,
-            body: JSON.stringify({
+          let response: Response;
+          try {
+            response = await fetchImpl(endpoint, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json"
+              },
+              signal: attemptSignal.signal,
+              body: JSON.stringify({
+                model,
+                temperature,
+                ...(maxOutputTokens !== undefined ? { max_tokens: maxOutputTokens } : {}),
+                response_format: { type: "json_object" },
+                messages: request.messages
+              })
+            });
+          } catch (error) {
+            await handleTransportFailure(error, attempt);
+            continue;
+          }
+
+          if (!response.ok) {
+            const statusError = new Error(`Agent loop HTTP provider failed with status ${response.status}.`);
+            const remainingBudget = deadline - Date.now();
+            const retryable = RETRYABLE_HTTP_STATUSES.has(response.status);
+            if (retryable && attempt < maxModelRetries && remainingBudget > 0) {
+              await sleep(Math.min(computeBackoffMs(attempt), remainingBudget), options.signal);
+              continue;
+            }
+            throw markAgentLoopProviderFailure(
+              statusError,
+              classifyHttpStatusFailure(response.status, retryable, { model, attemptCount: attempt + 1, maxAttempts: maxModelRetries + 1 })
+            );
+          }
+
+          let data: OpenAiChatCompletionResponse;
+          try {
+            data = (await response.json()) as OpenAiChatCompletionResponse;
+          } catch (error) {
+            // LLM-R1-T08A. A pending body read that the deadline/external
+            // signal just aborted is a transport failure (provider_timeout),
+            // never the same thing as a fully-received-but-malformed body -
+            // the two used to collapse into the same "invalid JSON" throw
+            // below because cleanup() had already disarmed the signal by
+            // this point, so an abort here previously could not even happen.
+            if (isAbortError(error)) {
+              await handleTransportFailure(error, attempt);
+              continue;
+            }
+            throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned invalid JSON."), {
               model,
-              temperature,
-              ...(maxOutputTokens !== undefined ? { max_tokens: maxOutputTokens } : {}),
-              response_format: { type: "json_object" },
-              messages: request.messages
-            })
-          });
-        } catch (error) {
+              attemptCount: attempt + 1,
+              maxAttempts: maxModelRetries + 1,
+              httpStatus: response.status,
+              errorCode: "invalid_json_response",
+              errorClass: "InvalidProviderResponseError",
+              normalizedReason: "invalid_response",
+              retryable: false
+            });
+          }
+
+          const choice = data.choices?.[0];
+          const content = choice?.message?.content;
+          // LLM-R1-T02. `data` (and `choice`, when present) is already a
+          // successfully parsed response envelope at this point, even on the
+          // empty_response/invalid_model_json failure paths below - the exact
+          // same usage/finish_reason/id fields the success return already
+          // reads are available here too, never re-fetched, never guessed.
+          // Absent (undefined) only above, at the invalid_json_response throw,
+          // where no envelope was ever parsed at all.
+          const availableResponseMetadata = {
+            finishReason: choice?.finish_reason ?? null,
+            inputTokens: data.usage?.prompt_tokens ?? null,
+            outputTokens: data.usage?.completion_tokens ?? null,
+            providerRequestId: data.id ?? response.headers.get("x-request-id")
+          };
+          if (!content) {
+            throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned an empty response."), {
+              model,
+              attemptCount: attempt + 1,
+              maxAttempts: maxModelRetries + 1,
+              httpStatus: response.status,
+              errorCode: "empty_response",
+              errorClass: "InvalidProviderResponseError",
+              normalizedReason: "invalid_response",
+              retryable: false,
+              ...availableResponseMetadata
+            });
+          }
+
+          let rawOutput: unknown;
+          try {
+            rawOutput = parseModelJson(content);
+          } catch {
+            throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned invalid response JSON."), {
+              model,
+              attemptCount: attempt + 1,
+              maxAttempts: maxModelRetries + 1,
+              httpStatus: response.status,
+              errorCode: "invalid_model_json",
+              errorClass: "InvalidProviderResponseError",
+              normalizedReason: "invalid_response",
+              retryable: false,
+              ...availableResponseMetadata
+            });
+          }
+
+          return {
+            rawOutput,
+            model: data.model ?? model,
+            inputTokens: availableResponseMetadata.inputTokens,
+            outputTokens: availableResponseMetadata.outputTokens,
+            providerRequestId: availableResponseMetadata.providerRequestId,
+            finishReason: availableResponseMetadata.finishReason
+          };
+        } finally {
           attemptSignal.cleanup();
-          // The external (turn-level) deadline firing is never retried -
-          // there is no time left, and the caller already treats this as a
-          // timeout. Any other thrown error here (per-attempt timeout, a
-          // genuine connection failure) is a technical, transient failure.
-          if (isAbortError(error) && options.signal?.aborted) {
-            throw error;
-          }
-          const remainingBudget = deadline - Date.now();
-          if (attempt < maxModelRetries && remainingBudget > 0) {
-            await sleep(Math.min(computeBackoffMs(attempt), remainingBudget), options.signal);
-            continue;
-          }
-          throw markAgentLoopProviderFailure(error, classifyRawProviderError(error, { model, attemptCount: attempt + 1, maxAttempts: maxModelRetries + 1 }));
         }
-        attemptSignal.cleanup();
-
-        if (!response.ok) {
-          const statusError = new Error(`Agent loop HTTP provider failed with status ${response.status}.`);
-          const remainingBudget = deadline - Date.now();
-          const retryable = RETRYABLE_HTTP_STATUSES.has(response.status);
-          if (retryable && attempt < maxModelRetries && remainingBudget > 0) {
-            await sleep(Math.min(computeBackoffMs(attempt), remainingBudget), options.signal);
-            continue;
-          }
-          throw markAgentLoopProviderFailure(
-            statusError,
-            classifyHttpStatusFailure(response.status, retryable, { model, attemptCount: attempt + 1, maxAttempts: maxModelRetries + 1 })
-          );
-        }
-
-        let data: OpenAiChatCompletionResponse;
-        try {
-          data = (await response.json()) as OpenAiChatCompletionResponse;
-        } catch {
-          throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned invalid JSON."), {
-            model,
-            attemptCount: attempt + 1,
-            maxAttempts: maxModelRetries + 1,
-            httpStatus: response.status,
-            errorCode: "invalid_json_response",
-            errorClass: "InvalidProviderResponseError",
-            normalizedReason: "invalid_response",
-            retryable: false
-          });
-        }
-
-        const choice = data.choices?.[0];
-        const content = choice?.message?.content;
-        // LLM-R1-T02. `data` (and `choice`, when present) is already a
-        // successfully parsed response envelope at this point, even on the
-        // empty_response/invalid_model_json failure paths below - the exact
-        // same usage/finish_reason/id fields the success return already
-        // reads are available here too, never re-fetched, never guessed.
-        // Absent (undefined) only above, at the invalid_json_response throw,
-        // where no envelope was ever parsed at all.
-        const availableResponseMetadata = {
-          finishReason: choice?.finish_reason ?? null,
-          inputTokens: data.usage?.prompt_tokens ?? null,
-          outputTokens: data.usage?.completion_tokens ?? null,
-          providerRequestId: data.id ?? response.headers.get("x-request-id")
-        };
-        if (!content) {
-          throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned an empty response."), {
-            model,
-            attemptCount: attempt + 1,
-            maxAttempts: maxModelRetries + 1,
-            httpStatus: response.status,
-            errorCode: "empty_response",
-            errorClass: "InvalidProviderResponseError",
-            normalizedReason: "invalid_response",
-            retryable: false,
-            ...availableResponseMetadata
-          });
-        }
-
-        let rawOutput: unknown;
-        try {
-          rawOutput = parseModelJson(content);
-        } catch {
-          throw markAgentLoopProviderFailure(new Error("Agent loop HTTP provider returned invalid response JSON."), {
-            model,
-            attemptCount: attempt + 1,
-            maxAttempts: maxModelRetries + 1,
-            httpStatus: response.status,
-            errorCode: "invalid_model_json",
-            errorClass: "InvalidProviderResponseError",
-            normalizedReason: "invalid_response",
-            retryable: false,
-            ...availableResponseMetadata
-          });
-        }
-
-        return {
-          rawOutput,
-          model: data.model ?? model,
-          inputTokens: availableResponseMetadata.inputTokens,
-          outputTokens: availableResponseMetadata.outputTokens,
-          providerRequestId: availableResponseMetadata.providerRequestId,
-          finishReason: availableResponseMetadata.finishReason
-        };
       }
     }
   };
