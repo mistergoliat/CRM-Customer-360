@@ -166,11 +166,23 @@ async function runPlannerPhase(input: {
   }
 }
 
-function buildRespondedResult(step: AgentStepRespond, steps: AgentLoopStepRecord[], toolExecutionCount: number, warnings: string[], llmCalls: AgentLoopInferenceRecord[]): AgentLoopResult {
+function buildRespondedResult(
+  step: AgentStepRespond,
+  steps: AgentLoopStepRecord[],
+  toolExecutionCount: number,
+  warnings: string[],
+  llmCalls: AgentLoopInferenceRecord[],
+  correlationId: string
+): AgentLoopResult {
   const mutationClaimCheck = checkUnbackedCommercialMutationClaim({ terminalReason: "responded", finalMessage: step.message, steps });
   if (mutationClaimCheck.unbacked) {
     warnings.push(`agent_loop_mutation_claim_blocked:${mutationClaimCheck.matchedPattern ?? "unknown"}`);
   }
+  // LLM-R1-T09B, Part 9. Bounded, enum-only observability of the Commercial
+  // Mutation Execution Guard's own decision - never the claimed/final message
+  // text, never reasoning. Pure additive logging; the guard's logic above is
+  // unchanged (Part 3's "no modificar... mutation guard salvo bug real").
+  console.info({ event: "multi_intent_mutation_guard_evaluated", correlationId, claimed: mutationClaimCheck.claimed, backed: mutationClaimCheck.backed, blocked: mutationClaimCheck.unbacked });
   const finalMessage = mutationClaimCheck.unbacked ? MUTATION_CLAIM_GUARD_FALLBACK_MESSAGE : step.message;
   // T09A scope: no send_product_link continuity in the multi-intent path
   // (Part 26 - this task orchestrates existing capabilities, never a new
@@ -315,7 +327,7 @@ export async function runCommercialMultiIntentLoop(input: RunAgentToolLoopInput)
     stepRecords.push({ stepIndex: stepRecords.length, step, governance: null, observation: null, phase: "finalization" });
 
     if (step.type === "respond") {
-      const result = buildRespondedResult(step, stepRecords, toolExecutionCount, warnings, llmCalls);
+      const result = buildRespondedResult(step, stepRecords, toolExecutionCount, warnings, llmCalls, input.correlationId);
       console.info({ event: "multi_intent_finalizer_completed", correlationId: input.correlationId, finalizerElapsedMs: Date.now() - finalizerStartedAt });
       return result;
     }

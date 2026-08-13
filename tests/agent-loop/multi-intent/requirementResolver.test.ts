@@ -22,6 +22,51 @@ test("[MI-Resolve-1] select_products with an exact RecentCatalogContext match re
 });
 
 // Part 21 test 7: producto ausente.
+// LLM-R1-T09B real bug (WA01 live smoke): the planner returned "la classic"
+// for "quiero 2 de la classic" - a leading Spanish article that made neither
+// direction of the old pure-substring match succeed against the real
+// product name. Regression test for the fix (stripLeadingFillerWords).
+test("[MI-Resolve-1b] a productReference with a leading Spanish article (\"la classic\") still resolves against the real product name", () => {
+  const context = baseContext({ recentCatalogContext: catalogContext([{ productId: "31", name: "Barra Olimpica Classic 20kg" }]) });
+  const [resolved] = resolveCommercialIntentPlan([{ type: "select_products", productReference: "la classic", quantity: 2 }], context);
+  assert.equal(resolved.status, "ready");
+  const product = resolved.requirements.find((r) => r.type === "PRODUCT");
+  assert.equal(product?.status, "resolved");
+  if (product?.status === "resolved") assert.equal((product.value as { productId: string }).productId, "31");
+});
+
+test("[MI-Resolve-1c] a leading filler word is never stripped from a real product name that starts with one (e.g. a hypothetical \"La Roca\")", () => {
+  const context = baseContext({ recentCatalogContext: catalogContext([{ productId: "99", name: "La Roca 24kg" }, { productId: "31", name: "Barra Olimpica Classic 20kg" }]) });
+  const [resolved] = resolveCommercialIntentPlan([{ type: "select_products", productReference: "la roca", quantity: 1 }], context);
+  const product = resolved.requirements.find((r) => r.type === "PRODUCT");
+  assert.equal(product?.status, "resolved");
+  if (product?.status === "resolved") assert.equal((product.value as { productId: string }).productId, "99", "matches La Roca, not Classic");
+});
+
+// LLM-R1-T09B real bug (WA03/WA05 live smoke): the Catalog Service's own
+// "no variant" sentinel (combinationId 0, PrestaShop convention) was being
+// carried forward as if it were a real, specific variant id - persisted,
+// then rejected by calculate_shipping's batch round-trip. "0" must never
+// survive as a resolved combinationId.
+test("[MI-Resolve-1d] a RecentCatalogContext product with combinationId \"0\" (Catalog Service's \"no variant\" sentinel) resolves without a combinationId", () => {
+  const context: RequirementResolverContext = {
+    commercialContextSummary: {},
+    recentCatalogContext: { interactions: [{ inboundMessageId: "m1", completedAt: new Date().toISOString(), sourceTool: "search_products", products: [{ productId: "31", name: "Barra Olimpica Classic 20kg", combinationId: "0" }] }] }
+  };
+  const [resolved] = resolveCommercialIntentPlan([{ type: "select_products", productReference: "Classic", quantity: 1 }], context);
+  const product = resolved.requirements.find((r) => r.type === "PRODUCT");
+  assert.equal(product?.status, "resolved");
+  if (product?.status === "resolved") assert.equal((product.value as { combinationId?: string }).combinationId, undefined);
+});
+
+test("[MI-Resolve-1e] a durable line item with combinationId \"0\" resolves without a combinationId", () => {
+  const context = baseContext({ commercialContextSummary: { commercialLineItems: { items: [{ productId: "31", combinationId: "0", quantity: 1 }] } } });
+  const [resolved] = resolveCommercialIntentPlan([{ type: "select_products", quantity: 2 }], context);
+  const product = resolved.requirements.find((r) => r.type === "PRODUCT");
+  assert.equal(product?.status, "resolved");
+  if (product?.status === "resolved") assert.equal((product.value as { combinationId?: string }).combinationId, undefined);
+});
+
 test("[MI-Resolve-2] select_products with no matching evidence leaves PRODUCT missing, never invented", () => {
   const context = baseContext({ recentCatalogContext: catalogContext([{ productId: "31", name: "Barra Olimpica Classic 20kg" }]) });
   const [resolved] = resolveCommercialIntentPlan([{ type: "select_products", productReference: "mancuerna", quantity: 1 }], context);

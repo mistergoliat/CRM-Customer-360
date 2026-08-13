@@ -44,6 +44,27 @@ const UNRESOLVED_PRODUCT_REFERENCE_WORDS = new Set([
 const MIN_PRODUCT_REFERENCE_LENGTH = 3;
 const MAX_AMBIGUOUS_CANDIDATES = 5;
 
+/**
+ * LLM-R1-T09B (real bug found live during the WhatsApp smoke - WA01: the
+ * planner returned productReference "la classic" for the customer message
+ * "quiero 2 de la classic"; neither "la classic" nor "barra olimpica classic
+ * 20kg" is a substring of the other, so the previously pure-substring match
+ * missed a real, unambiguous product). The planner is instructed to name the
+ * product "as specifically as the customer did" (buildIntentPlannerPromptPackage.ts),
+ * which correctly and often includes the customer's own leading Spanish
+ * article - relying on prompt compliance alone to never include one would be
+ * probabilistic, not deterministic. Stripped as whole leading words only
+ * (never mid-string, so a real product literally named e.g. "La Roca" is
+ * never mangled) before the fuzzy match below.
+ */
+const LEADING_FILLER_WORDS = new Set(["la", "el", "los", "las", "un", "una", "unos", "unas", "de", "del"]);
+
+function stripLeadingFillerWords(normalized: string): string {
+  const words = normalized.split(/\s+/).filter(Boolean);
+  while (words.length > 1 && LEADING_FILLER_WORDS.has(words[0])) words.shift();
+  return words.join(" ");
+}
+
 /** Diacritic combining marks (Unicode block 0x0300-0x036F) stripped by code point, not by regex literal, to keep this ASCII-only source file free of embedded combining characters. */
 const COMBINING_MARK_RANGE_START = 0x0300;
 const COMBINING_MARK_RANGE_END = 0x036f;
@@ -65,15 +86,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * LLM-R1-T09B (real bug found live during the WhatsApp smoke - WA03/WA05:
+ * the Catalog Service's search results carry combinationId 0 for a product
+ * with no specific variant selected, PrestaShop's own "no combination"
+ * sentinel - see environment.ts's searchItemPayload/BENCHMARK products). "0"
+ * is a non-empty, truthy string, so it was being carried forward as if it
+ * were a real, specific variant id - persisted into commercial_line_items,
+ * then sent back to the Catalog Service's batch endpoint on calculate_shipping,
+ * where it does not round-trip identically and calculateShippingCapability.ts's
+ * own defensive "this should be unreachable" mismatch guard fired for real.
+ * Normalized once here, the single place catalog evidence turns into a
+ * ResolvedProductCandidate - every downstream consumer (matching, the
+ * resolved PRODUCT value, the select_products arguments the executor builds)
+ * never sees a "0" combinationId again.
+ */
+function normalizeCombinationId(value: string | null | undefined): string | undefined {
+  return value && value !== "0" ? value : undefined;
+}
+
 function collectCatalogCandidates(recentCatalogContext: RecentCatalogContext | null): ResolvedProductCandidate[] {
   const candidates: ResolvedProductCandidate[] = [];
   const seen = new Set<string>();
   for (const interaction of recentCatalogContext?.interactions ?? []) {
     for (const product of interaction.products) {
-      const key = `${product.productId}:${product.combinationId ?? ""}`;
+      const combinationId = normalizeCombinationId(product.combinationId);
+      const key = `${product.productId}:${combinationId ?? ""}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      candidates.push({ productId: product.productId, ...(product.combinationId ? { combinationId: product.combinationId } : {}), name: product.name });
+      candidates.push({ productId: product.productId, ...(combinationId ? { combinationId } : {}), name: product.name });
     }
   }
   return candidates;
@@ -82,9 +123,11 @@ function collectCatalogCandidates(recentCatalogContext: RecentCatalogContext | n
 function matchProductReference(reference: string, candidates: ResolvedProductCandidate[]): ResolvedProductCandidate[] {
   const normalizedRef = normalizeText(reference);
   if (normalizedRef.length < MIN_PRODUCT_REFERENCE_LENGTH || UNRESOLVED_PRODUCT_REFERENCE_WORDS.has(normalizedRef)) return [];
+  const strippedRef = stripLeadingFillerWords(normalizedRef);
+  if (strippedRef.length < MIN_PRODUCT_REFERENCE_LENGTH) return [];
   return candidates.filter((candidate) => {
     const normalizedName = normalizeText(candidate.name);
-    return normalizedName.includes(normalizedRef) || normalizedRef.includes(normalizedName);
+    return normalizedName.includes(strippedRef) || strippedRef.includes(normalizedName);
   });
 }
 
@@ -121,11 +164,12 @@ function resolveProductRequirement(intent: { productReference?: string }, contex
   const durableItems = readDurableCommercialLineItems(context.commercialContextSummary);
   if (durableItems.length === 1) {
     const item = durableItems[0];
+    const combinationId = normalizeCombinationId(item.combinationId);
     return {
       type: "PRODUCT",
       status: "resolved",
       source: "durable_state",
-      value: { productId: item.productId, ...(item.combinationId ? { combinationId: item.combinationId } : {}) }
+      value: { productId: item.productId, ...(combinationId ? { combinationId } : {}) }
     };
   }
 

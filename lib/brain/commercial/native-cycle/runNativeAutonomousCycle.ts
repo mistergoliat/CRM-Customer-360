@@ -20,7 +20,8 @@ import {
   buildCommercialCyclePolicyFlags,
   buildCommercialCycleTimeouts,
   buildCommercialSalesAgentDryRun,
-  readEnvFlag
+  readEnvFlag,
+  shouldRouteToMultiIntentPlanner
 } from "../config/commercialCycleConfig";
 import { runNativeAgentToolLoopCycle, runNativeAgentToolLoopCycleConfigurationFailure } from "../agent-loop";
 import type { NativeAgentToolLoopCycleResult } from "../agent-loop";
@@ -417,7 +418,14 @@ export async function runNativeAutonomousCycle(
           model: resolvedSalesAgentConfiguration.effectiveModelConfiguration.model,
           temperature: resolvedSalesAgentConfiguration.effectiveModelConfiguration.temperature,
           maxOutputTokens: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxOutputTokens,
-          maxModelRetries: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxModelRetries
+          maxModelRetries: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxModelRetries,
+          // LLM-R1-T09B. thinking is omitted (provider default, "enabled" -
+          // KEEP_THINKING_ENABLED, audit doc section 15) for every turn EXCEPT
+          // one routed to the allowlisted multi-intent planner, which was only
+          // ever live-validated (T09A) with thinking=disabled - never a global
+          // production configuration change, only this specific, narrow,
+          // already-gated path.
+          ...(shouldRouteToMultiIntentPlanner(input.waId) ? { thinking: "disabled" as const } : {})
         }),
       trustedCustomerSession: session.execution,
       recentCatalogContext: recentCatalogContextResult.context,

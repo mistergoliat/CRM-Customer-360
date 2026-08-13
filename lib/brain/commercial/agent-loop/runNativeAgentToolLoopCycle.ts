@@ -1,7 +1,7 @@
 import { runAgentToolLoop } from "./runAgentToolLoop";
 import type { RunAgentToolLoopInput } from "./runAgentToolLoop";
 import { runCommercialMultiIntentLoop } from "../multi-intent/runCommercialMultiIntentLoop";
-import { buildMultiIntentPlannerFeatureFlags } from "../config/commercialCycleConfig";
+import { shouldRouteToMultiIntentPlanner } from "../config/commercialCycleConfig";
 import { dispatchAgentLoopResponse, type DispatchAgentLoopResponseResult } from "./dispatchAgentLoopResponse";
 import { recordAgentToolLoopCompletedCommercialEvent } from "../events/service";
 import type { AgentToolLoopLlmCallSummary, AgentToolLoopLlmMetricsPayload, AgentToolLoopStepSummary } from "../events/types";
@@ -542,10 +542,12 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     maxToolExecutions: effectiveLoopConfiguration.maxToolCallsPerTurn,
     timeoutMs: effectiveModelConfiguration.timeoutMs
   };
-  // LLM-R1-T09A. Default false: byte/semantically identical to before this
-  // task (Part 18). Both loops share the exact same input/output contract -
-  // only which one runs for this turn changes.
-  const loop = buildMultiIntentPlannerFeatureFlags().multiIntentPlannerEnabled
+  // LLM-R1-T09A/T09B. Default false, and even when the flag is on, only this
+  // exact waId being one of BRAIN_AUTONOMOUS_TEST_WA_IDS routes here - every
+  // other waId (and any ambiguous/empty allowlist configuration) stays on the
+  // legacy path, byte/semantically identical to before T09A. Both loops share
+  // the exact same input/output contract - only which one runs changes.
+  const loop = shouldRouteToMultiIntentPlanner(input.waId)
     ? await runCommercialMultiIntentLoop(agentToolLoopInput)
     : await runAgentToolLoop(agentToolLoopInput);
 

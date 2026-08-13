@@ -3,7 +3,7 @@ title: SALES-AGENT-LLM-MODEL-BENCHMARK-DECISION — Agent Tool Loop Model Suitab
 doc_id: audit-sales-agent-llm-model-benchmark-decision
 status: live_benchmark_executed_benchmark_alternatives
 owner: architecture
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-14
 source_of_truth_for:
   - Agent Tool Loop model suitability verdict (deepseek-v4-flash)
   - Bounded Action Plan future-architecture classification
@@ -11,6 +11,7 @@ source_of_truth_for:
   - non-thinking prompt-repair verdict (PROMPT_FIX_PARTIAL)
   - Commercial Mutation Execution Guard verdict (MUTATION_GUARD_ONLY)
   - Backend Multi-Intent Planning + Requirement Resolution architecture verdict (MULTI_INTENT_ARCHITECTURE_VALIDATED)
+  - WhatsApp allowlisted multi-intent smoke verdict (WHATSAPP_SMOKE_VALIDATED)
 depends_on:
   - ./SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md
   - ./SALES-AGENT-LLM-END-TO-END-LATENCY-AUDIT.md
@@ -26,6 +27,7 @@ depends_on:
   - ../releases/LLM-R1-T08C-nonthinking-tool-execution-repair.md
   - ../releases/LLM-R1-T08D-multi-intent-tool-budget-and-mutation-guard.md
   - ../releases/LLM-R1-T09A-multi-intent-planning-and-requirement-resolution.md
+  - ../releases/LLM-R1-T09B-whatsapp-allowlisted-multi-intent-smoke.md
   - ../architecture/commercial-multi-intent-planning.md
 tags:
   - audit
@@ -240,4 +242,39 @@ Production feature flag enabled: NO
 Production thinking configuration changed: NO
 Verdict: MULTI_INTENT_ARCHITECTURE_VALIDATED
 Next: LLM-R1-T09B - enable BRAIN_MULTI_INTENT_PLANNER_ENABLED for BRAIN_AUTONOMOUS_TEST_WA_IDS only, real WhatsApp smoke
+```
+
+---
+
+## 19. WhatsApp Allowlisted Multi-Intent Smoke (`LLM-R1-T09B`)
+
+Makes `BRAIN_MULTI_INTENT_PLANNER_ENABLED` safe to enable for real: routing scoped to `BRAIN_AUTONOMOUS_TEST_WA_IDS`, fail-closed on ambiguous configuration (flag on + empty allowlist routes nobody, never "everyone"). Full detail, bug fixes, and per-case evidence in `docs/releases/LLM-R1-T09B-whatsapp-allowlisted-multi-intent-smoke.md` - summary here, sections 1-18 unchanged.
+
+**Real code path, not synthetic inputs.** This is the first task in the whole `LLM-R1` series to drive the multi-intent runtime through `processNativeWhatsAppInbound` (the exact function the real webhook route calls) instead of a benchmark harness's directly-injected `RunAgentToolLoopInput`. This dev environment's Meta webhook is not wired to it (pre-existing, confirmed constraint) - a literal phone-to-phone round trip was not achievable regardless; only the final Meta send is faked (`BRAIN_META_SEND_ENABLED=false`), everything else (DB, live LLM, dispatch, capability persistence) is real.
+
+**WA01-WA07: 7/7 PASS**, `deepseek-v4-flash`, `thinking=disabled` (only for the allowlisted turns - production's global default, `thinking` omitted/provider-default, is untouched for every other turn). 0 unbacked mutation claims, 0 provider timeouts, 2.00 LLM calls/turn, `completeTurnLatencyMsP50` ~3.0s / p95 ~3.3s across 7 live test turns.
+
+**Two real bugs found and fixed, both in requirementResolver.ts, both classified `REQUIREMENT_RESOLUTION`, both only reachable through real conditions T09A's own tests/benchmark never exercised**: (1) a leading Spanish article ("la classic") defeated the pure-substring product match - fixed by stripping a small, fixed set of leading filler words from the reference only, never from the product name itself; (2) the Catalog Service's own "no variant" sentinel (`combinationId: 0`) was carried forward as if it were a real, specific variant id, eventually tripping `calculateShippingCapability.ts`'s own defensive "unreachable" mismatch guard for real - fixed by normalizing `"0"` to absent at the two points combinationId is read from evidence. Both have regression tests.
+
+**One pre-existing, out-of-scope infrastructure gap found and documented, not fixed**: `LOGISTICS_DB_ENABLED` is not configured in this dev environment, so the real commune resolver cannot reach `pc_pos.comuna` at all - confirmed directly (`configuration_unavailable`). Affects the legacy loop identically; not specific to T09A/T09B. The system's own response is correct and honest (a retryable, honestly-communicated block, never a fabricated commune or cost) - independently confirmed via a supplementary run using T09A's own already-live-validated commune/Carrier fixture, which produced a real quote once a working resolver was available.
+
+**One additional non-blocking finding, documented per the task's own "si implica rediseno arquitectonico, detener y documentar"**: the whole Agent Tool Loop family (legacy and multi-intent, neither modified here) has no mechanism of its own to create a `crm_opportunities` row - only the legacy `persistCommercialState` pipeline does, bypassed entirely by this family. Every prior benchmark/test (including T09A's own) side-stepped this with a synthetic `opportunityId`; this is the first task to go through a real, brand-new conversation and surface it. Worked around locally in the smoke harness only (a real, DB-linked seed row, never a production code change) - a candidate for its own future task.
+
+**Verdict: `WHATSAPP_SMOKE_VALIDATED`.** Production's global routing and global `thinking` configuration are both unchanged - `BRAIN_MULTI_INTENT_PLANNER_ENABLED` still defaults to `false`, and even when true, only an explicitly allowlisted `waId` is ever affected.
+
+```text
+LLM-R1-T09B: DONE
+Branch: feat/llm-r1-t09b-whatsapp-allowlisted-smoke
+Allowlist routing: PASS
+WA01-WA07: 7/7 PASS
+Unbacked mutation claims: 0
+Provider timeouts: 0
+Multi-intent path non-allowlisted leakage: NO
+Pending intent durable: YES
+Average LLM calls/turn: 2.00
+Turn latency: p50=3011ms p95=3314ms (n=7)
+Production global thinking changed: NO
+Production global routing changed: NO
+Verdict: WHATSAPP_SMOKE_VALIDATED
+Next: LLM-R1-T09C - resolve the LOGISTICS_DB_ENABLED gap so a real commune/shipping quote can be demonstrated without --fake-commune; separately, investigate Agent Tool Loop opportunity creation as its own task
 ```
