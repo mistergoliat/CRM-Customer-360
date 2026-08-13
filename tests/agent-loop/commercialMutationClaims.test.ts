@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkUnbackedCommercialMutationClaim } from "@/lib/brain/commercial/agent-loop/benchmark/unbackedCommercialMutationClaims";
+import { checkUnbackedCommercialMutationClaim } from "@/lib/brain/commercial/agent-loop/commercialMutationClaims";
 import type { AgentLoopStepRecord } from "@/lib/brain/commercial/agent-loop/agentStepTypes";
 
 function completedSelectProductsStep(): AgentLoopStepRecord {

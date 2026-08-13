@@ -13,6 +13,7 @@ import type { RecentCatalogContext } from "./recentCatalogContext";
 import { classifyAgentLoopProviderFailure, logAgentLoopProviderFailure } from "./providers/providerFailureClassification";
 import { buildPendingCatalogActionFromRecommendation, collectAllowedProductIds, matchesPendingCatalogActionCandidate, normalizePendingCatalogActionForEvidence } from "./pendingCatalogAction";
 import { resolveObservedRecommendationSourceProduct } from "./resolveObservedRecommendationSourceProduct";
+import { checkUnbackedCommercialMutationClaim } from "./commercialMutationClaims";
 
 /**
  * ACS-R1-05.1-T02.1 (spec section 5). Fixed, backend-owned pool - never
@@ -63,6 +64,16 @@ const DEFAULT_TIMEOUT_MS = 20000;
 /** One initial attempt + one format retry - see dispatchAgentLoopResponse.ts for the fallback this feeds when both fail. */
 const FINALIZATION_MAX_ATTEMPTS = 2;
 const FINALIZATION_ALLOWED_TYPES = ["respond", "handoff"] as const;
+/**
+ * LLM-R1-T08D, Parte 5 (Commercial Mutation Execution Guard). Fixed, honest,
+ * backend-authored fallback - never invents that anything was persisted,
+ * never a partial rewrite of the model's own (untrusted, in this exact case)
+ * message. Spanish, matching every other fixed customer-facing string this
+ * loop already emits verbatim (e.g. buildAgentStepPromptPackage.ts's
+ * COMMERCIAL_CLOSING_RULE_LINES).
+ */
+const MUTATION_CLAIM_GUARD_FALLBACK_MESSAGE =
+  "Necesito un momento mas para confirmar tu seleccion antes de continuar - ¿puedes confirmarme nuevamente que producto y cantidad quieres?";
 
 export type RunAgentToolLoopInput = {
   correlationId: string;
@@ -565,8 +576,24 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
    * Kept as one shared closure instead of duplicating it at both call sites.
    */
   const respondedResult = (step: AgentStepRespond): AgentLoopResult => {
+    // LLM-R1-T08D, Parte 5 (Commercial Mutation Execution Guard). Fail
+    // closed: a response can never reach the customer claiming a product
+    // selection/quantity/order is done unless this turn's own steps show a
+    // select_products observation actually completing it. `backed` is pure
+    // structural evidence (steps this turn) - never regex; the pattern match
+    // only decides whether step.message reads as a completion claim at all,
+    // per commercialMutationClaims.ts's own discipline. When it fires, the
+    // model's own message AND any pendingCatalogAction it attached are both
+    // discarded - once one claim in a step is untrusted, nothing else in
+    // that same step is selectively trusted either.
+    const mutationClaimCheck = checkUnbackedCommercialMutationClaim({ terminalReason: "responded", finalMessage: step.message, steps });
+    if (mutationClaimCheck.unbacked) {
+      warnings.push(`agent_loop_mutation_claim_blocked:${mutationClaimCheck.matchedPattern ?? "unknown"}`);
+    }
+    const finalMessage = mutationClaimCheck.unbacked ? MUTATION_CLAIM_GUARD_FALLBACK_MESSAGE : step.message;
+
     const normalizedPendingCatalogAction = normalizePendingCatalogActionForEvidence({
-      pendingCatalogAction: step.pendingCatalogAction ?? null,
+      pendingCatalogAction: mutationClaimCheck.unbacked ? null : (step.pendingCatalogAction ?? null),
       recentCatalogContext: input.recentCatalogContext ?? null,
       toolObservations: steps.map((record) => record.observation),
       correlationId: input.correlationId
@@ -602,7 +629,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     }
     const finalPendingCatalogAction = modelPendingCatalogAction ?? recommendationPendingCatalogAction;
 
-    return { ran: true, terminalReason: "responded", steps, toolExecutionCount, finalMessage: step.message, handoffReason: null, warnings, finalPendingCatalogAction, llmCalls };
+    return { ran: true, terminalReason: "responded", steps, toolExecutionCount, finalMessage, handoffReason: null, warnings, finalPendingCatalogAction, llmCalls };
   };
 
   // ---- Phase 1: gathering ----

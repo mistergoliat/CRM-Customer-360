@@ -502,6 +502,15 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     // actually callable, never saw it).
     ...SHIPPING_DESTINATION_RULE_LINES,
     ...SELECT_PRODUCTS_RULE_LINES,
+    // LLM-R1-T08D. Gathering-only, deliberately never added to
+    // SELECT_PRODUCTS_RULE_LINES/its finalization suffix - prioritization
+    // between tools is only ever a live decision while tools are actually
+    // offered. A multi-intent message with a limited tool budget must not let
+    // a read/setup action for a secondary intent (or a redundant re-verify
+    // call for a product already evidenced) crowd out completing the
+    // mutation the customer already confirmed - the C09 pattern this task
+    // fixes (docs/releases/LLM-R1-T08D-multi-intent-tool-budget-and-mutation-guard.md).
+    "When the customer's message asks for more than one thing and completing all of them would need more tool calls than you have left this turn, prioritize the tool that commits what they explicitly confirmed (e.g. select_products for a stated product and quantity) over a tool that only prepares or answers a secondary request in the same message (e.g. set_shipping_destination, or get_product_details used only to re-verify a product you can already identify from recentCatalogContext or this turn's own observations) - finish the confirmed commitment first, then offer to continue with the rest next.",
     ...CALCULATE_SHIPPING_RULE_LINES,
     ...STOCK_DISCLOSURE_RULE_LINES,
     ...COMMERCIAL_CLOSING_RULE_LINES,

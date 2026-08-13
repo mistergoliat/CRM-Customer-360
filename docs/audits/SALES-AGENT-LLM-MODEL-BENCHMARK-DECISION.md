@@ -9,6 +9,7 @@ source_of_truth_for:
   - Bounded Action Plan future-architecture classification
   - deepseek-v4-flash thinking vs. non-thinking verdict (KEEP_THINKING_ENABLED)
   - non-thinking prompt-repair verdict (PROMPT_FIX_PARTIAL)
+  - Commercial Mutation Execution Guard verdict (MUTATION_GUARD_ONLY)
 depends_on:
   - ./SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md
   - ./SALES-AGENT-LLM-END-TO-END-LATENCY-AUDIT.md
@@ -22,6 +23,7 @@ depends_on:
   - ../releases/LLM-R1-T08A-provider-deadline-enforcement-fix.md
   - ../releases/LLM-R1-T08B-deepseek-thinking-mode-benchmark.md
   - ../releases/LLM-R1-T08C-nonthinking-tool-execution-repair.md
+  - ../releases/LLM-R1-T08D-multi-intent-tool-budget-and-mutation-guard.md
 tags:
   - audit
   - sales-agent
@@ -144,6 +146,22 @@ Responde la pregunta que la seccion 15 dejo abierta: **¿un refuerzo de prompt/c
 **Veredicto: `PROMPT_FIX_PARTIAL`**. Mejora significativa y real (no ruido: 20x en completion, reduccion de dos tercios en el hallazgo critico), pero C09 sigue sin resolverse - no califica para `PROMPT_FIX_SUFFICIENT` (que exige `unbackedCommercialMutationClaimRate=0%`). Proxima tarea propuesta: `LLM-R1-T08D` - Commercial Mutation Execution Guard, un guard de runtime dirigido especificamente al patron de agotamiento de presupuesto de C09 (fuera de alcance de `T08C`, que se mantuvo deliberadamente solo-prompt).
 
 **Produccion no cambio de configuracion** (`thinking` sigue benchmark-only, nunca seteado por `runNativeAutonomousCycle.ts`) - el veredicto de modelo/modo de produccion sigue siendo el de la seccion 15 (`thinking=enabled`, via `KEEP_THINKING_ENABLED`) hasta que `LLM-R1-T08D` cierre la brecha de C09. El prompt SI cambio (2 lineas aditivas, de bajo riesgo, activas ahora mismo para cualquier caller incluido el camino `thinking=enabled` actual - una correccion de contrato, no un cambio de veredicto de modelo). No se reescribe ningun resultado de las secciones 1-15.
+
+## 17. Presupuesto de tools multi-intencion y Commercial Mutation Execution Guard (`LLM-R1-T08D`)
+
+Responde la pregunta que la seccion 16 dejo abierta: ¿por que C09 sigue fallando incluso con el refuerzo de prompt de `T08C`, y que evita que el cliente reciba una confirmacion comercial falsa mientras tanto? Auditoria completa, evidencia de codigo y datos crudos en `docs/releases/LLM-R1-T08D-multi-intent-tool-budget-and-mutation-guard.md` - resumen aqui, sin reescribir la seccion 16.
+
+**Causa raiz confirmada por lectura de codigo (no supuesta)**: `maxToolExecutions=2` nunca fue el limite real - el propio `groundTruth` de C09 (`tests/fixtures/agent-loop-benchmark/corpus.ts`) exige solo `select_products` este turno, diseñado para completarse en 2 llamadas (`get_product_details` + `select_products`), difiriendo el despacho a un turno siguiente. `get_product_details` es **redundante** para C09: el evidence gate (`resolveObservedRecommendationSourceProduct.ts`) acepta `recentCatalogContext` de un turno anterior como evidencia valida, sin necesitar ninguna llamada este turno - confirmado leyendo el gate real, no asumido. La causa real es **priorizacion**: con presupuesto compartido entre dos sub-intenciones visibles, el modelo gasta ambos slots en lecturas (verificar el producto + resolver el destino de envio) en vez de completar la unica mutacion (`select_products`) que el cliente confirmo sin ambigüedad.
+
+**Estrategia elegida: Option A** (presupuesto sin cambios, `maxToolExecutions` sigue en 2) - se agrego una regla de prioridad al prompt (solo gathering) indicando que, ante multiples intenciones y presupuesto limitado, la tool que compromete lo ya confirmado (`select_products`) debe priorizarse sobre lecturas para una intencion secundaria.
+
+**Commercial Mutation Execution Guard, implementado en runtime** (obligatorio independientemente del resultado de la estrategia de presupuesto): en `runAgentToolLoop.ts`, ningun `respond` puede afirmar una seleccion/cantidad/pedido completado sin una observacion `select_products` con `status:"completed"` este turno - evidencia estructural, nunca regex, para esa parte; el matching de texto (reutiliza el heuristico de `T08C`, relocado de `benchmark/` a `lib/brain/commercial/agent-loop/commercialMutationClaims.ts` porque ahora es codigo de produccion real) solo decide si el mensaje *afirma* algo, nunca si es confiable. Falla cerrado: descarta el mensaje y cualquier `pendingCatalogAction` del modelo, sustituye una respuesta honesta fija, reutiliza el terminalReason existente (`"responded"`), nunca inventa persistencia.
+
+**Resultado, benchmark focalizado live (C09, `thinking=disabled`, 10 runs, mismo runtime `T08A`)**: `select_products` completion se mueve de 0% a solo **10%** - el refuerzo de prompt de la Parte 6 **no cambio de forma confiable el comportamiento en vivo del modelo** (9/10 runs siguen gastando el presupuesto en lecturas). Pero `unbackedCommercialMutationClaimRate` cae de 100% a **0%** - el guard bloqueo correctamente las 9 confirmaciones falsas que se habrian enviado, sustituyendolas por una respuesta honesta. C02/C04 (`thinking=disabled`, 10 runs cada uno) se re-confirmaron en 100% de completion, 0% unbacked - sin regresion de `T08C`. El corpus completo de 12 casos **no se corrio** (gate de esta tarea: completion combinado C02+C04+C09 >= 90%; resultado real 70%).
+
+**Veredicto: `MUTATION_GUARD_ONLY`** - el flujo de C09 sigue sin completarse de forma confiable, pero el guard elimina las afirmaciones falsas por completo en esta muestra. Proxima tarea propuesta: `LLM-R1-T08E` - evaluar Option B (`maxToolExecutions=3`) de forma aislada, ya que el refuerzo de prompt (Option A) no logro cambiar el comportamiento en vivo de forma confiable.
+
+**Produccion no cambio de configuracion de `thinking`** - el veredicto de modelo/modo sigue siendo el de la seccion 15 (`KEEP_THINKING_ENABLED`). El prompt y el runtime SI cambiaron (la regla de prioridad y el guard son codigo de produccion activo ahora mismo, incluido el camino `thinking=enabled` - cambios aditivos, de bajo riesgo, que nunca deberian intervenir bajo `thinking=enabled` dada su fiabilidad ya alta). No se reescribe ningun resultado de las secciones 1-16.
 
 ---
 

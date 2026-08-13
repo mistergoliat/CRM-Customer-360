@@ -1,4 +1,4 @@
-import { checkUnbackedCommercialMutationClaim } from "./unbackedCommercialMutationClaims";
+import { checkUnbackedCommercialMutationClaim } from "../commercialMutationClaims";
 import type { BenchmarkProviderCallRecord, BenchmarkTurnResult } from "./types";
 
 function percentile(sortedAscending: number[], p: number): number | null {

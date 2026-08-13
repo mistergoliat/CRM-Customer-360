@@ -608,13 +608,17 @@ test("[LLM-R1-T03 Caso 5] gathering system/user prompt lengths are unchanged fro
   // SELECT_PRODUCTS_RULE_LINES, which this fixture's gathering path does
   // render (unlike T03/T04 above, this is a real, intended content change -
   // see docs/releases/LLM-R1-T08C-nonthinking-tool-execution-repair.md).
+  // LLM-R1-T08D (later): +600 chars more, gathering-only - the multi-intent
+  // tool-priority rule (never added to finalization, so that phase's own
+  // golden length below is untouched) - see
+  // docs/releases/LLM-R1-T08D-multi-intent-tool-budget-and-mutation-guard.md.
   const { messages } = buildAgentStepPromptPackage({
     ...baseInput,
     phase: "gathering",
     identityConfiguration: pesasChileConfig(),
     availableTools: [{ name: "explore_catalog", description: "d" }]
   });
-  assert.equal(messages[0].content.length, 20439, "gathering systemPrompt.length must match the post-T08C measurement");
+  assert.equal(messages[0].content.length, 21039, "gathering systemPrompt.length must match the post-T08D measurement");
   assert.equal(messages[1].content.length, 205, "gathering userPrompt.length must be byte-identical to the pre-T03 measurement");
 });
 
@@ -646,8 +650,10 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt is objectively smaller than
 // as the T03 Caso 5 comment above explains - identical delta in both phases
 // because SELECT_PRODUCTS_FINALIZATION_RULE_LINES is a suffix of
 // SELECT_PRODUCTS_RULE_LINES that includes both new lines too.
+// LLM-R1-T08D (later): gathering +600 chars more (the multi-intent
+// tool-priority rule, gathering-only by design); finalization unchanged.
 const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 16690;
-const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 20439;
+const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 21039;
 
 test("[LLM-R1-T04 Caso 1] a normal call (no priorAttemptFailure) is byte-identical to before this task - no repair instruction present", () => {
   for (const phase of ["gathering", "finalization"] as const) {

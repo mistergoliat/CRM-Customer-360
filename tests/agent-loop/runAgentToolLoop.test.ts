@@ -2,11 +2,39 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before } from "node:test";
+import { getPool } from "@/lib/db";
 import { AGENT_LOOP_TOOL_POOL, runAgentToolLoop } from "@/lib/brain/commercial/agent-loop/runAgentToolLoop";
 import { createFakeAgentLoopProvider } from "@/lib/brain/commercial/agent-loop/providers/fakeAgentLoopProvider";
 import type { AgentLoopProvider } from "@/lib/brain/commercial/agent-loop/agentLoopProviderTypes";
 import { resetCapabilityGatewayCatalogPortForTests } from "@/lib/brain/commercial/capability-gateway/registry";
 import { markAgentLoopProviderFailure } from "@/lib/brain/commercial/agent-loop/providers/providerFailureClassification";
+
+// LLM-R1-T08D. Same local dev DB credentials tests/commercial/selectProductsCapability.test.ts
+// already establishes - node:test loads every matched file into one process,
+// so whichever file sets these first makes select_products' real DB write
+// path reachable for the rest of the run too. Needed here (unlike every
+// other test in this file, which stays at opportunityId: null and observes
+// select_products as "denied") only for the two new mutation-guard tests
+// below that need a genuinely completed selection.
+Object.assign(process.env, {
+  NODE_ENV: "development",
+  DB_HOST: "127.0.0.1",
+  DB_PORT: "3306",
+  DB_NAME: "main_management",
+  DB_USER: "crm_app",
+  DB_PASSWORD: "una_clave_local",
+  DB_URL: "",
+  DATABASE_HOST: "127.0.0.1",
+  DATABASE_PORT: "3306",
+  DATABASE_NAME: "main_management",
+  DATABASE_USER: "crm_app",
+  DATABASE_PASSWORD: "una_clave_local",
+  DATABASE_URL: ""
+});
+
+function uniqueOpportunityId() {
+  return 830000000 + Math.floor(Math.random() * 9999999);
+}
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
 let server: http.Server;
@@ -23,6 +51,17 @@ before(async () => {
 
 after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  // LLM-R1-T08D. This file never opened the real DB pool before (every other
+  // test stays at opportunityId: null, so select_products always short-
+  // circuits to "denied" before touching lib/db.ts) - the new mutation-guard
+  // tests are the first ones here to actually reach it. mysql2's pool keeps
+  // the event loop alive indefinitely once opened; same teardown
+  // tests/commercial/selectProductsCapability.test.ts already uses.
+  try {
+    await getPool().end();
+  } catch {
+    // ignore pool teardown failures - test results already reported
+  }
 });
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown) {
@@ -1043,13 +1082,24 @@ test("[LLM-R1-T01 Case 3] finalization recovers after tools already completed - 
   const result = await runAgentToolLoop({ ...baseInput, customerMessage: "dame 2 de las classic", commercialContextSummary: {}, provider });
 
   assert.equal(result.terminalReason, "responded");
-  assert.equal(result.finalMessage, "Listo, agregue 2 unidades del Kettlebell 16kg.");
   assert.equal(callCount, 4, "2 tool decisions + 1 failed finalization attempt + 1 recovered finalization attempt");
   assert.equal(result.toolExecutionCount, 2, "both tools already completed before the structural failure - the recovery attempt must never re-run them");
 
   const toolNames = result.steps.filter((step) => step.step.type === "use_tool").map((step) => (step.step as { tool: string }).tool);
   assert.deepEqual(toolNames, ["get_product_details", "select_products"], "each tool - including the mutating select_products - appears exactly once in the full turn trace, never duplicated by the finalization structured-recovery attempt");
   assert.ok(result.warnings.includes("agent_loop_structured_recovery_attempted:finalization"));
+
+  // LLM-R1-T08D, Parte 5. baseInput.opportunityId is null, so select_products
+  // never actually reaches status "completed" here (denied:
+  // no_active_opportunity) - the recovered finalization message ("Listo,
+  // agregue 2 unidades...") claims a completion this fixture never truly
+  // backs. Before this task that mismatch was invisible; the Commercial
+  // Mutation Execution Guard now correctly intercepts it - this is the guard
+  // doing its job, not a regression of T01's recovery mechanism (which the
+  // assertions above already fully cover: exactly 2 tool executions, never
+  // duplicated, recovery warning present).
+  assert.equal(result.finalMessage, "Necesito un momento mas para confirmar tu seleccion antes de continuar - ¿puedes confirmarme nuevamente que producto y cantidad quieres?");
+  assert.ok(result.warnings.some((warning) => warning.startsWith("agent_loop_mutation_claim_blocked:")));
 });
 
 test("[LLM-R1-T01 Case 4] finalization fails closed after a second consecutive invalid_response - never a third finalization attempt", async () => {
@@ -2509,4 +2559,89 @@ test("get_product_details continuity: a non-candidate product backed by this tur
   const detailStep = result.steps.filter((step) => step.step.type === "use_tool")[1];
   assert.equal(detailStep.observation?.status, "completed");
   assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["777"], candidateProducts: [{ productId: "777" }] });
+});
+
+// ---------------------------------------------------------------------------
+// LLM-R1-T08D: Commercial Mutation Execution Guard (Parte 5) + C09 budget
+// strategy (Parte 6, Option A - maxToolExecutions stays 2). See
+// docs/releases/LLM-R1-T08D-multi-intent-tool-budget-and-mutation-guard.md.
+// ---------------------------------------------------------------------------
+
+test("[T08D-1] Commercial Mutation Execution Guard blocks an unbacked mutation claim - no select_products evidence this turn", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "Perfecto, te dejo 2 unidades del Kettlebell 16kg." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "quiero 2 kettlebell", commercialContextSummary: {}, provider });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(
+    result.finalMessage,
+    "Necesito un momento mas para confirmar tu seleccion antes de continuar - ¿puedes confirmarme nuevamente que producto y cantidad quieres?"
+  );
+  assert.ok(result.warnings.some((warning) => warning.startsWith("agent_loop_mutation_claim_blocked:")));
+});
+
+test("[T08D-2] Commercial Mutation Execution Guard allows a backed mutation claim - select_products genuinely completed this turn", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } },
+      { type: "respond", message: "Listo, agregue 2 unidades del Kettlebell 16kg." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    opportunityId: uniqueOpportunityId(),
+    customerMessage: "quiero 2 kettlebell",
+    commercialContextSummary: {},
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.finalMessage, "Listo, agregue 2 unidades del Kettlebell 16kg.");
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("agent_loop_mutation_claim_blocked:")));
+
+  const selectStep = result.steps.find((step) => step.step.type === "use_tool" && step.step.tool === "select_products");
+  assert.equal(selectStep?.observation?.status, "completed");
+});
+
+test("[T08D-3] C09-style multi-intent turn completes select_products within the unchanged maxToolExecutions=2 budget when the model prioritizes the confirmed mutation first (Option A)", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } },
+      { type: "respond", message: "Listo, agregue 2 unidades del Kettlebell 16kg. Dame un momento y te confirmo el despacho a Ñuñoa." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    opportunityId: uniqueOpportunityId(),
+    customerMessage: "quiero 2 kettlebell y saber cuanto sale el despacho a Ñuñoa",
+    commercialContextSummary: {},
+    provider
+    // maxToolExecutions left at its default (2) - LLM-R1-T08D Option A: no budget increase.
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(
+    result.toolExecutionCount,
+    2,
+    "get_product_details + select_products both fit inside the unchanged budget of 2 when select_products is prioritized over the secondary shipping intent"
+  );
+  const selectStep = result.steps.find((step) => step.step.type === "use_tool" && step.step.tool === "select_products");
+  assert.equal(
+    selectStep?.observation?.status,
+    "completed",
+    "the required mutation completes within budget - set_shipping_destination/calculate_shipping are correctly deferred to a follow-up turn, per C09's own groundTruth design (LLM-R1-T05 Parte E)"
+  );
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("agent_loop_mutation_claim_blocked:")), "a truthful, backed claim is never touched by the guard");
 });
