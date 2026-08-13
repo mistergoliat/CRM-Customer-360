@@ -206,6 +206,8 @@ export type AgentLoopProviderFailure = {
   finishReason?: string | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  /** LLM-R1-T08B. Numeric count only - never reasoning_content text. Same absence discipline as inputTokens/outputTokens above. */
+  reasoningTokens?: number | null;
   providerRequestId?: string | null;
 };
 
@@ -239,6 +241,8 @@ export type AgentLoopInferenceRecord = {
   finishReason: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** LLM-R1-T08B. Numeric count only - never reasoning_content text. null when this call's provider did not report it (including every timeout/pre-response failure). */
+  reasoningTokens: number | null;
   outcome: AgentLoopInferenceOutcome;
 };
 

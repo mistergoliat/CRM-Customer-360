@@ -15,6 +15,7 @@ function call(overrides: Partial<BenchmarkProviderCallRecord> = {}): BenchmarkPr
     finishReason: "stop",
     inputTokens: 50,
     outputTokens: 20,
+    reasoningTokens: null,
     providerRequestId: "req-1",
     model: "benchmark-offline-model",
     ...overrides

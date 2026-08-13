@@ -3,18 +3,23 @@ title: SALES-AGENT-LLM-MODEL-BENCHMARK-DECISION — Agent Tool Loop Model Suitab
 doc_id: audit-sales-agent-llm-model-benchmark-decision
 status: live_benchmark_executed_benchmark_alternatives
 owner: architecture
-last_reviewed: 2026-08-12
+last_reviewed: 2026-08-13
 source_of_truth_for:
   - Agent Tool Loop model suitability verdict (deepseek-v4-flash)
   - Bounded Action Plan future-architecture classification
+  - deepseek-v4-flash thinking vs. non-thinking verdict (KEEP_THINKING_ENABLED)
 depends_on:
   - ./SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md
+  - ./SALES-AGENT-LLM-END-TO-END-LATENCY-AUDIT.md
   - ../releases/LLM-R1-T01-structured-output-recovery.md
   - ../releases/LLM-R1-T02-provider-observability.md
   - ../releases/LLM-R1-T03-prompt-finalization-reduction.md
   - ../releases/LLM-R1-T04-guided-structured-repair.md
   - ../releases/LLM-R1-T05-production-measurement-model-benchmark.md
   - ../releases/LLM-R1-T06-live-benchmark-model-decision.md
+  - ../releases/LLM-R1-T07-end-to-end-latency-root-cause-audit.md
+  - ../releases/LLM-R1-T08A-provider-deadline-enforcement-fix.md
+  - ../releases/LLM-R1-T08B-deepseek-thinking-mode-benchmark.md
 tags:
   - audit
   - sales-agent
@@ -105,6 +110,22 @@ Confirmado con datos reales (secciones 8 y 11): el problema de C09 no es "demasi
 2. **Proxima tarea propuesta: `LLM-R1-T07`** - comparacion A/B de `deepseek-v4-flash` contra 1-2 modelos candidatos, bajo exactamente el mismo harness/corpus/configuracion (`AgentStep` schema identico, mismos fixtures de tools, mismo `commercialContext`, misma temperatura, mismo budget de tokens, misma politica de reintentos - unico parametro que cambia es el provider/modelo), priorizando candidatos con mejor latencia de cola en generaciones largas (el patron de C09) sin degradar la fiabilidad estructural ya alta de `deepseek-v4-flash`. No se implementa en esta tarea.
 3. **Bounded Action Plan (Parte F, heredado de `T05`)**: se mantiene `FUTURE_OPTIMIZATION` (no se reclasifica) - la evidencia de esta tarea (seccion 13) muestra que el cuello de botella de C09 es longitud de respuesta, no numero de rondas, asi que una arquitectura de accion-por-lote no ataca la causa raiz observada aqui.
 4. **Hallazgo secundario, fuera de alcance de implementar aqui**: revisar el `groundTruth` de C02 (`get_product_details` no deberia ser `requiredTools` duro) y de C07 (contemplar una respuesta segura "nunca intento la seleccion" como un resultado tambien valido, no solo "intento y fue bloqueado") en una futura tarea de mantenimiento del corpus - ninguno de los dos refleja un problema real del modelo o del sistema.
+
+## 15. DeepSeek V4 Flash: Thinking vs. Non-Thinking (`LLM-R1-T08B`)
+
+`LLM-R1-T07` (`docs/audits/SALES-AGENT-LLM-END-TO-END-LATENCY-AUDIT.md`) identifico que la latencia de cola esta dominada por `reasoning_content` oculto del proveedor (`correlation(outputTokens, elapsedMs)=0.995`), y `LLM-R1-T08A` corrigio el defecto de deadline independiente del modelo. Esta seccion responde la pregunta que quedaba abierta: **¿que pasa si se apaga el thinking del mismo modelo?** Metodologia completa, datos crudos y analisis caso-por-caso en `docs/releases/LLM-R1-T08B-deepseek-thinking-mode-benchmark.md` - esta seccion resume el resultado sin reescribir las secciones 1-14 (historicas, `LLM-R1-T06`).
+
+**Metodologia**: mismo harness/corpus/prompts/tools fake/budgets/`timeoutMs`/mecanismo de recuperacion que las secciones 1-14, corriendo sobre el runtime ya corregido por `T08A`. Unica variable: el campo `thinking` del request (`{"type":"enabled"}` vs. `{"type":"disabled"}`, contrato oficial de DeepSeek, confirmado por su documentacion antes de escribir codigo), agregado como lever benchmark-only sin afectar la configuracion por defecto de produccion. Smoke 12x1 + medicion 12x10 por configuracion (240 turnos de medicion, mas 24 de smoke).
+
+**Reasoning tokens**: A (`thinking=enabled`) promedia 419.3 tokens de razonamiento por llamada (p95 1240, max 1975); B (`thinking=disabled`) reporta `reasoningTokens=null` en el 100% de las 264 llamadas - el proveedor omite `usage.completion_tokens_details` por completo en ese modo, confirmado con telemetria real, nunca asumido.
+
+**Latencia**: B reduce LLM call p50 65.6% (4404ms→1516ms), p95 84.8% (13848ms→2111ms), turn p95 69.1% (20013ms→6176ms), y **timeout rate de 22.5% a 0.0%** sobre 120 turnos. C09 (el caso critico de las secciones 7/11) pasa de **100% timeout a 0% timeout**.
+
+**Correctness - hallazgo critico**: `requiredToolCompletionRate` cae de 84.2% a 75.8%, pero el numero agregado subestima un patron especifico y serio: en **29 de 30 corridas combinadas de C02+C04+C09** (los tres casos cuyo `groundTruth` exige `select_products` completado), el modelo en modo `thinking=disabled` **nunca invoca `select_products`** y en su lugar **narra la seleccion como si ya estuviera confirmada** en la respuesta al cliente - una violacion directa de la regla explicita del prompt ("nunca reclames haber ejecutado algo que la plataforma no ejecuto"). En `thinking=enabled`, sobre los mismos tres casos, `select_products` se invoca correctamente en el 100% de los intentos no interrumpidos por timeout. Esto es distinto del artifact de C02/C07 ya documentado en la seccion 5 (que nunca involucraba `select_products` faltante) - es un hallazgo nuevo de esta tarea.
+
+**Veredicto: `KEEP_THINKING_ENABLED`** - no por preferencia al status quo (C09 con 100% timeout en `thinking=enabled` sigue siendo un problema real, documentado, sin resolver), sino porque `thinking=disabled` introduce un "fallo funcional incompatible" (criterio explicito para `KEEP_THINKING_ENABLED`): afirmar una accion comercial no ejecutada es un riesgo de exactitud/confianza del pedido, mas serio que un timeout visible. Proxima tarea propuesta: `LLM-R1-T08C` (redefinida) - investigar si un refuerzo de prompt especifico corrige el patron de `select_products` omitido en modo non-thinking antes de reconsiderar cualquier cambio de produccion; `BENCHMARK_OTHER_MODEL` (un modelo distinto, todavia no explorado) queda como alternativa abierta si no se corrige.
+
+No se cambio produccion en `LLM-R1-T08A` ni en `LLM-R1-T08B`. No se reescribe ningun resultado de las secciones 1-14.
 
 ---
 

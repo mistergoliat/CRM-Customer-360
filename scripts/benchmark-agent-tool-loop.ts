@@ -68,8 +68,10 @@ function printMetrics(label: string, metrics: BenchmarkAggregateMetrics) {
   console.log(`  Complete turn latency p50/p95: ${formatMs(metrics.latency.completeTurnLatencyMsP50)} / ${formatMs(metrics.latency.completeTurnLatencyMsP95)}`);
   console.log(`  LLM total ms/completed turn: ${formatMs(metrics.latency.llmTotalMsPerCompletedTurnAvg)}`);
   console.log("Tokens:");
-  console.log(`  inputTokens/call avg:  ${metrics.tokens.inputTokensPerCallAvg?.toFixed(1) ?? "n/a"}`);
-  console.log(`  outputTokens/call avg: ${metrics.tokens.outputTokensPerCallAvg?.toFixed(1) ?? "n/a"}`);
+  console.log(`  inputTokens/call avg:     ${metrics.tokens.inputTokensPerCallAvg?.toFixed(1) ?? "n/a"}`);
+  console.log(`  outputTokens/call avg:    ${metrics.tokens.outputTokensPerCallAvg?.toFixed(1) ?? "n/a"}`);
+  console.log(`  reasoningTokens/call avg: ${metrics.tokens.reasoningTokensPerCallAvg?.toFixed(1) ?? "n/a"}`);
+  console.log(`  contentTokens/call avg:   ${metrics.tokens.contentTokensPerCallAvg?.toFixed(1) ?? "n/a"}`);
   console.log(`  usageComplete: ${metrics.tokens.usageComplete}`);
   console.log("Finish reasons:", metrics.finishReasonCounts);
 }
@@ -127,7 +129,9 @@ async function main() {
       return;
     }
 
-    console.log(`[benchmark] mode=live model=${resolution.config.model} runsPerCase=${runsPerCase} cases=${cases.map((testCase) => testCase.caseId).join(",")}`);
+    console.log(
+      `[benchmark] mode=live model=${resolution.config.model} thinking=${resolution.config.thinking ?? "(provider default)"} runsPerCase=${runsPerCase} cases=${cases.map((testCase) => testCase.caseId).join(",")}`
+    );
     console.log("[benchmark] Catalog/Carrier/commune/DB stay fully isolated - only the LLM provider call is real.");
     const summary = await runCorpus(cases, { mode: "live", runsPerCase, liveConfig: resolution.config });
     printMetrics(`LIVE aggregate (${resolution.config.model})`, computeAggregateMetrics(summary.results));

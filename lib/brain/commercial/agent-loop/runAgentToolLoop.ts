@@ -106,6 +106,8 @@ type AgentLoopProviderCallMetadata = {
   finishReason: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** LLM-R1-T08B. Numeric count only - never reasoning_content text. */
+  reasoningTokens: number | null;
 };
 
 async function invokeProviderWithDeadline(
@@ -147,7 +149,8 @@ async function invokeProviderWithDeadline(
         providerRequestId: response.providerRequestId ?? null,
         finishReason: response.finishReason ?? null,
         inputTokens: response.inputTokens ?? null,
-        outputTokens: response.outputTokens ?? null
+        outputTokens: response.outputTokens ?? null,
+        reasoningTokens: response.reasoningTokens ?? null
       }
     };
   } catch (error) {
@@ -192,6 +195,7 @@ function buildSuccessInferenceRecord(input: {
     finishReason: input.metadata.finishReason,
     inputTokens: input.metadata.inputTokens,
     outputTokens: input.metadata.outputTokens,
+    reasoningTokens: input.metadata.reasoningTokens,
     outcome: "success"
   };
 }
@@ -213,6 +217,7 @@ function buildFailureInferenceRecord(input: {
     finishReason: input.providerFailure.finishReason ?? null,
     inputTokens: input.providerFailure.inputTokens ?? null,
     outputTokens: input.providerFailure.outputTokens ?? null,
+    reasoningTokens: input.providerFailure.reasoningTokens ?? null,
     outcome: input.providerFailure.normalizedReason
   };
 }
@@ -229,6 +234,7 @@ function buildTimeoutInferenceRecord(input: { phase: AgentLoopStepPhase; attempt
     finishReason: null,
     inputTokens: null,
     outputTokens: null,
+    reasoningTokens: null,
     outcome: "provider_timeout"
   };
 }

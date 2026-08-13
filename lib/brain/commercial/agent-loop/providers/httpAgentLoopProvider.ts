@@ -19,6 +19,15 @@ type HttpAgentLoopProviderConfig = {
   maxOutputTokens?: number;
   /** Technical HTTP/model retries only - never a second model decision or a finalization attempt (those live in runAgentToolLoop.ts). */
   maxModelRetries?: number;
+  /**
+   * LLM-R1-T08B. Benchmark-only lever - never set by any production caller
+   * (runNativeAutonomousCycle.ts never passes this). Undefined (the default)
+   * omits the `thinking` field from the request entirely, byte-identical to
+   * pre-T08B behavior - the provider's own default (currently "enabled")
+   * governs, exactly as today. Only liveProvider.ts's benchmark config
+   * resolver ever sets this, gated behind its own explicit env var.
+   */
+  thinking?: "enabled" | "disabled";
   fetchImpl?: typeof fetch;
 };
 
@@ -29,7 +38,12 @@ type OpenAiChatCompletionResponse = {
     finish_reason?: string | null;
     message?: { content?: string | null } | null;
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    /** LLM-R1-T08B. DeepSeek's documented reasoning-token breakdown (api-docs.deepseek.com) - completion_tokens already includes this count, never a separate budget. */
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
 };
 
 function getConfigValue(value: string | null | undefined, fallback: string | undefined) {
@@ -140,6 +154,9 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
   // instead of silently capping every call at an invented number.
   const maxOutputTokens = config.maxOutputTokens;
   const maxModelRetries = config.maxModelRetries ?? SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.maxModelRetries;
+  // LLM-R1-T08B. Never defaulted, same discipline as maxOutputTokens above -
+  // undefined omits `thinking` from the request entirely.
+  const thinking = config.thinking;
 
   return {
     name: "http-agent-loop-provider",
@@ -227,6 +244,11 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
                 model,
                 temperature,
                 ...(maxOutputTokens !== undefined ? { max_tokens: maxOutputTokens } : {}),
+                // LLM-R1-T08B. Top-level `thinking` field, per DeepSeek's
+                // documented Chat Completions contract (api-docs.deepseek.com) -
+                // never nested, never a different name. Omitted entirely
+                // unless a caller explicitly configured it.
+                ...(thinking !== undefined ? { thinking: { type: thinking } } : {}),
                 response_format: { type: "json_object" },
                 messages: request.messages
               })
@@ -289,6 +311,11 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
             finishReason: choice?.finish_reason ?? null,
             inputTokens: data.usage?.prompt_tokens ?? null,
             outputTokens: data.usage?.completion_tokens ?? null,
+            // LLM-R1-T08B. Numeric count only, straight from the provider's
+            // own usage accounting - never the reasoning_content text itself,
+            // which this type never even declares (see OpenAiChatCompletionResponse
+            // above). null (not 0) when the provider does not report it.
+            reasoningTokens: data.usage?.completion_tokens_details?.reasoning_tokens ?? null,
             providerRequestId: data.id ?? response.headers.get("x-request-id")
           };
           if (!content) {
@@ -327,6 +354,7 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
             model: data.model ?? model,
             inputTokens: availableResponseMetadata.inputTokens,
             outputTokens: availableResponseMetadata.outputTokens,
+            reasoningTokens: availableResponseMetadata.reasoningTokens,
             providerRequestId: availableResponseMetadata.providerRequestId,
             finishReason: availableResponseMetadata.finishReason
           };

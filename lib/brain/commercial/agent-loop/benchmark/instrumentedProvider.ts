@@ -41,6 +41,7 @@ export function createInstrumentedProvider(inner: AgentLoopProvider, caseId: str
           finishReason: response.finishReason ?? null,
           inputTokens: response.inputTokens ?? null,
           outputTokens: response.outputTokens ?? null,
+          reasoningTokens: response.reasoningTokens ?? null,
           providerRequestId: response.providerRequestId ?? null,
           model: response.model ?? null
         });
@@ -57,6 +58,7 @@ export function createInstrumentedProvider(inner: AgentLoopProvider, caseId: str
           finishReason: cause.finishReason ?? null,
           inputTokens: cause.inputTokens ?? null,
           outputTokens: cause.outputTokens ?? null,
+          reasoningTokens: cause.reasoningTokens ?? null,
           providerRequestId: cause.providerRequestId ?? null,
           model: cause.model
         });

@@ -67,6 +67,7 @@ export function createOfflineScriptedProvider(script: BenchmarkOfflineStep[]): A
         // real usage" in the aggregated metrics.
         inputTokens: null,
         outputTokens: null,
+        reasoningTokens: null,
         providerRequestId,
         finishReason: "stop"
       };

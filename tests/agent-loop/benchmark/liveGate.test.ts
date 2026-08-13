@@ -79,3 +79,52 @@ test("[T05] falls back to BRAIN_MODEL_NAME and honors explicit temperature/maxOu
     assert.equal(resolution.config.maxModelRetries, 2);
   }
 });
+
+// --- LLM-R1-T08B: thinking A/B lever, same strict-literal gate discipline as BENCHMARK_LIVE_LLM_ENABLED above ---
+
+test("[T08B] no BENCHMARK_LIVE_LLM_THINKING set - config.thinking stays undefined (reproduces pre-T08B/production behavior)", () => {
+  const resolution = resolveLiveBenchmarkProviderConfig(fakeEnv({
+    BENCHMARK_LIVE_LLM_ENABLED: "true",
+    BRAIN_MODEL_API_URL: "https://example.invalid",
+    BRAIN_MODEL_API_KEY: "sk-test",
+    BRAIN_MODEL_NAME: "deepseek-v4-flash"
+  }));
+  assert.equal(resolution.ok, true);
+  if (resolution.ok) assert.equal(resolution.config.thinking, undefined);
+});
+
+test("[T08B] BENCHMARK_LIVE_LLM_THINKING=enabled resolves config.thinking=\"enabled\" (Configuration A)", () => {
+  const resolution = resolveLiveBenchmarkProviderConfig(fakeEnv({
+    BENCHMARK_LIVE_LLM_ENABLED: "true",
+    BRAIN_MODEL_API_URL: "https://example.invalid",
+    BRAIN_MODEL_API_KEY: "sk-test",
+    BRAIN_MODEL_NAME: "deepseek-v4-flash",
+    BENCHMARK_LIVE_LLM_THINKING: "enabled"
+  }));
+  assert.equal(resolution.ok, true);
+  if (resolution.ok) assert.equal(resolution.config.thinking, "enabled");
+});
+
+test("[T08B] BENCHMARK_LIVE_LLM_THINKING=disabled (any case, trimmed) resolves config.thinking=\"disabled\" (Configuration B)", () => {
+  const resolution = resolveLiveBenchmarkProviderConfig(fakeEnv({
+    BENCHMARK_LIVE_LLM_ENABLED: "true",
+    BRAIN_MODEL_API_URL: "https://example.invalid",
+    BRAIN_MODEL_API_KEY: "sk-test",
+    BRAIN_MODEL_NAME: "deepseek-v4-flash",
+    BENCHMARK_LIVE_LLM_THINKING: " DISABLED "
+  }));
+  assert.equal(resolution.ok, true);
+  if (resolution.ok) assert.equal(resolution.config.thinking, "disabled");
+});
+
+test("[T08B] an unrecognized BENCHMARK_LIVE_LLM_THINKING value is never guessed/defaulted - treated as absent", () => {
+  const resolution = resolveLiveBenchmarkProviderConfig(fakeEnv({
+    BENCHMARK_LIVE_LLM_ENABLED: "true",
+    BRAIN_MODEL_API_URL: "https://example.invalid",
+    BRAIN_MODEL_API_KEY: "sk-test",
+    BRAIN_MODEL_NAME: "deepseek-v4-flash",
+    BENCHMARK_LIVE_LLM_THINKING: "banana"
+  }));
+  assert.equal(resolution.ok, true);
+  if (resolution.ok) assert.equal(resolution.config.thinking, undefined);
+});

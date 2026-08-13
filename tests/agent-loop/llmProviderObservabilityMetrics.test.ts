@@ -22,6 +22,7 @@ function call(overrides: Partial<AgentLoopInferenceRecord> = {}): AgentLoopInfer
     finishReason: "stop",
     inputTokens: 100,
     outputTokens: 20,
+    reasoningTokens: null,
     outcome: "success",
     ...overrides
   };

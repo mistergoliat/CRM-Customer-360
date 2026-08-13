@@ -1251,7 +1251,7 @@ test("[LLM-R1-T02] llmCalls never carries rawOutput, prompt text, or any secret-
 
   const result = await runAgentToolLoop({ ...baseInput, customerMessage: "dame 2 de las classic", commercialContextSummary: {}, provider });
 
-  const allowedKeys = new Set(["phase", "attempt", "decisionIndex", "elapsedMs", "model", "providerRequestId", "finishReason", "inputTokens", "outputTokens", "outcome"]);
+  const allowedKeys = new Set(["phase", "attempt", "decisionIndex", "elapsedMs", "model", "providerRequestId", "finishReason", "inputTokens", "outputTokens", "reasoningTokens", "outcome"]);
   for (const call of result.llmCalls) {
     for (const key of Object.keys(call)) {
       assert.ok(allowedKeys.has(key), `unexpected key leaked into an llmCalls entry: ${key}`);

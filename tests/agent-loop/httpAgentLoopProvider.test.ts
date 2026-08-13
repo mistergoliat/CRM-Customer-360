@@ -597,6 +597,93 @@ test("[HP27] cleanup runs exactly once per attempt: the external signal's abort 
   assert.equal(getEventListeners(controller.signal, "abort").length, 0, "every attempt's abort listener on the shared external signal must be removed - none should leak across retries");
 });
 
+// --- LLM-R1-T08B: benchmark-only thinking A/B lever + reasoningTokens observability ---
+
+test("[HP29] Configuration A (thinking=\"enabled\") sends {\"thinking\":{\"type\":\"enabled\"}} in the request body", async () => {
+  let capturedBody: Record<string, unknown> = {};
+  handler = async (req, res) => {
+    capturedBody = await readBody(req);
+    sendJson(res, 200, successResponse());
+  };
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k", thinking: "enabled" });
+  await provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 });
+  assert.deepEqual(capturedBody.thinking, { type: "enabled" });
+});
+
+test("[HP30] Configuration B (thinking=\"disabled\") sends {\"thinking\":{\"type\":\"disabled\"}} in the request body", async () => {
+  let capturedBody: Record<string, unknown> = {};
+  handler = async (req, res) => {
+    capturedBody = await readBody(req);
+    sendJson(res, 200, successResponse());
+  };
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k", thinking: "disabled" });
+  await provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 });
+  assert.deepEqual(capturedBody.thinking, { type: "disabled" });
+});
+
+test("[HP31] no thinking configured (the real production call shape - runNativeAutonomousCycle.ts never sets it) - the field is entirely absent, never defaulted", async () => {
+  let capturedBody: Record<string, unknown> = {};
+  handler = async (req, res) => {
+    capturedBody = await readBody(req);
+    sendJson(res, 200, successResponse());
+  };
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  await provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 });
+  assert.equal("thinking" in capturedBody, false, "the production request shape must stay byte-identical to pre-T08B - thinking must never be silently introduced");
+});
+
+test("[HP32] reasoningTokens parses from usage.completion_tokens_details.reasoning_tokens when the provider reports it", async () => {
+  handler = (_req, res) =>
+    sendJson(res, 200, {
+      id: "req-thinking",
+      model: "deepseek-v4-flash",
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ type: "respond", message: "hola" }) } }],
+      usage: { prompt_tokens: 100, completion_tokens: 711, completion_tokens_details: { reasoning_tokens: 685 } }
+    });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  const result = await provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 });
+  assert.equal(result.reasoningTokens, 685);
+  assert.equal(result.outputTokens, 711);
+});
+
+test("[HP33] absence of completion_tokens_details is valid - reasoningTokens is null, never a thrown error or an invented 0", async () => {
+  handler = (_req, res) => sendJson(res, 200, successResponse());
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  const result = await provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 });
+  assert.equal(result.reasoningTokens, null);
+});
+
+test("[HP34] reasoning_content is never read into the response and never logged, even when the provider includes it", async () => {
+  const marker = "SECRET-REASONING-TRACE-MARKER-12345";
+  handler = (_req, res) =>
+    sendJson(res, 200, {
+      id: "req-reasoning-marker",
+      model: "deepseek-v4-flash",
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ type: "respond", message: "hola" }), reasoning_content: marker } }],
+      usage: { prompt_tokens: 10, completion_tokens: 50, completion_tokens_details: { reasoning_tokens: 40 } }
+    });
+  const logs: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
+  };
+  console.error = (...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
+  };
+  let result;
+  try {
+    const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+    result = await provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 });
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  assert.equal(result.reasoningTokens, 40, "the numeric count must still parse correctly");
+  assert.ok(!JSON.stringify(result).includes(marker), "reasoning_content text must never reach the returned response");
+  assert.ok(!logs.some((line) => line.includes(marker)), "reasoning_content text must never be logged");
+});
+
 test("[HP28] LLM-R1-T02 observability: a deadline firing mid-body-read is recorded as outcome=provider_timeout with a bounded elapsedMs, through the real runAgentToolLoop", async () => {
   // Body withheld for 5000ms - if the deadline did not actually protect
   // response.json() (the pre-fix defect), this call - and the whole turn -

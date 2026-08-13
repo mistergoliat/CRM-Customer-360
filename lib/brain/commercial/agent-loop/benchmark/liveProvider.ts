@@ -22,6 +22,8 @@ export type LiveBenchmarkProviderConfig = {
   temperature: number;
   maxOutputTokens?: number;
   maxModelRetries: number;
+  /** LLM-R1-T08B. Benchmark-only A/B lever - absent (undefined) reproduces pre-T08B/production behavior (thinking field omitted, provider default applies). */
+  thinking?: "enabled" | "disabled";
 };
 
 export type LiveBenchmarkConfigResolution =
@@ -57,6 +59,13 @@ export function resolveLiveBenchmarkProviderConfig(env: NodeJS.ProcessEnv = proc
   const temperature = Number.parseFloat(env.BENCHMARK_LIVE_LLM_TEMPERATURE?.trim() ?? "");
   const maxOutputTokensRaw = Number.parseInt(env.BENCHMARK_LIVE_LLM_MAX_OUTPUT_TOKENS?.trim() ?? "", 10);
   const maxModelRetries = Number.parseInt(env.BENCHMARK_LIVE_LLM_MAX_MODEL_RETRIES?.trim() ?? "", 10);
+  // LLM-R1-T08B. Same strict-literal discipline as isLiveBenchmarkEnabled -
+  // anything other than exactly "enabled"/"disabled" (case-insensitive,
+  // trimmed) is treated as absent, never guessed/defaulted. Absent means the
+  // `thinking` field is omitted from the live request entirely (httpAgentLoopProvider.ts),
+  // reproducing the provider's own default - the same as every run before T08B.
+  const thinkingRaw = env.BENCHMARK_LIVE_LLM_THINKING?.trim().toLowerCase();
+  const thinking: "enabled" | "disabled" | undefined = thinkingRaw === "enabled" || thinkingRaw === "disabled" ? thinkingRaw : undefined;
 
   return {
     ok: true,
@@ -66,7 +75,8 @@ export function resolveLiveBenchmarkProviderConfig(env: NodeJS.ProcessEnv = proc
       model,
       temperature: Number.isFinite(temperature) ? temperature : 0,
       ...(Number.isFinite(maxOutputTokensRaw) && maxOutputTokensRaw > 0 ? { maxOutputTokens: maxOutputTokensRaw } : {}),
-      maxModelRetries: Number.isFinite(maxModelRetries) && maxModelRetries >= 0 ? maxModelRetries : 0
+      maxModelRetries: Number.isFinite(maxModelRetries) && maxModelRetries >= 0 ? maxModelRetries : 0,
+      ...(thinking !== undefined ? { thinking } : {})
     }
   };
 }
@@ -79,6 +89,7 @@ export function createLiveBenchmarkProvider(config: LiveBenchmarkProviderConfig)
     model: config.model,
     temperature: config.temperature,
     maxOutputTokens: config.maxOutputTokens,
-    maxModelRetries: config.maxModelRetries
+    maxModelRetries: config.maxModelRetries,
+    thinking: config.thinking
   });
 }

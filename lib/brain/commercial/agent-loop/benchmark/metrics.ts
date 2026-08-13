@@ -58,8 +58,13 @@ export type BenchmarkAggregateMetrics = {
   tokens: {
     inputTokensPerCallAvg: number | null;
     outputTokensPerCallAvg: number | null;
+    /** LLM-R1-T08B. Average only, same depth as inputTokens/outputTokens above - full p50/p95/max distributions are computed from the raw BenchmarkRunSummary (--out), not duplicated here. */
+    reasoningTokensPerCallAvg: number | null;
+    /** LLM-R1-T08B. outputTokens - reasoningTokens, averaged only over calls where both are known - never derived from a partially-known pair. */
+    contentTokensPerCallAvg: number | null;
     inputTokensPerCompletedTurnAvg: number | null;
     outputTokensPerCompletedTurnAvg: number | null;
+    reasoningTokensPerCompletedTurnAvg: number | null;
     /** false whenever at least one provider call is missing token usage - same T02 discipline: never silently treat a partial average as complete. */
     usageComplete: boolean;
   };
@@ -107,12 +112,23 @@ export function computeAggregateMetrics(results: BenchmarkTurnResult[]): Benchma
 
   const inputTokenValues = allCalls.map((call) => call.inputTokens).filter((value): value is number => value !== null);
   const outputTokenValues = allCalls.map((call) => call.outputTokens).filter((value): value is number => value !== null);
+  // LLM-R1-T08B. reasoningTokens is null whenever a call/provider does not
+  // report it (e.g. offline scripted, or a thinking-disabled call where the
+  // provider reports 0 - both stay distinct: 0 is a real reported value,
+  // null means "unknown", never conflated).
+  const reasoningTokenValues = allCalls.map((call) => call.reasoningTokens).filter((value): value is number => value !== null);
+  const contentTokenValues = allCalls
+    .filter((call) => call.outputTokens !== null && call.reasoningTokens !== null)
+    .map((call) => (call.outputTokens as number) - (call.reasoningTokens as number));
   const usageComplete = allCalls.length > 0 && allCalls.every((call) => call.inputTokens !== null && call.outputTokens !== null);
   const completedTurnInputTokens = completedTurns
     .map((result) => (result.providerCalls.every((call) => call.inputTokens !== null) ? result.providerCalls.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0) : null))
     .filter((value): value is number => value !== null);
   const completedTurnOutputTokens = completedTurns
     .map((result) => (result.providerCalls.every((call) => call.outputTokens !== null) ? result.providerCalls.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0) : null))
+    .filter((value): value is number => value !== null);
+  const completedTurnReasoningTokens = completedTurns
+    .map((result) => (result.providerCalls.every((call) => call.reasoningTokens !== null) ? result.providerCalls.reduce((sum, call) => sum + (call.reasoningTokens ?? 0), 0) : null))
     .filter((value): value is number => value !== null);
 
   const finishReasonCounts = { stop: 0, length: 0, other: 0, null_unknown: 0 };
@@ -147,8 +163,11 @@ export function computeAggregateMetrics(results: BenchmarkTurnResult[]): Benchma
     tokens: {
       inputTokensPerCallAvg: average(inputTokenValues),
       outputTokensPerCallAvg: average(outputTokenValues),
+      reasoningTokensPerCallAvg: average(reasoningTokenValues),
+      contentTokensPerCallAvg: average(contentTokenValues),
       inputTokensPerCompletedTurnAvg: average(completedTurnInputTokens),
       outputTokensPerCompletedTurnAvg: average(completedTurnOutputTokens),
+      reasoningTokensPerCompletedTurnAvg: average(completedTurnReasoningTokens),
       usageComplete
     },
     finishReasonCounts

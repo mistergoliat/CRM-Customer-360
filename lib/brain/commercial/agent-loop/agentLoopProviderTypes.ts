@@ -25,6 +25,15 @@ export type AgentLoopProviderResponse = {
   model?: string | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  /**
+   * LLM-R1-T08B. A numeric count only - a provider that supports "thinking"/
+   * reasoning models (e.g. usage.completion_tokens_details.reasoning_tokens)
+   * may report how many of outputTokens were spent on hidden reasoning
+   * before the final content. Never the reasoning text itself - no field
+   * anywhere in this contract carries raw reasoning_content, and none should
+   * ever be added. Absent/null for a provider that does not report it.
+   */
+  reasoningTokens?: number | null;
   providerRequestId?: string | null;
   finishReason?: string | null;
 };

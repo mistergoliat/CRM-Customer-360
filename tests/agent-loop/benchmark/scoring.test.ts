@@ -103,7 +103,11 @@ test("[T05] scoreCase requires an expected controlled tool failure to actually b
 });
 
 test("[T05] scoreCase requires an expected structured provider failure to actually be observed", () => {
-  const passingLoop = baseLoop({ llmCalls: [{ phase: "gathering", attempt: 0, decisionIndex: 0, elapsedMs: 10, model: "m", providerRequestId: null, finishReason: null, inputTokens: null, outputTokens: null, outcome: "invalid_response" }] });
+  const passingLoop = baseLoop({
+    llmCalls: [
+      { phase: "gathering", attempt: 0, decisionIndex: 0, elapsedMs: 10, model: "m", providerRequestId: null, finishReason: null, inputTokens: null, outputTokens: null, reasoningTokens: null, outcome: "invalid_response" }
+    ]
+  });
   const passingScore = scoreCase("C-structured-observed", 0, passingLoop, baseGroundTruth({ expectsStructuredFailure: true }));
   assert.equal(passingScore.structuredFailureObserved, true);
   assert.equal(passingScore.overallPass, true);

@@ -85,6 +85,8 @@ export type BenchmarkProviderCallRecord = {
   finishReason: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** LLM-R1-T08B. Numeric count only - never reasoning_content text (see AgentLoopProviderResponse). null when the provider/mode did not report it. */
+  reasoningTokens: number | null;
   providerRequestId: string | null;
   model: string | null;
 };
