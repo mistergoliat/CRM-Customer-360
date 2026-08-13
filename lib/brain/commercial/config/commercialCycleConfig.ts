@@ -144,6 +144,24 @@ export function buildAgentToolLoopFeatureFlags(overrides?: Partial<{ agentToolLo
   };
 }
 
+/**
+ * LLM-R1-T09A. Fail-closed (default false) toggle for the backend Multi-Intent
+ * Planning + Requirement Resolution runtime (lib/brain/commercial/multi-intent/
+ * runCommercialMultiIntentLoop.ts) - only meaningful when the Agent Tool Loop
+ * itself is already enabled (buildAgentToolLoopFeatureFlags above); it
+ * selects which of the two loop implementations runNativeAgentToolLoopCycle.ts
+ * runs for a turn, never a separate runtime path of its own. When true, this
+ * production flag is only ever expected to be additionally scoped to
+ * BRAIN_AUTONOMOUS_TEST_WA_IDS (the existing pilot allowlist) - see
+ * docs/releases/LLM-R1-T09A-multi-intent-planning-and-requirement-resolution.md.
+ */
+export function buildMultiIntentPlannerFeatureFlags(overrides?: Partial<{ multiIntentPlannerEnabled: boolean }>) {
+  return {
+    multiIntentPlannerEnabled: readEnvFlag("BRAIN_MULTI_INTENT_PLANNER_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
+
 export function buildCommercialSalesAgentDryRun(): boolean {
   const raw = process.env.BRAIN_SALES_AGENT_DRY_RUN?.trim().toLowerCase();
   if (raw === "true") return true;

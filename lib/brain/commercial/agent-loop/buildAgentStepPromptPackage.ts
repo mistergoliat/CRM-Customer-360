@@ -399,6 +399,26 @@ const CALCULATE_SHIPPING_RULE_LINES = [
  */
 const CALCULATE_SHIPPING_FINALIZATION_RULE_LINES = CALCULATE_SHIPPING_RULE_LINES.slice(1);
 
+/**
+ * LLM-R1-T09A. Governs commercialContext.multiIntentPlan - present only when
+ * the backend Multi-Intent Planner (BRAIN_MULTI_INTENT_PLANNER_ENABLED, off
+ * by default - see lib/brain/commercial/multi-intent/runCommercialMultiIntentLoop.ts)
+ * ran this turn. Finalization-only: that runtime only ever invokes this
+ * builder in "finalization" phase (it never offers tools - Part 16 of the
+ * task, "el LLM no ejecuta"; the deterministic executor already ran every
+ * resolvable capability before this prompt is ever built). Absent for every
+ * legacy Agent Tool Loop turn (the flag's default-off path), so this block
+ * describes an inert, no-op case for every existing caller - same discipline
+ * as CUSTOMER_PURCHASE_HISTORY_RULE_LINES above.
+ */
+const MULTI_INTENT_PLAN_RULE_LINES = [
+  "When commercialContext.multiIntentPlan is present, it is the authoritative backend classification of every intent detected in the customer's message this turn - ground your response in it, never re-derive intent completeness from free text.",
+  "For each entry in multiIntentPlan.pendingIntents, ask only for the exact fields listed in its missing array, in one combined question when there is more than one pending intent - never ask again for information already resolved.",
+  "For each entry in multiIntentPlan.needsClarificationIntents, ask the customer to choose among its candidates (when present) using their real names - never guess one yourself.",
+  "For each entry in multiIntentPlan.unsupportedIntents, tell the customer honestly that you cannot do that yet and ask a short clarifying question about what they actually need - never invent a tool call or claim it will be done for an unsupported intent.",
+  "If multiIntentPlan lists more than one intent this turn, answer all of them in a single consolidated reply - never one message per intent."
+];
+
 const RESPOND_STEP_SHAPE_WITH_PENDING_ACTION =
   '{"type":"respond","message":"...","pendingCatalogAction":{"actionType":"send_product_link","candidateProductIds":["..."]}}. pendingCatalogAction is optional on respond - include it only per the pendingCatalogAction rules above';
 
@@ -483,6 +503,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...STOCK_DISCLOSURE_RULE_LINES,
       ...COMMERCIAL_CLOSING_RULE_LINES,
       ...PENDING_CATALOG_ACTION_RULE_LINES,
+      ...MULTI_INTENT_PLAN_RULE_LINES,
       "You must never claim to have executed anything yourself - the platform executes tools, not you."
     ];
   }
