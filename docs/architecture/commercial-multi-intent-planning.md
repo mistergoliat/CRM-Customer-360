@@ -4,7 +4,7 @@ doc_id: architecture-commercial-multi-intent-planning
 status: draft
 version: "1.0.0"
 owner: architecture
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-14
 source_of_truth_for:
   - CommercialIntentPlan contract
   - CommercialRequirementResolver design
@@ -182,3 +182,7 @@ Turn 1 leaves `get_shipping_quote` `waiting_for_information` (missing `DESTINATI
 - `pendingCatalogAction`/`send_product_link` continuity (get_product_details/recommend_catalog_products) is not implemented in the multi-intent path - `runCommercialMultiIntentLoop.ts` always returns `finalPendingCatalogAction: null`. A documented limitation, not a bug (Part 26: this task orchestrates the three existing capabilities its two intents need, never a fourth).
 - Grouping multiple missing fields into one combined question (Part 15) is covered generically by `MULTI_INTENT_PLAN_RULE_LINES`'s "ask only for missing fields... in one combined question when there is more than one pending intent" instruction, but was not built as a dedicated mechanism beyond that prompt rule - T09A's corpus (MI01-MI06) never exercises more than one missing field at once.
 - No WhatsApp real-traffic change: `BRAIN_MULTI_INTENT_PLANNER_ENABLED` defaults to `false`; a future task can scope it to `BRAIN_AUTONOMOUS_TEST_WA_IDS` for a live smoke, per Part 25.
+
+## 9. Addendum (`LLM-R1-T09B`): allowlist-scoped routing
+
+`LLM-R1-T09B` made the flag above safe to enable for real traffic: `shouldRouteToMultiIntentPlanner(waId)` (`commercialCycleConfig.ts`) composes it with `BRAIN_AUTONOMOUS_TEST_WA_IDS` so only an explicitly allowlisted customer is ever routed to this runtime, with fail-closed semantics on ambiguous configuration (flag on + empty allowlist routes nobody). `runNativeAutonomousCycle.ts`'s single `createHttpAgentLoopProvider` call site also became routing-aware, so `thinking=disabled` (this architecture's own live-validated configuration) only ever applies to a turn actually routed here - every other turn keeps production's existing default. See `docs/releases/LLM-R1-T09B-whatsapp-allowlisted-multi-intent-smoke.md` for the full routing contract, the real-WhatsApp-code-path smoke results, and two small Requirement Resolver bugs found and fixed live (a leading-article product-match gap and a Catalog Service "no variant" sentinel leaking through as a real combinationId).

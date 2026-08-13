@@ -29,6 +29,7 @@ import type { CommercialShadowFeatureFlags } from "../shadow";
 import type { CommercialOperationalLoopFeatureFlags } from "../operational-loop";
 import type { CommercialExecutionBridgeFeatureFlags } from "../execution-bridge";
 import { SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN } from "../sales-agent/runtimeTypes";
+import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "../../runtime/autonomousRuntimeConfig";
 
 export function readEnvFlag(name: string, fallback = false): boolean {
   const value = process.env[name]?.trim().toLowerCase();
@@ -160,6 +161,27 @@ export function buildMultiIntentPlannerFeatureFlags(overrides?: Partial<{ multiI
     multiIntentPlannerEnabled: readEnvFlag("BRAIN_MULTI_INTENT_PLANNER_ENABLED", false),
     ...(overrides ?? {})
   };
+}
+
+/**
+ * LLM-R1-T09B. The actual per-turn routing decision: the multi-intent
+ * planner runs for THIS turn only when the flag is on AND this exact waId is
+ * one of the explicitly configured BRAIN_AUTONOMOUS_TEST_WA_IDS entries -
+ * never a global switch. Deliberately does NOT reuse isWaIdAuthorizedForPilot's
+ * "empty allowlist means unrestricted" semantics (correct for that function's
+ * own purpose - gating the whole autonomous pilot before any allowlist is
+ * configured) - here, `BRAIN_MULTI_INTENT_PLANNER_ENABLED=true` with an empty
+ * allowlist is ambiguous configuration (a flag with no one to apply it to),
+ * and this task's own contract requires failing closed in that case: nobody
+ * is routed to the new path until BRAIN_AUTONOMOUS_TEST_WA_IDS is explicitly
+ * non-empty. A null/missing waId always fails closed too (isWaIdAuthorizedForPilot
+ * already returns false for a waId that fails to normalize).
+ */
+export function shouldRouteToMultiIntentPlanner(waId: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!buildMultiIntentPlannerFeatureFlags(undefined).multiIntentPlannerEnabled) return false;
+  const allowlist = loadAutonomousPilotAllowlist(env);
+  if (allowlist.length === 0) return false;
+  return isWaIdAuthorizedForPilot(waId, allowlist);
 }
 
 export function buildCommercialSalesAgentDryRun(): boolean {
