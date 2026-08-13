@@ -52,6 +52,7 @@ function printMetrics(label: string, metrics: BenchmarkAggregateMetrics) {
   console.log(`  toolArgumentAccuracy:        ${formatPercent(metrics.correctness.toolArgumentAccuracy)}`);
   console.log(`  terminalReasonCorrectness:   ${formatPercent(metrics.correctness.terminalReasonCorrectness)}`);
   console.log(`  overallPassRate:             ${formatPercent(metrics.correctness.overallPassRate)}`);
+  console.log(`  unbackedCommercialMutationClaimRate: ${formatPercent(metrics.correctness.unbackedCommercialMutationClaimRate)}`);
   console.log("Structural robustness:");
   console.log(`  validAgentStepRate:              ${formatPercent(metrics.structuralRobustness.validAgentStepRate)}`);
   console.log(`  invalidResponseRate:             ${formatPercent(metrics.structuralRobustness.invalidResponseRate)}`);

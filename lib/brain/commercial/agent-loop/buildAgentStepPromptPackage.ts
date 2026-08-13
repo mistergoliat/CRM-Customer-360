@@ -333,18 +333,36 @@ const SELECT_PRODUCTS_RULE_LINES = [
   "Each select_products call must include the customer's complete desired selection (every product and quantity they want), never only the items being added or changed - it replaces the entire previous selection.",
   "If commercialContext.commercialLineItems already reflects what the customer wants and nothing changed this turn, reuse it silently - do not call select_products again for the same selection.",
   "If a select_products observation has status \"blocked\", the referenced product was not actually observed this conversation - use search_products or get_product_details to observe the real product first, then retry with that exact productId/combinationId.",
-  "quantity must be a whole number greater than zero - ask the customer to clarify an unclear or non-numeric quantity instead of guessing one."
+  "quantity must be a whole number greater than zero - ask the customer to clarify an unclear or non-numeric quantity instead of guessing one.",
+  // LLM-R1-T08C. A product selection, addition, or quantity change is
+  // confirmed only when a select_products tool observation from THIS turn
+  // has status "completed" (data.status "selected"), or
+  // commercialContext.commercialLineItems already durably reflects that
+  // exact selection from a previous turn with nothing changed this turn (the
+  // reuse rule above) - if neither is true, never say the selection,
+  // quantity, or order is done, confirmed, ready, or registered; say
+  // honestly that it still needs to be completed. This is the one rule this
+  // task adds - deliberately phase-agnostic (the constraint on what may be
+  // CLAIMED is identical in gathering and finalization; only what the model
+  // can DO about a gap differs, and that already follows from whether tools
+  // are offered this phase, an existing mechanism this task does not touch).
+  "A product selection, addition, or quantity change is confirmed only when a select_products tool observation from this turn has status \"completed\" (data.status \"selected\"), or commercialContext.commercialLineItems already durably reflects that exact selection from a previous turn with nothing changed this turn (see the reuse rule above) - if neither is true, never say the selection, quantity, or order is done, confirmed, ready, or registered.",
+  "Understanding what the customer wants is not the same as it being done: never turn \"the customer wants 3 units\" into \"I left you 3 units\" (or any equivalent confirmation) without that select_products evidence."
 ];
 
 /**
  * LLM-R1-T03. Finalization drops the first 4 lines above (when to call
  * select_products, evidence for its arguments, full-replace call semantics,
  * reuse-silently-instead-of-recalling - all impossible/moot once no tool
- * call can be made this turn). The remaining 2 lines both stay actionable
- * via `respond` itself: acknowledging a "blocked" selection honestly instead
- * of implying it succeeded, and asking a clarifying question for an unclear
- * quantity rather than guessing. A contiguous suffix of
- * SELECT_PRODUCTS_RULE_LINES (never a duplicated copy).
+ * call can be made this turn). The remaining lines stay actionable via
+ * `respond` itself: acknowledging a "blocked" selection honestly instead of
+ * implying it succeeded, asking a clarifying question for an unclear
+ * quantity rather than guessing, and (LLM-R1-T08C) never narrating a
+ * selection/quantity/order as done without the same evidence gathering
+ * requires - this last one is the finalization guard: since no tool is
+ * available here, the only compliant response when the evidence is missing
+ * is a truthful "not done yet", never a fabricated success. A contiguous
+ * suffix of SELECT_PRODUCTS_RULE_LINES (never a duplicated copy).
  */
 const SELECT_PRODUCTS_FINALIZATION_RULE_LINES = SELECT_PRODUCTS_RULE_LINES.slice(4);
 

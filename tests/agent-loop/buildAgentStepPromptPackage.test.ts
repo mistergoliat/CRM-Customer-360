@@ -602,13 +602,19 @@ test("[LLM-R1-T03 Caso 5] gathering system/user prompt lengths are unchanged fro
   // edit ever lands inside buildEvidenceAndToolRulesLines's non-finalization
   // branch), so these lengths are expected to be byte-for-byte identical,
   // never merely "close".
+  //
+  // LLM-R1-T08C (later): +656 chars - the two new select_products
+  // evidence-binding/intent-vs-executed-state lines this task added to
+  // SELECT_PRODUCTS_RULE_LINES, which this fixture's gathering path does
+  // render (unlike T03/T04 above, this is a real, intended content change -
+  // see docs/releases/LLM-R1-T08C-nonthinking-tool-execution-repair.md).
   const { messages } = buildAgentStepPromptPackage({
     ...baseInput,
     phase: "gathering",
     identityConfiguration: pesasChileConfig(),
     availableTools: [{ name: "explore_catalog", description: "d" }]
   });
-  assert.equal(messages[0].content.length, 19783, "gathering systemPrompt.length must be byte-identical to the pre-T03 measurement");
+  assert.equal(messages[0].content.length, 20439, "gathering systemPrompt.length must match the post-T08C measurement");
   assert.equal(messages[1].content.length, 205, "gathering userPrompt.length must be byte-identical to the pre-T03 measurement");
 });
 
@@ -636,8 +642,12 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt is objectively smaller than
 // docs/releases/LLM-R1-T04-guided-structured-repair.md.
 // ---------------------------------------------------------------------------
 
-const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 16034;
-const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 19783;
+// LLM-R1-T08C (later): both +656 chars, same two new select_products lines
+// as the T03 Caso 5 comment above explains - identical delta in both phases
+// because SELECT_PRODUCTS_FINALIZATION_RULE_LINES is a suffix of
+// SELECT_PRODUCTS_RULE_LINES that includes both new lines too.
+const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 16690;
+const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 20439;
 
 test("[LLM-R1-T04 Caso 1] a normal call (no priorAttemptFailure) is byte-identical to before this task - no repair instruction present", () => {
   for (const phase of ["gathering", "finalization"] as const) {
@@ -764,4 +774,101 @@ test("[LLM-R1-T04 Caso 9] a repaired finalization prompt still excludes the tool
   // Grounding/closing rules T03 kept must still be there too.
   assert.match(system, /You must never invent product, price, stock, or delivery information not returned by a tool this turn/);
   assert.match(system, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
+});
+
+// ---------------------------------------------------------------------------
+// LLM-R1-T08C. select_products evidence-binding rule (never claim a
+// selection/quantity/order is done without a completed select_products
+// observation this turn, or an unchanged durably-persisted one) - the
+// non-thinking-mode fix for the "select_products skipped, narrated as done"
+// pattern T08B found in 29/30 runs of C02/C04/C09.
+// ---------------------------------------------------------------------------
+
+const SELECT_PRODUCTS_EVIDENCE_RULE = /A product selection, addition, or quantity change is confirmed only when a select_products tool observation from this turn has status "completed" \(data\.status "selected"\), or commercialContext\.commercialLineItems already durably reflects that exact selection from a previous turn with nothing changed this turn \(see the reuse rule above\) - if neither is true, never say the selection, quantity, or order is done, confirmed, ready, or registered\./;
+const INTENT_VS_EXECUTED_STATE_RULE = /Understanding what the customer wants is not the same as it being done: never turn "the customer wants 3 units" into "I left you 3 units" \(or any equivalent confirmation\) without that select_products evidence\./;
+
+test("[T08C Case A] gathering, selection requested with no prior select_products success - the prompt contains the explicit mandatory evidence rule", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "dame 2 de las classic",
+    priorSteps: [],
+    identityConfiguration: pesasChileConfig()
+  });
+  const system = messages[0].content;
+  assert.match(system, SELECT_PRODUCTS_EVIDENCE_RULE);
+  assert.match(system, INTENT_VS_EXECUTED_STATE_RULE);
+});
+
+test("[T08C Case B] gathering, selection already durably persisted - the same prompt still allows a truthful confirmation via the existing reuse rule", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "confirmame mi pedido",
+    commercialContextSummary: { commercialLineItems: { items: [{ productId: "31", quantity: 2 }] } },
+    identityConfiguration: pesasChileConfig()
+  });
+  const system = messages[0].content;
+  // The pre-existing reuse rule (unchanged by this task) is the allowance
+  // path the new evidence rule explicitly defers to ("see the reuse rule
+  // above") - both must be present together, never contradicting each other.
+  assert.match(system, /If commercialContext\.commercialLineItems already reflects what the customer wants and nothing changed this turn, reuse it silently/);
+  assert.match(system, SELECT_PRODUCTS_EVIDENCE_RULE);
+});
+
+test("[T08C Case C] finalization, select_products never completed - the prompt explicitly forbids claiming success (finalization guard, no tools reintroduced)", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    availableTools: [],
+    priorSteps: [],
+    identityConfiguration: pesasChileConfig()
+  });
+  const system = messages[0].content;
+  assert.match(system, SELECT_PRODUCTS_EVIDENCE_RULE);
+  assert.match(system, INTENT_VS_EXECUTED_STATE_RULE);
+  // select_products must never become an available/callable tool in
+  // finalization as a side effect of this fix - the guard is a response
+  // constraint, never a tool-availability change.
+  assert.doesNotMatch(system, /Available tools:/);
+  assert.doesNotMatch(system, /"type":"use_tool"/);
+});
+
+test("[T08C Case D] finalization, select_products already completed this turn - the same prompt still permits confirming the persisted state, and the evidence is visible to the model", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    availableTools: [],
+    priorSteps: [
+      {
+        stepIndex: 0,
+        phase: "gathering",
+        governance: "authorized",
+        step: { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "31", quantity: 2 }] } },
+        observation: { tool: "select_products", status: "completed", data: { status: "selected", items: [{ productId: "31", quantity: 2 }], changed: true } }
+      }
+    ],
+    identityConfiguration: pesasChileConfig()
+  });
+  const system = messages[0].content;
+  assert.match(system, SELECT_PRODUCTS_EVIDENCE_RULE);
+
+  const user = JSON.parse(messages[1].content) as { priorStepsThisTurn: Array<{ step: { type: string; tool?: string }; observation: { status: string } | null }> };
+  const selectStep = user.priorStepsThisTurn.find((entry) => entry.step.type === "use_tool" && entry.step.tool === "select_products");
+  assert.ok(selectStep, "the completed select_products observation must reach the model via priorStepsThisTurn");
+  assert.equal(selectStep?.observation?.status, "completed");
+});
+
+test("[T08C Case E] no selection intent (\"gracias\") - the new rule constrains claims, it never becomes an unconditional requirement to call select_products", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "gracias, eso es todo",
+    identityConfiguration: pesasChileConfig()
+  });
+  const system = messages[0].content;
+  // The pre-existing, unmodified trigger condition for calling the tool at all.
+  assert.match(system, /Use select_products only once the customer has confirmed which product\(s\) they want to buy/);
+  assert.ok(!/always call select_products/i.test(system), "the new rule must never read as an unconditional call requirement");
+  assert.ok(!/must call select_products/i.test(system), "the new rule constrains claims, not tool invocation itself");
 });

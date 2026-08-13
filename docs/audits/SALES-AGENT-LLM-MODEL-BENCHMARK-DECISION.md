@@ -8,6 +8,7 @@ source_of_truth_for:
   - Agent Tool Loop model suitability verdict (deepseek-v4-flash)
   - Bounded Action Plan future-architecture classification
   - deepseek-v4-flash thinking vs. non-thinking verdict (KEEP_THINKING_ENABLED)
+  - non-thinking prompt-repair verdict (PROMPT_FIX_PARTIAL)
 depends_on:
   - ./SALES-AGENT-LLM-PROVIDER-LATENCY-STRUCTURED-OUTPUT-AUDIT.md
   - ./SALES-AGENT-LLM-END-TO-END-LATENCY-AUDIT.md
@@ -20,6 +21,7 @@ depends_on:
   - ../releases/LLM-R1-T07-end-to-end-latency-root-cause-audit.md
   - ../releases/LLM-R1-T08A-provider-deadline-enforcement-fix.md
   - ../releases/LLM-R1-T08B-deepseek-thinking-mode-benchmark.md
+  - ../releases/LLM-R1-T08C-nonthinking-tool-execution-repair.md
 tags:
   - audit
   - sales-agent
@@ -126,6 +128,22 @@ Confirmado con datos reales (secciones 8 y 11): el problema de C09 no es "demasi
 **Veredicto: `KEEP_THINKING_ENABLED`** - no por preferencia al status quo (C09 con 100% timeout en `thinking=enabled` sigue siendo un problema real, documentado, sin resolver), sino porque `thinking=disabled` introduce un "fallo funcional incompatible" (criterio explicito para `KEEP_THINKING_ENABLED`): afirmar una accion comercial no ejecutada es un riesgo de exactitud/confianza del pedido, mas serio que un timeout visible. Proxima tarea propuesta: `LLM-R1-T08C` (redefinida) - investigar si un refuerzo de prompt especifico corrige el patron de `select_products` omitido en modo non-thinking antes de reconsiderar cualquier cambio de produccion; `BENCHMARK_OTHER_MODEL` (un modelo distinto, todavia no explorado) queda como alternativa abierta si no se corrige.
 
 No se cambio produccion en `LLM-R1-T08A` ni en `LLM-R1-T08B`. No se reescribe ningun resultado de las secciones 1-14.
+
+## 16. Reparacion de ejecucion de tools en modo non-thinking (`LLM-R1-T08C`)
+
+Responde la pregunta que la seccion 15 dejo abierta: **¿un refuerzo de prompt/contrato puede corregir el patron de `select_products` omitido-y-narrado-como-hecho de `thinking=disabled`, sin cambiar modelo ni arquitectura?** Metodologia completa, auditoria linea-por-linea del prompt y datos crudos en `docs/releases/LLM-R1-T08C-nonthinking-tool-execution-repair.md` - resumen aqui, sin reescribir la seccion 15.
+
+**Fix**: dos lineas nuevas en `SELECT_PRODUCTS_RULE_LINES` (`buildAgentStepPromptPackage.ts`) que atan explicitamente lo que el modelo puede *afirmar* en `respond.message` a evidencia real (`select_products` con `status:"completed"` este turno, o `commercialContext.commercialLineItems` ya reflejandolo de forma durable) - nunca a la sola comprension de la intencion del cliente. Fluyen automaticamente a `finalization` via el mecanismo de sufijo contiguo que `LLM-R1-T03` ya establecio (sin reintroducir `select_products` como tool disponible ahi). +656 caracteres en ambas fases, medido y documentado en los tests golden de longitud.
+
+**Resultado, benchmark focalizado live (C02+C04+C09, `thinking=disabled`, 10 runs/caso, mismo runtime `T08A`)**: `select_products` completion rate 3.3%→**66.7%**; el hallazgo critico de la seccion 15 (`unbackedCommercialMutationClaimRate`, metrica nueva de esta tarea) cae de 96.7%→**33.3%**. Pero el promedio esconde una bifurcacion limpia: **C02 y C04 quedan en 100%/0%** (completion/unbacked) - el fix los resuelve por completo - mientras **C09 queda exactamente igual que antes, 0%/100%**. Latencia sin cambio material (LLM p50/p95 1471ms/1953ms vs. 1494ms/1980ms antes).
+
+**Por que C09 no mejora**: en los 10 runs post-fix, el modelo agota su `maxToolExecutions=2` en `get_product_details`+`set_shipping_destination` (resolviendo la intencion de despacho del mensaje multi-intencion) y nunca llega a intentar `select_products` - no es que ignore la regla nueva, es que el presupuesto de tools se agota antes de que la tool sea una opcion. En finalizacion, el modelo igual narra la seleccion como hecha, violando la regla nueva en el 100% de los casos - la unica de las tres causas donde el refuerzo textual no cambio el resultado.
+
+**Gate experimental** (definido por la propia tarea, no un umbral historico): no escalar al corpus completo de 12 casos si el completion combinado de C02+C04+C09 es menor a 90%. Resultado real: 66.7% - **no se corrio el corpus completo**.
+
+**Veredicto: `PROMPT_FIX_PARTIAL`**. Mejora significativa y real (no ruido: 20x en completion, reduccion de dos tercios en el hallazgo critico), pero C09 sigue sin resolverse - no califica para `PROMPT_FIX_SUFFICIENT` (que exige `unbackedCommercialMutationClaimRate=0%`). Proxima tarea propuesta: `LLM-R1-T08D` - Commercial Mutation Execution Guard, un guard de runtime dirigido especificamente al patron de agotamiento de presupuesto de C09 (fuera de alcance de `T08C`, que se mantuvo deliberadamente solo-prompt).
+
+**Produccion no cambio de configuracion** (`thinking` sigue benchmark-only, nunca seteado por `runNativeAutonomousCycle.ts`) - el veredicto de modelo/modo de produccion sigue siendo el de la seccion 15 (`thinking=enabled`, via `KEEP_THINKING_ENABLED`) hasta que `LLM-R1-T08D` cierre la brecha de C09. El prompt SI cambio (2 lineas aditivas, de bajo riesgo, activas ahora mismo para cualquier caller incluido el camino `thinking=enabled` actual - una correccion de contrato, no un cambio de veredicto de modelo). No se reescribe ningun resultado de las secciones 1-15.
 
 ---
 

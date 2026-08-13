@@ -1,3 +1,4 @@
+import { checkUnbackedCommercialMutationClaim } from "./unbackedCommercialMutationClaims";
 import type { BenchmarkProviderCallRecord, BenchmarkTurnResult } from "./types";
 
 function percentile(sortedAscending: number[], p: number): number | null {
@@ -34,6 +35,16 @@ export type BenchmarkAggregateMetrics = {
     toolArgumentAccuracy: number | null;
     terminalReasonCorrectness: number | null;
     overallPassRate: number | null;
+    /**
+     * LLM-R1-T08C, Parte 8. Fraction of turns whose final message claims a
+     * product selection/quantity/order mutation is done without a
+     * select_products observation this turn actually completing it -
+     * see unbackedCommercialMutationClaims.ts. More important than
+     * overallPassRate for this task's question (per its own instruction):
+     * a low overallPassRate can be a corpus artifact (see C02/C07 in T06),
+     * but a nonzero rate here is always a real, user-facing false claim.
+     */
+    unbackedCommercialMutationClaimRate: number | null;
   };
   structuralRobustness: {
     validAgentStepRate: number | null;
@@ -89,6 +100,7 @@ export function computeAggregateMetrics(results: BenchmarkTurnResult[]): Benchma
   const toolArgumentAccuracy = rate(results.filter((result) => result.score.toolArgumentsCorrect).length, totalRuns);
   const terminalReasonCorrectness = rate(results.filter((result) => result.score.terminalReasonCorrect).length, totalRuns);
   const overallPassRate = rate(results.filter((result) => result.score.overallPass).length, totalRuns);
+  const unbackedCommercialMutationClaimRate = rate(results.filter((result) => checkUnbackedCommercialMutationClaim(result.loop).unbacked).length, totalRuns);
 
   const validAgentStepRate = rate(allCalls.filter((call) => call.outcome === "success").length, totalProviderCalls);
   const invalidResponseRate = rate(allCalls.filter((call) => call.outcome === "invalid_response").length, totalProviderCalls);
@@ -139,7 +151,7 @@ export function computeAggregateMetrics(results: BenchmarkTurnResult[]): Benchma
   return {
     totalRuns,
     totalProviderCalls,
-    correctness: { requiredToolCompletionRate, forbiddenToolInvocationRate, toolArgumentAccuracy, terminalReasonCorrectness, overallPassRate },
+    correctness: { requiredToolCompletionRate, forbiddenToolInvocationRate, toolArgumentAccuracy, terminalReasonCorrectness, overallPassRate, unbackedCommercialMutationClaimRate },
     structuralRobustness: {
       validAgentStepRate,
       invalidResponseRate,
