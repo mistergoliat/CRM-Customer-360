@@ -119,6 +119,7 @@ function availableHistoryContext(status: CustomerCommercialHistoryContext["statu
       }
     ],
     purchaseBehavior: null,
+    customerRfm: null,
     provenance: {
       source: "PRESTASHOP",
       identityStatus: "DIRECT_SOURCE",
@@ -212,6 +213,108 @@ test("agent loop receives compact customer purchase history context before model
   ]);
   assert.match(JSON.stringify(history), /"monetaryInterpretation":"INFORMATIONAL_ONLY"/);
   assert.doesNotMatch(JSON.stringify(history), /VIP|lifetimeValue/i);
+});
+
+test("agent loop forwards a resolved masterCustomerId to the customer profile loader", async () => {
+  const provider: AgentLoopProvider = {
+    name: "capturing-provider",
+    async invoke() {
+      return { rawOutput: { type: "respond", message: "hola" } };
+    }
+  };
+  let loaderInput:
+    | {
+        customerId: number | null;
+        masterCustomerId: string | null;
+      }
+    | undefined;
+
+  await runNativeAgentToolLoopCycle({
+    ...baseInput,
+    snapshot: buildSnapshot(),
+    provider,
+    trustedCustomerSession: {
+      conversationId: "1",
+      opportunityId: null,
+      trustedInbound: {
+        channel: "whatsapp",
+        externalId: baseInput.waId,
+        normalizedPhone: baseInput.waId,
+        messageId: baseInput.inboundMessageId,
+        receivedAt: baseInput.currentTime
+      },
+      identity: {
+        status: "identified",
+        customerId: "123",
+        source: "external_identity",
+        localResolutionOutcome: "identified",
+        externalResolutionOutcome: null
+      },
+      masterCustomerIdentity: { status: "resolved", masterCustomerId: "9001", source: "native_session_verified_projection" },
+      onboarding: null,
+      contextAccess: "commercial_history",
+      currentTurnConsent: { createCustomer: null, linkExternalIdentity: null },
+      freshExternalResolutionEvidence: null
+    },
+    loadCustomerProfileContext: async (input) => {
+      loaderInput = { customerId: input.customerId, masterCustomerId: input.masterCustomerId };
+      return availableHistoryContext();
+    },
+    resolvedSalesAgentConfiguration: buildResolvedConfig()
+  });
+
+  assert.deepEqual(loaderInput, { customerId: 123, masterCustomerId: "9001" });
+});
+
+test("agent loop never falls back from customerId to masterCustomerId when canonical identity is unresolved", async () => {
+  const provider: AgentLoopProvider = {
+    name: "capturing-provider",
+    async invoke() {
+      return { rawOutput: { type: "respond", message: "hola" } };
+    }
+  };
+  let loaderInput:
+    | {
+        customerId: number | null;
+        masterCustomerId: string | null;
+      }
+    | undefined;
+
+  await runNativeAgentToolLoopCycle({
+    ...baseInput,
+    snapshot: buildSnapshot(),
+    provider,
+    trustedCustomerSession: {
+      conversationId: "1",
+      opportunityId: null,
+      trustedInbound: {
+        channel: "whatsapp",
+        externalId: baseInput.waId,
+        normalizedPhone: baseInput.waId,
+        messageId: baseInput.inboundMessageId,
+        receivedAt: baseInput.currentTime
+      },
+      identity: {
+        status: "identified",
+        customerId: "123",
+        source: "external_identity",
+        localResolutionOutcome: "identified",
+        externalResolutionOutcome: null
+      },
+      masterCustomerIdentity: { status: "identity_unresolved", reason: "identity_not_verified" },
+      onboarding: null,
+      contextAccess: "commercial_history",
+      currentTurnConsent: { createCustomer: null, linkExternalIdentity: null },
+      freshExternalResolutionEvidence: null
+    },
+    loadCustomerProfileContext: async (input) => {
+      loaderInput = { customerId: input.customerId, masterCustomerId: input.masterCustomerId };
+      return availableHistoryContext();
+    },
+    resolvedSalesAgentConfiguration: buildResolvedConfig()
+  });
+
+  assert.deepEqual(loaderInput, { customerId: 123, masterCustomerId: null });
 });
 
 test("agent loop does not call the customer profile loader when a human already owns the conversation", async () => {

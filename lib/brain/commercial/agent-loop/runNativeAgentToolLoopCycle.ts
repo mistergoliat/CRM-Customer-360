@@ -18,6 +18,7 @@ import {
   buildCustomerHistoryCommercialGuidance,
   buildCustomerHistoryCommercialSignalsSummary,
   buildCustomerPurchaseHistorySummary,
+  buildCustomerRfmSummary,
   deriveCustomerHistoryCommercialSignals,
   deriveCustomerHistoryNeeds,
   filterRelevantCustomerHistorySignals,
@@ -52,6 +53,7 @@ export type RunNativeAgentToolLoopCycleInput = {
   /** Test-only injection point for T12C; production callers use the shared Customer Profile capability wrapper. */
   loadCustomerProfileContext?: ((input: {
     customerId: number | null;
+    masterCustomerId: string | null;
     commercialIntent: boolean;
     customerMessage: string;
     snapshot: CommercialContextSnapshot;
@@ -105,6 +107,10 @@ function buildCommercialContextSummary(
 
   if (customerProfileContext) {
     summary.customerPurchaseHistory = buildCustomerPurchaseHistorySummary(customerProfileContext);
+    const customerRfm = buildCustomerRfmSummary(customerProfileContext.customerRfm);
+    if (customerRfm) {
+      summary.customerRfm = customerRfm;
+    }
   }
 
   if (customerHistoryCommercialSignalsSummary) {
@@ -216,6 +222,14 @@ function parseTrustedCustomerId(session: NativeCustomerSessionExecutionContext |
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function parseTrustedMasterCustomerId(session: NativeCustomerSessionExecutionContext | null | undefined): string | null {
+  const resolution = session?.masterCustomerIdentity;
+  if (!resolution || resolution.status !== "resolved") return null;
+  return /^\d{1,20}$/.test(resolution.masterCustomerId) && !/^0+$/.test(resolution.masterCustomerId)
+    ? resolution.masterCustomerId
+    : null;
+}
+
 function buildCustomerProfileComparisonCandidates(input: {
   recentCatalogContext?: RecentCatalogContext | null;
   pendingCatalogAction?: PendingCatalogActionStep | null;
@@ -255,6 +269,7 @@ function buildCustomerProfileComparisonCandidates(input: {
 
 async function defaultLoadCustomerProfileContext(input: {
   customerId: number | null;
+  masterCustomerId: string | null;
   commercialIntent: boolean;
   customerMessage: string;
   snapshot: CommercialContextSnapshot;
@@ -274,6 +289,7 @@ async function defaultLoadCustomerProfileContext(input: {
 
   const context = await loadCustomerCommercialHistoryContext({
     customerId: input.customerId,
+    masterCustomerId: input.masterCustomerId,
     commercialIntent: input.commercialIntent,
     historyNeeds,
     requestId: input.requestId,
@@ -431,6 +447,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
   try {
     customerProfileContext = await loadCustomerProfileContext({
       customerId: parseTrustedCustomerId(input.trustedCustomerSession),
+      masterCustomerId: parseTrustedMasterCustomerId(input.trustedCustomerSession),
       commercialIntent: true,
       customerMessage: input.customerMessage,
       snapshot: input.snapshot,
@@ -446,6 +463,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
       recentOrders: [],
       purchasedProducts: [],
       purchaseBehavior: null,
+      customerRfm: null,
       provenance: null,
       recommendationHistoryMatches: [],
       constraints: {
@@ -475,6 +493,10 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
       reasonCodes: customerProfileContext.observations.map((observation) => observation.reasonCode),
       durationMs: Date.now() - customerProfileStartedAt,
       contractVersion: customerProfileContext.provenance?.contractVersion ?? null,
+      rfmLookupStatus: customerProfileContext.customerRfm?.status ?? null,
+      rfmContractVersion: customerProfileContext.customerRfm?.status === "AVAILABLE" ? customerProfileContext.customerRfm.contractVersion : null,
+      rfmSegmentVersion:
+        customerProfileContext.customerRfm?.status === "AVAILABLE" ? customerProfileContext.customerRfm.segment.version : null,
       historyItemCount: customerProfileContext.purchasedProducts.length,
       recommendationMatchCount: customerProfileContext.recommendationHistoryMatches.length,
       requestId: input.correlationId

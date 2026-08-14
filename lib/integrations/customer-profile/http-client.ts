@@ -6,7 +6,9 @@ import {
   parseCustomerProfileResponse,
   parseCustomerPurchasedProductsResponse,
   parseCustomerPurchaseBehaviorResponse,
+  parseCustomerRfmResponse,
   validateCustomerId,
+  validateMasterCustomerId,
   validateOrderReference,
   validatePurchaseBehaviorTopProducts,
   validatePurchaseBehaviorTopVariants,
@@ -31,9 +33,15 @@ import type {
   CustomerPurchaseBehaviorResult,
   CustomerOrderStatusResponse,
   CustomerOrderStatusResult,
+  CustomerRfmContractErrorReason,
+  CustomerRfmNotFoundReason,
+  CustomerRfmResponse,
+  CustomerRfmResult,
+  CustomerRfmUnavailableReason,
   GetCommercialSummaryInput,
   GetCustomerOrderStatusInput,
   GetCustomerProfileInput,
+  GetCustomerRfmInput,
   GetPurchaseBehaviorInput,
   GetPurchasedProductsInput
 } from "./types";
@@ -56,12 +64,14 @@ type CustomerProfileOperation =
   | "purchased-products"
   | "purchase-behavior"
   | "order-status"
+  | "rfm"
   | "readiness";
 
 type Observation = {
   operation: CustomerProfileOperation;
   requestId: string | null;
   customerId: number | null;
+  masterCustomerId: string | null;
   referencePresent: boolean;
   status: string;
   reason: string | null;
@@ -69,6 +79,7 @@ type Observation = {
   durationMs: number;
   contractVersion: string | null;
   identitySource: string | null;
+  segmentVersion: string | null;
 };
 
 type JsonReadResult = { kind: "json"; body: unknown } | { kind: "empty" } | { kind: "invalid_json" };
@@ -164,19 +175,36 @@ async function readJsonBody(response: Response): Promise<JsonReadResult> {
 }
 
 function logObservation(observation: Observation): void {
+  if (observation.operation === "rfm") {
+    console.info({
+      event: "customer_rfm_lookup",
+      service: "customer-profile",
+      requestId: observation.requestId,
+      masterCustomerId: observation.masterCustomerId,
+      rfm_lookup_status: observation.status,
+      reason: observation.reason,
+      httpStatus: observation.httpStatus,
+      rfm_provider_latency_ms: observation.durationMs,
+      rfm_contract_version: observation.contractVersion,
+      rfm_segment_version: observation.segmentVersion
+    });
+    return;
+  }
   console.info({
     event: "customer_profile_client_request",
     service: "customer-profile",
     operation: observation.operation,
     requestId: observation.requestId,
     customerId: observation.customerId,
+    masterCustomerId: observation.masterCustomerId,
     referencePresent: observation.referencePresent,
     status: observation.status,
     reason: observation.reason,
     httpStatus: observation.httpStatus,
     durationMs: observation.durationMs,
     contractVersion: observation.contractVersion,
-    identitySource: observation.identitySource
+    identitySource: observation.identitySource,
+    segmentVersion: observation.segmentVersion
   });
 }
 
@@ -208,6 +236,10 @@ function finalizeWithObservation<T extends { status: string }>(
     identitySource:
       result.status === "AVAILABLE" && "metadata" in result && typeof result.metadata === "object" && result.metadata !== null && "identitySource" in result.metadata
         ? String(result.metadata.identitySource)
+        : null,
+    segmentVersion:
+      result.status === "AVAILABLE" && "metadata" in result && typeof result.metadata === "object" && result.metadata !== null && "segmentVersion" in result.metadata
+        ? (typeof result.metadata.segmentVersion === "string" ? result.metadata.segmentVersion : result.metadata.segmentVersion === null ? null : null)
         : null
   };
   logObservation(base);
@@ -247,6 +279,22 @@ function classifyInvalidBody(status: number) {
   return unavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", false);
 }
 
+function rfmUnavailableResult(reason: CustomerRfmUnavailableReason, retryable: boolean): CustomerRfmResult {
+  return { status: "UNAVAILABLE", reason, retryable };
+}
+
+function rfmContractError(reason: CustomerRfmContractErrorReason): CustomerRfmResult {
+  return { status: "CONTRACT_ERROR", reason };
+}
+
+function rfmNotFound(reason: CustomerRfmNotFoundReason): CustomerRfmResult {
+  return { status: "NOT_FOUND", reason };
+}
+
+function rfmInvalidRequest(): CustomerRfmResult {
+  return { status: "INVALID_REQUEST", reason: "INVALID_MASTER_CUSTOMER_ID" };
+}
+
 function createDisabledCustomerProfileClient(): CustomerProfileClient {
   const disabled = async () => unavailableResult("CUSTOMER_PROFILE_DISABLED", false);
   return {
@@ -255,6 +303,7 @@ function createDisabledCustomerProfileClient(): CustomerProfileClient {
     getPurchasedProducts: disabled,
     getPurchaseBehavior: disabled,
     getOrderStatus: disabled,
+    getRfm: async () => ({ status: "UNAVAILABLE" as const, reason: "CUSTOMER_PROFILE_UNAVAILABLE" as const, retryable: false }),
     checkReadiness: disabled
   };
 }
@@ -279,9 +328,11 @@ async function requestCustomerEndpoint<TAvailable extends { provenance: { contra
     operation: input.operation,
     requestId: input.requestId ?? null,
     customerId: input.customerId,
+    masterCustomerId: null,
     referencePresent: Boolean(input.referencePresent),
     httpStatus: "status" in response ? response.status : null,
-    durationMs: Date.now() - startedAt
+    durationMs: Date.now() - startedAt,
+    segmentVersion: null
   };
 
   if ("kind" in response) {
@@ -338,6 +389,98 @@ async function requestCustomerEndpoint<TAvailable extends { provenance: { contra
   return finalizeWithObservation(observationBase, unavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", response.status >= 500));
 }
 
+async function requestMasterCustomerEndpoint(
+  config: CustomerProfileClientConfig,
+  input: {
+    operation: "rfm";
+    masterCustomerId: string;
+    requestId?: string;
+    path: string;
+  },
+  parseAvailable: (body: unknown, requestedMasterCustomerId: string) => { ok: true; value: CustomerRfmResponse } | { ok: false; reason: CustomerRfmContractErrorReason },
+  parseNotFoundReason: (body: unknown) => CustomerRfmNotFoundReason | null
+): Promise<CustomerRfmResult> {
+  const startedAt = Date.now();
+  const response = await fetchOnce(config, buildUrl(config.baseUrl as string, input.path), input.requestId);
+  const observationBase = {
+    operation: "rfm" as const,
+    requestId: input.requestId ?? null,
+    customerId: null,
+    masterCustomerId: input.masterCustomerId,
+    referencePresent: false,
+    httpStatus: "status" in response ? response.status : null,
+    durationMs: Date.now() - startedAt,
+    segmentVersion: null
+  };
+
+  if ("kind" in response) {
+    if (response.kind === "timeout") {
+      return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_TIMEOUT", true));
+    }
+    return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", true));
+  }
+
+  if (response.status >= 200 && response.status < 300) {
+    if (response.body.kind !== "json") {
+      return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", true));
+    }
+    const parsed = parseAvailable(response.body.body, input.masterCustomerId);
+    if (!parsed.ok) {
+      return finalizeWithObservation(observationBase, rfmContractError(parsed.reason));
+    }
+    return finalizeWithObservation(
+      {
+        ...observationBase,
+        segmentVersion: parsed.value.segment.version
+      },
+      {
+        status: "AVAILABLE" as const,
+        data: parsed.value,
+        metadata: {
+          requestedMasterCustomerId: input.masterCustomerId,
+          contractVersion: parsed.value.contractVersion,
+          segmentVersion: parsed.value.segment.version,
+          referenceTime: parsed.value.snapshot.referenceTime,
+          publishedAt: parsed.value.snapshot.publishedAt,
+          durationMs: Date.now() - startedAt
+        }
+      }
+    );
+  }
+
+  if (response.status === 400) {
+    return finalizeWithObservation(observationBase, rfmInvalidRequest());
+  }
+  if (response.status === 404) {
+    if (response.body.kind !== "json") {
+      return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", false));
+    }
+    const reason = parseNotFoundReason(response.body.body);
+    if (reason === null) {
+      return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", false));
+    }
+    return finalizeWithObservation(observationBase, rfmNotFound(reason));
+  }
+  if (response.status === 408) {
+    return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_TIMEOUT", true));
+  }
+  if (response.status === 429 || response.status === 500 || response.status === 502 || response.status === 504) {
+    return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", true));
+  }
+  if (response.status === 503) {
+    if (response.body.kind !== "json") {
+      return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", true));
+    }
+    const body = response.body.body;
+    const reason: CustomerRfmUnavailableReason =
+      typeof body === "object" && body !== null && "reason" in body && body.reason === "no_published_rfm_snapshot"
+        ? "RFM_DEGRADED"
+        : "CUSTOMER_PROFILE_UNAVAILABLE";
+    return finalizeWithObservation(observationBase, rfmUnavailableResult(reason, true));
+  }
+  return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", response.status >= 500));
+}
+
 function parseCustomerNotFound(body: unknown): "CUSTOMER_NOT_FOUND" | null {
   return typeof body === "object" && body !== null && "status" in body && body.status === "customer_not_found" ? "CUSTOMER_NOT_FOUND" : null;
 }
@@ -346,6 +489,13 @@ function parseOrderStatusNotFound(body: unknown): "CUSTOMER_NOT_FOUND" | "ORDER_
   if (typeof body !== "object" || body === null || !("status" in body)) return null;
   if (body.status === "customer_not_found") return "CUSTOMER_NOT_FOUND";
   if (body.status === "order_not_found") return "ORDER_NOT_FOUND";
+  return null;
+}
+
+function parseRfmNotFound(body: unknown): CustomerRfmNotFoundReason | null {
+  if (typeof body !== "object" || body === null || !("status" in body)) return null;
+  if (body.status === "customer_not_found") return "CUSTOMER_NOT_FOUND";
+  if (body.status === "rfm_not_available") return "RFM_NOT_AVAILABLE";
   return null;
 }
 
@@ -427,6 +577,23 @@ export function createHttpCustomerProfileClient(config: CustomerProfileClientCon
       );
     },
 
+    async getRfm(input: GetCustomerRfmInput): Promise<CustomerRfmResult> {
+      if (!validateMasterCustomerId(input.masterCustomerId)) {
+        return rfmInvalidRequest();
+      }
+      return requestMasterCustomerEndpoint(
+        config,
+        {
+          operation: "rfm",
+          masterCustomerId: input.masterCustomerId,
+          requestId: input.requestId,
+          path: `v1/customers/${encodeURIComponent(input.masterCustomerId)}/rfm`
+        },
+        parseCustomerRfmResponse,
+        parseRfmNotFound
+      );
+    },
+
     async checkReadiness(input = {}): Promise<CustomerProfileReadinessResult> {
       const startedAt = Date.now();
       const response = await fetchOnce(config, buildUrl(config.baseUrl as string, "health/ready"), input.requestId);
@@ -434,9 +601,11 @@ export function createHttpCustomerProfileClient(config: CustomerProfileClientCon
         operation: "readiness" as const,
         requestId: input.requestId ?? null,
         customerId: null,
+        masterCustomerId: null,
         referencePresent: false,
         httpStatus: "status" in response ? response.status : null,
-        durationMs: Date.now() - startedAt
+        durationMs: Date.now() - startedAt,
+        segmentVersion: null
       };
 
       if ("kind" in response) {

@@ -10,6 +10,7 @@ function makeClient(): CustomerProfileClient {
     getPurchasedProducts: async () => ({ status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_DISABLED", retryable: false }),
     getPurchaseBehavior: async () => ({ status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_DISABLED", retryable: false }),
     getOrderStatus: async () => ({ status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_DISABLED", retryable: false }),
+    getRfm: async () => ({ status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_UNAVAILABLE", retryable: false }),
     checkReadiness: async () => ({ status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_DISABLED", retryable: false })
   };
 }
@@ -25,6 +26,11 @@ test("customer profile capabilities are a thin internal application wrapper over
   assert.deepEqual(await capabilities.getOrderStatus({ customerId: 1, orderReference: "ABC123XYZ" }), {
     status: "UNAVAILABLE",
     reason: "CUSTOMER_PROFILE_DISABLED",
+    retryable: false
+  });
+  assert.deepEqual(await capabilities.getRfm({ masterCustomerId: "9001" }), {
+    status: "UNAVAILABLE",
+    reason: "CUSTOMER_PROFILE_UNAVAILABLE",
     retryable: false
   });
   assert.deepEqual(await capabilities.checkReadiness(), { status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_DISABLED", retryable: false });

@@ -1,4 +1,5 @@
 import {
+  CUSTOMER_RFM_CONTRACT_VERSION,
   CUSTOMER_PROFILE_CONTRACT_VERSION,
   CUSTOMER_PROFILE_IDENTITY_SOURCE,
   CUSTOMER_PROFILE_IDENTITY_STATUS,
@@ -9,14 +10,17 @@ import {
   type CustomerProfileReadinessResponse,
   type CustomerProfileResponse,
   type CustomerPurchasedProductsResponse,
-  type CustomerPurchaseBehaviorResponse
+  type CustomerPurchaseBehaviorResponse,
+  type CustomerRfmResponse
 } from "./types";
 
 type ParseSuccess<T> = { ok: true; value: T };
 type ParseFailure = { ok: false; reason: "INVALID_RESPONSE" | "CONTRACT_VERSION_UNSUPPORTED" | "PROVENANCE_MISMATCH" };
+type CustomerRfmParseFailure = { ok: false; reason: "INVALID_RESPONSE" | "CONTRACT_VERSION_UNSUPPORTED" | "MASTER_CUSTOMER_ID_MISMATCH" };
 
 const DECIMAL_STRING_PATTERN = /^\d+(\.\d+)?$/;
 const ORDER_REFERENCE_PATTERN = /^[A-Za-z0-9]{1,32}$/;
+const MASTER_CUSTOMER_ID_PATTERN = /^\d{1,20}$/;
 
 type RecordValue = Record<string, unknown>;
 
@@ -64,6 +68,10 @@ function asDecimalString(value: unknown): string | null {
   return typeof value === "string" && DECIMAL_STRING_PATTERN.test(value) ? value : null;
 }
 
+function asCurrencyCode(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Z]{3}$/.test(value) ? value : null;
+}
+
 function asIsoDateString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const timestamp = Date.parse(value);
@@ -80,6 +88,10 @@ function parseStringArray(value: unknown): string[] | null {
     result.push(text);
   }
   return result;
+}
+
+function asScore(value: unknown): 1 | 2 | 3 | 4 | 5 | null {
+  return value === 1 || value === 2 || value === 3 || value === 4 || value === 5 ? value : null;
 }
 
 function parseDataProvenance(value: unknown, requestedCustomerId: number): ParseSuccess<CustomerDataProvenance> | ParseFailure {
@@ -420,6 +432,10 @@ function parseDeliveryEstimate(value: unknown): CustomerOrderStatusDeliveryEstim
 
 export function validateCustomerId(value: unknown): boolean {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function validateMasterCustomerId(value: unknown): boolean {
+  return typeof value === "string" && MASTER_CUSTOMER_ID_PATTERN.test(value) && !/^0+$/.test(value);
 }
 
 export function validatePurchasedProductsLimit(value: unknown): boolean {
@@ -848,4 +864,115 @@ export function parseCustomerProfileReadinessResponse(value: unknown): ParseSucc
     };
   }
   return { ok: false, reason: "INVALID_RESPONSE" };
+}
+
+export function parseCustomerRfmResponse(value: unknown, requestedMasterCustomerId: string): ParseSuccess<CustomerRfmResponse> | CustomerRfmParseFailure {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["status", "masterCustomerId", "snapshot", "rfm", "segment", "contractVersion"])) {
+    return { ok: false, reason: "INVALID_RESPONSE" };
+  }
+  if (value.status !== "available") return { ok: false, reason: "INVALID_RESPONSE" };
+  const masterCustomerId = asNonEmptyString(value.masterCustomerId);
+  if (masterCustomerId === null || !validateMasterCustomerId(masterCustomerId)) {
+    return { ok: false, reason: "INVALID_RESPONSE" };
+  }
+  if (masterCustomerId !== requestedMasterCustomerId) {
+    return { ok: false, reason: "MASTER_CUSTOMER_ID_MISMATCH" };
+  }
+  if (value.contractVersion !== CUSTOMER_RFM_CONTRACT_VERSION) {
+    return { ok: false, reason: "CONTRACT_VERSION_UNSUPPORTED" };
+  }
+
+  if (
+    !isRecord(value.snapshot) ||
+    !hasOnlyKeys(value.snapshot, ["snapshotId", "calculationVersion", "referenceTime", "publishedAt", "currencyCode"])
+  ) {
+    return { ok: false, reason: "INVALID_RESPONSE" };
+  }
+
+  const snapshotId = asNonEmptyString(value.snapshot.snapshotId);
+  const calculationVersion = asNonEmptyString(value.snapshot.calculationVersion);
+  const referenceTime = asIsoDateString(value.snapshot.referenceTime);
+  const publishedAt = asIsoDateString(value.snapshot.publishedAt);
+  const currencyCode = asCurrencyCode(value.snapshot.currencyCode);
+
+  if (snapshotId === null || calculationVersion === null || referenceTime === null || publishedAt === null || currencyCode === null) {
+    return { ok: false, reason: "INVALID_RESPONSE" };
+  }
+
+  if (
+    !isRecord(value.rfm) ||
+    !hasOnlyKeys(value.rfm, [
+      "recencyDays",
+      "frequencyOrders",
+      "grossOrderValueTaxIncl",
+      "averageOrderValueTaxIncl",
+      "recencyScore",
+      "frequencyScore",
+      "monetaryScore",
+      "rfmCode"
+    ])
+  ) {
+    return { ok: false, reason: "INVALID_RESPONSE" };
+  }
+
+  const recencyDays = asNonNegativeInteger(value.rfm.recencyDays);
+  const frequencyOrders = asNonNegativeInteger(value.rfm.frequencyOrders);
+  const grossOrderValueTaxIncl = asDecimalString(value.rfm.grossOrderValueTaxIncl);
+  const averageOrderValueTaxIncl = asDecimalString(value.rfm.averageOrderValueTaxIncl);
+  const recencyScore = asScore(value.rfm.recencyScore);
+  const frequencyScore = asScore(value.rfm.frequencyScore);
+  const monetaryScore = asScore(value.rfm.monetaryScore);
+  const rfmCode = asNonEmptyString(value.rfm.rfmCode);
+
+  if (
+    recencyDays === null ||
+    frequencyOrders === null ||
+    grossOrderValueTaxIncl === null ||
+    averageOrderValueTaxIncl === null ||
+    recencyScore === null ||
+    frequencyScore === null ||
+    monetaryScore === null ||
+    rfmCode === null
+  ) {
+    return { ok: false, reason: "INVALID_RESPONSE" };
+  }
+
+  if (!isRecord(value.segment) || !hasOnlyKeys(value.segment, ["code", "version"])) {
+    return { ok: false, reason: "INVALID_RESPONSE" };
+  }
+  const segmentCode = asNullableString(value.segment.code);
+  const segmentVersion = asNullableString(value.segment.version);
+  if (!segmentCode.ok || !segmentVersion.ok) {
+    return { ok: false, reason: "INVALID_RESPONSE" };
+  }
+
+  return {
+    ok: true,
+    value: {
+      status: "available",
+      masterCustomerId,
+      snapshot: {
+        snapshotId,
+        calculationVersion,
+        referenceTime,
+        publishedAt,
+        currencyCode
+      },
+      rfm: {
+        recencyDays,
+        frequencyOrders,
+        grossOrderValueTaxIncl,
+        averageOrderValueTaxIncl,
+        recencyScore,
+        frequencyScore,
+        monetaryScore,
+        rfmCode
+      },
+      segment: {
+        code: segmentCode.value,
+        version: segmentVersion.value
+      },
+      contractVersion: CUSTOMER_RFM_CONTRACT_VERSION
+    }
+  };
 }

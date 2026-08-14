@@ -6,9 +6,11 @@ import type {
   CustomerProfileResult,
   CustomerPurchasedProductsResult,
   CustomerPurchaseBehaviorResult,
+  CustomerRfmResult,
   GetCommercialSummaryInput,
   GetCustomerOrderStatusInput,
   GetCustomerProfileInput,
+  GetCustomerRfmInput,
   GetPurchaseBehaviorInput,
   GetPurchasedProductsInput
 } from "@/lib/integrations/customer-profile";
@@ -19,6 +21,7 @@ export type CustomerProfileCapabilities = {
   getPurchasedProducts(input: GetPurchasedProductsInput): Promise<CustomerPurchasedProductsResult>;
   getPurchaseBehavior(input: GetPurchaseBehaviorInput): Promise<CustomerPurchaseBehaviorResult>;
   getOrderStatus(input: GetCustomerOrderStatusInput): Promise<CustomerOrderStatusResult>;
+  getRfm(input: GetCustomerRfmInput): Promise<CustomerRfmResult>;
   checkReadiness(input?: { requestId?: string }): Promise<CustomerProfileReadinessResult>;
 };
 

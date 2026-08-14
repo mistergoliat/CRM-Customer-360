@@ -6,7 +6,8 @@ import type {
   CustomerCommercialSummaryResult,
   CustomerProfileResult,
   CustomerPurchasedProductsResult,
-  CustomerPurchaseBehaviorResult
+  CustomerPurchaseBehaviorResult,
+  CustomerRfmResult
 } from "@/lib/integrations/customer-profile";
 
 function baseConfig(overrides: Partial<{ contextEnabled: boolean; purchasedProductsLimit: number; topProductsLimit: number; topVariantsLimit: number; recentPurchasesLimit: number }> = {}) {
@@ -222,6 +223,46 @@ function availableProfile(): CustomerProfileResult {
   };
 }
 
+function availableRfm(): CustomerRfmResult {
+  return {
+    status: "AVAILABLE",
+    metadata: {
+      requestedMasterCustomerId: "9001",
+      contractVersion: "customer-rfm-runtime-v1",
+      segmentVersion: "rfm-commercial-v1",
+      referenceTime: "2026-08-03T00:00:00.000Z",
+      publishedAt: "2026-08-03T01:00:00.000Z",
+      durationMs: 8
+    },
+    data: {
+      status: "available",
+      masterCustomerId: "9001",
+      snapshot: {
+        snapshotId: "55",
+        calculationVersion: "rfm-population-v1",
+        referenceTime: "2026-08-03T00:00:00.000Z",
+        publishedAt: "2026-08-03T01:00:00.000Z",
+        currencyCode: "CLP"
+      },
+      rfm: {
+        recencyDays: 2,
+        frequencyOrders: 3,
+        grossOrderValueTaxIncl: "123456.780000",
+        averageOrderValueTaxIncl: "41152.260000",
+        recencyScore: 5,
+        frequencyScore: 3,
+        monetaryScore: 4,
+        rfmCode: "R5F3M4"
+      },
+      segment: {
+        code: "LOYAL",
+        version: "rfm-commercial-v1"
+      },
+      contractVersion: "customer-rfm-runtime-v1"
+    }
+  };
+}
+
 function buildCapabilities(overrides: Partial<CustomerProfileCapabilities> = {}): CustomerProfileCapabilities {
   return {
     async getCommercialSummary() {
@@ -236,6 +277,9 @@ function buildCapabilities(overrides: Partial<CustomerProfileCapabilities> = {})
     async getProfile() {
       return availableProfile();
     },
+    async getRfm() {
+      return availableRfm();
+    },
     async getOrderStatus() {
       throw new Error("not used in T12C loader tests");
     },
@@ -249,6 +293,7 @@ function buildCapabilities(overrides: Partial<CustomerProfileCapabilities> = {})
 test("loader returns IDENTITY_UNAVAILABLE when customerId is missing or invalid", async () => {
   const context = await loadCustomerCommercialHistoryContext({
     customerId: null,
+    masterCustomerId: null,
     commercialIntent: true,
     historyNeeds: [],
     customerProfileCapabilities: buildCapabilities(),
@@ -263,6 +308,7 @@ test("loader returns IDENTITY_UNAVAILABLE when customerId is missing or invalid"
 test("loader returns DISABLED when the wiring flag is off", async () => {
   const context = await loadCustomerCommercialHistoryContext({
     customerId: 123,
+    masterCustomerId: null,
     commercialIntent: true,
     historyNeeds: [],
     customerProfileCapabilities: buildCapabilities(),
@@ -277,6 +323,7 @@ test("loader uses commercial summary as base context without loading profile by 
   let profileCalls = 0;
   const context = await loadCustomerCommercialHistoryContext({
     customerId: 123,
+    masterCustomerId: "9001",
     commercialIntent: true,
     historyNeeds: [],
     customerProfileCapabilities: buildCapabilities({
@@ -293,6 +340,8 @@ test("loader uses commercial summary as base context without loading profile by 
   assert.equal(context.purchasedProducts.length, 0);
   assert.equal(context.purchaseBehavior, null);
   assert.equal(context.recentOrders.length, 0);
+  assert.equal(context.customerRfm?.status, "AVAILABLE");
+  assert.equal(context.constraints.rfmAvailable, true);
   assert.equal(profileCalls, 0);
 });
 
@@ -300,6 +349,7 @@ test("loader loads purchased products and behavior selectively with the configur
   const captured: Array<Record<string, unknown>> = [];
   const context = await loadCustomerCommercialHistoryContext({
     customerId: 123,
+    masterCustomerId: "9001",
     commercialIntent: true,
     historyNeeds: ["PRODUCT_RECOMMENDATION"],
     customerProfileCapabilities: buildCapabilities({
@@ -330,6 +380,7 @@ test("loader loads purchased products and behavior selectively with the configur
 test("loader becomes PARTIAL when a secondary capability fails but summary is available", async () => {
   const context = await loadCustomerCommercialHistoryContext({
     customerId: 123,
+    masterCustomerId: "9001",
     commercialIntent: true,
     historyNeeds: ["PRODUCT_RECOMMENDATION"],
     customerProfileCapabilities: buildCapabilities({
@@ -343,12 +394,14 @@ test("loader becomes PARTIAL when a secondary capability fails but summary is av
   assert.equal(context.status, "PARTIAL");
   assert.equal(context.purchasedProducts.length, 1);
   assert.equal(context.purchaseBehavior, null);
+  assert.equal(context.customerRfm?.status, "AVAILABLE");
   assert.ok(context.observations.some((observation) => observation.reasonCode === "CUSTOMER_PROFILE_PARTIAL"));
 });
 
 test("loader can load profile explicitly for recent orders context", async () => {
   const context = await loadCustomerCommercialHistoryContext({
     customerId: 123,
+    masterCustomerId: "9001",
     commercialIntent: true,
     historyNeeds: ["RECENT_ORDERS_CONTEXT"],
     customerProfileCapabilities: buildCapabilities(),
@@ -363,6 +416,7 @@ test("loader can load profile explicitly for recent orders context", async () =>
 test("loader returns NOT_FOUND when commercial summary says the customer does not exist", async () => {
   const context = await loadCustomerCommercialHistoryContext({
     customerId: 123,
+    masterCustomerId: "9001",
     commercialIntent: true,
     historyNeeds: [],
     customerProfileCapabilities: buildCapabilities({
@@ -380,6 +434,7 @@ test("loader returns NOT_FOUND when commercial summary says the customer does no
 test("loader maps summary timeout to UNAVAILABLE and contract errors to CONTRACT_ERROR", async () => {
   const unavailable = await loadCustomerCommercialHistoryContext({
     customerId: 123,
+    masterCustomerId: "9001",
     commercialIntent: true,
     historyNeeds: [],
     customerProfileCapabilities: buildCapabilities({
@@ -394,6 +449,7 @@ test("loader maps summary timeout to UNAVAILABLE and contract errors to CONTRACT
 
   const contractError = await loadCustomerCommercialHistoryContext({
     customerId: 123,
+    masterCustomerId: "9001",
     commercialIntent: true,
     historyNeeds: [],
     customerProfileCapabilities: buildCapabilities({
@@ -405,4 +461,67 @@ test("loader maps summary timeout to UNAVAILABLE and contract errors to CONTRACT
   });
   assert.equal(contractError.status, "CONTRACT_ERROR");
   assert.ok(contractError.observations.some((observation) => observation.reasonCode === "CUSTOMER_PROFILE_PROVENANCE_MISMATCH"));
+});
+
+test("loader keeps the turn AVAILABLE when master identity exists but RFM row is absent", async () => {
+  const context = await loadCustomerCommercialHistoryContext({
+    customerId: 123,
+    masterCustomerId: "9001",
+    commercialIntent: true,
+    historyNeeds: [],
+    customerProfileCapabilities: buildCapabilities({
+      async getRfm() {
+        return { status: "NOT_FOUND", reason: "RFM_NOT_AVAILABLE" };
+      }
+    }),
+    config: baseConfig()
+  });
+
+  assert.equal(context.status, "AVAILABLE");
+  assert.deepEqual(context.customerRfm, {
+    status: "NO_RFM",
+    masterCustomerId: "9001",
+    reasonCode: "RFM_NOT_AVAILABLE"
+  });
+  assert.equal(context.constraints.rfmAvailable, false);
+});
+
+test("loader degrades to PARTIAL when RFM is provider-degraded or provider-error, but keeps the sales context usable", async () => {
+  const degraded = await loadCustomerCommercialHistoryContext({
+    customerId: 123,
+    masterCustomerId: "9001",
+    commercialIntent: true,
+    historyNeeds: [],
+    customerProfileCapabilities: buildCapabilities({
+      async getRfm() {
+        return { status: "UNAVAILABLE", reason: "RFM_DEGRADED", retryable: true };
+      }
+    }),
+    config: baseConfig()
+  });
+  assert.equal(degraded.status, "PARTIAL");
+  assert.deepEqual(degraded.customerRfm, {
+    status: "RFM_DEGRADED",
+    masterCustomerId: "9001",
+    reasonCode: "RFM_DEGRADED"
+  });
+
+  const providerError = await loadCustomerCommercialHistoryContext({
+    customerId: 123,
+    masterCustomerId: "9001",
+    commercialIntent: true,
+    historyNeeds: [],
+    customerProfileCapabilities: buildCapabilities({
+      async getRfm() {
+        return { status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_TIMEOUT", retryable: true };
+      }
+    }),
+    config: baseConfig()
+  });
+  assert.equal(providerError.status, "PARTIAL");
+  assert.deepEqual(providerError.customerRfm, {
+    status: "PROVIDER_ERROR",
+    masterCustomerId: "9001",
+    reasonCode: "RFM_PROVIDER_ERROR"
+  });
 });

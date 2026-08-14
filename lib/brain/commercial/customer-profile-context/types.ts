@@ -46,14 +46,20 @@ export const CUSTOMER_PROFILE_CONTEXT_REASON_CODES = [
   "PURCHASE_BEHAVIOR_AVAILABLE",
   "PROFILE_AVAILABLE",
   "ORDER_STATUS_AVAILABLE",
+  "RFM_AVAILABLE",
+  "RFM_IDENTITY_UNAVAILABLE",
+  "RFM_CUSTOMER_NOT_FOUND",
   "RFM_NOT_AVAILABLE",
+  "RFM_DEGRADED",
+  "RFM_PROVIDER_ERROR",
+  "RFM_CONTRACT_ERROR",
   "MONETARY_INFORMATIONAL_ONLY",
   "CATALOG_RANKING_NOT_MODIFIED"
 ] as const;
 
 export type CustomerProfileContextReasonCode = (typeof CUSTOMER_PROFILE_CONTEXT_REASON_CODES)[number];
 
-export type CustomerProfileContextCapability = "commercial-summary" | "purchased-products" | "purchase-behavior" | "profile";
+export type CustomerProfileContextCapability = "commercial-summary" | "purchased-products" | "purchase-behavior" | "profile" | "rfm";
 
 export type CustomerProfileContextObservation = {
   readonly capability: CustomerProfileContextCapability | "context";
@@ -146,6 +152,37 @@ export type CustomerProfileRecommendationHistoryMatch = {
   readonly matchStatus: CustomerProfileHistoryMatchStatus;
 };
 
+export type CustomerRfmContext =
+  | {
+      readonly status: "AVAILABLE";
+      readonly masterCustomerId: string;
+      readonly snapshot: {
+        readonly referenceTime: string;
+        readonly publishedAt: string;
+        readonly calculationVersion: string;
+      };
+      readonly rfm: {
+        readonly recencyDays: number;
+        readonly frequencyOrders: number;
+        readonly grossOrderValueTaxIncl: string;
+        readonly averageOrderValueTaxIncl: string;
+        readonly recencyScore: number;
+        readonly frequencyScore: number;
+        readonly monetaryScore: number;
+        readonly rfmCode: string;
+      };
+      readonly segment: {
+        readonly code: string | null;
+        readonly version: string | null;
+      };
+      readonly contractVersion: string;
+    }
+  | {
+      readonly status: "NO_CUSTOMER" | "NO_RFM" | "RFM_DEGRADED" | "PROVIDER_ERROR";
+      readonly masterCustomerId: string;
+      readonly reasonCode: CustomerProfileContextReasonCode;
+    };
+
 export type CustomerCommercialHistoryContext = {
   readonly status: CustomerProfileContextStatus;
   readonly customerId: number | null;
@@ -160,6 +197,7 @@ export type CustomerCommercialHistoryContext = {
   readonly recentOrders: readonly CustomerProfileRecentOrderContext[];
   readonly purchasedProducts: readonly CustomerProfilePurchasedProductContext[];
   readonly purchaseBehavior: CustomerProfilePurchaseBehaviorContext | null;
+  readonly customerRfm: CustomerRfmContext | null;
   readonly provenance: {
     readonly source: string;
     readonly identityStatus: string;
@@ -168,8 +206,8 @@ export type CustomerCommercialHistoryContext = {
   } | null;
   readonly recommendationHistoryMatches: readonly CustomerProfileRecommendationHistoryMatch[];
   readonly constraints: {
-    readonly rfmAvailable: false;
-    readonly monetarySegmentAvailable: false;
+    readonly rfmAvailable: boolean;
+    readonly monetarySegmentAvailable: boolean;
     readonly mayAlterCatalogRanking: false;
     readonly mayAutoExcludePurchasedProducts: false;
   };
@@ -186,6 +224,7 @@ export type CustomerProfileContextConfig = {
 
 export type LoadCustomerCommercialHistoryContextInput = {
   readonly customerId: number | null;
+  readonly masterCustomerId: string | null;
   readonly commercialIntent: boolean;
   readonly historyNeeds: readonly CustomerHistoryNeed[];
   readonly requestId?: string;

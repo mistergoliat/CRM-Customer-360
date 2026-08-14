@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  CUSTOMER_RFM_CONTRACT_VERSION,
   CUSTOMER_PROFILE_CONTRACT_VERSION,
   parseCustomerProfileReadinessResponse,
   parseCustomerProfileResponse,
   parseCustomerPurchasedProductsResponse,
   parseCustomerPurchaseBehaviorResponse,
+  parseCustomerRfmResponse,
   validateCustomerId,
+  validateMasterCustomerId,
   validateOrderReference,
   validatePurchaseBehaviorTopProducts,
   validatePurchaseBehaviorTopVariants,
@@ -98,6 +101,10 @@ test("validators accept only the current customerId/order/query bounds", () => {
   assert.equal(validateOrderReference("ABC123XYZ"), true);
   assert.equal(validateOrderReference("A';DROP"), false);
   assert.equal(validateOrderReference("A".repeat(33)), false);
+
+  assert.equal(validateMasterCustomerId("9001"), true);
+  assert.equal(validateMasterCustomerId("0000"), false);
+  assert.equal(validateMasterCustomerId("abc"), false);
 });
 
 test("parseCustomerProfileResponse accepts the current productive profile contract", () => {
@@ -205,4 +212,103 @@ test("parseCustomerProfileReadinessResponse accepts ready and not_ready payloads
     reason: "prestashop_unavailable"
   });
   assert.equal(notReady.ok, true);
+});
+
+test("parseCustomerRfmResponse accepts the current productive RFM contract, including historical null segment", () => {
+  const parsed = parseCustomerRfmResponse(
+    {
+      status: "available",
+      masterCustomerId: "9001",
+      snapshot: {
+        snapshotId: "55",
+        calculationVersion: "rfm-population-v1",
+        referenceTime: "2026-08-03T00:00:00.000Z",
+        publishedAt: "2026-08-03T01:00:00.000Z",
+        currencyCode: "CLP"
+      },
+      rfm: {
+        recencyDays: 2,
+        frequencyOrders: 3,
+        grossOrderValueTaxIncl: "123456.780000",
+        averageOrderValueTaxIncl: "41152.260000",
+        recencyScore: 5,
+        frequencyScore: 3,
+        monetaryScore: 4,
+        rfmCode: "R5F3M4"
+      },
+      segment: {
+        code: null,
+        version: null
+      },
+      contractVersion: CUSTOMER_RFM_CONTRACT_VERSION
+    },
+    "9001"
+  );
+
+  assert.equal(parsed.ok, true);
+});
+
+test("parseCustomerRfmResponse rejects masterCustomerId mismatches and unexpected fields", () => {
+  const mismatch = parseCustomerRfmResponse(
+    {
+      status: "available",
+      masterCustomerId: "9002",
+      snapshot: {
+        snapshotId: "55",
+        calculationVersion: "rfm-population-v1",
+        referenceTime: "2026-08-03T00:00:00.000Z",
+        publishedAt: "2026-08-03T01:00:00.000Z",
+        currencyCode: "CLP"
+      },
+      rfm: {
+        recencyDays: 2,
+        frequencyOrders: 3,
+        grossOrderValueTaxIncl: "123456.780000",
+        averageOrderValueTaxIncl: "41152.260000",
+        recencyScore: 5,
+        frequencyScore: 3,
+        monetaryScore: 4,
+        rfmCode: "R5F3M4"
+      },
+      segment: {
+        code: "LOYAL",
+        version: "rfm-commercial-v1"
+      },
+      contractVersion: CUSTOMER_RFM_CONTRACT_VERSION
+    },
+    "9001"
+  );
+  assert.deepEqual(mismatch, { ok: false, reason: "MASTER_CUSTOMER_ID_MISMATCH" });
+
+  const unexpected = parseCustomerRfmResponse(
+    {
+      status: "available",
+      masterCustomerId: "9001",
+      snapshot: {
+        snapshotId: "55",
+        calculationVersion: "rfm-population-v1",
+        referenceTime: "2026-08-03T00:00:00.000Z",
+        publishedAt: "2026-08-03T01:00:00.000Z",
+        currencyCode: "CLP"
+      },
+      rfm: {
+        recencyDays: 2,
+        frequencyOrders: 3,
+        grossOrderValueTaxIncl: "123456.780000",
+        averageOrderValueTaxIncl: "41152.260000",
+        recencyScore: 5,
+        frequencyScore: 3,
+        monetaryScore: 4,
+        rfmCode: "R5F3M4"
+      },
+      segment: {
+        code: "LOYAL",
+        version: "rfm-commercial-v1"
+      },
+      contractVersion: CUSTOMER_RFM_CONTRACT_VERSION,
+      prestashopCustomerId: 123
+    },
+    "9001"
+  );
+  assert.deepEqual(unexpected, { ok: false, reason: "INVALID_RESPONSE" });
 });

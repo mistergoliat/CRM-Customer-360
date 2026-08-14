@@ -6,8 +6,8 @@ export function buildCustomerPurchaseHistorySummary(context: CustomerCommercialH
   const summary: Record<string, unknown> = {
     status: context.status,
     constraints: {
-      rfmAvailable: false,
-      monetarySegmentAvailable: false,
+      rfmAvailable: context.constraints.rfmAvailable,
+      monetarySegmentAvailable: context.constraints.monetarySegmentAvailable,
       mayAlterCatalogRanking: false,
       mayAutoExcludePurchasedProducts: false
     },
@@ -87,6 +87,43 @@ export function buildCustomerPurchaseHistorySummary(context: CustomerCommercialH
   }
 
   return summary;
+}
+
+export function buildCustomerRfmSummary(context: CustomerCommercialHistoryContext["customerRfm"]): Record<string, unknown> | null {
+  if (context === null) {
+    return null;
+  }
+
+  if (context.status !== "AVAILABLE") {
+    return {
+      status: context.status,
+      reasonCode: context.reasonCode
+    };
+  }
+
+  return {
+    status: "AVAILABLE",
+    contractVersion: context.contractVersion,
+    snapshot: {
+      referenceTime: context.snapshot.referenceTime,
+      publishedAt: context.snapshot.publishedAt,
+      calculationVersion: context.snapshot.calculationVersion
+    },
+    rfm: {
+      recencyDays: context.rfm.recencyDays,
+      frequencyOrders: context.rfm.frequencyOrders,
+      grossOrderValueTaxIncl: context.rfm.grossOrderValueTaxIncl,
+      averageOrderValueTaxIncl: context.rfm.averageOrderValueTaxIncl,
+      recencyScore: context.rfm.recencyScore,
+      frequencyScore: context.rfm.frequencyScore,
+      monetaryScore: context.rfm.monetaryScore,
+      rfmCode: context.rfm.rfmCode
+    },
+    segment: {
+      code: context.segment.code,
+      version: context.segment.version
+    }
+  };
 }
 
 /**
