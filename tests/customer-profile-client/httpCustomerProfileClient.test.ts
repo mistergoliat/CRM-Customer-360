@@ -6,6 +6,7 @@ import { closeTestHttpServer } from "../helpers/closeTestHttpServer";
 import {
   createCustomerProfileClient,
   createHttpCustomerProfileClient,
+  CUSTOMER_RFM_CONTRACT_VERSION,
   CustomerProfileClientConfigurationError,
   CUSTOMER_PROFILE_CONTRACT_VERSION,
   readCustomerProfileClientConfig
@@ -276,6 +277,35 @@ function orderStatusPayload(customerId = 1) {
   };
 }
 
+function rfmPayload(masterCustomerId = "9001") {
+  return {
+    status: "available",
+    masterCustomerId,
+    snapshot: {
+      snapshotId: "55",
+      calculationVersion: "rfm-population-v1",
+      referenceTime: "2026-08-03T00:00:00.000Z",
+      publishedAt: "2026-08-03T01:00:00.000Z",
+      currencyCode: "CLP"
+    },
+    rfm: {
+      recencyDays: 2,
+      frequencyOrders: 3,
+      grossOrderValueTaxIncl: "123456.780000",
+      averageOrderValueTaxIncl: "41152.260000",
+      recencyScore: 5,
+      frequencyScore: 3,
+      monetaryScore: 4,
+      rfmCode: "R5F3M4"
+    },
+    segment: {
+      code: "LOYAL",
+      version: "rfm-commercial-v1"
+    },
+    contractVersion: CUSTOMER_RFM_CONTRACT_VERSION
+  };
+}
+
 const ENV_KEYS = ["CUSTOMER_PROFILE_ENABLED", "CUSTOMER_PROFILE_BASE_URL", "CUSTOMER_PROFILE_TIMEOUT_MS", "CUSTOMER_PROFILE_AUTH_TOKEN"] as const;
 
 async function withEnv(values: Partial<Record<(typeof ENV_KEYS)[number], string>>, fn: () => void | Promise<void>) {
@@ -369,6 +399,25 @@ test("commercial summary and readiness parse available responses", async () => {
   }
 });
 
+test("rfm request uses masterCustomerId, preserves monetary precision, and allows historical null segment", async () => {
+  handler = (_req, res) => sendJson(res, 200, rfmPayload("9001"));
+  const available = await makeClient().getRfm({ masterCustomerId: "9001", requestId: "rfm-1" });
+  assert.equal(available.status, "AVAILABLE");
+  assert.equal(lastUrl, "/v1/customers/9001/rfm");
+  if (available.status === "AVAILABLE") {
+    assert.equal(available.data.rfm.grossOrderValueTaxIncl, "123456.780000");
+    assert.equal(available.metadata.segmentVersion, "rfm-commercial-v1");
+  }
+
+  handler = (_req, res) => sendJson(res, 200, { ...rfmPayload("9001"), segment: { code: null, version: null } });
+  const historical = await makeClient().getRfm({ masterCustomerId: "9001" });
+  assert.equal(historical.status, "AVAILABLE");
+  if (historical.status === "AVAILABLE") {
+    assert.equal(historical.data.segment.code, null);
+    assert.equal(historical.data.segment.version, null);
+  }
+});
+
 test("purchased products uses limit/offset defaults and explicit params", async () => {
   handler = (_req, res) => sendJson(res, 200, purchasedProductsPayload());
   const client = makeClient();
@@ -415,6 +464,7 @@ test("order status encodes the reference and never sends it in logs", async () =
 test("invalid local input is rejected before any network call", async () => {
   const client = makeClient();
   assert.deepEqual(await client.getProfile({ customerId: 0 }), { status: "INVALID_REQUEST", reason: "INVALID_CUSTOMER_ID" });
+  assert.deepEqual(await client.getRfm({ masterCustomerId: "0" }), { status: "INVALID_REQUEST", reason: "INVALID_MASTER_CUSTOMER_ID" });
   assert.deepEqual(await client.getPurchasedProducts({ customerId: 1, limit: 101 }), { status: "INVALID_REQUEST", reason: "INVALID_LIMIT" });
   assert.deepEqual(await client.getPurchaseBehavior({ customerId: 1, topVariants: 11 }), { status: "INVALID_REQUEST", reason: "INVALID_TOP_VARIANTS" });
   assert.deepEqual(await client.getOrderStatus({ customerId: 1, orderReference: "bad ref" }), { status: "INVALID_REQUEST", reason: "INVALID_ORDER_REFERENCE" });
@@ -428,6 +478,12 @@ test("404 maps to CUSTOMER_NOT_FOUND and ORDER_NOT_FOUND using the response body
 
   handler = (_req, res) => sendJson(res, 404, { status: "order_not_found", customerId: 1 });
   assert.deepEqual(await client.getOrderStatus({ customerId: 1, orderReference: "NOPE1234" }), { status: "NOT_FOUND", reason: "ORDER_NOT_FOUND" });
+
+  handler = (_req, res) => sendJson(res, 404, { status: "customer_not_found", masterCustomerId: "9001" });
+  assert.deepEqual(await client.getRfm({ masterCustomerId: "9001" }), { status: "NOT_FOUND", reason: "CUSTOMER_NOT_FOUND" });
+
+  handler = (_req, res) => sendJson(res, 404, { status: "rfm_not_available", masterCustomerId: "9001" });
+  assert.deepEqual(await client.getRfm({ masterCustomerId: "9001" }), { status: "NOT_FOUND", reason: "RFM_NOT_AVAILABLE" });
 });
 
 test("400, 429, 500 and 503 reasons map to the canonical result taxonomy", async () => {
@@ -450,6 +506,9 @@ test("400, 429, 500 and 503 reasons map to the canonical result taxonomy", async
 
   handler = (_req, res) => sendJson(res, 503, { status: "degraded", reason: "customer_profile_unavailable" });
   assert.deepEqual(await client.getProfile({ customerId: 1 }), { status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_UNAVAILABLE", retryable: true });
+
+  handler = (_req, res) => sendJson(res, 503, { status: "degraded", reason: "no_published_rfm_snapshot" });
+  assert.deepEqual(await client.getRfm({ masterCustomerId: "9001" }), { status: "UNAVAILABLE", reason: "RFM_DEGRADED", retryable: true });
 });
 
 test("invalid JSON and invalid schema are separated into unavailable vs contract error", async () => {
@@ -463,6 +522,9 @@ test("invalid JSON and invalid schema are separated into unavailable vs contract
 
   handler = (_req, res) => sendJson(res, 200, { ...profilePayload(), profile: { ...profilePayload().profile, customer: { ...profilePayload().profile.customer, firstname: 123 } } });
   assert.deepEqual(await client.getProfile({ customerId: 1 }), { status: "CONTRACT_ERROR", reason: "INVALID_RESPONSE" });
+
+  handler = (_req, res) => sendJson(res, 200, { ...rfmPayload("9001"), masterCustomerId: "9002" });
+  assert.deepEqual(await client.getRfm({ masterCustomerId: "9001" }), { status: "CONTRACT_ERROR", reason: "MASTER_CUSTOMER_ID_MISMATCH" });
 });
 
 test("provenance mismatches become CONTRACT_ERROR and the payload is rejected", async () => {
@@ -497,6 +559,9 @@ test("timeout and network failures are sanitized and retryable", async () => {
 
   const networkResult = await createHttpCustomerProfileClient(config({ baseUrl: "http://127.0.0.1:1", timeoutMs: 100 })).getProfile({ customerId: 1 });
   assert.deepEqual(networkResult, { status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_UNAVAILABLE", retryable: true });
+
+  const rfmNetworkResult = await createHttpCustomerProfileClient(config({ baseUrl: "http://127.0.0.1:1", timeoutMs: 100 })).getRfm({ masterCustomerId: "9001" });
+  assert.deepEqual(rfmNetworkResult, { status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_UNAVAILABLE", retryable: true });
 });
 
 test("the client logs only safe observability fields and never leaks token, PII or raw provider details", async () => {
@@ -514,6 +579,26 @@ test("the client logs only safe observability fields and never leaks token, PII 
     assert.equal(serialized.includes("REF100"), false);
     assert.equal(serialized.includes("10000.000000"), false);
     assert.equal(serialized.includes("status\":\"AVAILABLE\""), true);
+  } finally {
+    console.info = originalInfo;
+  }
+});
+
+test("rfm adapter logs normalized lookup observability without leaking raw provider payloads", async () => {
+  const seen: unknown[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    seen.push(args);
+  };
+  try {
+    handler = (_req, res) => sendJson(res, 200, rfmPayload("9001"));
+    await makeClient().getRfm({ masterCustomerId: "9001", requestId: "rfm-safe" });
+    const serialized = JSON.stringify(seen);
+    assert.equal(serialized.includes("\"event\":\"customer_rfm_lookup\""), true);
+    assert.equal(serialized.includes("\"rfm_lookup_status\":\"AVAILABLE\""), true);
+    assert.equal(serialized.includes("\"rfm_contract_version\":\"customer-rfm-runtime-v1\""), true);
+    assert.equal(serialized.includes("\"rfm_segment_version\":\"rfm-commercial-v1\""), true);
+    assert.equal(serialized.includes("prestashopCustomerId"), false);
   } finally {
     console.info = originalInfo;
   }

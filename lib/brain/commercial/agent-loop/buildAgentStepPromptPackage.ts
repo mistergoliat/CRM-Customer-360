@@ -134,6 +134,16 @@ const CUSTOMER_PURCHASE_HISTORY_RULE_LINES = [
   "reasonCodes inside customerPurchaseHistory are internal structured evidence, not customer-facing wording."
 ];
 
+const CUSTOMER_RFM_RULE_LINES = [
+  "When commercialContext.customerRfm is present, treat it as structured supporting evidence only.",
+  "Never use segment code alone as the complete summary of the customer; consider recency, frequency, monetary scores, and raw RFM metrics together.",
+  "Never generate discounts, campaigns, promotions, follow-up rules, or other commercial policies solely from customerRfm.",
+  "Never tell the customer an internal RFM segment name unless a human-designed policy explicitly requires it; this prompt does not grant that authority.",
+  "If commercialContext.customerRfm.status is not AVAILABLE, do not claim any RFM facts.",
+  "If customerRfm is unavailable or degraded, continue with the turn using the rest of the evidence - never block, never hand off solely because of that.",
+  "reasonCode inside customerRfm is internal structured evidence, not customer-facing wording."
+];
+
 /**
  * CP-R1-T12D. Governs commercialContext.customerHistoryCommercialSignals -
  * the deterministic signals derived from customerPurchaseHistory (see
@@ -494,6 +504,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...PRODUCT_PUBLIC_LINK_RULE_LINES,
       ...RECENT_CATALOG_CONTEXT_RULE_LINES,
       ...CUSTOMER_PURCHASE_HISTORY_RULE_LINES,
+      ...CUSTOMER_RFM_RULE_LINES,
       ...CUSTOMER_HISTORY_COMMERCIAL_POLICY_RULE_LINES,
       ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
       ...EXPLORE_CATALOG_FINALIZATION_RULE_LINES,
@@ -513,6 +524,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...PRODUCT_PUBLIC_LINK_RULE_LINES,
     ...RECENT_CATALOG_CONTEXT_RULE_LINES,
     ...CUSTOMER_PURCHASE_HISTORY_RULE_LINES,
+    ...CUSTOMER_RFM_RULE_LINES,
     ...CUSTOMER_HISTORY_COMMERCIAL_POLICY_RULE_LINES,
     ...ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES,
     ...EXPLORE_CATALOG_RULE_LINES,

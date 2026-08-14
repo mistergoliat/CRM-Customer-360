@@ -36,6 +36,7 @@ function baseContext(overrides: Partial<CustomerCommercialHistoryContext> = {}):
     recentOrders: [],
     purchasedProducts: [purchasedProduct()],
     purchaseBehavior: null,
+    customerRfm: null,
     provenance: { source: "PRESTASHOP", identityStatus: "DIRECT_SOURCE", contractVersion: "customer-profile-prestashop-direct-v1", generatedAt: "2026-08-06T11:00:00.000Z" },
     recommendationHistoryMatches: [],
     constraints: { rfmAvailable: false, monetarySegmentAvailable: false, mayAlterCatalogRanking: false, mayAutoExcludePurchasedProducts: false },

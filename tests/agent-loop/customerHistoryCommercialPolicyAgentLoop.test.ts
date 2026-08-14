@@ -123,6 +123,7 @@ function historyContext(input: {
     recentOrders: [],
     purchasedProducts: input.purchasedProducts ?? [],
     purchaseBehavior: null,
+    customerRfm: null,
     provenance: unavailable ? null : { source: "PRESTASHOP", identityStatus: "DIRECT_SOURCE", contractVersion: "customer-profile-prestashop-direct-v1", generatedAt: "2026-08-06T10:00:00.000Z" },
     recommendationHistoryMatches: input.recommendationHistoryMatches ?? [],
     constraints: { rfmAvailable: false, monetarySegmentAvailable: false, mayAlterCatalogRanking: false, mayAutoExcludePurchasedProducts: false },

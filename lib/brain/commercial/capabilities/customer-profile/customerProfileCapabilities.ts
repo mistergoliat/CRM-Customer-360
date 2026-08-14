@@ -18,6 +18,9 @@ export function createCustomerProfileCapabilities(deps: CreateCustomerProfileCap
     getOrderStatus(input) {
       return deps.customerProfileClient.getOrderStatus(input);
     },
+    getRfm(input) {
+      return deps.customerProfileClient.getRfm(input);
+    },
     checkReadiness(input) {
       return deps.customerProfileClient.checkReadiness(input);
     }

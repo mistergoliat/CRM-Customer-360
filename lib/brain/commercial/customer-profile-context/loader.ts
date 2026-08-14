@@ -5,6 +5,7 @@ import type {
   CustomerProfileContextObservation,
   CustomerProfilePurchasedProductContext,
   CustomerProfileRecommendationComparisonInput,
+  CustomerRfmContext,
   LoadCustomerCommercialHistoryContextInput
 } from "./types";
 import { readCustomerProfileContextConfig } from "./config";
@@ -34,6 +35,7 @@ function createBaseContext(input: {
     recentOrders: [],
     purchasedProducts: [],
     purchaseBehavior: null,
+    customerRfm: null,
     provenance: null,
     recommendationHistoryMatches: [],
     constraints: {
@@ -58,6 +60,10 @@ function isValidCustomerId(value: number | null): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+function isValidMasterCustomerId(value: string | null): value is string {
+  return typeof value === "string" && /^\d{1,20}$/.test(value) && !/^0+$/.test(value);
+}
+
 function resolveConfig(config?: CustomerProfileContextConfig): CustomerProfileContextConfig {
   return config ?? readCustomerProfileContextConfig();
 }
@@ -76,6 +82,92 @@ function mapUnavailableReason(reason: string): CustomerProfileContextObservation
 
 function mapContractReason(reason: string): CustomerProfileContextObservation["reasonCode"] {
   return reason === "PROVENANCE_MISMATCH" ? "CUSTOMER_PROFILE_PROVENANCE_MISMATCH" : "CUSTOMER_PROFILE_CONTRACT_ERROR";
+}
+
+function mapRfmContext(input: {
+  masterCustomerId: string;
+  result: Awaited<ReturnType<LoadCustomerCommercialHistoryContextInput["customerProfileCapabilities"]["getRfm"]>>;
+}): {
+  customerRfm: CustomerRfmContext | null;
+  observation: CustomerProfileContextObservation;
+  shouldMarkPartial: boolean;
+} {
+  const { masterCustomerId, result } = input;
+
+  if (result.status === "AVAILABLE") {
+    return {
+      customerRfm: {
+        status: "AVAILABLE",
+        masterCustomerId,
+        snapshot: {
+          referenceTime: result.data.snapshot.referenceTime,
+          publishedAt: result.data.snapshot.publishedAt,
+          calculationVersion: result.data.snapshot.calculationVersion
+        },
+        rfm: {
+          recencyDays: result.data.rfm.recencyDays,
+          frequencyOrders: result.data.rfm.frequencyOrders,
+          grossOrderValueTaxIncl: result.data.rfm.grossOrderValueTaxIncl,
+          averageOrderValueTaxIncl: result.data.rfm.averageOrderValueTaxIncl,
+          recencyScore: result.data.rfm.recencyScore,
+          frequencyScore: result.data.rfm.frequencyScore,
+          monetaryScore: result.data.rfm.monetaryScore,
+          rfmCode: result.data.rfm.rfmCode
+        },
+        segment: {
+          code: result.data.segment.code,
+          version: result.data.segment.version
+        },
+        contractVersion: result.data.contractVersion
+      },
+      observation: contextObservation("rfm", "AVAILABLE", "RFM_AVAILABLE"),
+      shouldMarkPartial: false
+    };
+  }
+
+  if (result.status === "NOT_FOUND") {
+    if (result.reason === "CUSTOMER_NOT_FOUND") {
+      return {
+        customerRfm: { status: "NO_CUSTOMER", masterCustomerId, reasonCode: "RFM_CUSTOMER_NOT_FOUND" },
+        observation: contextObservation("rfm", "NOT_FOUND", "RFM_CUSTOMER_NOT_FOUND"),
+        shouldMarkPartial: false
+      };
+    }
+    return {
+      customerRfm: { status: "NO_RFM", masterCustomerId, reasonCode: "RFM_NOT_AVAILABLE" },
+      observation: contextObservation("rfm", "AVAILABLE", "RFM_NOT_AVAILABLE"),
+      shouldMarkPartial: false
+    };
+  }
+
+  if (result.status === "UNAVAILABLE") {
+    if (result.reason === "RFM_DEGRADED") {
+      return {
+        customerRfm: { status: "RFM_DEGRADED", masterCustomerId, reasonCode: "RFM_DEGRADED" },
+        observation: contextObservation("rfm", "PARTIAL", "RFM_DEGRADED"),
+        shouldMarkPartial: true
+      };
+    }
+    return {
+      customerRfm: { status: "PROVIDER_ERROR", masterCustomerId, reasonCode: "RFM_PROVIDER_ERROR" },
+      observation: contextObservation("rfm", "PARTIAL", "RFM_PROVIDER_ERROR"),
+      shouldMarkPartial: true
+    };
+  }
+
+  if (result.status === "CONTRACT_ERROR" || result.status === "INVALID_REQUEST") {
+    return {
+      customerRfm: { status: "PROVIDER_ERROR", masterCustomerId, reasonCode: "RFM_CONTRACT_ERROR" },
+      observation: contextObservation("rfm", "PARTIAL", "RFM_CONTRACT_ERROR"),
+      shouldMarkPartial: true
+    };
+  }
+
+  return {
+    customerRfm: { status: "PROVIDER_ERROR", masterCustomerId, reasonCode: "RFM_PROVIDER_ERROR" },
+    observation: contextObservation("rfm", "PARTIAL", "RFM_PROVIDER_ERROR"),
+    shouldMarkPartial: true
+  };
 }
 
 function buildPurchasedProductsContext(products: ReadonlyArray<{
@@ -129,15 +221,22 @@ export async function loadCustomerCommercialHistoryContext(input: LoadCustomerCo
   }
 
   const observations: CustomerProfileContextObservation[] = [
-    contextObservation("context", "AVAILABLE", "RFM_NOT_AVAILABLE"),
     contextObservation("context", "AVAILABLE", "MONETARY_INFORMATIONAL_ONLY"),
     contextObservation("context", "AVAILABLE", "CATALOG_RANKING_NOT_MODIFIED")
   ];
 
-  const summaryResult = await input.customerProfileCapabilities.getCommercialSummary({
-    customerId: input.customerId,
-    requestId: input.requestId
-  });
+  const [summaryResult, rfmResult] = await Promise.all([
+    input.customerProfileCapabilities.getCommercialSummary({
+      customerId: input.customerId,
+      requestId: input.requestId
+    }),
+    isValidMasterCustomerId(input.masterCustomerId)
+      ? input.customerProfileCapabilities.getRfm({
+          masterCustomerId: input.masterCustomerId,
+          requestId: input.requestId
+        })
+      : Promise.resolve(null)
+  ]);
 
   if (summaryResult.status === "NOT_FOUND") {
     observations.unshift(contextObservation("context", "NOT_FOUND", "CUSTOMER_PROFILE_CUSTOMER_NOT_FOUND"));
@@ -168,8 +267,24 @@ export async function loadCustomerCommercialHistoryContext(input: LoadCustomerCo
   let purchasedProducts: CustomerCommercialHistoryContext["purchasedProducts"] = [];
   let purchaseBehavior: CustomerCommercialHistoryContext["purchaseBehavior"] = null;
   let recentOrders: CustomerCommercialHistoryContext["recentOrders"] = [];
+  let customerRfm: CustomerCommercialHistoryContext["customerRfm"] = null;
   let requestedSecondaryCount = 0;
   let failedSecondaryCount = 0;
+
+  if (rfmResult === null) {
+    observations.push(contextObservation("rfm", "AVAILABLE", "RFM_IDENTITY_UNAVAILABLE"));
+  } else {
+    const mappedRfm = mapRfmContext({
+      masterCustomerId: input.masterCustomerId as string,
+      result: rfmResult
+    });
+    customerRfm = mappedRfm.customerRfm;
+    observations.push(mappedRfm.observation);
+    if (mappedRfm.shouldMarkPartial) {
+      requestedSecondaryCount += 1;
+      failedSecondaryCount += 1;
+    }
+  }
 
   const productHistoryRequested = shouldLoadProductHistory(input.historyNeeds);
   if (productHistoryRequested) {
@@ -270,6 +385,7 @@ export async function loadCustomerCommercialHistoryContext(input: LoadCustomerCo
     recentOrders,
     purchasedProducts,
     purchaseBehavior,
+    customerRfm,
     provenance: {
       source: summaryResult.data.provenance.customerIdentity.source,
       identityStatus: summaryResult.data.provenance.customerIdentity.status,
@@ -278,8 +394,8 @@ export async function loadCustomerCommercialHistoryContext(input: LoadCustomerCo
     },
     recommendationHistoryMatches: [],
     constraints: {
-      rfmAvailable: false,
-      monetarySegmentAvailable: false,
+      rfmAvailable: customerRfm?.status === "AVAILABLE",
+      monetarySegmentAvailable: customerRfm?.status === "AVAILABLE" && customerRfm.segment.code !== null && customerRfm.segment.version !== null,
       mayAlterCatalogRanking: false,
       mayAutoExcludePurchasedProducts: false
     },

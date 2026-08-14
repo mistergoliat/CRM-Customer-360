@@ -1,8 +1,10 @@
 export const CUSTOMER_PROFILE_CONTRACT_VERSION = "customer-profile-prestashop-direct-v1" as const;
+export const CUSTOMER_RFM_CONTRACT_VERSION = "customer-rfm-runtime-v1" as const;
 export const CUSTOMER_PROFILE_IDENTITY_SOURCE = "PRESTASHOP" as const;
 export const CUSTOMER_PROFILE_IDENTITY_STATUS = "DIRECT_SOURCE" as const;
 
 export type CustomerProfileCustomerId = number;
+export type CustomerProfileMasterCustomerId = string;
 
 export type CustomerDataSourceEntity =
   | "ps_customer"
@@ -275,6 +277,10 @@ export type GetCustomerOrderStatusInput = CustomerProfileRequestMetadata & {
   readonly orderReference: string;
 };
 
+export type GetCustomerRfmInput = CustomerProfileRequestMetadata & {
+  readonly masterCustomerId: CustomerProfileMasterCustomerId;
+};
+
 export type CustomerProfileClientAvailableMetadata = {
   readonly requestedCustomerId: CustomerProfileCustomerId;
   readonly contractVersion: string;
@@ -283,9 +289,19 @@ export type CustomerProfileClientAvailableMetadata = {
   readonly durationMs: number;
 };
 
+export type CustomerRfmClientAvailableMetadata = {
+  readonly requestedMasterCustomerId: CustomerProfileMasterCustomerId;
+  readonly contractVersion: string;
+  readonly segmentVersion: string | null;
+  readonly referenceTime: string;
+  readonly publishedAt: string;
+  readonly durationMs: number;
+};
+
 export type CustomerProfileNotFoundReason = "CUSTOMER_NOT_FOUND" | "ORDER_NOT_FOUND";
 export type CustomerProfileInvalidRequestReason =
   | "INVALID_CUSTOMER_ID"
+  | "INVALID_MASTER_CUSTOMER_ID"
   | "INVALID_LIMIT"
   | "INVALID_OFFSET"
   | "INVALID_TOP_PRODUCTS"
@@ -301,6 +317,64 @@ export type CustomerProfileContractErrorReason =
   | "INVALID_RESPONSE"
   | "CONTRACT_VERSION_UNSUPPORTED"
   | "PROVENANCE_MISMATCH";
+
+export type CustomerRfmResponse = {
+  readonly status: "available";
+  readonly masterCustomerId: CustomerProfileMasterCustomerId;
+  readonly snapshot: {
+    readonly snapshotId: string;
+    readonly calculationVersion: string;
+    readonly referenceTime: string;
+    readonly publishedAt: string;
+    readonly currencyCode: string;
+  };
+  readonly rfm: {
+    readonly recencyDays: number;
+    readonly frequencyOrders: number;
+    readonly grossOrderValueTaxIncl: string;
+    readonly averageOrderValueTaxIncl: string;
+    readonly recencyScore: 1 | 2 | 3 | 4 | 5;
+    readonly frequencyScore: 1 | 2 | 3 | 4 | 5;
+    readonly monetaryScore: 1 | 2 | 3 | 4 | 5;
+    readonly rfmCode: string;
+  };
+  readonly segment: {
+    readonly code: string | null;
+    readonly version: string | null;
+  };
+  readonly contractVersion: typeof CUSTOMER_RFM_CONTRACT_VERSION;
+};
+
+export type CustomerRfmNotFoundReason = "CUSTOMER_NOT_FOUND" | "RFM_NOT_AVAILABLE";
+export type CustomerRfmUnavailableReason = "CUSTOMER_PROFILE_TIMEOUT" | "CUSTOMER_PROFILE_UNAVAILABLE" | "RFM_DEGRADED";
+export type CustomerRfmContractErrorReason =
+  | "INVALID_RESPONSE"
+  | "CONTRACT_VERSION_UNSUPPORTED"
+  | "MASTER_CUSTOMER_ID_MISMATCH";
+
+export type CustomerRfmResult =
+  | {
+      readonly status: "AVAILABLE";
+      readonly data: CustomerRfmResponse;
+      readonly metadata: CustomerRfmClientAvailableMetadata;
+    }
+  | {
+      readonly status: "NOT_FOUND";
+      readonly reason: CustomerRfmNotFoundReason;
+    }
+  | {
+      readonly status: "INVALID_REQUEST";
+      readonly reason: "INVALID_MASTER_CUSTOMER_ID";
+    }
+  | {
+      readonly status: "UNAVAILABLE";
+      readonly reason: CustomerRfmUnavailableReason;
+      readonly retryable: boolean;
+    }
+  | {
+      readonly status: "CONTRACT_ERROR";
+      readonly reason: CustomerRfmContractErrorReason;
+    };
 
 export type CustomerProfileClientResult<TData, TNotFound extends CustomerProfileNotFoundReason = CustomerProfileNotFoundReason> =
   | {
@@ -358,6 +432,7 @@ export type CustomerProfileClient = {
   getPurchasedProducts(input: GetPurchasedProductsInput): Promise<CustomerPurchasedProductsResult>;
   getPurchaseBehavior(input: GetPurchaseBehaviorInput): Promise<CustomerPurchaseBehaviorResult>;
   getOrderStatus(input: GetCustomerOrderStatusInput): Promise<CustomerOrderStatusResult>;
+  getRfm(input: GetCustomerRfmInput): Promise<CustomerRfmResult>;
   checkReadiness(input?: CustomerProfileRequestMetadata): Promise<CustomerProfileReadinessResult>;
 };
 
