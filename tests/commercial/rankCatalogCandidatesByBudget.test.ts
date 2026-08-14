@@ -13,7 +13,7 @@ function makeProduct(overrides: Partial<CatalogProduct> & { productId: string; a
     active: true,
     selectedVariant: overrides.selectedVariant ?? null,
     variants: [],
-    price: overrides.amount === null ? null : { amount: overrides.amount, currency: overrides.currency ?? "CLP", taxIncluded: true, discountApplied: false },
+    price: overrides.amount === null ? null : { amount: overrides.amount, currency: overrides.currency ?? "CLP", taxIncluded: true, taxRate: 0.19, discountApplied: false },
     availability: overrides.availability ?? "in_stock",
     stockQuantity: overrides.stockQuantity ?? 5,
     weightKg: overrides.weightKg ?? null,

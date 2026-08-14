@@ -273,6 +273,9 @@ function parseProductResponse(payload: unknown, retrievedAt: string): CatalogPro
         amount: asNumber(pricing.effectiveUnitPrice),
         currency: asString(pricing.currency),
         taxIncluded: typeof pricing.taxIncluded === "boolean" ? pricing.taxIncluded : null,
+        // SALES-AGENT-R1-T1.1: additive V1 field (CAT-side migration, sole
+        // configured-rate source) - never defaulted/inferred when absent.
+        taxRate: asNumber(pricing.taxRate),
         discountApplied: asBoolean(pricing.discountApplied)
       }
     : null;

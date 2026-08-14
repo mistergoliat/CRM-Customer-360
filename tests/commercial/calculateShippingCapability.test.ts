@@ -70,7 +70,7 @@ function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
     active: true,
     selectedVariant: null,
     variants: [],
-    price: { amount: 10000, currency: "CLP", taxIncluded: true, discountApplied: false },
+    price: { amount: 10000, currency: "CLP", taxIncluded: true, taxRate: 0.19, discountApplied: false },
     availability: "in_stock",
     stockQuantity: 5,
     weightKg: 10,
@@ -143,8 +143,8 @@ test("B/available: full pipeline - destination + two products hydrated from Cata
 
   const catalogPort = fakeCatalogPort((input) =>
     input.productId === "1"
-      ? { ok: true, input, product: product({ productId: "1", weightKg: 10, price: { amount: 50000, currency: "CLP", taxIncluded: true, discountApplied: false } }) }
-      : { ok: true, input, product: product({ productId: "2", weightKg: 5, price: { amount: 20000, currency: "CLP", taxIncluded: true, discountApplied: false } }) }
+      ? { ok: true, input, product: product({ productId: "1", weightKg: 10, price: { amount: 50000, currency: "CLP", taxIncluded: true, taxRate: 0.19, discountApplied: false } }) }
+      : { ok: true, input, product: product({ productId: "2", weightKg: 5, price: { amount: 20000, currency: "CLP", taxIncluded: true, taxRate: 0.19, discountApplied: false } }) }
   );
   const carrierService = fakeCarrierService(() => successOptions());
 
