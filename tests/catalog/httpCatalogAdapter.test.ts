@@ -41,7 +41,7 @@ function productDetailPayload(overrides: Record<string, unknown> = {}) {
     selectedVariant: null,
     attributes: [],
     variants: [],
-    pricing: { quantity: 1, baseUnitPrice: 100000, effectiveUnitPrice: 89990, subtotal: 89990, currency: "CLP", taxIncluded: true, taxMode: "configured_rate", discountApplied: true, discountType: "amount", discountValue: 10010, specificPriceId: 3, pricingMode: "sql_specific_price" },
+    pricing: { quantity: 1, baseUnitPrice: 100000, effectiveUnitPrice: 89990, subtotal: 89990, currency: "CLP", taxIncluded: true, taxRate: 0.19, taxMode: "configured_rate", discountApplied: true, discountType: "amount", discountValue: 10010, specificPriceId: 3, pricingMode: "sql_specific_price" },
     stock: { physicalQuantity: 2, available: true, shopId: 1 },
     freshness: { productCheckedAt: new Date().toISOString(), priceCalculatedAt: new Date().toISOString(), stockCheckedAt: new Date().toISOString(), cached: false },
     ...overrides
@@ -100,7 +100,7 @@ test("getProductDetails maps a successful response including price and stock", a
       selectedVariant: null,
       attributes: [],
       variants: [],
-      pricing: { quantity: 1, baseUnitPrice: 100000, effectiveUnitPrice: 89990, subtotal: 89990, currency: "CLP", taxIncluded: true, taxMode: "configured_rate", discountApplied: true, discountType: "amount", discountValue: 10010, specificPriceId: 3, pricingMode: "sql_specific_price" },
+      pricing: { quantity: 1, baseUnitPrice: 100000, effectiveUnitPrice: 89990, subtotal: 89990, currency: "CLP", taxIncluded: true, taxRate: 0.19, taxMode: "configured_rate", discountApplied: true, discountType: "amount", discountValue: 10010, specificPriceId: 3, pricingMode: "sql_specific_price" },
       stock: { physicalQuantity: 2, available: true, shopId: 1 },
       freshness: { productCheckedAt: new Date().toISOString(), priceCalculatedAt: new Date().toISOString(), stockCheckedAt: new Date().toISOString(), cached: false }
     });
@@ -111,8 +111,31 @@ test("getProductDetails maps a successful response including price and stock", a
   if (!result.ok || !result.value) return assert.fail("expected a product");
   assert.equal(result.value.price?.amount, 89990);
   assert.equal(result.value.price?.currency, "CLP");
+  // SALES-AGENT-R1-T1.1: taxRate is the exact rate Catalog already applied
+  // to derive amount - passed through verbatim, never recomputed here.
+  assert.equal(result.value.price?.taxRate, 0.19);
   assert.equal(result.value.availability, "in_stock");
   assert.equal(result.value.stockQuantity, 2);
+});
+
+test("SALES-AGENT-R1-T1.1: getProductDetails maps a missing pricing.taxRate to null, never a hardcoded default", async () => {
+  handler = (_req, res) => {
+    sendJson(res, 200, {
+      product: { productId: 7, name: "Jaula X", sku: "SKU-7", shortDescription: null, longDescription: null, active: true },
+      selectedVariant: null,
+      attributes: [],
+      variants: [],
+      pricing: { quantity: 1, baseUnitPrice: 100000, effectiveUnitPrice: 89990, subtotal: 89990, currency: "CLP", taxIncluded: true, taxMode: "configured_rate", discountApplied: false, discountType: null, discountValue: null, specificPriceId: null, pricingMode: "sql_specific_price" },
+      stock: { physicalQuantity: 2, available: true, shopId: 1 },
+      freshness: { productCheckedAt: new Date().toISOString(), priceCalculatedAt: new Date().toISOString(), stockCheckedAt: new Date().toISOString(), cached: false }
+    });
+  };
+
+  const result = await makeAdapter().getProductDetails({ productId: "7" }, { correlationId: "corr-2b" });
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.value) return assert.fail("expected a product");
+  assert.equal(result.value.price?.taxRate, null);
+  assert.equal(result.value.price?.amount, 89990, "taxRate being unavailable never blocks parsing the rest of price");
 });
 
 test("CRM-R1-T13E: getProductDetails maps a numeric weightKg sibling of pricing/stock", async () => {

@@ -180,12 +180,29 @@ export function calculateShippingCapability(
           destination: destinationSummary,
           totalWeightKg: weightResult.totalWeightKg,
           totalBoleta: subtotalResult.totalBoleta,
-          options: quote.options.map((option) => ({
+          // SALES-AGENT-R1-T2.1. `index` is the option's stable, deterministic
+          // identity within THIS calculation (array position - Carrier MS
+          // provides no option-level id/code of its own, confirmed live; an
+          // invented random id would add no real traceability per the task's
+          // own guidance). select_shipping_option's evidence gate
+          // (resolveObservedShippingOption.ts) re-reads this exact array from
+          // crm_capability_executions.response_summary_json later and
+          // resolves the model's `optionIndex` against it - never against
+          // free text/labels.
+          options: quote.options.map((option, index) => ({
+            index,
             carrierName: option.carrierName,
             serviceType: option.serviceType,
             totalCost: option.totalCost,
             estimatedDelivery: option.estimatedDelivery
-          }))
+          })),
+          // Internal-only evidence (never shown to the model - stripped by
+          // buildToolObservation.ts's projectCalculateShipping allowlist):
+          // the exact durable fact versions this calculation was computed
+          // against, so a later select_shipping_option call can be checked
+          // for staleness if either changes before the customer picks.
+          selectionFactId: selection.factId,
+          destinationFactId: destination.factId
         },
         evidence
       );

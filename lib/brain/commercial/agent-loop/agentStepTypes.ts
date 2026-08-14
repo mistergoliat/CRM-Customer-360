@@ -90,7 +90,13 @@ export type ToolObservation = {
   status: ToolObservationStatus;
   data?: unknown;
   errorCode?: string;
-  /** CP-R1-T10B8C. recommend_catalog_products "skipped" observations only - the verbatim BuildSearchProductsV2RequestSkipReason, never retryable, never a handoff signal. */
+  /**
+   * CP-R1-T10B8C. recommend_catalog_products "skipped" observations - the
+   * verbatim BuildSearchProductsV2RequestSkipReason, never retryable, never a
+   * handoff signal. SALES-AGENT-R1-T2.1.1 reuses this same field for
+   * select_shipping_option's "blocked"/shipping_calculation_stale
+   * observations - selection_changed/destination_changed, never a fact ID.
+   */
   reason?: string;
   /** CP-R1-T10B8C. recommend_catalog_products "failed" observations only - mirrors CapabilityGatewayResult.retryable, safe to surface (no PII). */
   retryable?: boolean;

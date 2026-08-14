@@ -45,6 +45,13 @@ import { checkUnbackedCommercialMutationClaim } from "./commercialMutationClaims
  * alternatives via Carrier MS, the sole authority over coverage/carriers/
  * rates - takes no arguments, everything is backend state - see
  * calculateShippingCapability.ts).
+ *
+ * SALES-AGENT-R1-T2.1 added `select_shipping_option` (records the customer's
+ * chosen shipping option as the opportunity's durable selected_shipping_option -
+ * only an optionIndex observed in a real calculate_shipping response this
+ * conversation, never a carrier name/service type/price from the model; its
+ * evidence gate lives inside selectShippingOptionCapability.ts itself, not
+ * in processUseToolStep below - see that file's own docstring for why).
  */
 export const AGENT_LOOP_TOOL_POOL = [
   "search_products",
@@ -54,7 +61,8 @@ export const AGENT_LOOP_TOOL_POOL = [
   "recommend_catalog_products",
   "set_shipping_destination",
   "select_products",
-  "calculate_shipping"
+  "calculate_shipping",
+  "select_shipping_option"
 ] as const;
 export type AgentLoopToolName = (typeof AGENT_LOOP_TOOL_POOL)[number];
 

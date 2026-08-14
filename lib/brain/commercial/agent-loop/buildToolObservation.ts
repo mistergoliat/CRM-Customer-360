@@ -1,4 +1,5 @@
 import type { CapabilityGatewayResult } from "../capability-gateway/types";
+import { SHIPPING_CALCULATION_STALE_ERROR_CODE } from "@/lib/domains/selected-shipping-option";
 import type { CatalogExploreResult, CatalogProduct, CatalogSearchResult } from "@/lib/catalog";
 import type { CompanyKnowledgeSearchResult } from "../capability-gateway/companyKnowledgeCapability";
 import type { SearchProductsV2Personalization, SearchProductsV2Recommendation, SearchProductsV2Warning } from "@/lib/catalog/search-products-v2/types";
@@ -104,14 +105,63 @@ function projectSelectProducts(data: unknown) {
 }
 
 /**
- * CRM-R1-T13E.2. calculate_shipping's own `data` (status plus, only on
- * "available"/"no_shipping_options", destination/totalWeightKg/totalBoleta/
- * options - all already normalized from the real Carrier MS response by
- * calculateShippingCapability.ts) is passed through as-is - the raw Carrier
- * MS payload, pc_pos tables, or any HTTP detail never reach this point.
+ * SALES-AGENT-R1-T2.1. select_shipping_option's own `data`
+ * (status/carrierName/serviceType/totalCost/estimatedDelivery/changed) is
+ * already the small, bounded, real-Carrier-MS-sourced shape agreed at the
+ * capability layer - passed through as-is, same pattern as
+ * projectSelectProducts. Never includes shippingQuoteExecutionId/
+ * selectionFactId/destinationFactId - those never leave
+ * selectShippingOptionCapability.ts/the durable fact.
+ */
+function projectSelectShippingOption(data: unknown) {
+  return isRecord(data) ? data : null;
+}
+
+/**
+ * SALES-AGENT-R1-T2.1.1. select_shipping_option's staleness rejection - the
+ * one blocked reason for this tool that carries an extra safe field (WHICH
+ * fact moved since the source calculate_shipping ran: selection_changed vs.
+ * destination_changed), never the fact IDs themselves - those never leave
+ * lib/domains/selected-shipping-option/service.ts#checkShippingEvidenceFreshness.
+ */
+function projectSelectShippingOptionStale(result: CapabilityGatewayResult, warnings: { warnings?: string[] }): ToolObservation {
+  const data = isRecord(result.data) ? result.data : null;
+  const reason = typeof data?.reason === "string" ? data.reason : undefined;
+  return { tool: "select_shipping_option", status: "blocked", errorCode: SHIPPING_CALCULATION_STALE_ERROR_CODE, ...(reason ? { reason } : {}), ...warnings };
+}
+
+/**
+ * CRM-R1-T13E.2 / SALES-AGENT-R1-T2.1. calculate_shipping's own `data` is
+ * allowlisted, not passed through raw as before - `selectionFactId`/
+ * `destinationFactId` (added in T2.1 so select_shipping_option's evidence
+ * gate can detect staleness later) are internal correlation data the model
+ * has no use for and must never see, same discipline as every other
+ * evidence field in this file. `options[].index` IS shown - it is exactly
+ * the stable, deterministic identity the model must cite (never a label)
+ * when later calling select_shipping_option.
  */
 function projectCalculateShipping(data: unknown) {
-  return isRecord(data) ? data : null;
+  if (!isRecord(data)) return null;
+  const options = Array.isArray(data.options)
+    ? data.options.slice(0, MAX_EXPLORE_ITEMS).map((option) => {
+        if (!isRecord(option)) return null;
+        return {
+          index: option.index,
+          carrierName: option.carrierName,
+          serviceType: option.serviceType,
+          totalCost: option.totalCost,
+          estimatedDelivery: option.estimatedDelivery
+        };
+      }).filter((option): option is NonNullable<typeof option> => option !== null)
+    : undefined;
+
+  return {
+    status: data.status,
+    ...(data.destination !== undefined ? { destination: data.destination } : {}),
+    ...(data.totalWeightKg !== undefined ? { totalWeightKg: data.totalWeightKg } : {}),
+    ...(data.totalBoleta !== undefined ? { totalBoleta: data.totalBoleta } : {}),
+    ...(options !== undefined ? { options } : {})
+  };
 }
 
 function projectCompanyKnowledge(data: unknown) {
@@ -255,6 +305,10 @@ export function buildToolObservation(tool: string, result: CapabilityGatewayResu
     return projectRecommendCatalogProductsFailed(result, warnings);
   }
 
+  if (tool === "select_shipping_option" && result.status === "invalid_arguments" && result.errorCode === SHIPPING_CALCULATION_STALE_ERROR_CODE) {
+    return projectSelectShippingOptionStale(result, warnings);
+  }
+
   if (result.status === "completed") {
     const data =
       tool === "search_products"
@@ -271,7 +325,9 @@ export function buildToolObservation(tool: string, result: CapabilityGatewayResu
                   ? projectSelectProducts(result.data)
                   : tool === "calculate_shipping"
                     ? projectCalculateShipping(result.data)
-                    : null;
+                    : tool === "select_shipping_option"
+                      ? projectSelectShippingOption(result.data)
+                      : null;
     return { tool, status: "completed", data, ...warnings };
   }
 

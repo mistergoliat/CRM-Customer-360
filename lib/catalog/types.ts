@@ -42,6 +42,15 @@ export type CatalogProductPrice = {
   amount: number | null;
   currency: string | null;
   taxIncluded: boolean | null;
+  /**
+   * SALES-AGENT-R1-T1.1. The exact rate the Catalog Service already applied
+   * to derive `amount` (V1 `pricing.taxRate`, additive field, sourced from
+   * that service's single configured-rate pricing pipeline - never a second,
+   * independently-read value). Null only when the upstream field is missing
+   * or malformed - CRM never defaults this to a hardcoded rate (e.g. 0.19)
+   * and never infers it from currency/country.
+   */
+  taxRate: number | null;
   discountApplied: boolean;
 };
 
