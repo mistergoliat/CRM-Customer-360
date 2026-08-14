@@ -18,6 +18,7 @@ import { getSharedCatalogRecommendationCapability, recommendCatalogProductsCapab
 import { setShippingDestinationCapability } from "./shippingDestinationCapability";
 import { selectProductsCapability } from "./selectProductsCapability";
 import { calculateShippingCapability } from "./calculateShippingCapability";
+import { selectShippingOptionCapability } from "./selectShippingOptionCapability";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -444,7 +445,13 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   // (the sole authority over coverage/carriers/rates) from the durable
   // shipping_destination (T13D) and commercial_line_items (above), hydrated
   // through Catalog Service - see calculateShippingCapability.ts.
-  calculateShippingCapability() as CapabilityGatewayDefinition
+  calculateShippingCapability() as CapabilityGatewayDefinition,
+  // SALES-AGENT-R1-T2.1: records the customer's chosen shipping option
+  // (carrier + service type) as the opportunity's durable
+  // selected_shipping_option - only an optionIndex observed in a real
+  // calculate_shipping response this conversation, never a price, carrier
+  // name or service type from the model. See selectShippingOptionCapability.ts.
+  selectShippingOptionCapability() as CapabilityGatewayDefinition
 ];
 
 const CAPABILITIES_BY_NAME = new Map(CAPABILITY_GATEWAY_REGISTRY.map((definition) => [definition.capability, definition]));

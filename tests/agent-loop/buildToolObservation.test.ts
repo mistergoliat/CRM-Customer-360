@@ -35,7 +35,7 @@ function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
     active: true,
     selectedVariant: null,
     variants: [],
-    price: { amount: 19990, currency: "CLP", taxIncluded: true, discountApplied: false },
+    price: { amount: 19990, currency: "CLP", taxIncluded: true, taxRate: 0.19, discountApplied: false },
     availability: "in_stock",
     stockQuantity: 4,
     weightKg: null,
@@ -254,4 +254,53 @@ test("ACS-R1-05.1-T02.6.2: the real stockQuantity is untouched in the observatio
   );
   const data = observation.data as { products: Array<Record<string, unknown>> };
   assert.equal(data.products[0].stockQuantity, 47171);
+});
+
+// ---- SALES-AGENT-R1-T2.1.1: select_shipping_option staleness observation ----
+
+function staleSelectShippingOption(reason: "selection_changed" | "destination_changed"): CapabilityGatewayResult<Record<string, unknown>> {
+  return {
+    capability: "select_shipping_option",
+    version: "capability-gateway.v1",
+    availability: "available",
+    status: "invalid_arguments",
+    data: { status: "shipping_calculation_stale", reason },
+    errorCode: "shipping_calculation_stale",
+    retryable: false,
+    evidence: [],
+    warnings: [],
+    retryCount: 0,
+    startedAt: FIXED_TIME,
+    completedAt: FIXED_TIME,
+    executionPublicId: "capability-exec-test"
+  };
+}
+
+test("select_shipping_option: a stale selection (selection_changed) observation surfaces status/errorCode/reason, never the underlying fact IDs", () => {
+  const observation = buildToolObservation("select_shipping_option", staleSelectShippingOption("selection_changed"));
+  assert.deepEqual(observation, { tool: "select_shipping_option", status: "blocked", errorCode: "shipping_calculation_stale", reason: "selection_changed" });
+});
+
+test("select_shipping_option: a stale selection (destination_changed) observation surfaces the distinct reason", () => {
+  const observation = buildToolObservation("select_shipping_option", staleSelectShippingOption("destination_changed"));
+  assert.deepEqual(observation, { tool: "select_shipping_option", status: "blocked", errorCode: "shipping_calculation_stale", reason: "destination_changed" });
+});
+
+test("select_shipping_option: a non-staleness invalid_arguments (e.g. out-of-range index) falls back to the generic blocked mapping, no reason field", () => {
+  const observation = buildToolObservation("select_shipping_option", {
+    capability: "select_shipping_option",
+    version: "capability-gateway.v1",
+    availability: "available",
+    status: "invalid_arguments",
+    data: null,
+    errorCode: "shipping_option_index_out_of_range",
+    retryable: false,
+    evidence: [],
+    warnings: [],
+    retryCount: 0,
+    startedAt: FIXED_TIME,
+    completedAt: FIXED_TIME,
+    executionPublicId: "capability-exec-test"
+  });
+  assert.deepEqual(observation, { tool: "select_shipping_option", status: "blocked", errorCode: "shipping_option_index_out_of_range" });
 });
