@@ -9,6 +9,7 @@ import { buildCommercialBridgeFeatureFlags } from "../config/commercialCycleConf
 import { buildContinuityFallbackMessage, type ContinuityFallbackContext } from "../continuity/buildContinuityFallbackMessage";
 import type { ContinuityFallbackClass } from "../continuity/salesTurnDisposition";
 import type { AgentLoopResult } from "./agentStepTypes";
+import { takeHumanControlForAiHandoff } from "@/lib/domains/conversations/control";
 
 function parseEnvCsv(name: string, fallback: string[] = []): string[] {
   const value = process.env[name]?.trim();
@@ -131,6 +132,28 @@ export async function dispatchAgentLoopResponse(input: DispatchAgentLoopResponse
   const bridgeFlags = buildCommercialBridgeFeatureFlags();
   if (!bridgeFlags.actionQueueEnabled) {
     return emptyResult(["agent_tool_loop_action_queue_disabled"]);
+  }
+
+  /**
+   * SALES-AGENT-R1 checkout-readiness audit, TASK_001. A handoff the model
+   * decides must durably take the conversation away from the AI before the
+   * acknowledgement message is even built - otherwise the same customer's
+   * next inbound reactivates the loop instead of reaching the human who was
+   * promised. Gated on actionPersistenceEnabled (not actionQueueEnabled)
+   * because persistAgentAction below is itself a no-op DB-wise in dry-run
+   * mode - nothing else in this function touches the database until
+   * persistence is on, so the control transfer must not be the exception.
+   * The reactive continuity path's own handoff-equivalent fallback classes
+   * (handoff_acknowledgement/unsafe_primary_draft) get the identical
+   * treatment in continuity/dispatchFallbackAction.ts - never a second,
+   * diverging control-transfer rule.
+   */
+  if (input.loop.terminalReason === "handoff" && bridgeFlags.actionPersistenceEnabled) {
+    await takeHumanControlForAiHandoff({
+      conversationId: input.conversationId,
+      currentTime: input.currentTime,
+      reason: input.loop.handoffReason ?? "agent_tool_loop_handoff"
+    });
   }
 
   const message =

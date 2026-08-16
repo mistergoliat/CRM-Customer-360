@@ -75,6 +75,11 @@ async function seedConversation() {
  * call with decision "respond_now" never triggers a search, so without this
  * seed the fallback message legitimately has no known need to ground on.
  */
+async function loadConversationControlState(conversationId: number) {
+  const rows = await queryRows<Record<string, unknown>>("SELECT ai_enabled, human_owner_active FROM conversation WHERE id = ?", [conversationId]);
+  return { aiEnabled: Number(rows[0]?.ai_enabled) === 1, humanOwnerActive: Number(rows[0]?.human_owner_active) === 1 };
+}
+
 async function seedNeedProfile(input: { conversationId: number; waId: string; useCase: string; budgetMax: number }) {
   const key = uniqueSuffix("need-profile");
   await safeExecute(
@@ -359,6 +364,18 @@ test("ACS-R1-05-T06.2: a technically-blocked draft (unresolved placeholder) is t
     );
     assert.equal(eventRows.length, 1);
     assert.equal(eventRows[0].event_type, "autonomous_turn_disposition");
+
+    // Persistent Human Handoff: a content-safety handoff must durably flip
+    // conversation ownership, not just report responseOwner:"human" in the
+    // disposition event - otherwise the very next inbound would invoke the
+    // model again. And it must do so WITHOUT cancelling the acknowledgement
+    // it just queued (ordering: takeover happens before dispatch).
+    // outboxRows.length === 1 was already asserted above - this confirms
+    // the acknowledgement survives the takeover's own pending-send
+    // cancellation (ordering: takeover happens before dispatch).
+    const controlState = await loadConversationControlState(seeded.conversationId!);
+    assert.equal(controlState.humanOwnerActive, true);
+    assert.equal(controlState.aiEnabled, false);
   } finally {
     process.env = previousEnv;
     resetCapabilityGatewayCatalogPortForTests();
@@ -412,6 +429,13 @@ test("ACS-R1-05-T06.2 (second correction, section 4/8/9): an ungrounded declarat
     );
     assert.equal(outboxRows.length, 1);
     assert.doesNotMatch(String(outboxRows[0].message_text), /999\.999/);
+
+    // Persistent Human Handoff: same durability requirement as the
+    // unsafe_primary_draft scenario above, exercised here through the
+    // explicit escalate_to_operator -> handoff_acknowledgement path.
+    const controlState = await loadConversationControlState(seeded.conversationId!);
+    assert.equal(controlState.humanOwnerActive, true);
+    assert.equal(controlState.aiEnabled, false);
   } finally {
     process.env = previousEnv;
     resetCapabilityGatewayCatalogPortForTests();
