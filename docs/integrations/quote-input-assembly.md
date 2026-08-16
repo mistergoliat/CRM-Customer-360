@@ -1,7 +1,7 @@
 ---
 title: Quote Input Assembler - deterministic commercial_line_items -> QuoteServiceCreateRequest
 doc_id: integration-quote-input-assembly
-status: implemented_not_wired
+status: wired
 tags:
   - integration
   - quote-service
@@ -45,6 +45,18 @@ Quote Service (T3, futuro)   snapshotea (inmutable, al llamar createQuote)
 output es un `QuoteServiceCreateQuoteInput` validado y una `evidence` de
 solo lectura — el side effect (crear la Quote real) es responsabilidad de
 una tarea futura (T3+).
+
+**Actualizacion SALES-AGENT-R1-T3**: el side effect ya existe -
+`createQuoteCapability.ts` llama a `assembleQuoteInput({requireShipping: false, ...})`
+y, si el resultado es exitoso, crea la Quote real via
+`QuoteServicePort.createQuote()`. `requireShipping: true` sigue sin ningun
+caller (el gap de metadata tributaria de shipping descrito abajo sigue
+abierto) - T3 solo conecta el camino producto-sin-envio. La referencia a la
+Quote creada (`quoteId`/`quoteNumber`/`selectionFactId` como ancla de
+reuso) se persiste en `lib/domains/created-quote` sobre el mismo
+`crm_request_facts` que ya usan `commercial_line_items`/
+`shipping_destination`/`selected_shipping_option` - sin migracion nueva.
+Ver `docs/audits/SALES-AGENT-R1-T3-create-quote-wiring-audit.md`.
 
 ## Reglas que este módulo garantiza
 

@@ -19,6 +19,7 @@ import { setShippingDestinationCapability } from "./shippingDestinationCapabilit
 import { selectProductsCapability } from "./selectProductsCapability";
 import { calculateShippingCapability } from "./calculateShippingCapability";
 import { selectShippingOptionCapability } from "./selectShippingOptionCapability";
+import { createQuoteCapability } from "./createQuoteCapability";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -451,7 +452,14 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   // selected_shipping_option - only an optionIndex observed in a real
   // calculate_shipping response this conversation, never a price, carrier
   // name or service type from the model. See selectShippingOptionCapability.ts.
-  selectShippingOptionCapability() as CapabilityGatewayDefinition
+  selectShippingOptionCapability() as CapabilityGatewayDefinition,
+  // SALES-AGENT-R1-T3: creates a real draft quote via the external Quote
+  // Service from the durable commercial_line_items selection (never with
+  // shipping - a pre-existing contract gap, see
+  // docs/audits/SALES-AGENT-R1-T3-create-quote-wiring-audit.md). Reuses an
+  // existing quote instead of duplicating one when the selection has not
+  // changed since it was created. See createQuoteCapability.ts.
+  createQuoteCapability() as CapabilityGatewayDefinition
 ];
 
 const CAPABILITIES_BY_NAME = new Map(CAPABILITY_GATEWAY_REGISTRY.map((definition) => [definition.capability, definition]));

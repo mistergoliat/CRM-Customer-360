@@ -52,6 +52,12 @@ import { checkUnbackedCommercialMutationClaim } from "./commercialMutationClaims
  * conversation, never a carrier name/service type/price from the model; its
  * evidence gate lives inside selectShippingOptionCapability.ts itself, not
  * in processUseToolStep below - see that file's own docstring for why).
+ *
+ * SALES-AGENT-R1-T3 added `create_quote` (creates a real draft quote via the
+ * external Quote Service from the durable commercial_line_items selection -
+ * takes no arguments, everything is backend state; never includes shipping,
+ * a pre-existing contract gap - see createQuoteCapability.ts and
+ * docs/audits/SALES-AGENT-R1-T3-create-quote-wiring-audit.md).
  */
 export const AGENT_LOOP_TOOL_POOL = [
   "search_products",
@@ -62,7 +68,8 @@ export const AGENT_LOOP_TOOL_POOL = [
   "set_shipping_destination",
   "select_products",
   "calculate_shipping",
-  "select_shipping_option"
+  "select_shipping_option",
+  "create_quote"
 ] as const;
 export type AgentLoopToolName = (typeof AGENT_LOOP_TOOL_POOL)[number];
 
