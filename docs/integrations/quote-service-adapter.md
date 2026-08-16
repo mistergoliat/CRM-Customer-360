@@ -1,7 +1,7 @@
 ---
 title: Quote Service Adapter - HTTP boundary to the external Quote Service
 doc_id: integration-quote-service-adapter
-status: implemented_not_wired
+status: wired
 tags:
   - integration
   - quote-service
@@ -36,6 +36,14 @@ operativo. **T1 no expone el Quote Service al Sales Agent todavia** - no hay
 capability registrada, no hay tool, no hay assembler que lea
 `commercial_line_items`/`shipping_destination`/Catalog Service para construir
 un request. Este documento describe exclusivamente el adapter.
+
+**Actualizacion SALES-AGENT-R1-T3**: este adapter esta ahora en uso real,
+via `createQuoteCapability()` (`lib/brain/commercial/capability-gateway/createQuoteCapability.ts`),
+registrada en el Capability Gateway y expuesta al Native Agent Tool Loop
+como el tool `create_quote`. Solo `createQuote()` se invoca (nunca
+`updateDraft`/`issueQuote`/`sendQuoteEmail` - fuera de alcance de T3). Ver
+`docs/audits/SALES-AGENT-R1-T3-create-quote-wiring-audit.md` para el diseno
+completo.
 
 ## Configuracion
 

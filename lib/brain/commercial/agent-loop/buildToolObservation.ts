@@ -164,6 +164,21 @@ function projectCalculateShipping(data: unknown) {
   };
 }
 
+/**
+ * SALES-AGENT-R1-T3. create_quote's own `data` (status plus, only on
+ * "created"/"reused", quoteId/quoteNumber/quoteStatus/currency/total/validUntil -
+ * or, on an assembly gap, the same allowlisted-safe details the assembler
+ * itself already restricts to productId/combinationId/reason field names,
+ * never customer PII) is already the small, bounded shape agreed at the
+ * capability layer - passed through as-is, same pattern as
+ * projectSetShippingDestination/projectSelectProducts. Never the full
+ * QuoteServiceCreateQuoteInput/customerSnapshot - those never leave
+ * createQuoteCapability.ts.
+ */
+function projectCreateQuote(data: unknown) {
+  return isRecord(data) ? data : null;
+}
+
 function projectCompanyKnowledge(data: unknown) {
   if (!isRecord(data)) return { entries: [] };
   const result = data as CompanyKnowledgeSearchResult;
@@ -327,7 +342,9 @@ export function buildToolObservation(tool: string, result: CapabilityGatewayResu
                     ? projectCalculateShipping(result.data)
                     : tool === "select_shipping_option"
                       ? projectSelectShippingOption(result.data)
-                      : null;
+                      : tool === "create_quote"
+                        ? projectCreateQuote(result.data)
+                        : null;
     return { tool, status: "completed", data, ...warnings };
   }
 

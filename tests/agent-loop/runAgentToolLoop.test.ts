@@ -1518,11 +1518,12 @@ function exploreResponsePayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("I0 - el pool conserva las tools previas mas explore_catalog/set_shipping_destination/select_products/calculate_shipping/select_shipping_option (expansion intencional, nada eliminado)", () => {
+test("I0 - el pool conserva las tools previas mas explore_catalog/set_shipping_destination/select_products/calculate_shipping/select_shipping_option/create_quote (expansion intencional, nada eliminado)", () => {
   assert.deepEqual(
     [...AGENT_LOOP_TOOL_POOL].sort(),
     [
       "calculate_shipping",
+      "create_quote",
       "explore_catalog",
       "get_product_details",
       "recommend_catalog_products",
