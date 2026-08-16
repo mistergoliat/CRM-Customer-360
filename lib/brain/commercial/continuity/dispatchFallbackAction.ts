@@ -6,6 +6,7 @@ import type { SandboxAutonomyAgentActionContext, SandboxAutonomyEvaluationResult
 import { executeActionThroughGate, SqlExecutionUnitOfWork } from "../execution-gate";
 import type { ExecutionGateResult } from "../execution-gate";
 import { buildCommercialBridgeFeatureFlags } from "../config/commercialCycleConfig";
+import { takeHumanControlForAiHandoff } from "@/lib/domains/conversations/control";
 import type { ContinuityFallbackClass } from "./salesTurnDisposition";
 
 function parseEnvCsv(name: string, fallback: string[] = []): string[] {
@@ -105,6 +106,16 @@ function buildFallbackAgentAction(input: DispatchFallbackActionInput, idempotenc
 }
 
 /**
+ * SALES-AGENT-R1 checkout-readiness audit, TASK_001. Only the two fallback
+ * classes ensureAutonomousSalesTurnContinuity.ts already treats as "a human
+ * must own this conversation now" (its isSafetyFallback/explicit-handoff
+ * branches) durably take control - infrastructure fallbacks (catalog/model
+ * unavailable, invalid model result, max steps exceeded) stay AI-owned so
+ * the agent can keep retrying on a later turn.
+ */
+const HUMAN_HANDOFF_FALLBACK_CLASSES = new Set<ContinuityFallbackClass>(["handoff_acknowledgement", "unsafe_primary_draft"]);
+
+/**
  * Builds, persists (idempotently) and dispatches a fallback
  * `send_whatsapp_reply` action through the SAME real pipeline every other
  * autonomous reply goes through: persistAgentAction -> sandbox ->
@@ -115,6 +126,17 @@ export async function dispatchFallbackAction(input: DispatchFallbackActionInput)
   const bridgeFlags = buildCommercialBridgeFeatureFlags();
   if (!bridgeFlags.actionQueueEnabled) {
     return emptyResult(["continuity_fallback_action_queue_disabled"]);
+  }
+
+  // Durable ownership transfer BEFORE the acknowledgement is queued - same
+  // rationale and same gate (actionPersistenceEnabled) as the identical
+  // block in dispatchAgentLoopResponse.ts.
+  if (HUMAN_HANDOFF_FALLBACK_CLASSES.has(input.fallbackClass) && bridgeFlags.actionPersistenceEnabled) {
+    await takeHumanControlForAiHandoff({
+      conversationId: input.conversationId,
+      currentTime: input.currentTime,
+      reason: `continuity_fallback:${input.fallbackClass}`
+    });
   }
 
   const idempotencyKey = buildContinuityFallbackIdempotencyKey(input.conversationId, input.inboundMessageId, input.fallbackClass);

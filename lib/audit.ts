@@ -31,6 +31,7 @@ export type AuditAction =
   | "ai_sdr.handoff.requested"
   | "whatsapp.delivery_status.applied"
   | "conversation.control.take"
+  | "conversation.control.ai_handoff"
   | "conversation.control.release"
   | "conversation.control.pause"
   | "conversation.control.close"

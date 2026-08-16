@@ -107,6 +107,31 @@ export async function takeHumanControlTx(connection: PoolConnection, conversatio
   return cancelPendingAutonomousSendsTx(connection, conversationId, nowSql, "superseded_by_operator");
 }
 
+/**
+ * SALES-AGENT-R1 checkout-readiness audit, TASK_001. Durable AI-initiated
+ * handoff. The agent (or a fallback path standing in for it) decided a
+ * human must own this conversation from now on - a textual acknowledgement
+ * alone is not a control transfer. Reuses the same canonical
+ * takeHumanControlTx an operator's manual "take" action uses, so a handoff
+ * and a manual takeover are indistinguishable in their effect on future
+ * turns.
+ *
+ * Must run BEFORE the handoff acknowledgement message is dispatched: this
+ * cancels any pending outbox rows for the conversation, and dispatching
+ * first would let this call cancel the very acknowledgement just queued.
+ */
+export async function takeHumanControlForAiHandoff(input: { conversationId: number; currentTime: string; reason: string }): Promise<number> {
+  const nowSql = toMysql(input.currentTime);
+  const cancelledOutbox = await withTransaction((connection) => takeHumanControlTx(connection, input.conversationId, nowSql));
+  await auditLog({
+    action: "conversation.control.ai_handoff",
+    entityType: "conversation",
+    entityId: input.conversationId,
+    after: { reason: input.reason, cancelledOutbox }
+  });
+  return cancelledOutbox;
+}
+
 const SYSTEM_EVENT_LABEL: Record<ConversationControlAction, string> = {
   take: "El operador tomó el control de la conversación.",
   release: "El operador devolvió el control a la IA.",
