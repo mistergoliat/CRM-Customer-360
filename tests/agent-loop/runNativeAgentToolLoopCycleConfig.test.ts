@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after } from "node:test";
@@ -573,4 +575,20 @@ test("[W9] blocked consumed pendingCatalogAction is omitted from the persisted e
     );
   });
   resetCapabilityGatewayCatalogPortForTests();
+});
+
+test("[T08E-9] production thinking wiring is unchanged by T08E: the legacy loop caller still omits thinking, and the only current thinking=disabled production path remains the pre-existing allowlisted multi-intent exception", () => {
+  const nativeCycleSource = readFileSync(resolve(process.cwd(), "lib/brain/commercial/native-cycle/runNativeAutonomousCycle.ts"), "utf8");
+  const loopCycleSource = readFileSync(resolve(process.cwd(), "lib/brain/commercial/agent-loop/runNativeAgentToolLoopCycle.ts"), "utf8");
+
+  assert.match(
+    nativeCycleSource,
+    /shouldRouteToMultiIntentPlanner\(input\.waId\)\s*\?\s*\{\s*thinking:\s*"disabled" as const\s*\}\s*:\s*\{\}/,
+    "the only current production thinking override should stay the allowlisted multi-intent branch in runNativeAutonomousCycle.ts"
+  );
+  assert.doesNotMatch(
+    loopCycleSource,
+    /thinking:\s*"disabled"/,
+    "runNativeAgentToolLoopCycle.ts must not introduce a new thinking override as part of T08E"
+  );
 });

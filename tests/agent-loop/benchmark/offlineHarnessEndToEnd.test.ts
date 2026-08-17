@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test, { after } from "node:test";
 import { getPool } from "@/lib/db";
 import { runCorpus } from "@/lib/brain/commercial/agent-loop/benchmark/runCorpus";
+import type { BenchmarkCase } from "@/lib/brain/commercial/agent-loop/benchmark/types";
 import { BENCHMARK_CORPUS } from "@/tests/fixtures/agent-loop-benchmark/corpus";
 
 /**
@@ -76,4 +77,40 @@ test("[T05] C12: persistent invalid_response fails closed after exactly the boun
   assert.equal(result.loop.llmCalls.length, 2);
   assert.ok(result.loop.llmCalls.every((call) => call.outcome === "invalid_response"));
   assert.equal(result.providerCalls.length, 2);
+});
+
+test("[T08E] benchmark harness keeps the default tool budget at 2 and can isolate an override to 3 without touching prompts/fixtures", async () => {
+  const syntheticThreeToolCase: BenchmarkCase = {
+    caseId: "T08E-HARNESS",
+    description: "synthetic three-tool path for isolated maxToolExecutions wiring",
+    customerMessage: "haz tres pasos",
+    commercialContextSummary: {},
+    groundTruth: {
+      requiredTools: ["search_products", "get_product_details"],
+      forbiddenTools: [],
+      expectedTerminalReason: "responded",
+      notes: "Pure harness wiring proof: the default loop budget must stop at 2, while an explicit benchmark-only override to 3 must allow the third tool."
+    },
+    offlineScript: [
+      { kind: "use_tool", tool: "search_products", arguments: { query: "barra olimpica" } },
+      { kind: "use_tool", tool: "get_product_details", arguments: { productId: "31" } },
+      { kind: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "asc" }, limit: 2 } },
+      { kind: "respond", message: "Listo." }
+    ]
+  };
+
+  const defaultSummary = await runCorpus([syntheticThreeToolCase], { mode: "offline", runsPerCase: 1 });
+  assert.equal(defaultSummary.loopConfiguration.maxToolExecutions, 2);
+  assert.equal(defaultSummary.results[0].trace.configuredMaxToolExecutions, 2);
+  assert.equal(defaultSummary.results[0].loop.toolExecutionCount, 2, "the default benchmark path must preserve the production default budget");
+  assert.deepEqual(defaultSummary.results[0].trace.orderedToolSequence, ["search_products", "get_product_details"], "the third tool must stay unreachable under the default budget");
+  assert.equal(defaultSummary.results[0].score.requiredToolsCompleted, true, "the original required tools should remain completed even when the third tool is still unreachable");
+
+  const overrideSummary = await runCorpus([syntheticThreeToolCase], { mode: "offline", runsPerCase: 1, loopOverrides: { maxToolExecutions: 3 } });
+  assert.equal(overrideSummary.loopConfiguration.maxToolExecutions, 3);
+  assert.equal(overrideSummary.results[0].trace.configuredMaxToolExecutions, 3);
+  assert.equal(overrideSummary.results[0].loop.toolExecutionCount, 3, "the explicit benchmark-only override must allow the third tool");
+  assert.deepEqual(overrideSummary.results[0].trace.orderedToolSequence, ["search_products", "get_product_details", "explore_catalog"]);
+  assert.equal(overrideSummary.results[0].trace.decisionTrace[2]?.selectedTool, "explore_catalog");
+  assert.equal(overrideSummary.results[0].score.requiredToolsCompleted, true, "the default required tools remain completed while the third tool becomes reachable only under the isolated override");
 });

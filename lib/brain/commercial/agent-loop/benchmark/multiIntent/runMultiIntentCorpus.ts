@@ -6,7 +6,9 @@ import { createInstrumentedProvider } from "../instrumentedProvider";
 import { createLiveBenchmarkProvider } from "../liveProvider";
 import type { LiveBenchmarkProviderConfig } from "../liveProvider";
 import { scoreCase } from "../scoring";
-import type { BenchmarkProviderCallRecord, BenchmarkRunMode, BenchmarkRunSummary, BenchmarkTurnResult } from "../types";
+import { buildBenchmarkTurnTrace } from "../trace";
+import { DEFAULT_MAX_DECISIONS, DEFAULT_MAX_TOOL_EXECUTIONS, DEFAULT_TIMEOUT_MS } from "../../../agent-loop/runAgentToolLoop";
+import type { BenchmarkLoopConfiguration, BenchmarkLoopOverrides, BenchmarkProviderCallRecord, BenchmarkRunMode, BenchmarkRunSummary, BenchmarkTurnResult } from "../types";
 import type { MultiIntentBenchmarkCase } from "./corpus";
 
 /**
@@ -21,13 +23,22 @@ import type { MultiIntentBenchmarkCase } from "./corpus";
  * legacy harness's own scoring is directly applicable, never reimplemented.
  */
 export type RunMultiIntentCorpusOptions =
-  | { mode: "offline"; runsPerCase: number }
-  | { mode: "live"; runsPerCase: number; liveConfig: LiveBenchmarkProviderConfig };
+  | { mode: "offline"; runsPerCase: number; loopOverrides?: BenchmarkLoopOverrides }
+  | { mode: "live"; runsPerCase: number; liveConfig: LiveBenchmarkProviderConfig; loopOverrides?: BenchmarkLoopOverrides };
+
+function resolveLoopConfiguration(overrides: BenchmarkLoopOverrides | undefined): BenchmarkLoopConfiguration {
+  return {
+    maxDecisions: overrides?.maxDecisions ?? DEFAULT_MAX_DECISIONS,
+    maxToolExecutions: overrides?.maxToolExecutions ?? DEFAULT_MAX_TOOL_EXECUTIONS,
+    timeoutMs: overrides?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  };
+}
 
 export async function runMultiIntentBenchmarkCase(
   testCase: MultiIntentBenchmarkCase,
   mode: BenchmarkRunMode,
   liveConfig: LiveBenchmarkProviderConfig | undefined,
+  loopConfiguration: BenchmarkLoopConfiguration,
   runIndex: number
 ): Promise<BenchmarkTurnResult> {
   const environment = await setupBenchmarkEnvironment();
@@ -50,12 +61,16 @@ export async function runMultiIntentBenchmarkCase(
       commercialContextSummary: testCase.commercialContextSummary,
       recentCatalogContext: testCase.recentCatalogContext ?? null,
       pendingCatalogAction: null,
-      provider
+      provider,
+      maxDecisions: loopConfiguration.maxDecisions,
+      maxToolExecutions: loopConfiguration.maxToolExecutions,
+      timeoutMs: loopConfiguration.timeoutMs
     });
     const totalElapsedMs = Date.now() - startedAt;
 
     const score = scoreCase(testCase.caseId, runIndex, loop, testCase.groundTruth);
-    return { caseId: testCase.caseId, runIndex, loop, totalElapsedMs, providerCalls, score };
+    const trace = buildBenchmarkTurnTrace(loop, totalElapsedMs, loopConfiguration);
+    return { caseId: testCase.caseId, runIndex, loop, totalElapsedMs, providerCalls, score, trace };
   } finally {
     await environment.teardown();
   }
@@ -63,11 +78,12 @@ export async function runMultiIntentBenchmarkCase(
 
 export async function runMultiIntentCorpus(cases: MultiIntentBenchmarkCase[], options: RunMultiIntentCorpusOptions): Promise<BenchmarkRunSummary> {
   const startedAt = new Date().toISOString();
+  const loopConfiguration = resolveLoopConfiguration(options.loopOverrides);
   const results: BenchmarkTurnResult[] = [];
 
   for (const testCase of cases) {
     for (let runIndex = 0; runIndex < options.runsPerCase; runIndex += 1) {
-      const result = await runMultiIntentBenchmarkCase(testCase, options.mode, options.mode === "live" ? options.liveConfig : undefined, runIndex);
+      const result = await runMultiIntentBenchmarkCase(testCase, options.mode, options.mode === "live" ? options.liveConfig : undefined, loopConfiguration, runIndex);
       results.push(result);
     }
   }
@@ -77,6 +93,7 @@ export async function runMultiIntentCorpus(cases: MultiIntentBenchmarkCase[], op
     mode: options.mode,
     model: options.mode === "live" ? options.liveConfig.model : "benchmark-offline-model",
     runsPerCase: options.runsPerCase,
+    loopConfiguration,
     startedAt,
     finishedAt,
     results

@@ -53,11 +53,15 @@ function fakeCommuneCatalog(): CommuneCatalogPort {
 async function confirmDestination(opportunityId: number) {
   const result = await setShippingDestinationForOpportunity({ opportunityId, inputText: "Ñuñoa" }, { resolver: createCommuneResolver(fakeCommuneCatalog()) });
   assert.equal(result.ok, true);
+  assert.equal(result.ok && result.status, "resolved");
+  return result.ok && result.status === "resolved" ? result.destination : null;
 }
 
 async function confirmItems(opportunityId: number, items: Array<{ productId: string; combinationId?: string | null; quantity: number }>) {
   const result = await setCommercialLineItemsForOpportunity({ opportunityId, items: items.map((item) => ({ productId: item.productId, combinationId: item.combinationId ?? null, quantity: item.quantity })) });
   assert.equal(result.ok, true);
+  assert.equal(result.ok && result.status, "selected");
+  return result.ok && result.status === "selected" ? result.selection : null;
 }
 
 function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
@@ -135,11 +139,13 @@ test("M: calculate_shipping is also directly registered in the Gateway with the 
 
 test("B/available: full pipeline - destination + two products hydrated from Catalog Service produce the exact aggregates sent to Carrier MS, and its real options are returned", async () => {
   const opportunityId = uniqueOpportunityId();
-  await confirmDestination(opportunityId);
-  await confirmItems(opportunityId, [
+  const destination = await confirmDestination(opportunityId);
+  const selection = await confirmItems(opportunityId, [
     { productId: "1", quantity: 2 },
     { productId: "2", quantity: 3 }
   ]);
+  assert.ok(destination);
+  assert.ok(selection);
 
   const catalogPort = fakeCatalogPort((input) =>
     input.productId === "1"
@@ -164,7 +170,9 @@ test("B/available: full pipeline - destination + two products hydrated from Cata
     destination: { communeId: 99, canonicalName: "Ñuñoa" },
     totalWeightKg: 35,
     totalBoleta: 160000,
-    options: [{ carrierName: "Blue Express", serviceType: "EXPRESS", totalCost: 5351, estimatedDelivery: "12-08-2026" }]
+    options: [{ index: 0, carrierName: "Blue Express", serviceType: "EXPRESS", totalCost: 5351, estimatedDelivery: "12-08-2026" }],
+    selectionFactId: selection.factId,
+    destinationFactId: destination.factId
   });
 });
 

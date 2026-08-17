@@ -20,6 +20,7 @@ import { writeFile } from "node:fs/promises";
 import { getPool } from "../lib/db";
 import { loadLocalEnv } from "./db-utils";
 import { BENCHMARK_CORPUS } from "../tests/fixtures/agent-loop-benchmark/corpus";
+import { buildBenchmarkAuditArtifact, renderBenchmarkAuditMarkdown } from "../lib/brain/commercial/agent-loop/benchmark/audit";
 import { runCorpus } from "../lib/brain/commercial/agent-loop/benchmark/runCorpus";
 import { computeAggregateMetrics, computeMetricsByCase } from "../lib/brain/commercial/agent-loop/benchmark/metrics";
 import { isLiveBenchmarkEnabled, resolveLiveBenchmarkProviderConfig } from "../lib/brain/commercial/agent-loop/benchmark/liveProvider";
@@ -90,6 +91,12 @@ async function main() {
     const wantsLive = readFlag("live");
     const caseFilter = readArg("case")?.split(",").map((value) => value.trim());
     const outPath = readArg("out");
+    const auditJsonPath = readArg("audit-json");
+    const auditMarkdownPath = readArg("audit-md");
+    const maxToolExecutionsRaw = readArg("max-tool-executions");
+    const maxToolExecutions =
+      maxToolExecutionsRaw !== null && Number.isFinite(Number.parseInt(maxToolExecutionsRaw, 10)) ? Number.parseInt(maxToolExecutionsRaw, 10) : undefined;
+    const loopOverrides = maxToolExecutions !== undefined ? { maxToolExecutions } : undefined;
 
     const corpusValidation = validateBenchmarkCorpus(BENCHMARK_CORPUS);
     if (!corpusValidation.ok) {
@@ -107,11 +114,19 @@ async function main() {
     }
 
     if (!wantsLive) {
-      console.log(`[benchmark] mode=offline runsPerCase=${runsPerCase} cases=${cases.map((testCase) => testCase.caseId).join(",")}`);
-      const summary = await runCorpus(cases, { mode: "offline", runsPerCase });
-      printMetrics("OFFLINE aggregate", computeAggregateMetrics(summary.results));
+      console.log(
+        `[benchmark] mode=offline runsPerCase=${runsPerCase} cases=${cases.map((testCase) => testCase.caseId).join(",")} maxToolExecutions=${maxToolExecutions ?? "(default)"}`
+      );
+      const summary = await runCorpus(cases, { mode: "offline", runsPerCase, ...(loopOverrides ? { loopOverrides } : {}) });
+      const aggregateMetrics = computeAggregateMetrics(summary.results);
+      printMetrics("OFFLINE aggregate", aggregateMetrics);
       for (const [caseId, metrics] of computeMetricsByCase(summary.results)) printMetrics(`case ${caseId}`, metrics);
       if (outPath) await writeFile(outPath, JSON.stringify(summary, null, 2), "utf8");
+      if (auditJsonPath || auditMarkdownPath) {
+        const auditArtifact = buildBenchmarkAuditArtifact({ summary, cases, aggregateMetrics, generatedAt: new Date().toISOString() });
+        if (auditJsonPath) await writeFile(auditJsonPath, JSON.stringify(auditArtifact, null, 2), "utf8");
+        if (auditMarkdownPath) await writeFile(auditMarkdownPath, renderBenchmarkAuditMarkdown(auditArtifact), "utf8");
+      }
       return;
     }
 
@@ -133,11 +148,18 @@ async function main() {
     console.log(
       `[benchmark] mode=live model=${resolution.config.model} thinking=${resolution.config.thinking ?? "(provider default)"} runsPerCase=${runsPerCase} cases=${cases.map((testCase) => testCase.caseId).join(",")}`
     );
+    console.log(`[benchmark] loop maxToolExecutions=${maxToolExecutions ?? "(default)"}`);
     console.log("[benchmark] Catalog/Carrier/commune/DB stay fully isolated - only the LLM provider call is real.");
-    const summary = await runCorpus(cases, { mode: "live", runsPerCase, liveConfig: resolution.config });
-    printMetrics(`LIVE aggregate (${resolution.config.model})`, computeAggregateMetrics(summary.results));
+    const summary = await runCorpus(cases, { mode: "live", runsPerCase, liveConfig: resolution.config, ...(loopOverrides ? { loopOverrides } : {}) });
+    const aggregateMetrics = computeAggregateMetrics(summary.results);
+    printMetrics(`LIVE aggregate (${resolution.config.model})`, aggregateMetrics);
     for (const [caseId, metrics] of computeMetricsByCase(summary.results)) printMetrics(`case ${caseId}`, metrics);
     if (outPath) await writeFile(outPath, JSON.stringify(summary, null, 2), "utf8");
+    if (auditJsonPath || auditMarkdownPath) {
+      const auditArtifact = buildBenchmarkAuditArtifact({ summary, cases, aggregateMetrics, generatedAt: new Date().toISOString() });
+      if (auditJsonPath) await writeFile(auditJsonPath, JSON.stringify(auditArtifact, null, 2), "utf8");
+      if (auditMarkdownPath) await writeFile(auditMarkdownPath, renderBenchmarkAuditMarkdown(auditArtifact), "utf8");
+    }
   } finally {
     // select_products/set_shipping_destination (via environment.ts) open a
     // DB pool that otherwise keeps the process alive forever after the

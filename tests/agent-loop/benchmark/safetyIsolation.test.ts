@@ -11,7 +11,7 @@ import test from "node:test";
  * code cannot touch that system" - not a mock that could itself be wrong.
  */
 const BENCHMARK_DIR = path.join(process.cwd(), "lib", "brain", "commercial", "agent-loop", "benchmark");
-const OFFLINE_PATH_SOURCE_FILES = ["types.ts", "validateCorpus.ts", "scoring.ts", "metrics.ts", "offlineProvider.ts", "instrumentedProvider.ts", "environment.ts", "runCorpus.ts"];
+const OFFLINE_PATH_SOURCE_FILES = ["types.ts", "validateCorpus.ts", "scoring.ts", "metrics.ts", "trace.ts", "offlineProvider.ts", "instrumentedProvider.ts", "environment.ts", "runCorpus.ts"];
 const FORBIDDEN_IMPORT_PATTERN = /from\s+["'][^"']*(whatsapp|outbox|messaging|meta-?client|meta-?graph)[^"']*["']/i;
 
 test("[T05] offline benchmark source files never import WhatsApp/outbox/Meta messaging modules", () => {

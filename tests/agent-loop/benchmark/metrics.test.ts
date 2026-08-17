@@ -46,7 +46,33 @@ function score(overrides: Partial<BenchmarkCaseScore> = {}): BenchmarkCaseScore 
 }
 
 function turn(overrides: Partial<BenchmarkTurnResult> = {}): BenchmarkTurnResult {
-  return { caseId: "C01", runIndex: 0, loop: loop(), totalElapsedMs: 500, providerCalls: [call()], score: score(), ...overrides };
+  return {
+    caseId: "C01",
+    runIndex: 0,
+    loop: loop(),
+    totalElapsedMs: 500,
+    providerCalls: [call()],
+    score: score(),
+    trace: {
+      configuredMaxDecisions: 3,
+      configuredMaxToolExecutions: 2,
+      configuredTimeoutMs: 20000,
+      decisionTrace: [],
+      orderedToolSequence: [],
+      selectProductsAttempted: false,
+      selectProductsCompleted: false,
+      setShippingDestinationAttempted: false,
+      getProductDetailsAttempted: false,
+      guardActivated: false,
+      terminalReason: "responded",
+      warnings: [],
+      llmCallCount: 0,
+      toolExecutionCount: 0,
+      turnLatencyMs: 500,
+      llmCallLatenciesMs: []
+    },
+    ...overrides
+  };
 }
 
 test("[T05] computeAggregateMetrics returns all-null metrics for an empty result set (never an invented 0)", () => {

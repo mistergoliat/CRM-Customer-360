@@ -621,7 +621,7 @@ test("[HP30] Configuration B (thinking=\"disabled\") sends {\"thinking\":{\"type
   assert.deepEqual(capturedBody.thinking, { type: "disabled" });
 });
 
-test("[HP31] no thinking configured (the real production call shape - runNativeAutonomousCycle.ts never sets it) - the field is entirely absent, never defaulted", async () => {
+test("[HP31] no thinking configured (the legacy/non-allowlisted production call shape) - the field is entirely absent, never defaulted", async () => {
   let capturedBody: Record<string, unknown> = {};
   handler = async (req, res) => {
     capturedBody = await readBody(req);

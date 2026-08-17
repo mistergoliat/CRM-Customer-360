@@ -7,6 +7,7 @@ import { createQuoteCapability, CREATE_QUOTE_INPUT_SCHEMA } from "@/lib/brain/co
 import { setCommercialLineItemsForOpportunity } from "@/lib/domains/commercial-line-items";
 import { getActiveCreatedQuoteForOpportunity } from "@/lib/domains/created-quote";
 import type { CapabilityGatewayContext } from "@/lib/brain/commercial/capability-gateway/types";
+import type { CatalogBatchItemInput, CatalogBatchItemResult, CatalogPort, CatalogProduct } from "@/lib/catalog";
 import type { QuoteServicePort, QuoteServiceQuote } from "@/lib/domains/quote-service";
 import type { QuoteServiceError, QuoteServiceResult } from "@/lib/domains/quote-service";
 
@@ -125,6 +126,46 @@ function fakeQuote(overrides: Partial<QuoteServiceQuote> = {}): QuoteServiceQuot
   };
 }
 
+function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
+  return {
+    productId: "545",
+    name: "Barra Olimpica 20kg",
+    sku: "BAR-OLY-20",
+    shortDescription: null,
+    longDescription: null,
+    active: true,
+    selectedVariant: null,
+    variants: [],
+    price: { amount: 99990, currency: "CLP", taxIncluded: true, taxRate: 0.19, discountApplied: false },
+    availability: "in_stock",
+    stockQuantity: 5,
+    weightKg: 20,
+    provenance: { source: "catalog_service_http", retrievedAt: "2026-08-15T00:00:00.000Z", cached: false },
+    ...overrides
+  };
+}
+
+function fakeCatalogPort(resolve: (input: CatalogBatchItemInput) => CatalogBatchItemResult): CatalogPort {
+  return {
+    async searchProducts() { throw new Error("not used"); },
+    async getProductDetails() { throw new Error("not used"); },
+    async batchGetProducts(input) {
+      return { ok: true, value: { items: input.items.map(resolve), provenance: { source: "catalog_service_http", retrievedAt: "2026-08-15T00:00:00.000Z", cached: false } } };
+    },
+    async exploreCatalog() { throw new Error("not used"); }
+  };
+}
+
+function capabilityWithCatalog(port: QuoteServicePort) {
+  return createQuoteCapability(
+    () => port,
+    () => ({
+      getCatalogPort: () => fakeCatalogPort((input) => ({ ok: true, input, product: product({ productId: input.productId }) })),
+      now: () => new Date("2026-08-15T00:00:00.000Z")
+    })
+  );
+}
+
 function conflictError(code: string): QuoteServiceError {
   return { class: "conflict", code, message: "conflict", httpStatus: 409, retryable: false };
 }
@@ -163,7 +204,7 @@ test("no commercial_line_items yet: completed with an informational status, no Q
 
   const outcome = await createQuoteCapability(() => fakeQuoteServicePort()).execute({}, context(opportunityId));
   assert.equal(outcome.status, "completed");
-  assert.deepEqual(outcome.data, { status: "no_commercial_line_items" });
+  assert.deepEqual(outcome.data, { status: "no_commercial_line_items", opportunityId });
 });
 
 test("resolved: assembles from real commercial_line_items, creates via Quote Service, persists the reference", async () => {
@@ -180,7 +221,7 @@ test("resolved: assembles from real commercial_line_items, creates via Quote Ser
     }
   });
 
-  const outcome = await createQuoteCapability(() => port).execute({}, context(opportunityId));
+  const outcome = await capabilityWithCatalog(port).execute({}, context(opportunityId));
   assert.equal(outcome.status, "completed");
   assert.deepEqual(outcome.data, {
     status: "created",
@@ -210,7 +251,7 @@ test("resolved: a second call with the UNCHANGED selection reuses the existing q
       return { ok: true, value: fakeQuote() };
     }
   });
-  const capability = createQuoteCapability(() => port);
+  const capability = capabilityWithCatalog(port);
 
   const first = await capability.execute({}, context(opportunityId));
   assert.equal(first.status, "completed");
@@ -236,7 +277,7 @@ test("Quote Service returns a conflict: mapped to a non-retryable failure, nothi
     }
   });
 
-  const outcome = await createQuoteCapability(() => port).execute({}, context(opportunityId));
+  const outcome = await capabilityWithCatalog(port).execute({}, context(opportunityId));
   assert.equal(outcome.status, "failed");
   assert.equal(outcome.retryable, false);
   assert.equal(outcome.errorCode, "idempotency_key_reused_with_different_payload");

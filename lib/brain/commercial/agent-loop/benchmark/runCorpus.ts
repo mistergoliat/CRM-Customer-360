@@ -1,15 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { runAgentToolLoop } from "../runAgentToolLoop";
+import { DEFAULT_MAX_DECISIONS, DEFAULT_MAX_TOOL_EXECUTIONS, DEFAULT_TIMEOUT_MS, runAgentToolLoop } from "../runAgentToolLoop";
 import { setupBenchmarkEnvironment } from "./environment";
 import { createOfflineScriptedProvider } from "./offlineProvider";
 import { createInstrumentedProvider } from "./instrumentedProvider";
 import { createLiveBenchmarkProvider, type LiveBenchmarkProviderConfig } from "./liveProvider";
 import { scoreCase } from "./scoring";
-import type { BenchmarkCase, BenchmarkProviderCallRecord, BenchmarkRunMode, BenchmarkRunSummary, BenchmarkTurnResult } from "./types";
+import { buildBenchmarkTurnTrace } from "./trace";
+import type { BenchmarkCase, BenchmarkLoopConfiguration, BenchmarkLoopOverrides, BenchmarkProviderCallRecord, BenchmarkRunMode, BenchmarkRunSummary, BenchmarkTurnResult } from "./types";
 
 export type RunCorpusOptions =
-  | { mode: "offline"; runsPerCase: number }
-  | { mode: "live"; runsPerCase: number; liveConfig: LiveBenchmarkProviderConfig };
+  | { mode: "offline"; runsPerCase: number; loopOverrides?: BenchmarkLoopOverrides }
+  | { mode: "live"; runsPerCase: number; liveConfig: LiveBenchmarkProviderConfig; loopOverrides?: BenchmarkLoopOverrides };
+
+function resolveLoopConfiguration(overrides: BenchmarkLoopOverrides | undefined): BenchmarkLoopConfiguration {
+  return {
+    maxDecisions: overrides?.maxDecisions ?? DEFAULT_MAX_DECISIONS,
+    maxToolExecutions: overrides?.maxToolExecutions ?? DEFAULT_MAX_TOOL_EXECUTIONS,
+    timeoutMs: overrides?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  };
+}
 
 /**
  * LLM-R1-T05, Part A/C/D. Runs one case, one time: fresh isolated
@@ -21,7 +30,13 @@ export type RunCorpusOptions =
  * fixtures, commercialContext, budgets) is identical between offline and
  * live (Part D's comparison requirement).
  */
-export async function runBenchmarkCase(testCase: BenchmarkCase, mode: BenchmarkRunMode, liveConfig: LiveBenchmarkProviderConfig | undefined, runIndex: number): Promise<BenchmarkTurnResult> {
+export async function runBenchmarkCase(
+  testCase: BenchmarkCase,
+  mode: BenchmarkRunMode,
+  liveConfig: LiveBenchmarkProviderConfig | undefined,
+  loopConfiguration: BenchmarkLoopConfiguration,
+  runIndex: number
+): Promise<BenchmarkTurnResult> {
   const environment = await setupBenchmarkEnvironment();
   try {
     if (testCase.setup) {
@@ -45,12 +60,16 @@ export async function runBenchmarkCase(testCase: BenchmarkCase, mode: BenchmarkR
       commercialContextSummary: testCase.commercialContextSummary,
       recentCatalogContext: testCase.recentCatalogContext ?? null,
       pendingCatalogAction: testCase.pendingCatalogAction ?? null,
-      provider
+      provider,
+      maxDecisions: loopConfiguration.maxDecisions,
+      maxToolExecutions: loopConfiguration.maxToolExecutions,
+      timeoutMs: loopConfiguration.timeoutMs
     });
     const totalElapsedMs = Date.now() - startedAt;
 
     const score = scoreCase(testCase.caseId, runIndex, loop, testCase.groundTruth);
-    return { caseId: testCase.caseId, runIndex, loop, totalElapsedMs, providerCalls, score };
+    const trace = buildBenchmarkTurnTrace(loop, totalElapsedMs, loopConfiguration);
+    return { caseId: testCase.caseId, runIndex, loop, totalElapsedMs, providerCalls, score, trace };
   } finally {
     await environment.teardown();
   }
@@ -68,11 +87,12 @@ export async function runBenchmarkCase(testCase: BenchmarkCase, mode: BenchmarkR
  */
 export async function runCorpus(cases: BenchmarkCase[], options: RunCorpusOptions): Promise<BenchmarkRunSummary> {
   const startedAt = new Date().toISOString();
+  const loopConfiguration = resolveLoopConfiguration(options.loopOverrides);
   const results: BenchmarkTurnResult[] = [];
 
   for (const testCase of cases) {
     for (let runIndex = 0; runIndex < options.runsPerCase; runIndex += 1) {
-      const result = await runBenchmarkCase(testCase, options.mode, options.mode === "live" ? options.liveConfig : undefined, runIndex);
+      const result = await runBenchmarkCase(testCase, options.mode, options.mode === "live" ? options.liveConfig : undefined, loopConfiguration, runIndex);
       results.push(result);
     }
   }
@@ -82,6 +102,7 @@ export async function runCorpus(cases: BenchmarkCase[], options: RunCorpusOption
     mode: options.mode,
     model: options.mode === "live" ? options.liveConfig.model : "benchmark-offline-model",
     runsPerCase: options.runsPerCase,
+    loopConfiguration,
     startedAt,
     finishedAt,
     results

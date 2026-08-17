@@ -1,5 +1,6 @@
 import type { PendingCatalogActionStep } from "../agentStepTypes";
 import type { AgentLoopResult, AgentLoopTerminalReason } from "../agentStepTypes";
+import type { AgentLoopInferenceOutcome, AgentLoopStepPhase, AgentLoopStepRecord, AgentStepType, ToolObservationStatus } from "../agentStepTypes";
 import type { AgentLoopToolName } from "../runAgentToolLoop";
 import type { RecentCatalogContext } from "../recentCatalogContext";
 import type { AgentLoopProviderFailureCause } from "../providers/providerFailureClassification";
@@ -91,6 +92,52 @@ export type BenchmarkProviderCallRecord = {
   model: string | null;
 };
 
+export type BenchmarkLoopConfiguration = {
+  maxDecisions: number;
+  maxToolExecutions: number;
+  timeoutMs: number;
+};
+
+export type BenchmarkLoopOverrides = Partial<BenchmarkLoopConfiguration>;
+
+export type BenchmarkTurnTraceDecision = {
+  decisionIndex: number;
+  toolExecutionCountBeforeDecision: number;
+  remainingToolExecutions: number;
+  stepsRemaining: number;
+  modelStepType: AgentStepType;
+  selectedTool: string | null;
+  toolArguments: Record<string, unknown> | null;
+  observationStatus: ToolObservationStatus | null;
+  observationDataStatus: string | null;
+  observationErrorCode: string | null;
+  governance: AgentLoopStepRecord["governance"];
+  consumedToolBudget: boolean;
+  blocked: boolean;
+  duplicate: boolean;
+  invalid: boolean;
+  llmAttempts: Array<{ attempt: number; outcome: AgentLoopInferenceOutcome; elapsedMs: number }>;
+};
+
+export type BenchmarkTurnTrace = {
+  configuredMaxDecisions: number;
+  configuredMaxToolExecutions: number;
+  configuredTimeoutMs: number;
+  decisionTrace: BenchmarkTurnTraceDecision[];
+  orderedToolSequence: string[];
+  selectProductsAttempted: boolean;
+  selectProductsCompleted: boolean;
+  setShippingDestinationAttempted: boolean;
+  getProductDetailsAttempted: boolean;
+  guardActivated: boolean;
+  terminalReason: AgentLoopTerminalReason;
+  warnings: string[];
+  llmCallCount: number;
+  toolExecutionCount: number;
+  turnLatencyMs: number;
+  llmCallLatenciesMs: number[];
+};
+
 export type BenchmarkCaseScore = {
   caseId: string;
   runIndex: number;
@@ -115,6 +162,7 @@ export type BenchmarkTurnResult = {
   totalElapsedMs: number;
   providerCalls: BenchmarkProviderCallRecord[];
   score: BenchmarkCaseScore;
+  trace: BenchmarkTurnTrace;
 };
 
 export type BenchmarkRunMode = "offline" | "live";
@@ -123,7 +171,134 @@ export type BenchmarkRunSummary = {
   mode: BenchmarkRunMode;
   model: string | null;
   runsPerCase: number;
+  loopConfiguration: BenchmarkLoopConfiguration;
   startedAt: string;
   finishedAt: string;
   results: BenchmarkTurnResult[];
+};
+
+export const BENCHMARK_AUDIT_PRIMARY_CLASSES = [
+  "CORRECT",
+  "ACCEPTABLE_DEGRADATION",
+  "REAL_FUNCTIONAL_FAILURE",
+  "SAFETY_FAILURE",
+  "BENCHMARK_EXPECTATION_MISMATCH",
+  "FAULT_INJECTION_NOT_REPRODUCED"
+] as const;
+export type BenchmarkAuditPrimaryClass = (typeof BENCHMARK_AUDIT_PRIMARY_CLASSES)[number];
+
+export const BENCHMARK_AUDIT_RESPONSE_QUALITIES = ["GOOD", "ACCEPTABLE", "POOR_BUT_CORRECT"] as const;
+export type BenchmarkAuditResponseQuality = (typeof BENCHMARK_AUDIT_RESPONSE_QUALITIES)[number];
+
+export const BENCHMARK_AUDIT_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+export type BenchmarkAuditSeverity = (typeof BENCHMARK_AUDIT_SEVERITIES)[number];
+
+export type BenchmarkExpectedAuditSummary = {
+  requiredTools: string[];
+  forbiddenTools: string[];
+  expectedTerminalReason: string | null;
+  expectedBusinessOutcome: string;
+  expectedFailureMode: string | null;
+};
+
+export type BenchmarkContextSummary = {
+  recentCatalogContextPresent: boolean;
+  pendingCatalogActionPresent: boolean;
+  shippingContextPresent: boolean;
+  commercialLineItemsPresent: boolean;
+};
+
+export type BenchmarkAuditDecision = {
+  phase: AgentLoopStepPhase;
+  decisionIndex: number;
+  stepType: string;
+  tool?: string;
+  toolArguments?: unknown;
+  responseMessage?: string | null;
+  handoffReason?: string | null;
+  observationStatus: ToolObservationStatus | null;
+  observationDataStatus: string | null;
+  observationErrorCode: string | null;
+  observationData?: unknown;
+  observationWarnings: string[];
+  consumedToolBudget: boolean;
+};
+
+export type BenchmarkAuditRecord = {
+  caseId: string;
+  caseDescription: string;
+  runIndex: number;
+  userMessage: string;
+  expected: BenchmarkExpectedAuditSummary;
+  contextSummary: BenchmarkContextSummary;
+  decisions: BenchmarkAuditDecision[];
+  toolSequence: string[];
+  modelResponseBeforeRuntimeGuards: string | null;
+  guardInterventions: {
+    commercialMutationGuardActivated: boolean;
+    warnings: string[];
+  };
+  finalCustomerMessage: string | null;
+  metrics: {
+    scorerPass: boolean;
+    requiredToolsCompleted: boolean;
+    toolArgumentsCorrect: boolean;
+    terminalReasonCorrect: boolean;
+    timeout: boolean;
+    structuredFailure: boolean;
+    unbackedCommercialMutationClaim: boolean;
+    llmCalls: number;
+    toolExecutions: number;
+    turnLatencyMs: number;
+  };
+  providerCalls: BenchmarkProviderCallRecord[];
+  auditClassification: BenchmarkAuditPrimaryClass;
+  responseQuality: BenchmarkAuditResponseQuality | null;
+  severity: BenchmarkAuditSeverity | null;
+  auditNotes: string[];
+  /** Benchmark-only carry-throughs for audit logic/reporting; never production persistence. */
+  score: BenchmarkCaseScore;
+  loop: AgentLoopResult;
+  groundTruth: BenchmarkGroundTruth;
+};
+
+export type BenchmarkAuditCaseSummary = {
+  caseId: string;
+  distinctResponsePatterns: Array<{ pattern: string; count: number; runs: number[] }>;
+  toolSequenceDistribution: Array<{ pattern: string; count: number; runs: number[] }>;
+  customerResponsePatternDistribution: Array<{ pattern: string; count: number; runs: number[] }>;
+  bestRepresentativeRun: {
+    runIndex: number;
+    responseQuality: BenchmarkAuditResponseQuality | null;
+    auditClassification: BenchmarkAuditPrimaryClass;
+    finalCustomerMessage: string | null;
+  } | null;
+  worstPassingRun: {
+    runIndex: number;
+    responseQuality: BenchmarkAuditResponseQuality | null;
+    auditClassification: BenchmarkAuditPrimaryClass;
+    finalCustomerMessage: string | null;
+  } | null;
+};
+
+export type BenchmarkAuditArtifact = {
+  generatedAt: string;
+  mode: BenchmarkRunMode;
+  model: string | null;
+  runsPerCase: number;
+  loopConfiguration: BenchmarkLoopConfiguration;
+  aggregateMetrics: import("./metrics").BenchmarkAggregateMetrics;
+  customerVisibleMetrics: {
+    customerCorrectRate: number | null;
+    acceptableDegradationRate: number | null;
+    realFunctionalFailureRate: number | null;
+    safetyFailureRate: number | null;
+    benchmarkExpectationMismatchRate: number | null;
+    faultInjectionNotReproducedRate: number | null;
+    goodResponseQualityRate: number | null;
+    acceptableResponseQualityRate: number | null;
+    poorButCorrectResponseQualityRate: number | null;
+  };
+  records: BenchmarkAuditRecord[];
+  caseSummaries: BenchmarkAuditCaseSummary[];
 };

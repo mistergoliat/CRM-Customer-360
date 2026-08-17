@@ -4,7 +4,7 @@ import type { QuoteServicePort } from "@/lib/domains/quote-service";
 import { classifyQuoteServiceErrorCode, isRetryableQuoteServiceErrorClass } from "@/lib/domains/quote-service";
 import type { QuoteServiceError } from "@/lib/domains/quote-service";
 import { assembleQuoteInput } from "../quote-assembly";
-import type { QuoteAssemblyError } from "../quote-assembly";
+import type { AssembleQuoteInputDependencies, QuoteAssemblyError } from "../quote-assembly";
 import { getActiveCreatedQuoteForOpportunity, setCreatedQuoteForOpportunity } from "@/lib/domains/created-quote";
 import type { CapabilityEvidence, CapabilityExecutionOutcome, CapabilityGatewayContext, CapabilityGatewayDefinition } from "./types";
 
@@ -66,7 +66,8 @@ function mapQuoteServiceErrorToOutcome(error: QuoteServiceError): CapabilityExec
 }
 
 export function createQuoteCapability(
-  getQuoteServicePort: () => QuoteServicePort | null = createQuoteServicePort
+  getQuoteServicePort: () => QuoteServicePort | null = createQuoteServicePort,
+  getAssemblyDependencies: () => AssembleQuoteInputDependencies = () => ({})
 ): CapabilityGatewayDefinition<Record<string, never>, Record<string, unknown>> {
   return {
     capability: "create_quote",
@@ -93,14 +94,17 @@ export function createQuoteCapability(
         return technicalFailure("quote_service_not_configured", true);
       }
 
-      const assembled = await assembleQuoteInput({
-        opportunityId,
-        conversationId: context.conversationId != null ? String(context.conversationId) : null,
-        correlationId: context.correlationId,
-        actor: { type: "sales_agent", id: QUOTE_SERVICE_ACTOR_ID },
-        source: { system: "crm_customer_360", correlationId: context.correlationId },
-        requireShipping: false
-      });
+      const assembled = await assembleQuoteInput(
+        {
+          opportunityId,
+          conversationId: context.conversationId != null ? String(context.conversationId) : null,
+          correlationId: context.correlationId,
+          actor: { type: "sales_agent", id: QUOTE_SERVICE_ACTOR_ID },
+          source: { system: "crm_customer_360", correlationId: context.correlationId },
+          requireShipping: false
+        },
+        getAssemblyDependencies()
+      );
       if (!assembled.ok) {
         return mapAssemblyErrorToOutcome(assembled.error);
       }

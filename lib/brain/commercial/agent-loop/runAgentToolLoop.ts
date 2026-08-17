@@ -73,9 +73,9 @@ export const AGENT_LOOP_TOOL_POOL = [
 ] as const;
 export type AgentLoopToolName = (typeof AGENT_LOOP_TOOL_POOL)[number];
 
-const DEFAULT_MAX_DECISIONS = 3;
-const DEFAULT_MAX_TOOL_EXECUTIONS = 2;
-const DEFAULT_TIMEOUT_MS = 20000;
+export const DEFAULT_MAX_DECISIONS = 3;
+export const DEFAULT_MAX_TOOL_EXECUTIONS = 2;
+export const DEFAULT_TIMEOUT_MS = 20000;
 /** One initial attempt + one format retry - see dispatchAgentLoopResponse.ts for the fallback this feeds when both fail. */
 const FINALIZATION_MAX_ATTEMPTS = 2;
 const FINALIZATION_ALLOWED_TYPES = ["respond", "handoff"] as const;

@@ -2647,3 +2647,212 @@ test("[T08D-3] C09-style multi-intent turn completes select_products within the 
   );
   assert.ok(!result.warnings.some((warning) => warning.startsWith("agent_loop_mutation_claim_blocked:")), "a truthful, backed claim is never touched by the guard");
 });
+
+// ---------------------------------------------------------------------------
+// LLM-R1-T08E: isolated maxToolExecutions=3 experiment plumbing + regressions.
+// ---------------------------------------------------------------------------
+
+test("[T08E-1] default maxToolExecutions remains 2 - a third successful tool execution never occurs without an explicit override", async () => {
+  catalogUpWithExplore(
+    {
+      scope: { availability: "available" },
+      sort: { by: "price", direction: "asc" },
+      totalMatched: 2,
+      exhaustiveForScope: true,
+      products: [
+        { productId: "31", name: "Barra Olimpica Classic 20kg", price: 89990, currency: "CLP", stockQuantity: 15, stockScope: "direct", availability: "available" }
+      ]
+    },
+    {
+      product: { productId: 501, name: "Kettlebell 16kg", sku: "KB-16", shortDescription: "Kettlebell", longDescription: null, active: true },
+      variants: [],
+      selectedVariant: null,
+      pricing: { effectiveUnitPrice: 29990, currency: "CLP", taxIncluded: true, discountApplied: false },
+      stock: { available: true, physicalQuantity: 4 },
+      freshness: { cached: false }
+    }
+  );
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "barra olimpica" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "asc" }, limit: 1 } },
+      { type: "respond", message: "Listo." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "haz tres cosas",
+    commercialContextSummary: {},
+    maxDecisions: 4,
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 2, "the production default budget must stay at 2");
+  assert.deepEqual(
+    result.steps.flatMap((step) => (step.phase === "gathering" && step.step.type === "use_tool" ? [step.step.tool] : [])),
+    ["search_products", "get_product_details"]
+  );
+});
+
+test("[T08E-2] explicit maxToolExecutions=3 permits three successful tool executions before the final response", async () => {
+  catalogUpWithExplore(
+    {
+      scope: { availability: "available" },
+      sort: { by: "price", direction: "asc" },
+      totalMatched: 2,
+      exhaustiveForScope: true,
+      products: [
+        { productId: "31", name: "Barra Olimpica Classic 20kg", price: 89990, currency: "CLP", stockQuantity: 15, stockScope: "direct", availability: "available" }
+      ]
+    },
+    {
+      product: { productId: 501, name: "Kettlebell 16kg", sku: "KB-16", shortDescription: "Kettlebell", longDescription: null, active: true },
+      variants: [],
+      selectedVariant: null,
+      pricing: { effectiveUnitPrice: 29990, currency: "CLP", taxIncluded: true, discountApplied: false },
+      stock: { available: true, physicalQuantity: 4 },
+      freshness: { cached: false }
+    }
+  );
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "barra olimpica" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "asc" }, limit: 1 } },
+      { type: "respond", message: "Listo." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "haz tres cosas",
+    commercialContextSummary: {},
+    maxDecisions: 4,
+    maxToolExecutions: 3,
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 3);
+  assert.deepEqual(
+    result.steps.flatMap((step) => (step.phase === "gathering" && step.step.type === "use_tool" ? [step.step.tool] : [])),
+    ["search_products", "get_product_details", "explore_catalog"]
+  );
+});
+
+test("[T08E-3] maxDecisions=3 with maxToolExecutions=3 still completes tool/tool/tool/respond because finalization owns the fourth model decision", async () => {
+  catalogUpWithExplore(
+    {
+      scope: { availability: "available" },
+      sort: { by: "price", direction: "asc" },
+      totalMatched: 2,
+      exhaustiveForScope: true,
+      products: [
+        { productId: "31", name: "Barra Olimpica Classic 20kg", price: 89990, currency: "CLP", stockQuantity: 15, stockScope: "direct", availability: "available" }
+      ]
+    },
+    {
+      product: { productId: 501, name: "Kettlebell 16kg", sku: "KB-16", shortDescription: "Kettlebell", longDescription: null, active: true },
+      variants: [],
+      selectedVariant: null,
+      pricing: { effectiveUnitPrice: 29990, currency: "CLP", taxIncluded: true, discountApplied: false },
+      stock: { available: true, physicalQuantity: 4 },
+      freshness: { cached: false }
+    }
+  );
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "barra olimpica" } },
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "explore_catalog", arguments: { sort: { by: "price", direction: "asc" }, limit: 1 } },
+      { type: "respond", message: "Listo." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "haz tres cosas",
+    commercialContextSummary: {},
+    maxDecisions: 3,
+    maxToolExecutions: 3,
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.equal(result.toolExecutionCount, 3);
+  assert.ok(result.warnings.includes("agent_loop_finalization_entered"), "the final response must come from the dedicated finalization phase, not a fourth gathering decision");
+  assert.equal(result.steps.filter((step) => step.phase === "gathering" && step.step.type === "use_tool").length, 3);
+});
+
+test("[T08E-4] Commercial Mutation Execution Guard remains intact with maxToolExecutions=3 when select_products never completed", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "respond", message: "Perfecto, te dejo 2 unidades del Kettlebell 16kg." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "quiero 2 kettlebell",
+    commercialContextSummary: {},
+    maxToolExecutions: 3,
+    provider
+  });
+
+  assert.equal(
+    result.finalMessage,
+    "Necesito un momento mas para confirmar tu seleccion antes de continuar - ¿puedes confirmarme nuevamente que producto y cantidad quieres?"
+  );
+  assert.ok(result.warnings.some((warning) => warning.startsWith("agent_loop_mutation_claim_blocked:")));
+});
+
+test("[T08E-5] A completed select_products still allows the backed confirmation with maxToolExecutions=3", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } },
+      { type: "respond", message: "Listo, agregue 2 unidades del Kettlebell 16kg." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    opportunityId: uniqueOpportunityId(),
+    customerMessage: "quiero 2 kettlebell",
+    commercialContextSummary: {},
+    maxToolExecutions: 3,
+    provider
+  });
+
+  assert.equal(result.finalMessage, "Listo, agregue 2 unidades del Kettlebell 16kg.");
+  assert.ok(!result.warnings.some((warning) => warning.startsWith("agent_loop_mutation_claim_blocked:")));
+});
+
+test("[T08E-6] duplicate tool protection is unchanged when maxToolExecutions=3", async () => {
+  catalogUp(1);
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+      { type: "respond", message: "Listo." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "busca kettlebell",
+    commercialContextSummary: {},
+    maxToolExecutions: 3,
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(result.steps[1].governance, "blocked_duplicate");
+  assert.equal(result.steps[1].observation?.errorCode, "duplicate_tool_call");
+});
