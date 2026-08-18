@@ -31,14 +31,26 @@ function makeStep(
   };
 }
 
+/**
+ * A CANCELLED/SUPERSEDED objective must still produce its step, terminal
+ * status forced - skipping it here (the old behavior) leaves a same-typed
+ * step from an EARLIER turn's still-active objective orphaned at whatever
+ * status it last had in the DB (steps are never deleted, only upserted from
+ * whatever a projection's own steps array contains). A later turn's executor
+ * pass can then find that orphaned step's dependencies newly satisfied for
+ * unrelated reasons and reactivate/re-execute it - a real, reproducible
+ * duplicate-execution risk this benchmark's R2-04 (turn-continuation)
+ * exposed. Forcing the terminal status here, in the same projection that
+ * decided the objective is terminal, closes the orphan at the source.
+ */
+function terminalOr(objective: CommercialObjective, computed: CommercialWorkStep["status"]): CommercialWorkStep["status"] {
+  return objective.status === "CANCELLED" || objective.status === "SUPERSEDED" ? objective.status : computed;
+}
+
 export function deriveCommercialWorkSteps(objectives: readonly CommercialObjective[]): CommercialWorkStep[] {
   const steps: CommercialWorkStep[] = [];
 
   for (const objective of objectives) {
-    if (objective.status === "CANCELLED" || objective.status === "SUPERSEDED") {
-      continue;
-    }
-
     const stepPrefix = `${objective.objectiveId}:step`;
     switch (objective.type) {
       case "DISCOVER_PRODUCTS":
@@ -47,7 +59,7 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId: `${stepPrefix}:SEARCH_PRODUCTS`,
             objectiveIds: [objective.objectiveId],
             type: "SEARCH_PRODUCTS",
-            status: objective.status === "COMPLETED" ? "COMPLETED" : "READY",
+            status: terminalOr(objective, objective.status === "COMPLETED" ? "COMPLETED" : "READY"),
             dependencies: [],
             capabilityName: "search_products",
             input: objective.inputs,
@@ -63,7 +75,7 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId: `${stepPrefix}:RECOMMEND_PRODUCTS`,
             objectiveIds: [objective.objectiveId],
             type: "RECOMMEND_PRODUCTS",
-            status: objective.status === "WAITING_CUSTOMER" ? "WAITING_CUSTOMER" : objective.status === "COMPLETED" ? "COMPLETED" : "READY",
+            status: terminalOr(objective, objective.status === "WAITING_CUSTOMER" ? "WAITING_CUSTOMER" : objective.status === "COMPLETED" ? "COMPLETED" : "READY"),
             dependencies: [{ type: "CUSTOMER_INPUT", requirement: "PRODUCT" }],
             capabilityName: "recommend_catalog_products",
             input: objective.inputs,
@@ -79,14 +91,16 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId: `${stepPrefix}:SELECT_PRODUCTS`,
             objectiveIds: [objective.objectiveId],
             type: "SELECT_PRODUCTS",
-            status:
+            status: terminalOr(
+              objective,
               objective.status === "COMPLETED"
                 ? "COMPLETED"
                 : objective.status === "WAITING_CUSTOMER"
                   ? "WAITING_CUSTOMER"
                   : objective.status === "BLOCKED"
                     ? "BLOCKED"
-                    : "READY",
+                    : "READY"
+            ),
             dependencies: [{ type: "CUSTOMER_INPUT", requirement: "PRODUCT" }],
             capabilityName: "select_products",
             input: objective.inputs,
@@ -101,12 +115,10 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId: `${stepPrefix}:SET_SHIPPING_DESTINATION`,
             objectiveIds: [objective.objectiveId],
             type: "SET_SHIPPING_DESTINATION",
-            status:
-              objective.status === "COMPLETED"
-                ? "COMPLETED"
-                : objective.status === "WAITING_CUSTOMER"
-                  ? "WAITING_CUSTOMER"
-                  : "READY",
+            status: terminalOr(
+              objective,
+              objective.status === "COMPLETED" ? "COMPLETED" : objective.status === "WAITING_CUSTOMER" ? "WAITING_CUSTOMER" : "READY"
+            ),
             dependencies: [{ type: "CUSTOMER_INPUT", requirement: "DESTINATION" }],
             capabilityName: "set_shipping_destination",
             input: objective.inputs,
@@ -123,7 +135,8 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId,
             objectiveIds: [objective.objectiveId],
             type: "CALCULATE_SHIPPING",
-            status:
+            status: terminalOr(
+              objective,
               objective.status === "COMPLETED"
                 ? "COMPLETED"
                 : objective.status === "WAITING_SYSTEM"
@@ -132,7 +145,8 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
                     ? "WAITING_CUSTOMER"
                     : blocked
                       ? "BLOCKED"
-                      : "READY",
+                      : "READY"
+            ),
             dependencies: [
               { type: "FACT_CONFIRMED", factType: "commercial_line_items" },
               { type: "FACT_CONFIRMED", factType: "shipping_destination" }
@@ -153,14 +167,16 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId: `${stepPrefix}:SELECT_SHIPPING_OPTION`,
             objectiveIds: [objective.objectiveId],
             type: "SELECT_SHIPPING_OPTION",
-            status:
+            status: terminalOr(
+              objective,
               objective.status === "COMPLETED"
                 ? "COMPLETED"
                 : objective.status === "BLOCKED"
                   ? "BLOCKED"
                   : objective.status === "WAITING_CUSTOMER"
                     ? "WAITING_CUSTOMER"
-                    : "READY",
+                    : "READY"
+            ),
             dependencies: [{ type: "CAPABILITY_EVIDENCE", capabilityName: "calculate_shipping" }],
             capabilityName: "select_shipping_option",
             input: objective.inputs,
@@ -175,7 +191,7 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId: `${stepPrefix}:CREATE_QUOTE`,
             objectiveIds: [objective.objectiveId],
             type: "CREATE_QUOTE",
-            status: objective.status === "COMPLETED" ? "COMPLETED" : objective.status === "BLOCKED" ? "BLOCKED" : "READY",
+            status: terminalOr(objective, objective.status === "COMPLETED" ? "COMPLETED" : objective.status === "BLOCKED" ? "BLOCKED" : "READY"),
             dependencies: [{ type: "FACT_CONFIRMED", factType: "commercial_line_items" }],
             capabilityName: "create_quote",
             input: objective.inputs,
@@ -190,7 +206,7 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId: `${stepPrefix}:HANDOFF`,
             objectiveIds: [objective.objectiveId],
             type: "HANDOFF",
-            status: objective.status === "COMPLETED" ? "COMPLETED" : "READY",
+            status: terminalOr(objective, objective.status === "COMPLETED" ? "COMPLETED" : "READY"),
             dependencies: [],
             capabilityName: null,
             input: objective.inputs,

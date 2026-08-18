@@ -509,6 +509,25 @@ export async function executeCommercialWork(input: ExecuteCommercialWorkInput): 
       actionId: step.stepId
     });
     const factsAfter = await (input.loadCurrentFacts ?? defaultLoadFacts)(work);
+    const postSideEffectStaleBlockers = staleBlockersForStep(step, work, factsAfter);
+    if (postSideEffectStaleBlockers.length > 0) {
+      const record: CommercialWorkStepExecutionRecord = {
+        stepId: step.stepId,
+        stepType: step.type,
+        capabilityName: step.capabilityName,
+        status: "blocked",
+        gatewayStatus: result.status,
+        errorCode: "stale_evidence",
+        evidence: [...evidenceForCapability(result), ...postSideEffectStaleBlockers.flatMap((item) => item.evidence ?? [])]
+      };
+      records.push(record);
+      const steps = work.steps.map((item) =>
+        item.stepId === step.stepId ? { ...item, status: "BLOCKED" as const, blockers: postSideEffectStaleBlockers, evidence: record.evidence, lockOwner: null, lockUntil: null, startedAt: null } : item
+      );
+      const blockedWork = { ...work, steps, blockers: postSideEffectStaleBlockers, metrics: deriveCommercialWorkMetrics({ ...work, steps, blockers: postSideEffectStaleBlockers }) };
+      work = await persistNext(work.publicId, work.version, blockedWork, input.adapter);
+      continue;
+    }
     const record = stepRecordFromGateway(step, result, factsAfter);
     records.push(record);
     work = await persistNext(work.publicId, work.version, nextAggregate(work, factsAfter, record, [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);

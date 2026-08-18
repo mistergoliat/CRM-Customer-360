@@ -126,9 +126,17 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
           return;
         }
         if (objective.inputs.productEvidenceAvailable === false) {
-          objective.status = "BLOCKED";
+          // An ambiguous/unresolved product reference needs the customer to
+          // pick one, exactly like a missing product name two branches above -
+          // WAITING_CUSTOMER, never BLOCKED (BLOCKED means a prior objective
+          // must complete first, which does not apply here). Matches
+          // objectiveFollowUpPolicies.ts's MISSING_INFORMATION policy, which
+          // already lists MISSING_PRODUCT_EVIDENCE as a followup-eligible
+          // waiting reason for SELECT_PRODUCTS - that policy only ever
+          // applies to a WAITING_CUSTOMER objective.
+          objective.status = "WAITING_CUSTOMER";
           objective.missingRequirements.push("PRODUCT_EVIDENCE");
-          objective.blockers.push(blocker("MISSING_PRODUCT_EVIDENCE", "objective", objective.objectiveId));
+          objective.blockers.push(blocker("MISSING_PRODUCT_EVIDENCE", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
           return;
         }
       }
@@ -285,9 +293,19 @@ function applyPendingMutationInvalidations(objectives: CommercialObjective[]) {
   }
 }
 
+function sequenceFromTrigger(trigger: CommercialWorkProjectionInput["trigger"]): number | null {
+  const commercialSequence = "commercialSequence" in trigger ? trigger.commercialSequence : null;
+  if (typeof commercialSequence === "number" && Number.isSafeInteger(commercialSequence) && commercialSequence > 0) return commercialSequence;
+  if (trigger.type === "CUSTOMER_MESSAGE" && typeof trigger.sourceMessageSequence === "number" && Number.isSafeInteger(trigger.sourceMessageSequence) && trigger.sourceMessageSequence > 0) {
+    return trigger.sourceMessageSequence;
+  }
+  return null;
+}
+
 export function buildCommercialWorkProjection(input: CommercialWorkProjectionInput): CommercialWork {
   const derivedAt = toIso(input.now);
   const sourceMessageId = input.trigger.type === "CUSTOMER_MESSAGE" ? input.trigger.sourceMessageId : null;
+  const sourceSequence = sequenceFromTrigger(input.trigger);
   const opportunityId = input.opportunity?.id ?? (input.trigger.type === "CUSTOMER_MESSAGE" ? input.trigger.opportunityId : null);
   const id = `projection:${input.conversation.id}:${sourceMessageId ?? "no-message"}`;
   const objectives = deriveCommercialObjectives({
@@ -318,6 +336,10 @@ export function buildCommercialWorkProjection(input: CommercialWorkProjectionInp
     opportunityId,
     conversationId: input.conversation.id,
     sourceMessageId,
+    sourceSequence,
+    lastReconciledSequence: sourceSequence,
+    previousWorkPublicId: null,
+    supersedesWorkPublicId: null,
     trigger: input.trigger,
     status,
     objectives,

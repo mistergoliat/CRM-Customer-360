@@ -65,7 +65,12 @@ function productDetailPayload(product: BenchmarkFixtureProduct) {
     product: { productId: Number(product.productId), name: product.name, sku: null, shortDescription: product.shortDescription, longDescription: null, active: true },
     variants: [],
     selectedVariant: null,
-    pricing: { effectiveUnitPrice: product.price, currency: "CLP", taxIncluded: true, discountApplied: false },
+    // taxRate (IVA 19%, Chile) was absent until SALES-AGENT-R2-A07.5 - never
+    // needed by the Agent Tool Loop benchmark this fixture was built for, but
+    // required by create_quote's real assembleQuoteInput (resolveCatalogLine
+    // fails closed with catalog_tax_metadata_missing without it). Purely
+    // additive: no existing consumer reads/asserts on taxRate.
+    pricing: { effectiveUnitPrice: product.price, currency: "CLP", taxIncluded: true, taxRate: 0.19, discountApplied: false },
     stock: { available: product.available, physicalQuantity: product.stockQuantity },
     weightKg: product.weightKg,
     freshness: { cached: false }

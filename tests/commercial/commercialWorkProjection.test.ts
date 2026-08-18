@@ -199,6 +199,14 @@ test("CW09 shipping unavailable projects waiting system and retry candidate", ()
   assert.equal(step(work, "CALCULATE_SHIPPING").retryCandidate, true);
 });
 
+test("CW09b ambiguous/unresolved product evidence waits for customer clarification, never BLOCKED", () => {
+  const work = project({ objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "la barra", quantity: 1, productEvidenceAvailable: false })] });
+  assert.equal(objective(work, "SELECT_PRODUCTS").status, "WAITING_CUSTOMER");
+  assert.equal(objective(work, "SELECT_PRODUCTS").missingRequirements.includes("PRODUCT_EVIDENCE"), true);
+  assert.equal(step(work, "SELECT_PRODUCTS").status, "WAITING_CUSTOMER");
+  assert.equal(work.status, "WAITING_CUSTOMER");
+});
+
 test("CW10 quantity change invalidates dependent shipping evidence before the durable fact is updated", () => {
   const work = project({
     commercialLineItems: selection("selection-2-classic", 2),

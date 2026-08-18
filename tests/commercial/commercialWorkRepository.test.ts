@@ -3,6 +3,7 @@ import test, { after, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import { getPool, queryRows } from "@/lib/db";
 import {
+  buildCommercialWorkCorrelationKey,
   buildCommercialWorkProjection,
   getCommercialWorkById,
   getCommercialWorkByPublicId,
@@ -167,6 +168,24 @@ function objective(work: CommercialWork, type: string) {
 function assertPersistenceErrorCode(code: string) {
   return (error: unknown) => error instanceof CommercialWorkPersistenceError && error.code === code;
 }
+
+test("CWDB00b buildCommercialWorkCorrelationKey stays within correlation_key's VARCHAR(191) for a realistic multi-objective C09-shaped work", async () => {
+  const c09Shaped = project({
+    objectiveSeeds: [
+      objectiveSeed("SELECT_PRODUCTS", { items: [{ productId: "31", combinationId: null, quantity: 2 }] }),
+      objectiveSeed("SET_DESTINATION", { destinationText: "Nunoa" }),
+      objectiveSeed("GET_SHIPPING_QUOTE", { destinationText: "Nunoa" })
+    ]
+  });
+  const key = buildCommercialWorkCorrelationKey(c09Shaped);
+  assert.ok(key.length <= 191, `correlation key too long for the DB column: ${key.length} chars`);
+
+  // Reproduces the real bug: persisting without an explicit correlationKey
+  // override (i.e. letting the repository derive one itself) used to throw
+  // "Data too long for column 'correlation_key'" for exactly this shape.
+  const persisted = await persistCommercialWorkProjection({ work: c09Shaped });
+  assert.equal(persisted.status, "created");
+});
 
 test("CWDB01 create work; CWDB03 load by id; CWDB04 load by public id", async () => {
   const created = await persist(project({ objectiveSeeds: [objectiveSeed("DISCOVER_PRODUCTS", { query: "barra" })] }));

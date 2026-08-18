@@ -23,11 +23,11 @@ function normalizeTargetType(targetType: CommercialObjectiveSeed & { kind: "canc
   }
 }
 
-function supersessionFamily(type: CommercialObjectiveType): "selection" | "destination" | "shipping" | "quote" | "other" {
+export function commercialObjectiveSupersessionFamily(type: CommercialObjectiveType): "selection" | "destination" | "shipping" | "quote" | "other" {
   if (type === "SELECT_PRODUCTS" || type === "CHANGE_QUANTITY") return "selection";
   if (type === "SET_DESTINATION") return "destination";
   if (type === "GET_SHIPPING_QUOTE" || type === "SELECT_SHIPPING_OPTION") return "shipping";
-  if (type === "CREATE_QUOTE") return "quote";
+  if (type === "CREATE_QUOTE" || type === "WAIT_FOR_QUOTE_APPROVAL") return "quote";
   return "other";
 }
 
@@ -94,7 +94,7 @@ export function deriveCommercialObjectives(input: {
     if (seed.kind === "cancel") {
       const target = normalizeTargetType(seed);
       for (const objective of objectives) {
-        if (!target || objective.type === target || supersessionFamily(objective.type) === supersessionFamily(target)) {
+        if (!target || objective.type === target || commercialObjectiveSupersessionFamily(objective.type) === commercialObjectiveSupersessionFamily(target)) {
           objective.status = "CANCELLED";
           objective.blockers.push({ code: "CANCELLED", source: "objective", objectiveId: objective.objectiveId });
         }
@@ -110,10 +110,10 @@ export function deriveCommercialObjectives(input: {
       seed
     });
 
-    const family = supersessionFamily(type);
+    const family = commercialObjectiveSupersessionFamily(type);
     if (family !== "other") {
       for (const previous of objectives) {
-        if (previous.status !== "CANCELLED" && previous.status !== "SUPERSEDED" && supersessionFamily(previous.type) === family) {
+        if (previous.status !== "CANCELLED" && previous.status !== "SUPERSEDED" && commercialObjectiveSupersessionFamily(previous.type) === family) {
           previous.status = "SUPERSEDED";
           previous.blockers.push({ code: "SUPERSEDED", source: "objective", objectiveId: previous.objectiveId });
           objective.supersedesObjectiveIds.push(previous.objectiveId);

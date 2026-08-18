@@ -14,17 +14,20 @@ export type CommercialTrigger =
       opportunityId: number | null;
       sourceMessageId: number | null;
       sourceMessageSequence?: number | null;
+      commercialSequence?: number | null;
     }
   | {
       type: "FOLLOW_UP_DUE";
       actionId: number;
       conversationId?: number | null;
       opportunityId?: number | null;
+      commercialSequence?: number | null;
     }
   | {
       type: "WORK_RETRY_DUE";
       commercialWorkId: string;
       stepId: string;
+      commercialSequence?: number | null;
     }
   | {
       type: "SYSTEM_EVENT";
@@ -32,11 +35,13 @@ export type CommercialTrigger =
       correlationId: string;
       conversationId?: number | null;
       opportunityId?: number | null;
+      commercialSequence?: number | null;
     }
   | {
       type: "HANDOFF";
       conversationId: number;
       opportunityId?: number | null;
+      commercialSequence?: number | null;
     };
 
 export type CommercialObjectiveOrigin = "customer_requested" | "system_generated" | "operator_requested" | "projection_seed";
@@ -208,6 +213,10 @@ export type CommercialWork = {
   opportunityId: number | null;
   conversationId: number;
   sourceMessageId: number | null;
+  sourceSequence: number | null;
+  lastReconciledSequence: number | null;
+  previousWorkPublicId: string | null;
+  supersedesWorkPublicId: string | null;
   trigger: CommercialTrigger;
   status: CommercialWorkStatus;
   objectives: CommercialObjective[];
