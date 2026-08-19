@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { after, before } from "node:test";
 import { getPool } from "@/lib/db";
 import { setupR2BenchmarkEnvironment, type R2BenchmarkEnvironment } from "@/lib/brain/commercial/work/benchmark/environment";
-import { planCommercialObjectiveSeeds, type SemanticIntentAdapterInput } from "@/lib/brain/commercial/work/benchmark/semanticIntentAdapter";
+import { planCommercialObjectiveSeeds, type SemanticIntentAdapterInput } from "@/lib/brain/commercial/work/semanticIntentAdapter";
 import { createOfflinePlannerProvider } from "@/lib/brain/commercial/work/benchmark/offlinePlannerProvider";
 import { savePendingCommercialIntents } from "@/lib/brain/commercial/multi-intent/pendingIntentState";
 import type { RecentCatalogContext } from "@/lib/brain/commercial/agent-loop/recentCatalogContext";

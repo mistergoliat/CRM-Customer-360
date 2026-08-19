@@ -82,6 +82,12 @@ export function buildAgentToolLoopCompletedDedupeKey(inboundMessageId: string) {
   return `agent-tool-loop-completed:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R2-A08.5. One canonical event per inbound message on the R2
+// path, same rationale as buildAgentToolLoopCompletedDedupeKey above.
+export function buildCommercialWorkInboundCycleCompletedDedupeKey(inboundMessageId: string) {
+  return `commercial-work-inbound-cycle-completed:${inboundMessageId.trim()}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

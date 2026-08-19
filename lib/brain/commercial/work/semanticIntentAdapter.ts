@@ -1,4 +1,18 @@
 import type { ResolvedIntent } from "@/lib/brain/commercial/multi-intent/types";
+import type { AgentLoopInferenceRecord } from "@/lib/brain/commercial/agent-loop/agentStepTypes";
+import type { AgentLoopProvider } from "@/lib/brain/commercial/agent-loop/agentLoopProviderTypes";
+import {
+  buildFailureInferenceRecord,
+  buildSuccessInferenceRecord,
+  buildTimeoutInferenceRecord,
+  captureProviderFailure,
+  invokeProviderWithDeadline
+} from "@/lib/brain/commercial/agent-loop/runAgentToolLoop";
+import type { RecentCatalogContext } from "@/lib/brain/commercial/agent-loop/recentCatalogContext";
+import { buildIntentPlannerPromptPackage } from "@/lib/brain/commercial/multi-intent/buildIntentPlannerPromptPackage";
+import { parseCommercialIntentPlan } from "@/lib/brain/commercial/multi-intent/parseCommercialIntentPlan";
+import { loadPendingCommercialIntents, mergeCommercialIntents, savePendingCommercialIntents } from "@/lib/brain/commercial/multi-intent/pendingIntentState";
+import { readDurableCommercialLineItems, readDurableShippingDestination, resolveCommercialIntentPlan } from "@/lib/brain/commercial/multi-intent/requirementResolver";
 import type { CommercialObjectiveSeed } from "./types";
 
 export function commercialObjectiveSeedsFromResolvedIntent(resolved: ResolvedIntent): CommercialObjectiveSeed[] {
@@ -49,4 +63,110 @@ export function commercialObjectiveSeedsFromResolvedIntent(resolved: ResolvedInt
 
 export function commercialObjectiveSeedsFromResolvedIntents(resolvedIntents: readonly ResolvedIntent[]): CommercialObjectiveSeed[] {
   return resolvedIntents.filter((resolved) => resolved.intent.type !== "unsupported").flatMap(commercialObjectiveSeedsFromResolvedIntent);
+}
+
+/**
+ * SALES-AGENT-R2-A08.5. Promoted unchanged from work/benchmark/semanticIntentAdapter.ts
+ * (A07.5) - the one real semantic-interpretation LLM boundary for R2: a
+ * single planner call (LLM-R1-T09A's multi-intent planner prompt, deterministic
+ * requirement resolver) per invocation, then the pure mapper above. Provider-
+ * agnostic (AgentLoopProvider) - the production inbound entry point
+ * (runCommercialWorkInboundCycle.ts) hands it the real DeepSeek provider;
+ * the benchmark harness (runR2Scenario.ts) hands it an offline/live-benchmark
+ * one. Same code, never two implementations.
+ *
+ * Turn-to-turn objective identity continuity (carrying a prior persisted
+ * objectiveId forward as a seed's seedId) is NOT this adapter's concern -
+ * this only resolves what ONE turn's message means. Callers merge this
+ * output with any prior persisted CommercialWork via reconcileCommercialTrigger.
+ */
+
+export type SemanticIntentAdapterInput = {
+  opportunityId: number;
+  correlationId: string;
+  customerMessage: string;
+  commercialContextSummary: Record<string, unknown>;
+  recentCatalogContext: RecentCatalogContext | null;
+  provider: AgentLoopProvider;
+  deadline: number;
+  currentTime: string;
+  abortSignal?: AbortSignal | null;
+};
+
+/**
+ * Deliberately a narrow literal, not the benchmark's wider scoring taxonomy
+ * (work/benchmark/types.ts's R2FailureClassification) - this adapter only
+ * ever fails for one reason (semantic planning), and production code has no
+ * reason to depend on a benchmark-only type module. The literal is still
+ * assignable wherever a caller's own field is typed as the wider union.
+ */
+export type SemanticIntentAdapterFailureClassification = "SEMANTIC_PLANNING";
+
+export type SemanticIntentAdapterResult =
+  | { kind: "planned"; seeds: CommercialObjectiveSeed[]; resolvedIntents: ResolvedIntent[]; llmCalls: AgentLoopInferenceRecord[]; warnings: string[] }
+  | {
+      kind: "timeout" | "provider_unavailable" | "invalid_output";
+      failureClassification: SemanticIntentAdapterFailureClassification;
+      llmCalls: AgentLoopInferenceRecord[];
+      warnings: string[];
+    };
+
+export async function planCommercialObjectiveSeeds(input: SemanticIntentAdapterInput): Promise<SemanticIntentAdapterResult> {
+  const warnings: string[] = [];
+  const llmCalls: AgentLoopInferenceRecord[] = [];
+
+  const pendingRecords = await loadPendingCommercialIntents(input.opportunityId);
+  const durableSelectionItems = readDurableCommercialLineItems(input.commercialContextSummary);
+  const durableDestination = readDurableShippingDestination(input.commercialContextSummary);
+
+  const promptPackage = buildIntentPlannerPromptPackage({
+    customerMessage: input.customerMessage,
+    recentCatalogContext: input.recentCatalogContext,
+    hasDurableSelection: durableSelectionItems.length > 0,
+    durableSelectionItemCount: durableSelectionItems.length,
+    durableShippingDestinationName: durableDestination?.canonicalName ?? null,
+    pendingIntents: pendingRecords
+  });
+
+  const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, input.deadline, input.abortSignal);
+
+  if (invoked.kind === "timeout") {
+    llmCalls.push(buildTimeoutInferenceRecord({ phase: "gathering", attempt: 0, decisionIndex: null, elapsedMs: invoked.elapsedMs }));
+    warnings.push("r2_semantic_adapter_timeout");
+    return { kind: "timeout", failureClassification: "SEMANTIC_PLANNING", llmCalls, warnings };
+  }
+  if (invoked.kind === "error") {
+    const providerFailure = captureProviderFailure(input.provider, input.correlationId, invoked.error, invoked.elapsedMs);
+    llmCalls.push(buildFailureInferenceRecord({ phase: "gathering", attempt: 0, decisionIndex: null, elapsedMs: invoked.elapsedMs, providerFailure }));
+    warnings.push(`r2_semantic_adapter_provider_error:${providerFailure.normalizedReason}`);
+    return { kind: "provider_unavailable", failureClassification: "SEMANTIC_PLANNING", llmCalls, warnings };
+  }
+
+  llmCalls.push(buildSuccessInferenceRecord({ phase: "gathering", attempt: 0, decisionIndex: null, elapsedMs: invoked.elapsedMs, metadata: invoked.metadata }));
+
+  const parsed = parseCommercialIntentPlan(invoked.rawOutput);
+  if (parsed.status === "invalid") {
+    warnings.push(`r2_semantic_adapter_invalid_output:${parsed.reason}`);
+    return { kind: "invalid_output", failureClassification: "SEMANTIC_PLANNING", llmCalls, warnings };
+  }
+
+  const mergedIntents = mergeCommercialIntents(pendingRecords, parsed.intents);
+  const resolvedIntents = resolveCommercialIntentPlan(mergedIntents, {
+    commercialContextSummary: input.commercialContextSummary,
+    recentCatalogContext: input.recentCatalogContext
+  });
+
+  const seeds = commercialObjectiveSeedsFromResolvedIntents(resolvedIntents);
+
+  const stillPending = resolvedIntents
+    .filter((resolved) => resolved.status !== "ready" && resolved.intent.type !== "unsupported")
+    .map((resolved) => ({
+      intent: resolved.intent,
+      missingRequirements: resolved.requirements.filter((requirement) => requirement.status !== "resolved").map((requirement) => requirement.type),
+      savedAt: input.currentTime
+    }));
+  const saveResult = await savePendingCommercialIntents({ opportunityId: input.opportunityId, records: stillPending, sourceMessageId: input.correlationId });
+  if (!saveResult.ok) warnings.push(`r2_semantic_adapter_pending_save_failed:${saveResult.warning ?? "unknown"}`);
+
+  return { kind: "planned", seeds, resolvedIntents, llmCalls, warnings };
 }

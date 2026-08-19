@@ -29,7 +29,11 @@ export type CommercialEventType =
   // crm_capability_executions (via executeGovernedCapability); this event
   // records the loop's own shape (decision/tool counts, terminal reason),
   // never duplicating that per-call detail.
-  | "agent_tool_loop_completed";
+  | "agent_tool_loop_completed"
+  // SALES-AGENT-R2-A08.5. Controlled, allowlist-gated CommercialWork
+  // production inbound path - one event per turn, descriptive only, same
+  // discipline as agent_tool_loop_completed above.
+  | "commercial_work_inbound_cycle_completed";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -294,6 +298,29 @@ export type AgentToolLoopPendingCatalogActionPayload = {
   candidateProductIds: string[];
   /** CP-R1-T10B8D. Present only when this action originates from recommend_catalog_products - see PendingCatalogActionStep#candidateProducts. */
   candidateProducts?: AgentToolLoopPendingCatalogActionCandidateProduct[];
+};
+
+/**
+ * SALES-AGENT-R2-A08.5, Part 27. Descriptive audit trail for the controlled
+ * CommercialWork production inbound path - never authoritative (the durable
+ * state lives in crm_commercial_work/crm_agent_actions/brain_message_outbox).
+ * Bounded structural summary only - no prompt text, no customer message
+ * body, no secrets.
+ */
+export type CommercialWorkInboundCycleCompletedPayload = {
+  runtimePath: "commercial_work";
+  inboundMessageId: string | null;
+  reason: string;
+  commercialSequence: number | null;
+  workPublicId: string | null;
+  workVersion: number | null;
+  workStatus: string | null;
+  disposition: "FINAL" | "PARTIAL" | "BLOCKED" | "fallback" | null;
+  objectiveCount: number | null;
+  readyStepCount: number | null;
+  llmCallCount: number;
+  executedStepCount: number | null;
+  outboxWritten: boolean;
 };
 
 export type AgentToolLoopCompletedRecordedPayload = {

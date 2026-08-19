@@ -29,7 +29,11 @@ import type { CommercialShadowFeatureFlags } from "../shadow";
 import type { CommercialOperationalLoopFeatureFlags } from "../operational-loop";
 import type { CommercialExecutionBridgeFeatureFlags } from "../execution-bridge";
 import { SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN } from "../sales-agent/runtimeTypes";
-import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "../../runtime/autonomousRuntimeConfig";
+import {
+  loadAutonomousPilotAllowlist,
+  isWaIdAuthorizedForPilot,
+  loadCommercialWorkRuntimeAllowlist
+} from "../../runtime/autonomousRuntimeConfig";
 
 export function readEnvFlag(name: string, fallback = false): boolean {
   const value = process.env[name]?.trim().toLowerCase();
@@ -180,6 +184,39 @@ export function buildMultiIntentPlannerFeatureFlags(overrides?: Partial<{ multiI
 export function shouldRouteToMultiIntentPlanner(waId: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
   if (!buildMultiIntentPlannerFeatureFlags(undefined).multiIntentPlannerEnabled) return false;
   const allowlist = loadAutonomousPilotAllowlist(env);
+  if (allowlist.length === 0) return false;
+  return isWaIdAuthorizedForPilot(waId, allowlist);
+}
+
+/**
+ * SALES-AGENT-R2-A08.5. Fail-closed (default false) toggle for the
+ * CommercialWork (R2) durable execution architecture on the native WhatsApp
+ * inbound path. Meaningless on its own - see shouldRouteToCommercialWork
+ * below for the actual per-turn routing decision, which additionally
+ * requires a non-empty BRAIN_COMMERCIAL_WORK_RUNTIME_WA_IDS allowlist.
+ */
+export function buildCommercialWorkRuntimeFeatureFlags(overrides?: Partial<{ commercialWorkRuntimeEnabled: boolean }>) {
+  return {
+    commercialWorkRuntimeEnabled: readEnvFlag("BRAIN_COMMERCIAL_WORK_RUNTIME_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
+
+/**
+ * SALES-AGENT-R2-A08.5. Same fail-closed shape as shouldRouteToMultiIntentPlanner
+ * above (LLM-R1-T09B): the CommercialWork runtime handles a turn only when
+ * the flag is on AND this exact waId is one of the explicitly configured
+ * BRAIN_COMMERCIAL_WORK_RUNTIME_WA_IDS entries - never a global switch, and
+ * never simply because the multi-intent pilot's own allowlist happens to be
+ * populated. An empty allowlist with the flag on is ambiguous configuration
+ * (nobody to route) and fails closed, same reasoning as T09B. Checked before
+ * multiRequestEnabled/agentToolLoopEnabled in runNativeAutonomousCycle's
+ * runtime-selection step, so an allowlisted turn is fully owned by R2 - it
+ * never also runs the legacy or Agent Tool Loop pipelines for the same turn.
+ */
+export function shouldRouteToCommercialWork(waId: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!buildCommercialWorkRuntimeFeatureFlags(undefined).commercialWorkRuntimeEnabled) return false;
+  const allowlist = loadCommercialWorkRuntimeAllowlist(env);
   if (allowlist.length === 0) return false;
   return isWaIdAuthorizedForPilot(waId, allowlist);
 }

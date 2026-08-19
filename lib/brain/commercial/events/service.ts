@@ -4,6 +4,7 @@ import {
   normalizeAgentToolLoopCompletedCommercialEvent,
   normalizeAutonomousTurnContinuityFailedCommercialEvent,
   normalizeAutonomousTurnDispositionCommercialEvent,
+  normalizeCommercialWorkInboundCycleCompletedEvent,
   normalizeCustomerIdentityCapabilityOutcomeCommercialEvent,
   normalizeCustomerIdentityResolutionCommercialEvent,
   normalizeCustomerOnboardingTransitionCommercialEvent,
@@ -14,6 +15,13 @@ import {
   normalizeMetaWhatsAppStatusCommercialEvent
 } from "./normalize";
 import { recordCommercialEvent } from "./repository";
+
+export async function recordCommercialWorkInboundCycleCompletedEvent(
+  input: Parameters<typeof normalizeCommercialWorkInboundCycleCompletedEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCommercialWorkInboundCycleCompletedEvent(input), connection);
+}
 
 export async function recordMetaWhatsAppInboundCommercialEvent(
   input: Parameters<typeof normalizeMetaWhatsAppInboundCommercialEvent>[0],

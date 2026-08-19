@@ -103,7 +103,7 @@ function normalizeText(value: string | null | undefined): string {
   return (value ?? "").normalize("NFD").replace(/\p{Diacritic}/gu, "").trim().toLowerCase();
 }
 
-async function defaultLoadFacts(work: PersistedCommercialWork): Promise<CurrentFacts> {
+export async function defaultLoadFacts(work: PersistedCommercialWork): Promise<CurrentFacts> {
   if (typeof work.opportunityId !== "number") {
     return { commercialLineItems: null, shippingDestination: null, selectedShippingOption: null, createdQuote: null };
   }
@@ -116,7 +116,7 @@ async function defaultLoadFacts(work: PersistedCommercialWork): Promise<CurrentF
   return { commercialLineItems, shippingDestination, selectedShippingOption, createdQuote };
 }
 
-async function defaultLoadConversationControl(work: PersistedCommercialWork): Promise<ConversationControl> {
+export async function defaultLoadConversationControl(work: PersistedCommercialWork): Promise<ConversationControl> {
   const rows = await queryRows<{ human_owner_active: number | boolean; ai_enabled: number | boolean }>(
     "SELECT human_owner_active, ai_enabled FROM conversation WHERE id = ? LIMIT 1",
     [work.conversationId]

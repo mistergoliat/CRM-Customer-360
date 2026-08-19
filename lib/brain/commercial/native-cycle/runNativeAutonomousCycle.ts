@@ -21,12 +21,15 @@ import {
   buildCommercialCycleTimeouts,
   buildCommercialSalesAgentDryRun,
   readEnvFlag,
-  shouldRouteToMultiIntentPlanner
+  shouldRouteToMultiIntentPlanner,
+  shouldRouteToCommercialWork
 } from "../config/commercialCycleConfig";
 import { runNativeAgentToolLoopCycle, runNativeAgentToolLoopCycleConfigurationFailure } from "../agent-loop";
 import type { NativeAgentToolLoopCycleResult } from "../agent-loop";
 import { createHttpAgentLoopProvider } from "../agent-loop/providers/httpAgentLoopProvider";
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
+import { runCommercialWorkInboundCycle } from "../work/runCommercialWorkInboundCycle";
+import type { CommercialWorkInboundCycleResult } from "../work/runCommercialWorkInboundCycle";
 import { loadRecentCatalogContext } from "../agent-loop/recentCatalogContext";
 import type { RecentCatalogContextLoadResult } from "../agent-loop/recentCatalogContext";
 import { loadPendingCatalogAction } from "../agent-loop/pendingCatalogAction";
@@ -114,6 +117,8 @@ export type NativeAutonomousCycleResult = {
   multiRequest?: MultiRequestCycleResult | null;
   /** ACS-R1-05.1-T02.1: set only when BRAIN_AGENT_TOOL_LOOP_ENABLED is on for this turn - mutually exclusive with shadow/loop/bridge. */
   agentLoop?: NativeAgentToolLoopCycleResult | null;
+  /** SALES-AGENT-R2-A08.5: set only when shouldRouteToCommercialWork(waId) is true for this turn - mutually exclusive with every other runtime above. */
+  commercialWork?: CommercialWorkInboundCycleResult | null;
   catalogCapability?: CatalogGroundingResult | null;
   /** ACS-R1-04-T05: state of the single Customer 360 load for this turn ("not_requested" when there was no customerMasterId to load). */
   customerContextState?: AutonomousCustomerContextLoadState;
@@ -232,8 +237,14 @@ export async function runNativeAutonomousCycle(
   // below - checked before those legacy-specific gates so it is never
   // accidentally disabled by a flag that has nothing to do with it.
   const agentToolLoopEnabled = buildAgentToolLoopFeatureFlags().agentToolLoopEnabled;
+  // SALES-AGENT-R2-A08.5: same fail-closed, per-waId allowlist discipline as
+  // shouldRouteToMultiIntentPlanner (LLM-R1-T09B) - independent of every
+  // other flag above, and takes top priority below (checked first) when it
+  // is true for this exact waId, since an allowlisted turn is meant to be
+  // fully owned by CommercialWork, never mixed with any other runtime.
+  const commercialWorkEnabled = shouldRouteToCommercialWork(input.waId);
 
-  if (!multiRequestEnabled && !agentToolLoopEnabled) {
+  if (!multiRequestEnabled && !agentToolLoopEnabled && !commercialWorkEnabled) {
     if (!isAutonomyCycleEnabled()) {
       // Step 2: nothing will run this turn - Customer 360 is never loaded.
       return { ran: false, reason: "autonomous_cycle_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
@@ -275,6 +286,103 @@ export async function runNativeAutonomousCycle(
   const customer360: AutonomousCustomerContextLoadResult = await loadAutonomousCustomerContext({ customerId, loadCustomer360 });
 
   // Step 4/5: select exactly one runtime and hand it the reduced projections.
+  // SALES-AGENT-R2-A08.5. Checked first (top priority): a turn allowlisted
+  // for CommercialWork never also runs multi-request/agent-tool-loop/legacy
+  // for the same inbound - this branch always returns before falling
+  // through to any of them.
+  if (commercialWorkEnabled) {
+    const rawSnapshot = await buildNativeCommercialContext({
+      conversationPublicId: input.conversationPublicId,
+      currentTime: input.currentTime
+    });
+    const snapshot = { ...rawSnapshot, customer360: customer360.context, customer360State: customer360.state, customerSession: session.decision };
+
+    if (snapshot.status === "not_found") {
+      return {
+        ran: false,
+        reason: "conversation_not_found",
+        shadow: null,
+        loop: null,
+        bridge: null,
+        commercialWork: null,
+        catalogCapability: null,
+        customerContextState: customer360.state,
+        customerSession: session.decision,
+        commercialNeed: null,
+        warnings: dedupeWarnings([...customer360.warnings, ...session.warnings])
+      };
+    }
+
+    // Same "resolved exactly once per cycle" discipline as the agent tool
+    // loop branch below - a real resolution failure (never "nothing
+    // published", which the resolver already degrades on its own) must
+    // never license inventing a default personality and calling the model.
+    // Reuses the exact same config-failure handoff the agent tool loop
+    // branch already uses (a real, neutral, dispatched acknowledgement) -
+    // never a third, separate implementation of the same fallback.
+    let resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
+    try {
+      resolvedSalesAgentConfiguration = await resolveSalesAgentConfiguration();
+    } catch (error) {
+      const technicalReason = `sales_agent_configuration_resolution_failed:${error instanceof Error ? error.message : "unknown"}`;
+      const agentLoopResult = await runNativeAgentToolLoopCycleConfigurationFailure({
+        conversationId: input.conversationId,
+        waId: input.waId,
+        inboundMessageId: String(input.messageId ?? input.correlationId),
+        correlationId: input.correlationId,
+        currentTime: input.currentTime,
+        snapshot,
+        technicalReason
+      });
+      return {
+        ran: true,
+        reason: "commercial_work_configuration_unavailable",
+        shadow: null,
+        loop: null,
+        bridge: null,
+        agentLoop: agentLoopResult,
+        commercialWork: null,
+        catalogCapability: null,
+        customerContextState: customer360.state,
+        customerSession: session.decision,
+        commercialNeed: null,
+        warnings: dedupeWarnings([
+          ...customer360.warnings,
+          ...session.warnings,
+          ...agentLoopResult.loop.warnings,
+          ...agentLoopResult.dispatch.warnings
+        ])
+      };
+    }
+
+    const commercialWorkResult = await runCommercialWorkInboundCycle({
+      conversationId: input.conversationId,
+      waId: input.waId,
+      inboundMessageId: String(input.messageId ?? input.correlationId),
+      correlationId: input.correlationId,
+      currentTime: input.currentTime,
+      customerMessage: input.messageText,
+      snapshot,
+      provider: input.agentLoopProvider ?? null,
+      resolvedSalesAgentConfiguration,
+      abortSignal: input.abortSignal ?? null
+    });
+
+    return {
+      ran: commercialWorkResult.ran,
+      reason: commercialWorkResult.reason,
+      shadow: null,
+      loop: null,
+      bridge: null,
+      commercialWork: commercialWorkResult,
+      catalogCapability: null,
+      customerContextState: customer360.state,
+      customerSession: session.decision,
+      commercialNeed: null,
+      warnings: dedupeWarnings([...customer360.warnings, ...session.warnings, ...commercialWorkResult.warnings])
+    };
+  }
+
   if (multiRequestEnabled) {
     const multiRequest = await runMultiRequestAutonomousCycle({
       conversationId: input.conversationId,

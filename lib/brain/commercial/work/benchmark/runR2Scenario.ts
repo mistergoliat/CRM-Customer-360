@@ -1,14 +1,23 @@
 import { randomUUID } from "node:crypto";
 import type { AgentLoopProvider } from "@/lib/brain/commercial/agent-loop/agentLoopProviderTypes";
 import type { AgentLoopInferenceRecord } from "@/lib/brain/commercial/agent-loop/agentStepTypes";
-import { buildCommercialWorkProjection, persistCommercialWorkProjection, updateCommercialWorkAggregate, executeCommercialWork, runCommercialWorkTick, getCommercialWorkByPublicId, reconcileCommercialObjectives } from "@/lib/brain/commercial/work";
+import {
+  buildCommercialWorkProjection,
+  persistCommercialWorkProjection,
+  updateCommercialWorkAggregate,
+  executeCommercialWork,
+  runCommercialWorkTick,
+  getCommercialWorkByPublicId,
+  reconcileCommercialObjectives,
+  settleCommercialWorkProjection
+} from "@/lib/brain/commercial/work";
 import type { CommercialObjectiveSeed, CommercialWorkProjectionInput } from "@/lib/brain/commercial/work/types";
 import type { PersistedCommercialWork } from "@/lib/brain/commercial/work/persistenceTypes";
 import { getActiveCommercialLineItemsForOpportunity } from "@/lib/domains/commercial-line-items";
 import { getActiveShippingDestinationForOpportunity } from "@/lib/domains/shipping-destination";
 import { getActiveSelectedShippingOptionForOpportunity } from "@/lib/domains/selected-shipping-option";
 import { getActiveCreatedQuoteForOpportunity } from "@/lib/domains/created-quote";
-import { planCommercialObjectiveSeeds } from "./semanticIntentAdapter";
+import { planCommercialObjectiveSeeds } from "../semanticIntentAdapter";
 import { buildR2ExecuteCapability } from "./capabilityGateway";
 import { seedBenchmarkSelection, seedBenchmarkShippingDestination, setConversationControl, type R2BenchmarkEnvironment } from "./environment";
 import type { R2ArchitectureScenario, R2ScenarioRunOutcome } from "./types";
@@ -53,77 +62,6 @@ function buildCommercialContextSummary(facts: DurableFacts): Record<string, unkn
 
 function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60_000);
-}
-
-/**
- * A step whose dependencies are only PARTIALLY satisfied after a same-turn
- * execution cascade keeps the blockers/status it had at the START of that
- * turn - commercialWorkExecutor.ts's activateUnblockedSteps only refreshes a
- * step when its dependencies become FULLY satisfied (READY), never when they
- * go from "nothing satisfied" to "some satisfied" (e.g. selection just
- * completed, destination still missing: the step should read WAITING_CUSTOMER
- * with MISSING_DESTINATION, not the stale BLOCKED/MISSING_SELECTION from
- * before selection completed). Confirmed real, reproducible with R2-03.
- *
- * Rather than changing A05's executor (well-tested, central, and the
- * one-pass semantics may be intentional for a reason outside this task's
- * scope), this re-runs the SAME, unmodified, pure A03 projector
- * (buildCommercialWorkProjection) with the now-fresh durable facts and the
- * work's own currently-active objectives re-seeded - exactly the
- * reconciliation a real production caller integrating this architecture
- * would need to perform after a same-turn cascade. Zero new logic, zero
- * production code changed; documented as integration guidance in the
- * deliverable doc, not silently absorbed as if the gap did not exist.
- */
-async function settleProjection(input: {
-  work: PersistedCommercialWork;
-  env: R2BenchmarkEnvironment;
-  executeCapability: ReturnType<typeof buildR2ExecuteCapability>["executeCapability"];
-  now: Date;
-  correlationId: string;
-}): Promise<PersistedCommercialWork> {
-  let work = input.work;
-  for (let round = 0; round < 3; round += 1) {
-    const facts = await loadDurableFacts(input.env.opportunityId);
-    const reprojected = buildCommercialWorkProjection({
-      trigger: { type: "SYSTEM_EVENT", eventType: "r2_benchmark_settle", correlationId: input.correlationId, conversationId: input.env.conversationId, opportunityId: input.env.opportunityId },
-      conversation: { id: input.env.conversationId, humanOwnerActive: false, aiEnabled: true },
-      opportunity: { id: input.env.opportunityId },
-      objectiveSeeds: reconcileCommercialObjectives({ previousWork: work, newSemanticObjectives: [] }),
-      commercialLineItems: facts.commercialLineItems,
-      shippingDestination: facts.shippingDestination,
-      selectedShippingOption: facts.selectedShippingOption,
-      createdQuote: facts.createdQuote,
-      now: input.now
-    });
-
-    const statusChanged =
-      reprojected.status !== work.status ||
-      reprojected.steps.some((step) => {
-        const previous = work.steps.find((item) => item.stepId === step.stepId);
-        return !previous || previous.status !== step.status;
-      });
-    if (!statusChanged) return work;
-
-    try {
-      work = await updateCommercialWorkAggregate({ publicId: work.publicId, expectedVersion: work.version, nextWork: reprojected });
-    } catch {
-      return work;
-    }
-
-    if (!work.steps.some((step) => step.status === "READY")) return work;
-
-    const executed = await executeCommercialWork({
-      workPublicId: work.publicId,
-      expectedVersion: work.version,
-      context: { correlationId: input.correlationId, conversationId: input.env.conversationId, opportunityId: input.env.opportunityId },
-      executeCapability: input.executeCapability,
-      scheduleRetries: true,
-      now: input.now
-    });
-    if (executed.work) work = executed.work;
-  }
-  return work;
 }
 
 export type RunR2ScenarioInput = {
@@ -252,7 +190,14 @@ export async function runR2Scenario(input: RunR2ScenarioInput): Promise<R2Scenar
         now: turnNow
       });
       if (executed.work) work = executed.work;
-      work = await settleProjection({ work, env, executeCapability, now: turnNow, correlationId });
+      work = await settleCommercialWorkProjection({
+        work,
+        conversationId: env.conversationId,
+        opportunityId: env.opportunityId,
+        correlationId,
+        now: turnNow,
+        executeCapability
+      });
     }
   }
 

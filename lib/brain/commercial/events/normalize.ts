@@ -7,6 +7,7 @@ import type {
   CommercialEventSource,
   CommercialEventType,
   CommercialEventV1,
+  CommercialWorkInboundCycleCompletedPayload,
   CustomerIdentityCapabilityOutcomeRecordedPayload,
   CustomerIdentityResolutionMatchedBy,
   CustomerIdentityResolutionOutcome,
@@ -28,6 +29,7 @@ import {
   buildCommercialEventCorrelationId,
   buildCommercialEventId,
   buildCommercialStatusEventDedupeKey,
+  buildCommercialWorkInboundCycleCompletedDedupeKey,
   buildCustomerIdentityCapabilityOutcomeDedupeKey,
   buildCustomerIdentityResolutionDedupeKey,
   buildCustomerOnboardingTransitionDedupeKey,
@@ -634,5 +636,65 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "agent_tool_loop_completed" }
+  });
+}
+
+/**
+ * SALES-AGENT-R2-A08.5, Part 27. Same discipline as
+ * normalizeAgentToolLoopCompletedCommercialEvent above - one canonical,
+ * descriptive event per inbound message on the R2 CommercialWork path.
+ */
+export function normalizeCommercialWorkInboundCycleCompletedEvent(input: {
+  inboundMessageId: string | null;
+  reason: string;
+  commercialSequence: number | null;
+  workPublicId: string | null;
+  workVersion: number | null;
+  workStatus: string | null;
+  disposition: CommercialWorkInboundCycleCompletedPayload["disposition"];
+  objectiveCount: number | null;
+  readyStepCount: number | null;
+  llmCallCount: number;
+  executedStepCount: number | null;
+  outboxWritten: boolean;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = (input.inboundMessageId ?? input.correlationId ?? "").trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  const payload: CommercialWorkInboundCycleCompletedPayload = {
+    runtimePath: "commercial_work",
+    inboundMessageId: input.inboundMessageId,
+    reason: input.reason,
+    commercialSequence: input.commercialSequence,
+    workPublicId: input.workPublicId,
+    workVersion: input.workVersion,
+    workStatus: input.workStatus,
+    disposition: input.disposition,
+    objectiveCount: input.objectiveCount,
+    readyStepCount: input.readyStepCount,
+    llmCallCount: input.llmCallCount,
+    executedStepCount: input.executedStepCount,
+    outboxWritten: input.outboxWritten
+  };
+  return buildBaseEvent({
+    eventType: "commercial_work_inbound_cycle_completed",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildCommercialWorkInboundCycleCompletedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "commercial_work_inbound_cycle_completed" }
   });
 }

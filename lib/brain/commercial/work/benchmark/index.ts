@@ -3,7 +3,7 @@ export * from "./scoring";
 export * from "./metrics";
 export * from "./environment";
 export * from "./capabilityGateway";
-export * from "./semanticIntentAdapter";
+export * from "../semanticIntentAdapter";
 export * from "./offlinePlannerProvider";
 export * from "./runR2Scenario";
 export * from "./verdict";
