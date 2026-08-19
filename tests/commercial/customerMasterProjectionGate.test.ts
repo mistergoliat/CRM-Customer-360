@@ -211,8 +211,12 @@ test("structural: the customer session / onboarding transitions / identity capab
 test("structural: no new migration file was added by T08.1 - the projection reader only reads", () => {
   const migrationsDir = join(__dirname, "..", "..", "migrations");
   const files = readdirSync(migrationsDir);
-  const versions = files.map((file) => Number(file.split("_")[0])).filter((value) => !Number.isNaN(value));
-  assert.equal(Math.max(...versions), 24);
+  // The real invariant is the filename-pattern check, not a highest-version
+  // number - migrations legitimately keep extending past whatever number was
+  // current when T08.1 landed, for work entirely unrelated to T08.1 (same
+  // fix as T07's equivalent guard in customerIdentityAuditEvents.test.ts).
+  const suspicious = files.filter((file) => /master_customer_write|master_customer_persist|customer_master_sync/i.test(file));
+  assert.deepEqual(suspicious, []);
   const projectionSource = readFileSync(join(__dirname, "..", "..", "lib", "domains", "customer-service", "customerMasterProjection.ts"), "utf8");
   assert.doesNotMatch(projectionSource, /INSERT\s+INTO|UPDATE\s+master_customer|DELETE\s+FROM/i);
 });

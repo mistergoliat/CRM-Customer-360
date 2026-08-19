@@ -22,12 +22,27 @@ const FIXED_TIME = "2026-08-05T12:00:00.000Z";
 // Tool pool / description / schema exposure
 // ---------------------------------------------------------------------------
 
-test("pool: recommend_catalog_products is visible, pool has exactly 9 tools (SALES-AGENT-R1-T2.1 added select_shipping_option), nothing prior removed", () => {
-  assert.equal((AGENT_LOOP_TOOL_POOL as readonly string[]).includes("recommend_catalog_products"), true);
-  assert.equal(AGENT_LOOP_TOOL_POOL.length, 9);
-  for (const priorTool of ["search_products", "get_product_details", "search_company_knowledge", "explore_catalog"]) {
-    assert.ok((AGENT_LOOP_TOOL_POOL as readonly string[]).includes(priorTool), `${priorTool} must still be in the pool`);
-  }
+test("pool: recommend_catalog_products is visible, pool matches the canonical named tool set exactly, nothing prior removed", () => {
+  // A named list, not a magic count: this fails with a specific diff naming
+  // exactly which tool was added/removed/reordered, instead of a bare
+  // "expected 9, got 10" that silently drifts stale every time a tool is
+  // added elsewhere (as happened when create_quote landed and this stayed
+  // pinned at 9 - SALES-AGENT-R1-T3, before A08.6).
+  assert.deepEqual(
+    [...AGENT_LOOP_TOOL_POOL],
+    [
+      "search_products",
+      "get_product_details",
+      "search_company_knowledge",
+      "explore_catalog",
+      "recommend_catalog_products",
+      "set_shipping_destination",
+      "select_products",
+      "calculate_shipping",
+      "select_shipping_option",
+      "create_quote"
+    ]
+  );
 });
 
 test("pool: recommend_catalog_products appears exactly once", () => {

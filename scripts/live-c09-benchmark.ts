@@ -63,8 +63,6 @@ async function main() {
   const { BENCHMARK_CORPUS } = await import("../tests/fixtures/agent-loop-benchmark/corpus");
   const { resolveLiveBenchmarkProviderConfig } = await import("../lib/brain/commercial/agent-loop/benchmark/liveProvider");
   const { setupBenchmarkEnvironment } = await import("../lib/brain/commercial/agent-loop/benchmark/environment");
-  const { resetCommuneResolverForTests } = await import("../lib/brain/commercial/capability-gateway/shippingDestinationCapability");
-  const { resetCalculateShippingCarrierServiceForTests } = await import("../lib/brain/commercial/capability-gateway/calculateShippingCapability");
   const { processNativeWhatsAppInbound } = await import("../lib/brain/native-whatsapp/service");
 
   Object.assign(process.env, {
@@ -89,9 +87,13 @@ async function main() {
   const liveConfig = liveConfigResolution.config;
   console.log(`[live-c09] model=${liveConfig.model} thinking=${liveConfig.thinking ?? "provider_default"} runs=${runs}`);
 
+  // setupBenchmarkEnvironment() already installs both fakes below (commune
+  // resolver, carrier service) - calling the *Reset*ForTests() functions
+  // right after it would immediately undo that and fall back to the real
+  // integrations, which are not usable from this benchmark (the commune
+  // resolver hard-fails with configuration_unavailable whenever
+  // LOGISTICS_DB_ENABLED=false, exactly the regression this fixes).
   const catalogEnv = await setupBenchmarkEnvironment();
-  resetCommuneResolverForTests();
-  resetCalculateShippingCarrierServiceForTests();
 
   function uniqueWaId(seed: string): string {
     const digits = `${Date.now()}${seed}${Math.random().toString().slice(2, 6)}`.replace(/\D/g, "").slice(-8).padStart(8, "0");
@@ -109,6 +111,13 @@ async function main() {
    * (processNativeWhatsAppInbound), same discipline as whatsapp-r2-smoke.ts.
    */
   async function inject(waId: string, text: string, useCommercialWork: boolean = true) {
+    // Step 0 of runNativeAutonomousCycle (pilot isolation) applies before any
+    // runtime routing and reads BRAIN_AUTONOMOUS_TEST_WA_IDS independently of
+    // BRAIN_COMMERCIAL_WORK_RUNTIME_WA_IDS - when a real pilot allowlist is
+    // configured in this environment's .env, every synthetic benchmark waId
+    // is correctly fail-closed there (wa_id_not_authorized_for_pilot) unless
+    // it is also added to this allowlist for the duration of the call.
+    process.env.BRAIN_AUTONOMOUS_TEST_WA_IDS = waId;
     process.env.BRAIN_COMMERCIAL_WORK_RUNTIME_WA_IDS = useCommercialWork ? waId : "";
     const startedAt = Date.now();
     const result = await processNativeWhatsAppInbound({
@@ -231,6 +240,14 @@ async function main() {
   // routing -> runCommercialWorkInboundCycle, includes the real
   // finalizer/dispatch)
   // ---------------------------------------------------------------------
+  // Harness A's own runBenchmarkCase calls setupBenchmarkEnvironment()/
+  // teardown() once per legacy run (runCorpus.ts) - teardown resets the
+  // shared module-level commune resolver and carrier service caches, so by
+  // the time this harness starts (after all 10 legacy runs), both are back
+  // on the real integrations. Re-installing the fakes here, fresh, is
+  // required - this benchmark can never depend on real Logistics DB/Carrier
+  // MS reachability.
+  await setupBenchmarkEnvironment();
   const r2Runs: Array<{ llmCalls: number; selectionCompleted: boolean; destinationCompleted: boolean; shippingCompleted: boolean; remainingWorkDurable: boolean; workStatus: string | null; turnLatencyMs: number; commercialCompletionLatencyMs: number | null; dispatchedMessage: string | null }> = [];
   for (let i = 0; i < runs; i += 1) {
     const { work, dispatchedMessage, elapsedMs } = await runR2Turn("quiero 2 de la classic y saber cuanto sale el despacho a Ñuñoa", { seedProductSearchEvidence: true });

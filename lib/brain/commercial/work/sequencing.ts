@@ -60,12 +60,46 @@ async function loadExisting(conversationId: number, triggerDedupeKey: string): P
   return rows[0] ? hydrate(rows[0]) : null;
 }
 
+// The per-conversation GET_LOCK below already serializes concurrent callers
+// targeting the SAME conversation - it cannot prevent an InnoDB deadlock
+// (1213) against an unrelated transaction's gap locks on the same shared
+// sequence tables (a different conversation's allocation, running at the
+// same instant). That is a transient condition, not a correctness failure -
+// retrying the whole attempt a bounded number of times is the standard
+// response, same as any other deadlock-eligible write.
+const DEADLOCK_RETRYABLE_ERROR_CODES = new Set(["ER_LOCK_DEADLOCK", "ER_LOCK_WAIT_TIMEOUT"]);
+const MAX_SEQUENCE_ASSIGNMENT_ATTEMPTS = 3;
+
+function isRetryableSequenceError(error: unknown): boolean {
+  const code = (error as { code?: string } | undefined)?.code;
+  return typeof code === "string" && DEADLOCK_RETRYABLE_ERROR_CODES.has(code);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function assignCommercialTriggerSequence(input: AssignCommercialTriggerSequenceInput): Promise<AssignCommercialTriggerSequenceResult> {
   const triggerDedupeKey = normalizeDedupeKey(input.triggerDedupeKey);
   if (!Number.isSafeInteger(input.conversationId) || input.conversationId <= 0 || !triggerDedupeKey) {
     return { status: "failed", error: "invalid_sequence_input" };
   }
 
+  for (let attempt = 1; attempt <= MAX_SEQUENCE_ASSIGNMENT_ATTEMPTS; attempt += 1) {
+    const outcome = await assignCommercialTriggerSequenceAttempt(input, triggerDedupeKey);
+    if (outcome.status !== "failed" || !isRetryableSequenceError(outcome.cause) || attempt === MAX_SEQUENCE_ASSIGNMENT_ATTEMPTS) {
+      return outcome.status === "failed" ? { status: "failed", error: outcome.error } : outcome;
+    }
+    await sleep(25 * attempt);
+  }
+  // Unreachable: the loop always returns on its last iteration.
+  return { status: "failed", error: "commercial_sequence_allocation_failed" };
+}
+
+async function assignCommercialTriggerSequenceAttempt(
+  input: AssignCommercialTriggerSequenceInput,
+  triggerDedupeKey: string
+): Promise<AssignCommercialTriggerSequenceResult & { cause?: unknown }> {
   try {
     const existing = await loadExisting(input.conversationId, triggerDedupeKey);
     if (existing) return { status: "existing", record: existing };
@@ -136,7 +170,7 @@ export async function assignCommercialTriggerSequence(input: AssignCommercialTri
     });
     return result;
   } catch (error) {
-    return { status: "failed", error: sanitizeDbError(error) };
+    return { status: "failed", error: sanitizeDbError(error), cause: error };
   }
 }
 

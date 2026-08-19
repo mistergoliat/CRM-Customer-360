@@ -38,11 +38,18 @@ function mapScenario(value: AutonomousCommercialLoopInput["scenario"]["transport
   }
 }
 
-function buildOutboxRecord(input: AutonomousCommercialLoopInput, action: CrmAgentAction, commandId: string, recipient: string, messageText: string) {
+function buildOutboxRecord(
+  input: AutonomousCommercialLoopInput,
+  action: CrmAgentAction,
+  commandId: string,
+  idempotencyKey: string,
+  recipient: string,
+  messageText: string
+) {
   return {
     rowId: `outbox:${commandId}`,
     commandId,
-    idempotencyKey: commandId,
+    idempotencyKey,
     actionId: action.actionId,
     channel: "whatsapp" as const,
     commandType: "whatsapp_text" as const,
@@ -119,6 +126,7 @@ export async function executeAutonomousLoop(
           input,
           action,
           command.commandId,
+          command.idempotencyKey,
           command.recipient,
           command.messageText
         );

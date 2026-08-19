@@ -502,15 +502,16 @@ test("43: a new onboarding version does produce a new transition event", async (
 // 7. Fronteras (boundaries)
 // ---------------------------------------------------------------------------
 
-test("48: T07 did not add a new persistence table - no new migration file beyond 024", async () => {
+test("48: T07 did not add a new persistence table - no migration file matches T07's identity-audit concerns", async () => {
   const { readdirSync } = await import("node:fs");
   const { join } = await import("node:path");
   const migrationsDir = join(__dirname, "..", "..", "migrations");
   const files = readdirSync(migrationsDir);
+  // The real invariant is the filename-pattern check, not a highest-version
+  // number - migrations legitimately keep extending past whatever number was
+  // current when T07 landed, for work entirely unrelated to T07.
   const suspicious = files.filter((file) => /identity_event|identity_audit|onboarding_execution|capability_outcome_event|session_warning_table/i.test(file));
   assert.deepEqual(suspicious, []);
-  const versions = files.map((file) => Number(file.split("_")[0])).filter((value) => !Number.isNaN(value));
-  assert.equal(Math.max(...versions), 24);
 });
 
 test("50: multi-request never gains identity capability side effects because of T07 (unchanged: no new call path was added)", async () => {

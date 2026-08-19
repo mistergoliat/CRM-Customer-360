@@ -24,14 +24,19 @@ function collectTestFiles(directory: string): string[] {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
-const requestedPaths = process.argv.slice(2);
+// Both sides are normalized to forward slashes before comparing: relative()
+// returns backslash-separated paths on Windows, but a requested path may be
+// typed with either separator (or copy-pasted from a forward-slash context).
+const normalizeSeparators = (value: string) => value.replace(/\\/g, "/");
+const requestedPaths = process.argv.slice(2).map(normalizeSeparators);
 const allTestFiles = collectTestFiles(TESTS_DIR);
 const testFiles =
   requestedPaths.length === 0
     ? allTestFiles
-    : allTestFiles.filter((file) =>
-        requestedPaths.some((requested) => file === requested || file.endsWith(`/${requested}`))
-      );
+    : allTestFiles.filter((file) => {
+        const normalizedFile = normalizeSeparators(file);
+        return requestedPaths.some((requested) => normalizedFile === requested || normalizedFile.endsWith(`/${requested}`));
+      });
 
 if (testFiles.length === 0) {
   console.error("No test files found under tests/.");
