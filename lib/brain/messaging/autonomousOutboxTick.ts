@@ -224,14 +224,10 @@ export async function runOutboxTick(options: OutboxTickOptions): Promise<OutboxT
 
   const result: OutboxTickResult = { processed: 0, sent: 0, failed: 0, retried: 0, cancelled: 0, skipped: 0 };
 
-  const candidatesResult = await selectPlannedOutboxCandidates(options.batchSize);
+  const candidatesResult = await selectPlannedOutboxCandidates(options.batchSize, false, options.outboxIds);
   if (!candidatesResult.ok || candidatesResult.candidates.length === 0) return result;
 
-  const candidates = options.outboxIds
-    ? candidatesResult.candidates.filter((candidate) => candidate.id !== null && options.outboxIds!.includes(candidate.id))
-    : candidatesResult.candidates;
-
-  for (const candidate of candidates) {
+  for (const candidate of candidatesResult.candidates) {
     if (!candidate.id) continue;
     const requestedAt = new Date().toISOString();
 

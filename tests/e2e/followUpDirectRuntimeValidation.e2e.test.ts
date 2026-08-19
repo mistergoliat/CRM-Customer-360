@@ -328,19 +328,21 @@ test("direct runtime validation: real inbound -> real model decision -> real sch
     );
 
     // Force the real row due now (simulates real elapsed time, never a
-    // fabricated row). created_at is backdated together with scheduled_for -
-    // turn 2's own inbound message ("Lo voy a pensar") was persisted within
-    // the very same real call that created this row, sub-second apart, so
+    // fabricated row). Only scheduled_for moves into the past; created_at is
+    // nudged forward instead of backward. crm_agent_actions.created_at is a
+    // second-precision DATETIME while conversation_message.created_at is
+    // millisecond-precision (same gap tests/commercial/runFollowupTick.test.ts's
+    // scheduleFollowUpAction documents), so turn 2's own inbound ("Lo voy a
+    // pensar") can truncate to the same second as this row's real created_at -
     // shouldCancelFollowUp's "customer replied since schedule" check
-    // (cm.created_at > crm_agent_actions.created_at) is otherwise racy at
-    // DATETIME(3) precision - exactly the same real elapsed-time gap
-    // runFollowupTick.test.ts's own scheduleFollowUpAction helper already
-    // documents needing headroom for.
+    // (cm.created_at > crm_agent_actions.created_at) needs headroom AFTER the
+    // inbound, never before it, or every run would look like a reply arrived
+    // after scheduling and the row would be cancelled instead of executed.
     const forceDue = await safeExecute(
       `UPDATE crm_agent_actions SET scheduled_for = ?, created_at = ?, status = 'planned' WHERE action_id = ?`,
       [
         new Date(Date.now() - 60_000).toISOString().slice(0, 19).replace("T", " "),
-        new Date(Date.now() - 300_000).toISOString().slice(0, 19).replace("T", " "),
+        new Date(Date.now() + 2_000).toISOString().slice(0, 19).replace("T", " "),
         followUpRow.action_id
       ]
     );

@@ -929,7 +929,11 @@ function isStaleLockedTimestamp(lockedAt: string | null, lockSeconds: number) {
   return Date.now() - lockedAtMs > lockSeconds * 1000;
 }
 
-function buildCandidateQuery(debug: boolean) {
+function buildCandidateQuery(debug: boolean, outboxIdsCount: number) {
+  // outboxIds scope must live in the SQL: older planned rows would otherwise
+  // consume the LIMIT before an in-memory filter could apply (the same class
+  // of bug runFollowupTick.ts's selectDueFollowUps already guards against).
+  const scope = outboxIdsCount > 0 ? ` AND id IN (${Array(outboxIdsCount).fill("?").join(",")})` : "";
   return `
     SELECT
       id,
@@ -948,7 +952,7 @@ function buildCandidateQuery(debug: boolean) {
       updated_at
     FROM \`${BRAIN_MESSAGE_OUTBOX_TABLE}\`
     WHERE status = 'planned'
-      AND (next_attempt_at IS NULL OR next_attempt_at <= NOW(3))
+      AND (next_attempt_at IS NULL OR next_attempt_at <= NOW(3))${scope}
     ORDER BY planned_at ASC, id ASC
     LIMIT ?
   `;
@@ -1005,7 +1009,7 @@ function toSkippedRecord(
   };
 }
 
-export async function selectPlannedOutboxCandidates(limit: number, debug = false): Promise<
+export async function selectPlannedOutboxCandidates(limit: number, debug = false, outboxIds?: number[]): Promise<
   | { ok: true; candidates: BrainOutboxWorkerCandidate[]; warning?: string }
   | { ok: false; candidates: []; warning: string }
 > {
@@ -1013,7 +1017,8 @@ export async function selectPlannedOutboxCandidates(limit: number, debug = false
     return { ok: false, candidates: [], warning: `Tabla ${BRAIN_MESSAGE_OUTBOX_TABLE} no disponible` };
   }
 
-  const rows = await safeQueryRows<Record<string, unknown>>(buildCandidateQuery(debug), [limit]);
+  const scopeIds = outboxIds ?? [];
+  const rows = await safeQueryRows<Record<string, unknown>>(buildCandidateQuery(debug, scopeIds.length), [...scopeIds, limit]);
   if (!rows.ok) {
     return { ok: false, candidates: [], warning: rows.error };
   }
