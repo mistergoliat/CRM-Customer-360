@@ -5,6 +5,7 @@ import type {
   CommercialObjectiveOrigin
 } from "./types";
 import type { CommercialObjectiveType } from "./objectiveTypes";
+import { canTransitionObjectiveStatus } from "./transitions";
 
 function normalizeTargetType(targetType: CommercialObjectiveSeed & { kind: "cancel" }): CommercialObjectiveType | null {
   switch (targetType.targetType) {
@@ -78,6 +79,14 @@ export function objectiveSeedsFromPendingIntents(records: readonly PendingCommer
         }
       ];
     }
+    // SALES-AGENT-R2-A08.6, Part 9. create_quote can pend on PRODUCT_SELECTION
+    // (e.g. "cotizame esto" before any selection exists) - re-emitted
+    // unchanged once a later turn resolves that. cancel never reaches this
+    // function: it always resolves "ready" (requirementResolver.ts), so it is
+    // never saved as a pending intent in the first place.
+    if (record.intent.type === "create_quote") {
+      return [{ type: "CREATE_QUOTE", origin: "customer_requested" }];
+    }
     return [];
   });
 }
@@ -90,12 +99,37 @@ export function deriveCommercialObjectives(input: {
   const seeds = [...objectiveSeedsFromPendingIntents(input.pendingCommercialIntents), ...input.seeds];
   const objectives: CommercialObjective[] = [];
 
+  // SALES-AGENT-R2-A08.6, Part 3 (post-audit fix). Every freshly-derived
+  // CommercialObjective starts at "PENDING" (baseObjective) regardless of
+  // what it is carrying forward, so objective.status alone can never tell
+  // the cancel handling below what the objective's real, already-persisted
+  // status is - only reconciliation.ts's objectiveSeedFromPersisted knows
+  // that (carriedStatus), for a carried (non-fresh) objective specifically.
+  const carriedStatusById = new Map(
+    seeds
+      .filter((seed): seed is Extract<CommercialObjectiveSeed, { kind?: "objective" }> => seed.kind !== "cancel" && Boolean(seed.seedId) && Boolean(seed.carriedStatus))
+      .map((seed) => [seed.seedId as string, seed.carriedStatus!])
+  );
+
   for (const [index, seed] of seeds.entries()) {
     if (seed.kind === "cancel") {
       const target = normalizeTargetType(seed);
       for (const objective of objectives) {
         if (!target || objective.type === target || commercialObjectiveSupersessionFamily(objective.type) === commercialObjectiveSupersessionFamily(target)) {
-          objective.status = "CANCELLED";
+          // A COMPLETED objective's own state machine (transitions.ts) only
+          // allows COMPLETED -> SUPERSEDED, never -> CANCELLED - the
+          // calculation already happened, it cannot be un-calculated, only
+          // retired. objective.status itself is still "PENDING" at this
+          // point unless something earlier in this same pass already moved
+          // it (a real prior state to respect) - carriedStatusById is the
+          // only way to see the persisted status for anything untouched so
+          // far. The CANCELLED blocker is still pushed unconditionally so
+          // buildCommercialWorkFinalizerMessage.ts's cancelledFamilyClauses
+          // (keyed off this blocker, not the literal status) still credits
+          // the customer's cancellation request even when the objective
+          // lands SUPERSEDED instead of CANCELLED.
+          const effectiveStatus = objective.status !== "PENDING" ? objective.status : (carriedStatusById.get(objective.objectiveId) ?? objective.status);
+          objective.status = canTransitionObjectiveStatus(effectiveStatus, "CANCELLED") ? "CANCELLED" : "SUPERSEDED";
           objective.blockers.push({ code: "CANCELLED", source: "objective", objectiveId: objective.objectiveId });
         }
       }

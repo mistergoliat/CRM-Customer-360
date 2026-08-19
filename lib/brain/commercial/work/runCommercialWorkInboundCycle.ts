@@ -11,6 +11,7 @@ import { assignCommercialTriggerSequence } from "./sequencing";
 import { reconcileCommercialTrigger } from "./reconciliation";
 import { executeCommercialWork } from "./commercialWorkExecutor";
 import { settleCommercialWorkProjection } from "./settleCommercialWorkProjection";
+import { loadRecentCommercialCapabilityExecutions } from "./capabilityExecutionReader";
 import { planCommercialObjectiveSeeds } from "./semanticIntentAdapter";
 import { dispatchCommercialWorkResponse, type DispatchCommercialWorkResponseResult } from "./dispatchCommercialWorkResponse";
 import { scheduleObjectiveAwareFollowUp } from "./followup";
@@ -165,9 +166,10 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
     const commercialSequence = sequenceResult.status !== "failed" ? sequenceResult.record.commercialSequence : null;
     if (sequenceResult.status === "failed") warnings.push(`commercial_work_sequence_failed:${sequenceResult.error}`);
 
-    const [selectedShippingOption, createdQuote] = await Promise.all([
+    const [selectedShippingOption, createdQuote, recentCapabilityExecutions] = await Promise.all([
       getActiveSelectedShippingOptionForOpportunity(opportunityId),
-      getActiveCreatedQuoteForOpportunity(opportunityId)
+      getActiveCreatedQuoteForOpportunity(opportunityId),
+      loadRecentCommercialCapabilityExecutions({ opportunityId })
     ]);
 
     // Same evidence source the legacy/multi-intent loops already use for
@@ -186,7 +188,12 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       ...(input.snapshot.commercialLineItems ? { commercialLineItems: { items: input.snapshot.commercialLineItems.items } } : {}),
       ...(input.snapshot.shippingDestination
         ? { shippingDestination: { communeId: input.snapshot.shippingDestination.communeId, canonicalName: input.snapshot.shippingDestination.canonicalName } }
-        : {})
+        : {}),
+      // SALES-AGENT-R2-A08.6, Part 5. Same bounded direction/body shape
+      // runNativeAgentToolLoopCycle.ts's own buildCommercialContextSummary
+      // already exposes - the only signal readLastAgentMessage may use to
+      // interpret a bare confirmation ("si") as create_quote.
+      recentMessages: input.snapshot.recentMessages.slice(-5).map((message) => ({ direction: message.direction, body: message.body }))
     };
 
     const timeoutMs = input.resolvedSalesAgentConfiguration.effectiveModelConfiguration.timeoutMs ?? 20_000;
@@ -252,6 +259,7 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       shippingDestination: input.snapshot.shippingDestination,
       selectedShippingOption,
       createdQuote,
+      recentCapabilityExecutions,
       now: input.currentTime,
       semanticObjectives: planned.seeds
     });

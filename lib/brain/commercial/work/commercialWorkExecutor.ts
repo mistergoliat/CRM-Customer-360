@@ -154,7 +154,17 @@ function dependencySatisfied(dependency: CommercialWorkStep["dependencies"][numb
       if (dependency.factType === "selected_shipping_option") return Boolean(facts.selectedShippingOption);
       return Boolean(facts.createdQuote);
     case "CUSTOMER_INPUT":
-      if (dependency.requirement === "PRODUCT") return Boolean(work.steps.some((step) => step.input.items?.length || step.input.productReference));
+      // SALES-AGENT-R2-A08.6, Part 6. A bare productReference string is NOT
+      // trustworthy evidence on its own (it may be unresolved/ambiguous text
+      // that never matched real catalog/durable evidence) - only items[]
+      // (populated exclusively when the semantic adapter actually resolved a
+      // real productId, see semanticIntentAdapter.ts) counts. The projection
+      // layer (buildCommercialWorkProjection.ts's applyObjectiveState)
+      // already keeps an evidence-less objective at WAITING_CUSTOMER before
+      // this is ever consulted for a normal turn; this closes the same gap
+      // for a later re-activation pass (activateUnblockedSteps), which
+      // re-checks this same function without re-deriving the objective.
+      if (dependency.requirement === "PRODUCT") return Boolean(work.steps.some((step) => step.input.items?.length));
       if (dependency.requirement === "QUANTITY") return work.steps.some((step) => typeof step.input.quantity === "number" || Boolean(step.input.items?.length));
       if (dependency.requirement === "DESTINATION") return work.steps.some((step) => Boolean(step.input.destinationText || step.input.canonicalDestinationName || typeof step.input.communeId === "number"));
       return false;

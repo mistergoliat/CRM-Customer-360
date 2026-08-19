@@ -1,7 +1,7 @@
 import { getActiveRequestFact, upsertRequestFact } from "../request-facts";
 import { parseCommercialIntent } from "./parseCommercialIntentPlan";
 import { COMMERCIAL_REQUIREMENT_TYPES } from "./types";
-import type { CommercialIntent, CommercialRequirementType, PendingCommercialIntentRecord } from "./types";
+import type { CommercialIntent, CommercialIntentCancel, CommercialIntentCancelScope, CommercialRequirementType, PendingCommercialIntentRecord } from "./types";
 
 /**
  * LLM-R1-T09A, Part 11 (Pending Intent State). Reuses the existing
@@ -84,9 +84,34 @@ export async function savePendingCommercialIntents(input: {
  * entry, never duplicated. A pending intent this turn's message did not
  * touch at all is carried forward unchanged, so it is never silently
  * forgotten just because the customer asked about something else this turn.
+ *
+ * SALES-AGENT-R2-A08.6, Part 3 (post-audit fix). A cancel intent is the one
+ * exception to "carried forward unchanged": "olvidalo"/"olvida el despacho"
+ * is the customer explicitly withdrawing something still in flight, so a
+ * pending intent the cancel's own scope targets must be dropped here, not
+ * re-surfaced alongside it - otherwise a withdrawn "la classic" selection
+ * would keep re-emitting a SELECT_PRODUCTS seed turn after turn even though
+ * the customer asked to forget it, fighting deriveCommercialObjectives.ts's
+ * own cancel handling for the same objective.
  */
+const CANCEL_SCOPE_INTENT_TYPES: Record<Exclude<CommercialIntentCancelScope, "all">, CommercialIntent["type"]> = {
+  selection: "select_products",
+  destination: "get_shipping_quote",
+  shipping: "get_shipping_quote",
+  quote: "create_quote"
+};
+
+function cancelDiscardsIntentType(cancel: CommercialIntentCancel, intentType: CommercialIntent["type"]): boolean {
+  if (cancel.scope === "all") return true;
+  return CANCEL_SCOPE_INTENT_TYPES[cancel.scope] === intentType;
+}
+
 export function mergeCommercialIntents(pendingRecords: PendingCommercialIntentRecord[], newIntents: CommercialIntent[]): CommercialIntent[] {
   const newTypes = new Set(newIntents.filter((intent) => intent.type !== "unsupported").map((intent) => intent.type));
-  const carriedForward = pendingRecords.map((record) => record.intent).filter((intent) => intent.type !== "unsupported" && !newTypes.has(intent.type));
+  const cancelIntents = newIntents.filter((intent): intent is CommercialIntentCancel => intent.type === "cancel");
+  const carriedForward = pendingRecords
+    .map((record) => record.intent)
+    .filter((intent) => intent.type !== "unsupported" && !newTypes.has(intent.type))
+    .filter((intent) => !cancelIntents.some((cancel) => cancelDiscardsIntentType(cancel, intent.type)));
   return [...carriedForward, ...newIntents];
 }

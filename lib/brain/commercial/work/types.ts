@@ -53,6 +53,19 @@ export type CommercialObjectiveSeed =
       type: CommercialObjectiveType;
       origin?: CommercialObjectiveOrigin;
       inputs?: CommercialObjectiveInputs;
+      /**
+       * SALES-AGENT-R2-A08.6, Part 3 (post-audit fix). Set only by
+       * reconciliation.ts's objectiveSeedFromPersisted, carrying forward the
+       * already-persisted objective's real status - deriveCommercialObjectives.ts
+       * needs this to decide CANCELLED vs SUPERSEDED for a cancel request,
+       * since every freshly-derived CommercialObjective starts at "PENDING"
+       * (baseObjective) regardless of what it is carrying forward; without
+       * this, that in-progress "PENDING" would look transitionable to
+       * CANCELLED even for an objective the persisted aggregate already has
+       * as COMPLETED, producing an invalid transition once compared against
+       * the real prior state at persistence time.
+       */
+      carriedStatus?: CommercialObjectiveStatus;
     }
   | {
       kind: "cancel";

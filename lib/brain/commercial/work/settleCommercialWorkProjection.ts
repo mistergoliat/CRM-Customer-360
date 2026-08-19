@@ -2,6 +2,7 @@ import { executeGovernedCapability } from "@/lib/brain/commercial/capability-gat
 import { buildCommercialWorkProjection } from "./buildCommercialWorkProjection";
 import { reconcileCommercialObjectives } from "./reconciliation";
 import { executeCommercialWork, defaultLoadFacts, defaultLoadConversationControl } from "./commercialWorkExecutor";
+import { loadRecentCommercialCapabilityExecutions } from "./capabilityExecutionReader";
 import { updateCommercialWorkAggregate } from "./repository";
 import type { PersistedCommercialWork, CommercialWorkDatabaseAdapter } from "./persistenceTypes";
 
@@ -42,18 +43,36 @@ export async function settleCommercialWorkProjection(input: SettleCommercialWork
   const maxRounds = input.maxRounds ?? 3;
 
   for (let round = 0; round < maxRounds; round += 1) {
-    const [facts, control] = await Promise.all([defaultLoadFacts(work), defaultLoadConversationControl(work)]);
-    const reprojected = buildCommercialWorkProjection({
-      trigger: { type: "SYSTEM_EVENT", eventType: "commercial_work_settle", correlationId: input.correlationId, conversationId: input.conversationId, opportunityId: input.opportunityId },
-      conversation: { id: input.conversationId, humanOwnerActive: control.humanOwnerActive, aiEnabled: control.aiEnabled },
-      opportunity: { id: input.opportunityId },
-      objectiveSeeds: reconcileCommercialObjectives({ previousWork: work, newSemanticObjectives: [] }),
-      commercialLineItems: facts.commercialLineItems,
-      shippingDestination: facts.shippingDestination,
-      selectedShippingOption: facts.selectedShippingOption,
-      createdQuote: facts.createdQuote,
-      now
-    });
+    const [facts, control, recentCapabilityExecutions] = await Promise.all([
+      defaultLoadFacts(work),
+      defaultLoadConversationControl(work),
+      loadRecentCommercialCapabilityExecutions({ opportunityId: input.opportunityId })
+    ]);
+    // buildCommercialWorkProjection is a pure projector with no notion of
+    // conversation sequencing (that's reconciliation.ts's withSequenceAndLineage,
+    // never called here) - without carrying these forward explicitly, every
+    // settle round would silently null out sourceSequence/lastReconciledSequence/
+    // lineage on the very first turn that actually executes a capability,
+    // permanently disabling reconciliation.ts's stale-turn protection for that
+    // work from then on.
+    const reprojected = {
+      ...buildCommercialWorkProjection({
+        trigger: { type: "SYSTEM_EVENT", eventType: "commercial_work_settle", correlationId: input.correlationId, conversationId: input.conversationId, opportunityId: input.opportunityId },
+        conversation: { id: input.conversationId, humanOwnerActive: control.humanOwnerActive, aiEnabled: control.aiEnabled },
+        opportunity: { id: input.opportunityId },
+        objectiveSeeds: reconcileCommercialObjectives({ previousWork: work, newSemanticObjectives: [] }),
+        commercialLineItems: facts.commercialLineItems,
+        shippingDestination: facts.shippingDestination,
+        selectedShippingOption: facts.selectedShippingOption,
+        createdQuote: facts.createdQuote,
+        recentCapabilityExecutions,
+        now
+      }),
+      sourceSequence: work.sourceSequence,
+      lastReconciledSequence: work.lastReconciledSequence,
+      previousWorkPublicId: work.previousWorkPublicId,
+      supersedesWorkPublicId: work.supersedesWorkPublicId
+    };
 
     const statusChanged =
       reprojected.status !== work.status ||

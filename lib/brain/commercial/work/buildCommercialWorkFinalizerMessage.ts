@@ -1,8 +1,52 @@
 import type { PersistedCommercialWork } from "./persistenceTypes";
 import type { CommercialObjective } from "./types";
+import { commercialObjectiveSupersessionFamily } from "./deriveCommercialObjectives";
 
 export const COMMERCIAL_WORK_DISPOSITIONS = ["FINAL", "PARTIAL", "BLOCKED"] as const;
 export type CommercialWorkDisposition = (typeof COMMERCIAL_WORK_DISPOSITIONS)[number];
+
+const CANCELLED_FAMILY_CLAUSES: Record<string, string> = {
+  selection: "dejé sin efecto tu selección",
+  destination: "dejé sin efecto el destino",
+  shipping: "dejé sin efecto el cálculo de despacho",
+  quote: "dejé sin efecto la cotización"
+};
+
+/**
+ * deriveCommercialObjectives.ts marks a cancelled objective's origin with a
+ * CANCELLED blocker unconditionally, even when its own state machine
+ * (transitions.ts) forces the final status to SUPERSEDED instead of
+ * CANCELLED (a COMPLETED objective can only be superseded, never literally
+ * cancelled - the calculation already happened). Checking the blocker
+ * instead of the literal status is what lets a cancelled-while-COMPLETED
+ * shipping calculation still read as "cancelled" here, not silently as a
+ * normal, unremarked supersession.
+ */
+function wasCancelled(objective: CommercialObjective): boolean {
+  return objective.status === "CANCELLED" || objective.blockers.some((blocker) => blocker.code === "CANCELLED");
+}
+
+/**
+ * SALES-AGENT-R2-A08.6, Part 11. A family reads as "cancelled" only when it
+ * has at least one CANCELLED objective and no remaining active (non-
+ * cancelled/non-superseded) objective of that same family - a family that
+ * was cancelled and then re-requested in the same or a later turn is active
+ * again, not cancelled, and must never claim otherwise.
+ */
+function cancelledFamilyClauses(work: PersistedCommercialWork): string[] {
+  const families = new Set(work.objectives.map((objective) => commercialObjectiveSupersessionFamily(objective.type)).filter((family) => family !== "other"));
+  const clauses: string[] = [];
+  for (const family of families) {
+    const ofFamily = work.objectives.filter((objective) => commercialObjectiveSupersessionFamily(objective.type) === family);
+    const hasCancelled = ofFamily.some(wasCancelled);
+    const hasActive = ofFamily.some((objective) => objective.status !== "CANCELLED" && objective.status !== "SUPERSEDED");
+    if (hasCancelled && !hasActive) {
+      const clause = CANCELLED_FAMILY_CLAUSES[family];
+      if (clause) clauses.push(clause);
+    }
+  }
+  return clauses;
+}
 
 export type CommercialWorkFinalizerResult = {
   disposition: CommercialWorkDisposition;
@@ -91,19 +135,33 @@ function pendingClause(objective: CommercialObjective, hasDurableContinuation: b
 }
 
 export function buildCommercialWorkFinalizerMessage(work: PersistedCommercialWork): CommercialWorkFinalizerResult {
+  // SALES-AGENT-R2-A08.6, Part 3/11. Checked first and exclusively: a whole-
+  // work cancellation (evaluateCommercialWork.ts's deriveCommercialWorkStatus
+  // sets this only when every objective is CANCELLED) is never described as
+  // "completado" - that would be a truthful-but-misleading claim.
+  if (work.status === "CANCELLED") {
+    return { disposition: "FINAL", message: "Listo, cancelé tu solicitud." };
+  }
+
   const objectives = activeObjectives(work);
   const completedObjectives = objectives.filter((objective) => objective.status === "COMPLETED");
   const waitingCustomerObjectives = objectives.filter((objective) => objective.status === "WAITING_CUSTOMER");
+  const cancelClauses = cancelledFamilyClauses(work);
 
   const objectiveHasDurableStep = (objective: CommercialObjective): boolean =>
     work.steps.some((step) => step.objectiveIds.includes(objective.objectiveId) && DURABLE_CONTINUATION_STEP_STATUSES.has(step.status));
 
-  const completedClauses = completedObjectives.map(completedClause).filter((clause): clause is string => Boolean(clause));
+  const completedClauses = [...completedObjectives.map(completedClause).filter((clause): clause is string => Boolean(clause)), ...cancelClauses];
   const continuingObjectives = objectives.filter((objective) => objective.status !== "COMPLETED" && objectiveHasDurableStep(objective));
   const pendingClauses = continuingObjectives.map((objective) => pendingClause(objective, true)).filter((clause): clause is string => Boolean(clause));
 
   const isFullyComplete = objectives.length > 0 && objectives.every((objective) => objective.status === "COMPLETED");
-  if (isFullyComplete || work.status === "COMPLETED") {
+  // A standalone cancellation (nothing else pending/waiting) is a complete,
+  // truthful FINAL outcome on its own - e.g. "olvida el despacho" with
+  // nothing else in flight - even though the cancelled objective itself is
+  // filtered out of `objectives` above (activeObjectives excludes CANCELLED).
+  const isCancelOnlyFinal = cancelClauses.length > 0 && pendingClauses.length === 0 && waitingCustomerObjectives.length === 0;
+  if (isFullyComplete || work.status === "COMPLETED" || isCancelOnlyFinal) {
     const message = completedClauses.length > 0 ? `Listo. ${capitalize(completedClauses.join("; "))}.` : "Listo, tu solicitud quedó completada.";
     return { disposition: "FINAL", message };
   }

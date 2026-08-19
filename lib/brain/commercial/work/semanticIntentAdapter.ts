@@ -12,7 +12,13 @@ import type { RecentCatalogContext } from "@/lib/brain/commercial/agent-loop/rec
 import { buildIntentPlannerPromptPackage } from "@/lib/brain/commercial/multi-intent/buildIntentPlannerPromptPackage";
 import { parseCommercialIntentPlan } from "@/lib/brain/commercial/multi-intent/parseCommercialIntentPlan";
 import { loadPendingCommercialIntents, mergeCommercialIntents, savePendingCommercialIntents } from "@/lib/brain/commercial/multi-intent/pendingIntentState";
-import { readDurableCommercialLineItems, readDurableShippingDestination, resolveCommercialIntentPlan } from "@/lib/brain/commercial/multi-intent/requirementResolver";
+import {
+  readDurableCommercialLineItems,
+  readDurableShippingDestination,
+  readLastAgentMessage,
+  resolveCommercialIntentPlan,
+  sumDurableSelectionQuantity
+} from "@/lib/brain/commercial/multi-intent/requirementResolver";
 import type { CommercialObjectiveSeed } from "./types";
 
 export function commercialObjectiveSeedsFromResolvedIntent(resolved: ResolvedIntent): CommercialObjectiveSeed[] {
@@ -34,13 +40,23 @@ export function commercialObjectiveSeedsFromResolvedIntent(resolved: ResolvedInt
       return seeds;
     }
 
+    // SALES-AGENT-R2-A08.6, Part 6. "ambiguous" (2+ catalog matches) and
+    // "missing" (0 matches, or a reference that never resolved at all) are
+    // both genuinely unresolved product evidence - only "resolved" (handled
+    // above, returns real items[]) may reach SELECT_PRODUCTS' READY status
+    // (buildCommercialWorkProjection.ts's applyObjectiveState only skips
+    // WAITING_CUSTOMER when productEvidenceAvailable is not explicitly
+    // false). Before this fix, "missing" left productEvidenceAvailable
+    // unset, letting a bare unresolved productReference string reach READY
+    // and fail at the capability with invalid_arguments instead of asking
+    // the customer to clarify first.
     seeds.push({
       type: "SELECT_PRODUCTS",
       origin: "customer_requested",
       inputs: {
         ...(resolved.intent.productReference ? { productReference: resolved.intent.productReference } : {}),
         ...(quantityValue !== undefined ? { quantity: quantityValue } : {}),
-        ...(product?.status === "ambiguous" ? { productEvidenceAvailable: false } : {})
+        ...(product?.status === "ambiguous" || product?.status === "missing" ? { productEvidenceAvailable: false } : {})
       }
     });
     return seeds;
@@ -56,6 +72,23 @@ export function commercialObjectiveSeedsFromResolvedIntent(resolved: ResolvedInt
       origin: "customer_requested",
       inputs: destination?.status === "resolved" && typeof destination.value === "string" ? { destinationText: destination.value } : {}
     });
+    return seeds;
+  }
+
+  // SALES-AGENT-R2-A08.6, Part 9. create_quote reuses the existing
+  // CREATE_QUOTE objective/step/executor/capability unchanged - no new
+  // fields, since createQuoteCapability.ts takes none either.
+  if (resolved.intent.type === "create_quote") {
+    seeds.push({ type: "CREATE_QUOTE", origin: "customer_requested" });
+    return seeds;
+  }
+
+  // SALES-AGENT-R2-A08.6, Part 3/9. targetType omitted means "all" to
+  // reconciliation.ts's cancelTargetFamily/deriveCommercialObjectives.ts's
+  // cancel handling - matches this intent's own "all" scope exactly.
+  if (resolved.intent.type === "cancel") {
+    seeds.push({ kind: "cancel", ...(resolved.intent.scope !== "all" ? { targetType: resolved.intent.scope } : {}) });
+    return seeds;
   }
 
   return seeds;
@@ -124,8 +157,10 @@ export async function planCommercialObjectiveSeeds(input: SemanticIntentAdapterI
     recentCatalogContext: input.recentCatalogContext,
     hasDurableSelection: durableSelectionItems.length > 0,
     durableSelectionItemCount: durableSelectionItems.length,
+    durableSelectionQuantity: sumDurableSelectionQuantity(durableSelectionItems),
     durableShippingDestinationName: durableDestination?.canonicalName ?? null,
-    pendingIntents: pendingRecords
+    pendingIntents: pendingRecords,
+    lastAgentMessage: readLastAgentMessage(input.commercialContextSummary)
   });
 
   const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, input.deadline, input.abortSignal);

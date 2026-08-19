@@ -22,12 +22,26 @@ export const MAX_INTENTS_PER_PLAN = 6;
 export const MAX_INTENT_TEXT_FIELD_LENGTH = 200;
 export const MAX_QUANTITY = 9999;
 
-export const COMMERCIAL_INTENT_TYPES = ["select_products", "get_shipping_quote", "unsupported"] as const;
+export const COMMERCIAL_INTENT_TYPES = ["select_products", "get_shipping_quote", "create_quote", "cancel", "unsupported"] as const;
 export type CommercialIntentType = (typeof COMMERCIAL_INTENT_TYPES)[number];
 
 export type CommercialIntentSelectProducts = {
   type: "select_products";
-  /** Free text naming the product, in the customer's own words or resolved by the planner LLM against recentCatalogContext (e.g. a pronoun like "esa" resolved to a concrete product name) - never a productId, the planner never sees catalog identity. */
+  /**
+   * Free text naming the product, in the customer's own words or resolved by
+   * the planner LLM against recentCatalogContext (e.g. a pronoun like "esa"
+   * resolved to a concrete product name) - never a productId, the planner
+   * never sees catalog identity.
+   *
+   * SALES-AGENT-R2-A08.6, Part 2. Deliberately omitted (never invented) for a
+   * bare quantity correction that does not rename the product ("mejor 3",
+   * "deja 3", "quita una") - the requirement resolver's existing durable-state
+   * fallback (requirementResolver.ts#resolveProductRequirement) already
+   * carries the product forward from the active selection when this field is
+   * absent, which is also what makes the corrected selection correctly
+   * supersede the old one via the existing "selection" family instead of
+   * needing a second, parallel correction mechanism.
+   */
   productReference?: string;
   quantity?: number;
 };
@@ -36,6 +50,31 @@ export type CommercialIntentGetShippingQuote = {
   type: "get_shipping_quote";
   /** Free text naming the destination commune, e.g. "Ñuñoa" - never a communeId. */
   destination?: string;
+};
+
+/**
+ * SALES-AGENT-R2-A08.6, Part 4. Reuses the existing CREATE_QUOTE
+ * objective/step/capability unchanged - createQuoteCapability.ts's own input
+ * schema already takes no arguments (everything is assembled from durable
+ * backend state), so this intent carries no fields either.
+ */
+export type CommercialIntentCreateQuote = {
+  type: "create_quote";
+};
+
+/**
+ * SALES-AGENT-R2-A08.6, Part 3. A closed, backend-owned scope vocabulary -
+ * the model classifies into one of these five, never free text - matching
+ * reconciliation.ts's own cancelTargetFamily accepted values exactly
+ * (targetType "selection"|"destination"|"shipping"|"quote"|undefined, where
+ * "all" here maps to undefined there).
+ */
+export const CANCEL_SCOPES = ["selection", "destination", "shipping", "quote", "all"] as const;
+export type CommercialIntentCancelScope = (typeof CANCEL_SCOPES)[number];
+
+export type CommercialIntentCancel = {
+  type: "cancel";
+  scope: CommercialIntentCancelScope;
 };
 
 /**
@@ -48,7 +87,12 @@ export type CommercialIntentUnsupported = {
   description?: string;
 };
 
-export type CommercialIntent = CommercialIntentSelectProducts | CommercialIntentGetShippingQuote | CommercialIntentUnsupported;
+export type CommercialIntent =
+  | CommercialIntentSelectProducts
+  | CommercialIntentGetShippingQuote
+  | CommercialIntentCreateQuote
+  | CommercialIntentCancel
+  | CommercialIntentUnsupported;
 
 export type CommercialIntentPlan = {
   intents: CommercialIntent[];
@@ -87,7 +131,9 @@ export type IntentDefinition = {
 
 export const COMMERCIAL_INTENT_DEFINITIONS: Record<Exclude<CommercialIntentType, "unsupported">, IntentDefinition> = {
   select_products: { type: "select_products", requirements: ["PRODUCT", "QUANTITY"] },
-  get_shipping_quote: { type: "get_shipping_quote", requirements: ["PRODUCT_SELECTION", "DESTINATION"] }
+  get_shipping_quote: { type: "get_shipping_quote", requirements: ["PRODUCT_SELECTION", "DESTINATION"] },
+  create_quote: { type: "create_quote", requirements: ["PRODUCT_SELECTION"] },
+  cancel: { type: "cancel", requirements: [] }
 };
 
 /** Part 5/6. Where a resolved requirement's value came from - never invented, always traceable to a real source. */

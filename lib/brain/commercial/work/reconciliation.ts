@@ -35,7 +35,8 @@ function objectiveSeedFromPersisted(objective: CommercialObjective): ObjectiveSe
     seedId: objective.objectiveId,
     type: objective.type,
     origin: objective.origin,
-    inputs: objective.inputs
+    inputs: objective.inputs,
+    carriedStatus: objective.status
   };
 }
 

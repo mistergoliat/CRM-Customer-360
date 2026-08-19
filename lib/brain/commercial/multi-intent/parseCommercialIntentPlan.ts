@@ -1,5 +1,9 @@
-import { MAX_INTENTS_PER_PLAN, MAX_INTENT_TEXT_FIELD_LENGTH, MAX_QUANTITY } from "./types";
-import type { CommercialIntent } from "./types";
+import { MAX_INTENTS_PER_PLAN, MAX_INTENT_TEXT_FIELD_LENGTH, MAX_QUANTITY, CANCEL_SCOPES } from "./types";
+import type { CommercialIntent, CommercialIntentCancelScope } from "./types";
+
+function asCancelScope(value: unknown): CommercialIntentCancelScope | undefined {
+  return typeof value === "string" && (CANCEL_SCOPES as readonly string[]).includes(value) ? (value as CommercialIntentCancelScope) : undefined;
+}
 
 /**
  * LLM-R1-T09A, Part 2/20. Hand-rolled bounded validation for the planner
@@ -47,6 +51,16 @@ function parseKnownIntent(raw: Record<string, unknown>): CommercialIntent | null
   if (raw.type === "get_shipping_quote") {
     const destination = asBoundedText(raw.destination);
     return { type: "get_shipping_quote", ...(destination !== undefined ? { destination } : {}) };
+  }
+  if (raw.type === "create_quote") {
+    return { type: "create_quote" };
+  }
+  if (raw.type === "cancel") {
+    // A cancel without a recognizable scope is not trusted as "all" by
+    // default (Part 3: no unsafe broad cancellation) - it degrades to
+    // unsupported instead, same discipline as any other malformed intent.
+    const scope = asCancelScope(raw.scope);
+    return scope ? { type: "cancel", scope } : null;
   }
   if (raw.type === "unsupported") {
     const description = asBoundedText(raw.description);

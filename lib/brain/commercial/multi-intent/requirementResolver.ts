@@ -148,6 +148,31 @@ export function readDurableShippingDestination(commercialContextSummary: Record<
   return { communeId: raw.communeId, canonicalName: raw.canonicalName };
 }
 
+/**
+ * SALES-AGENT-R2-A08.6, Part 5. The most recent AGENT-authored message only
+ * (never a customer message) - the sole signal the planner prompt is allowed
+ * to use to interpret a bare confirmation ("si") as create_quote. Reads the
+ * same bounded recentMessages shape buildCommercialContextSummary already
+ * puts in commercialContextSummary (direction/body only), never a second
+ * conversation-history source.
+ */
+export function readLastAgentMessage(commercialContextSummary: Record<string, unknown>): string | null {
+  const raw = commercialContextSummary.recentMessages;
+  if (!Array.isArray(raw)) return null;
+  for (let index = raw.length - 1; index >= 0; index -= 1) {
+    const message = raw[index];
+    if (isRecord(message) && message.direction === "outbound" && typeof message.body === "string" && message.body.trim()) {
+      return message.body.trim();
+    }
+  }
+  return null;
+}
+
+/** Sum of quantities across a durable selection - used to let the planner compute an absolute new quantity for relative correction phrases ("quita una") without inventing arithmetic it can't ground. */
+export function sumDurableSelectionQuantity(items: ReturnType<typeof readDurableCommercialLineItems>): number | null {
+  return items.length > 0 ? items.reduce((sum, item) => sum + item.quantity, 0) : null;
+}
+
 function resolveProductRequirement(intent: { productReference?: string }, context: RequirementResolverContext): RequirementResolution {
   const candidates = collectCatalogCandidates(context.recentCatalogContext);
 
@@ -195,6 +220,16 @@ function resolveProductSelectionRequirement(context: RequirementResolverContext,
   return { type: "PRODUCT_SELECTION", status: "missing" };
 }
 
+/**
+ * SALES-AGENT-R2-A08.6, Part 4/9. create_quote's only prerequisite is a
+ * durable selection, matching createQuoteCapability.ts's own requireShipping:
+ * false contract - reuses the exact same PRODUCT_SELECTION resolution
+ * get_shipping_quote already relies on, never a second implementation.
+ */
+function resolveCreateQuoteRequirements(context: RequirementResolverContext, sameTurnSelectProductsReady: boolean): RequirementResolution[] {
+  return [resolveProductSelectionRequirement(context, sameTurnSelectProductsReady)];
+}
+
 function overallStatus(requirements: RequirementResolution[]): ResolvedIntentStatus {
   if (requirements.some((requirement) => requirement.status === "ambiguous")) return "needs_clarification";
   if (requirements.some((requirement) => requirement.status === "missing")) return "waiting_for_information";
@@ -216,6 +251,12 @@ export function resolveCommercialIntentPlan(intents: CommercialIntent[], context
       results[intentIndex] = { intentIndex, intent, requirements, status: overallStatus(requirements) };
     } else if (intent.type === "unsupported") {
       results[intentIndex] = { intentIndex, intent, requirements: [], status: "needs_clarification" };
+    } else if (intent.type === "cancel") {
+      // SALES-AGENT-R2-A08.6, Part 3. Cancellation never waits on anything -
+      // it always applies immediately to whatever exists (or nothing, if
+      // there is nothing of that scope to cancel, which reconciliation.ts's
+      // own cancel handling already treats as a safe no-op).
+      results[intentIndex] = { intentIndex, intent, requirements: [], status: "ready" };
     }
   });
 
@@ -226,6 +267,9 @@ export function resolveCommercialIntentPlan(intents: CommercialIntent[], context
   intents.forEach((intent, intentIndex) => {
     if (intent.type === "get_shipping_quote") {
       const requirements = [resolveProductSelectionRequirement(context, sameTurnSelectProductsReady), resolveDestinationRequirement(intent, context)];
+      results[intentIndex] = { intentIndex, intent, requirements, status: overallStatus(requirements) };
+    } else if (intent.type === "create_quote") {
+      const requirements = resolveCreateQuoteRequirements(context, sameTurnSelectProductsReady);
       results[intentIndex] = { intentIndex, intent, requirements, status: overallStatus(requirements) };
     }
   });

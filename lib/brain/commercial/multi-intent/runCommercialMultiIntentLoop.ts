@@ -17,7 +17,13 @@ import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT } from "../sales-agent-configura
 import { buildIntentPlannerPromptPackage } from "./buildIntentPlannerPromptPackage";
 import type { IntentPlannerPriorAttemptFailure } from "./buildIntentPlannerPromptPackage";
 import { parseCommercialIntentPlan } from "./parseCommercialIntentPlan";
-import { resolveCommercialIntentPlan, readDurableCommercialLineItems, readDurableShippingDestination } from "./requirementResolver";
+import {
+  resolveCommercialIntentPlan,
+  readDurableCommercialLineItems,
+  readDurableShippingDestination,
+  readLastAgentMessage,
+  sumDurableSelectionQuantity
+} from "./requirementResolver";
 import { planCommercialActions } from "./executionPlanner";
 import { executeCommercialActionPlan } from "./actionPlanExecutor";
 import { classifyMultiIntentOutcomes, buildMultiIntentResponseContract, buildMultiIntentPlanPromptProjection } from "./buildMultiIntentResponseContract";
@@ -117,8 +123,10 @@ async function runPlannerPhase(input: {
       recentCatalogContext: loopInput.recentCatalogContext ?? null,
       hasDurableSelection: durableSelectionItems.length > 0,
       durableSelectionItemCount: durableSelectionItems.length,
+      durableSelectionQuantity: sumDurableSelectionQuantity(durableSelectionItems),
       durableShippingDestinationName: durableDestination?.canonicalName ?? null,
       pendingIntents: pendingRecords,
+      lastAgentMessage: readLastAgentMessage(loopInput.commercialContextSummary),
       priorAttemptFailure
     });
     priorAttemptFailure = null;
