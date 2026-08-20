@@ -171,11 +171,10 @@ export function buildCommercialWorkFinalizerMessage(work: PersistedCommercialWor
   }
 
   if (waitingCustomerObjectives.length > 0) {
-    const missing = waitingCustomerObjectives.flatMap((objective) => objective.missingRequirements);
     const message =
       completedClauses.length > 0
-        ? `${capitalize(completedClauses.join("; "))}. ${buildMissingInfoQuestion(missing)}`
-        : buildMissingInfoQuestion(missing);
+        ? `${capitalize(completedClauses.join("; "))}. ${buildMissingInfoQuestion(waitingCustomerObjectives)}`
+        : buildMissingInfoQuestion(waitingCustomerObjectives);
     return { disposition: "BLOCKED", message };
   }
 
@@ -194,8 +193,36 @@ function capitalize(value: string): string {
   return value.length > 0 ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
-function buildMissingInfoQuestion(missing: readonly string[]): string {
+/**
+ * SALES-AGENT-R2-A11.1, Part 6. Distinguishes PRODUCT_AMBIGUOUS/PRODUCT_NOT_FOUND
+ * (a real search_products execution ran - see buildCommercialWorkProjection.ts's
+ * applyObjectiveState - and found 2+/0 matches) from PRODUCT (no reference was
+ * ever given, the only case that still asks the old generic question) - takes
+ * the full objectives, not a flattened string list, because PRODUCT_AMBIGUOUS's
+ * wording needs the real candidate names attached to the objective that
+ * carries them (objective.inputs.productCandidates), never invented ones.
+ * WAITING_SYSTEM objectives never reach here (deriveCommercialWorkStatus keeps
+ * them out of waitingCustomerObjectives), matching Part 12/13's requirement
+ * that a catalog failure is never surfaced as a customer question.
+ */
+function buildMissingInfoQuestion(waitingCustomerObjectives: readonly CommercialObjective[]): string {
+  const missing = waitingCustomerObjectives.flatMap((objective) => objective.missingRequirements);
   if (missing.includes("DESTINATION")) return "¿A qué comuna necesitas el despacho?";
+
+  if (missing.includes("PRODUCT_AMBIGUOUS")) {
+    const objective = waitingCustomerObjectives.find((item) => item.missingRequirements.includes("PRODUCT_AMBIGUOUS"));
+    const names = (objective?.inputs.productCandidates ?? []).map((candidate) => candidate.name).filter(Boolean);
+    return names.length > 0
+      ? `Encontré varias opciones para "${objective?.inputs.productReference ?? ""}": ${names.join(", ")}. ¿Cuál de estas te interesa?`
+      : "Encontré varias opciones para ese producto. ¿Puedes darme más detalle (marca, modelo o peso) para saber cuál necesitas?";
+  }
+  if (missing.includes("PRODUCT_NOT_FOUND")) {
+    const objective = waitingCustomerObjectives.find((item) => item.missingRequirements.includes("PRODUCT_NOT_FOUND"));
+    const reference = objective?.inputs.productReference;
+    return reference
+      ? `No encontré "${reference}" en el catálogo. ¿Puedes confirmarme el nombre exacto del producto?`
+      : "No encontré ese producto en el catálogo. ¿Puedes confirmarme el nombre exacto?";
+  }
   if (missing.includes("PRODUCT") || missing.includes("PRODUCT_EVIDENCE")) return "¿Qué producto te interesa?";
   if (missing.includes("QUANTITY")) return "¿Cuántas unidades necesitas?";
   return "¿Puedes darme un poco más de detalle para continuar?";

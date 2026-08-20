@@ -77,6 +77,10 @@ function unique(label: string) {
   return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
+function toMysqlDatetime(date: Date): string {
+  return date.toISOString().slice(0, 23).replace("T", " ");
+}
+
 async function seedConversation(): Promise<number> {
   const [result] = await getPool().execute(
     `INSERT INTO conversation (
@@ -229,6 +233,107 @@ async function createWaitingCustomerWork() {
   assert.equal(gateway.calls.length, 1);
   return { work: result.work as PersistedCommercialWork, facts, gateway, objectiveId: objective(result.work!, "SELECT_PRODUCTS").objectiveId };
 }
+
+/**
+ * SALES-AGENT-R2-A11.1, Part 2/4. Seeds a real, completed search_products
+ * execution row directly (same table/shape executeGovernedCapability itself
+ * persists) so settleCommercialWorkProjection's real DB reload
+ * (loadRecentCommercialCapabilityExecutions) finds it, exactly like a real
+ * SEARCH_PRODUCTS step execution would have left behind.
+ */
+async function seedSearchProductsExecution(query: string, items: Array<{ productId: string; name: string }>): Promise<void> {
+  await getPool().execute(
+    `INSERT INTO crm_capability_executions (
+      public_id, correlation_id, capability_name, capability_version,
+      availability_status, execution_status, retry_count, retryable, error_code,
+      request_summary_json, response_summary_json, evidence_json,
+      opportunity_id, conversation_id, started_at, completed_at
+    ) VALUES (?, ?, 'search_products', '1.0', 'available', 'completed', 0, 0, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+    [randomUUID(), unique("search-corr"), JSON.stringify({ query, limit: 5 }), JSON.stringify({ query, items }), JSON.stringify({}), opportunityId, conversationId, toMysqlDatetime(new Date(NOW)), toMysqlDatetime(new Date(NOW))]
+  );
+}
+
+/**
+ * Sets up a work with one SELECT_PRODUCTS objective already WAITING_CUSTOMER
+ * on a real, completed search_products execution that found 2 ambiguous
+ * candidates - the exact "una pesa" live-bug shape this task's Part 4/11
+ * requires proof of stability for (WC-P equivalent).
+ */
+async function createAmbiguousProductWaitingWork() {
+  const productReference = unique("producto-ambiguo");
+  const candidateItems = [
+    { productId: "31", name: "Barra Olimpica Classic 20kg" },
+    { productId: "32", name: "Barra Olimpica Pro 20kg" }
+  ];
+  // Seeded in the real DB (for settleCommercialWorkProjection's own reload
+  // later in WCP01) AND passed directly into the initial projection below
+  // (buildCommercialWorkProjection is pure - it only ever sees what its own
+  // recentCapabilityExecutions input carries, never reads the DB itself).
+  await seedSearchProductsExecution(productReference, candidateItems);
+  const created = await persist(
+    project({
+      objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference, quantity: 1 })],
+      recentCapabilityExecutions: [
+        {
+          publicId: unique("search-exec"),
+          capabilityName: "search_products",
+          executionStatus: "completed",
+          requestSummaryJson: { query: productReference, limit: 5 },
+          responseSummaryJson: { query: productReference, items: candidateItems },
+          completedAt: NOW
+        }
+      ]
+    })
+  );
+  assert.equal(created.work.status, "WAITING_CUSTOMER");
+  const select = objective(created.work, "SELECT_PRODUCTS");
+  assert.equal(select.missingRequirements.includes("PRODUCT_AMBIGUOUS"), true);
+  return { work: created.work as PersistedCommercialWork, objectiveId: select.objectiveId, productReference };
+}
+
+test("WCP01 (A11.1) an ambiguous product search stays WAITING_CUSTOMER with the same real candidates across repeated settle rounds - no drift, no infinite re-search", async () => {
+  const { work, objectiveId } = await createAmbiguousProductWaitingWork();
+
+  const settled = await settleCommercialWorkProjection({
+    work,
+    conversationId,
+    opportunityId,
+    correlationId: unique("settle-corr"),
+    now: new Date(NOW)
+  });
+  assert.equal(settled.status, "WAITING_CUSTOMER");
+  const select = objective(settled, "SELECT_PRODUCTS");
+  assert.equal(select.objectiveId, objectiveId, "same objective, never superseded merely by reprojecting");
+  assert.equal(select.missingRequirements.includes("PRODUCT_AMBIGUOUS"), true);
+  assert.equal(select.inputs.productCandidates?.length, 2, "the same 2 real candidates, never dropped or invented");
+  // No second search_products call was made - settle re-derives from the
+  // SAME already-completed execution, never re-searching an unresolved
+  // ambiguity that has not received a new customer answer.
+  const [executions] = await getPool().execute("SELECT COUNT(*) AS count FROM crm_capability_executions WHERE opportunity_id = ? AND capability_name = 'search_products'", [opportunityId]);
+  const count = Number((executions as Array<{ count: number }>)[0].count);
+  assert.equal(count, 1, "settle must not trigger a redundant search when ambiguity is already known");
+});
+
+test("WCP02 (A11.1) an irrelevant follow-up message never repeats the wrong question - it stays on the same real ambiguity, not a generic one", async () => {
+  const { work, objectiveId } = await createAmbiguousProductWaitingWork();
+
+  const reconciled = await reconcileCommercialTrigger({
+    trigger: { type: "CUSTOMER_MESSAGE", conversationId, opportunityId, sourceMessageId: null, commercialSequence: 2 },
+    conversation: { id: conversationId, humanOwnerActive: false, aiEnabled: true },
+    opportunity: { id: opportunityId },
+    now: NOW,
+    previousWork: work,
+    // "me puedes ayudar" / "una pesa" style vague follow-up - the planner
+    // emits nothing new to plan, so only the carried objective survives.
+    semanticObjectives: []
+  });
+  assert.equal(reconciled.status, "updated");
+  const select = objective(reconciled.work, "SELECT_PRODUCTS");
+  assert.equal(select.objectiveId, objectiveId, "same objective - a vague reply is never treated as a fresh, unrelated request");
+  assert.equal(select.status, "WAITING_CUSTOMER");
+  assert.equal(select.missingRequirements.includes("PRODUCT_AMBIGUOUS"), true, "still the real ambiguity, never silently reset to the generic MISSING_PRODUCT question");
+  assert.equal(select.inputs.productCandidates?.length, 2);
+});
 
 test("WC01/WC02 missing_information keeps the step WAITING_CUSTOMER and calls the capability exactly once, including across a later pass over unchanged state", async () => {
   const { work, facts, gateway } = await createWaitingCustomerWork();

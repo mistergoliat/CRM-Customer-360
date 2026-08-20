@@ -28,9 +28,32 @@ export function deriveCommercialWorkStatus(input: Pick<CommercialWork, "objectiv
   return "ACTIVE";
 }
 
+/**
+ * SALES-AGENT-R2-A11.1, Part 7. Every step in deriveCommercialWorkSteps.ts
+ * copies `blockers: [...objective.blockers]` onto itself (by design - a
+ * step-level consumer should not have to cross-reference its objective) -
+ * naively concatenating objective blockers and step blockers therefore
+ * double-counts every objective-level blocker once directly and once via
+ * each step that owns it. Identity here matches how blockers are already
+ * located elsewhere in this codebase (e.g. deriveCommercialWorkSteps.ts's
+ * own `objective.blockers.find((item) => item.code === ...)`): code +
+ * source + objectiveId + stepId. First occurrence wins.
+ */
+export function dedupeCommercialWorkBlockers(blockers: readonly CommercialWorkBlocker[]): CommercialWorkBlocker[] {
+  const seen = new Set<string>();
+  const result: CommercialWorkBlocker[] = [];
+  for (const item of blockers) {
+    const key = `${item.code}|${item.source}|${item.objectiveId ?? ""}|${item.stepId ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
 export function collectCommercialWorkBlockers(input: Pick<CommercialWork, "objectives" | "steps">, conversationBlockers: CommercialWorkBlocker[] = []): CommercialWorkBlocker[] {
   const blockers: CommercialWorkBlocker[] = [...conversationBlockers];
   for (const objective of input.objectives) blockers.push(...objective.blockers);
   for (const step of input.steps) blockers.push(...step.blockers);
-  return blockers;
+  return dedupeCommercialWorkBlockers(blockers);
 }

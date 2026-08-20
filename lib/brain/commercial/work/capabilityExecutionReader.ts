@@ -63,7 +63,7 @@ export async function loadRecentCommercialCapabilityExecutions(
 
   params.push(Math.max(1, Math.min(input.limit ?? 20, 100)));
   const rows = await queryRows<Record<string, unknown>>(
-    `SELECT id, public_id, capability_name, execution_status, retryable, error_code, response_summary_json, completed_at
+    `SELECT id, public_id, capability_name, execution_status, retryable, error_code, request_summary_json, response_summary_json, completed_at
       FROM crm_capability_executions
       WHERE ${where.join(" AND ")}
       ORDER BY COALESCE(completed_at, updated_at, created_at) DESC, id DESC
@@ -78,6 +78,7 @@ export async function loadRecentCommercialCapabilityExecutions(
     executionStatus: (asText(row.execution_status) ?? "failed") as CommercialCapabilityExecutionProjection["executionStatus"],
     retryable: asBool(row.retryable),
     errorCode: asText(row.error_code),
+    requestSummaryJson: parseJson(row.request_summary_json),
     responseSummaryJson: parseJson(row.response_summary_json),
     completedAt: asIso(row.completed_at)
   }));

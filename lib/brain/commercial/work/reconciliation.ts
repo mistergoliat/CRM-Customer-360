@@ -138,11 +138,18 @@ function withSequenceAndLineage(work: CommercialWork, input: { target: Commercia
   const lastReconciledSequence =
     input.incomingSequence && previousLatest ? Math.max(input.incomingSequence, previousLatest) : input.incomingSequence ?? previousLatest;
   const supersedesWorkPublicId = input.target.action === "create" && previous ? previous.publicId : null;
+  // SALES-AGENT-R2-A11.1, Part 8. For "create", previous is a DIFFERENT
+  // (terminal) work being superseded, so pointing lineage at it is correct.
+  // For "update", previous IS this same work (same publicId, in-place
+  // update) - previous.publicId here would self-reference, so instead carry
+  // forward whatever lineage was already persisted on this row
+  // (previous.previousWorkPublicId), never previous.publicId itself.
+  const previousWorkPublicId = input.target.action === "create" ? (previous?.publicId ?? null) : (input.target.previousWork.previousWorkPublicId ?? null);
   return {
     ...work,
     sourceSequence: input.incomingSequence,
     lastReconciledSequence,
-    previousWorkPublicId: previous?.publicId ?? null,
+    previousWorkPublicId,
     supersedesWorkPublicId
   };
 }

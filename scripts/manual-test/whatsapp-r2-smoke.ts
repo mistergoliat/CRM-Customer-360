@@ -262,7 +262,49 @@ async function main() {
     report.push({ caseId: "WA-R2-06", evidence: turn });
   }
 
-  console.log("\n================ SALES-AGENT-R2-A08.5 WHATSAPP SMOKE REPORT ================\n");
+  // ============================ WA-R2-07 ============================
+  // SALES-AGENT-R2-A11.1. Reproduces WA01 exactly: a first-mention product
+  // reference the R2 planner has never seen before, quantity included in
+  // the same message, and NO seed turn (no RecentCatalogContext evidence
+  // exists at all) - the precise shape of the live bug. This drives the
+  // customer message straight through R2 (useCommercialWork stays true,
+  // unlike WA-R2-01..06's legacy-routed seed turns), so the NEW
+  // SEARCH_PRODUCTS step is what has to resolve it. The local fixture
+  // catalog server (setupBenchmarkEnvironment) always returns the same 2
+  // products for any query, so the expected, correct outcome here is
+  // WAITING_CUSTOMER with missingRequirements including PRODUCT_AMBIGUOUS
+  // and the dispatched message naming both real products - never the old
+  // generic "Que producto te interesa?" (Bug 1), and never
+  // MISSING_PRODUCT_EVIDENCE/a customer-owed follow-up for what was really
+  // a system-owned "never searched yet" gap.
+  if (shouldRun("WA-R2-07")) {
+    const waId = uniqueWaId("07");
+    const seed = await inject(waId, "hola", false);
+    await seedMinimalOpportunity(seed.result.conversationId as number, waId);
+    const turn = await describeTurn("WA-R2-07 WA01 reproduction: first-mention product reference, real search required", waId, "buenas. neesito 2 discos olimpicos de 20kg");
+    report.push({ caseId: "WA-R2-07", evidence: turn });
+
+    // WA-R2-08: the "una pesa" continuation - Bug 2's exact shape. A vague
+    // follow-up after the ambiguous search result must not repeat the
+    // identical question forever; it must either progress or, at minimum,
+    // dispatch based on the CURRENT (ambiguous) state, never an infinite
+    // loop of the same missing_information response regardless of what the
+    // customer says next.
+    if (shouldRun("WA-R2-08")) {
+      const first = await describeTurn("WA-R2-08a follow-up 1: vague, does not resolve the ambiguity", waId, "me puedes ayudar");
+      const second = await describeTurn("WA-R2-08b follow-up 2: still vague", waId, "una pesa");
+      report.push({
+        caseId: "WA-R2-08",
+        evidence: {
+          first,
+          second,
+          sameMessageRepeatedVerbatim: Boolean(first.outboxMessage?.message_text && first.outboxMessage.message_text === second.outboxMessage?.message_text)
+        }
+      });
+    }
+  }
+
+  console.log("\n================ SALES-AGENT-R2-A08.5/A11.1 WHATSAPP SMOKE REPORT ================\n");
   console.log(JSON.stringify({ report }, null, 2));
 
   if (realSend && realSendTarget) {

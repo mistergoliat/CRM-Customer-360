@@ -11,7 +11,7 @@ import { getActiveShippingDestinationForOpportunity } from "@/lib/domains/shippi
 import type { ShippingDestination } from "@/lib/domains/shipping-destination";
 import { getActiveSelectedShippingOptionForOpportunity } from "@/lib/domains/selected-shipping-option";
 import type { SelectedShippingOption } from "@/lib/domains/selected-shipping-option";
-import { deriveCommercialWorkMetrics } from "./evaluateCommercialWork";
+import { deriveCommercialWorkMetrics, dedupeCommercialWorkBlockers } from "./evaluateCommercialWork";
 import type { CommercialWorkStatus, CommercialWorkStepStatus } from "./statuses";
 import type { PersistedCommercialWork, CommercialWorkDatabaseAdapter } from "./persistenceTypes";
 import { CommercialWorkPersistenceError } from "./persistenceTypes";
@@ -20,7 +20,7 @@ import { calculateCommercialWorkNextAttemptAt, getCommercialWorkRetryPolicy } fr
 import { canTransitionCommercialWorkStatus } from "./transitions";
 import type { CommercialEvidenceRef, CommercialObjective, CommercialWork, CommercialWorkBlocker, CommercialWorkStep } from "./types";
 
-const EXECUTABLE_STEP_TYPES = new Set(["SELECT_PRODUCTS", "SET_SHIPPING_DESTINATION", "CALCULATE_SHIPPING", "CREATE_QUOTE"]);
+const EXECUTABLE_STEP_TYPES = new Set(["SEARCH_PRODUCTS", "SELECT_PRODUCTS", "SET_SHIPPING_DESTINATION", "CALCULATE_SHIPPING", "CREATE_QUOTE"]);
 const TERMINAL_WORK_STATUSES = new Set<CommercialWorkStatus>(["COMPLETED", "CANCELLED", "SUPERSEDED", "HANDOFF", "FAILED"]);
 
 type CurrentFacts = {
@@ -279,6 +279,8 @@ function repairEvidence(step: CommercialWorkStep, facts: CurrentFacts): Commerci
 
 function buildGatewayInput(step: CommercialWorkStep): Record<string, unknown> {
   switch (step.type) {
+    case "SEARCH_PRODUCTS":
+      return { query: step.input.productReference ?? step.input.query ?? "", limit: 5 };
     case "SELECT_PRODUCTS":
       return { items: step.input.items ?? [] };
     case "SET_SHIPPING_DESTINATION":
@@ -483,7 +485,7 @@ function nextAggregate(
 ): CommercialWork {
   const steps = activateUnblockedSteps(work, facts, outcomes, options);
   const objectives = work.objectives.map((objective) => refreshObjectiveState(objective, steps, facts));
-  const blockers = [...extraBlockers, ...objectives.flatMap((objective) => objective.blockers), ...steps.flatMap((step) => step.blockers)];
+  const blockers = dedupeCommercialWorkBlockers([...extraBlockers, ...objectives.flatMap((objective) => objective.blockers), ...steps.flatMap((step) => step.blockers)]);
   const wantedStatus = deriveNextWorkStatus(work.status, objectives, steps, blockers);
   const status = canTransitionCommercialWorkStatus(work.status, wantedStatus) ? wantedStatus : work.status;
   const next = { ...work, status, objectives, steps, blockers, derivedAt: new Date().toISOString() };

@@ -56,7 +56,14 @@ export function commercialObjectiveSeedsFromResolvedIntent(resolved: ResolvedInt
       inputs: {
         ...(resolved.intent.productReference ? { productReference: resolved.intent.productReference } : {}),
         ...(quantityValue !== undefined ? { quantity: quantityValue } : {}),
-        ...(product?.status === "ambiguous" || product?.status === "missing" ? { productEvidenceAvailable: false } : {})
+        ...(product?.status === "ambiguous" || product?.status === "missing" ? { productEvidenceAvailable: false } : {}),
+        // SALES-AGENT-R2-A11.1, Part 2. requirementResolver.ts's PRODUCT
+        // "ambiguous" status already carries real candidates from
+        // RecentCatalogContext (a prior search this same conversation) -
+        // buildCommercialWorkProjection.ts's applyObjectiveState uses these
+        // directly (skipping a redundant fresh search_products call) when
+        // present, exactly like the R2-07 architecture scenario documents.
+        ...(product?.status === "ambiguous" ? { productCandidates: product.candidates } : {})
       }
     });
     return seeds;

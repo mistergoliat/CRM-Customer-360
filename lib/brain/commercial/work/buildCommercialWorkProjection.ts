@@ -58,6 +58,52 @@ function latestCalculateShippingExecution(executions: readonly CommercialCapabil
   })[0] ?? null;
 }
 
+/**
+ * SALES-AGENT-R2-A11.1, Part 2. Matched on the ORIGINAL request query text
+ * (requestSummaryJson, populated unconditionally by executeCapability.ts's
+ * `requestSummary = definition.buildRequestSummary ? ... : input`, even on
+ * failure) rather than the response payload - a failed/temporarily-blocked
+ * search has no responseSummaryJson (executeCapability.ts persists
+ * responseSummary: null on every non-execute() early return), so matching on
+ * the response would make a real catalog outage invisible to this objective
+ * and leave it stuck re-deriving READY -> re-searching forever instead of
+ * reaching WAITING_SYSTEM.
+ */
+function latestSearchProductsExecution(
+  executions: readonly CommercialCapabilityExecutionProjection[] | undefined,
+  productReference: string | undefined
+): CommercialCapabilityExecutionProjection | null {
+  if (!productReference) return null;
+  const wantedQuery = normalizeText(productReference);
+  const candidates = (executions ?? []).filter((execution) => {
+    if (execution.capabilityName !== "search_products") return false;
+    const requestQuery = execution.requestSummaryJson && typeof execution.requestSummaryJson.query === "string" ? execution.requestSummaryJson.query : null;
+    return requestQuery !== null && normalizeText(requestQuery) === wantedQuery;
+  });
+  return candidates.sort((a, b) => {
+    const left = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+    const right = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+    return right - left;
+  })[0] ?? null;
+}
+
+type SearchProductsCandidate = { productId: string; combinationId?: string; name: string };
+
+function searchProductsCandidates(execution: CommercialCapabilityExecutionProjection): SearchProductsCandidate[] {
+  const rawItems = execution.responseSummaryJson?.items;
+  if (!Array.isArray(rawItems)) return [];
+  return rawItems
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item) => {
+      const productId = typeof item.productId === "string" ? item.productId : typeof item.productId === "number" ? String(item.productId) : null;
+      if (!productId) return null;
+      const combinationId = typeof item.combinationId === "string" && item.combinationId !== "0" ? item.combinationId : undefined;
+      const name = typeof item.name === "string" && item.name.trim() ? item.name.trim() : typeof item.sku === "string" ? item.sku : productId;
+      return { productId, ...(combinationId ? { combinationId } : {}), name } satisfies SearchProductsCandidate;
+    })
+    .filter((candidate): candidate is SearchProductsCandidate => candidate !== null);
+}
+
 function executionAnchorStatus(input: {
   execution: CommercialCapabilityExecutionProjection | null;
   selectionFactId: string | null;
@@ -144,20 +190,68 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
           objective.blockers.push(blocker("MISSING_QUANTITY", "objective", objective.objectiveId));
           return;
         }
-        if (objective.inputs.productEvidenceAvailable === false) {
-          // An ambiguous/unresolved product reference needs the customer to
-          // pick one, exactly like a missing product name two branches above -
-          // WAITING_CUSTOMER, never BLOCKED (BLOCKED means a prior objective
-          // must complete first, which does not apply here). Matches
-          // objectiveFollowUpPolicies.ts's MISSING_INFORMATION policy, which
-          // already lists MISSING_PRODUCT_EVIDENCE as a followup-eligible
-          // waiting reason for SELECT_PRODUCTS - that policy only ever
-          // applies to a WAITING_CUSTOMER objective.
+        // SALES-AGENT-R2-A11.1, Part 2/3. A productReference with no
+        // resolved items is not automatically a customer question anymore -
+        // it is a SYSTEM-OWNED gap first: has search_products actually been
+        // asked about THIS reference yet? Only a REAL search outcome (0/1/N
+        // candidates, or a technical failure) may turn this into
+        // WAITING_CUSTOMER/WAITING_SYSTEM/FAILED - "never searched" always
+        // becomes READY so deriveCommercialWorkSteps.ts can derive and run a
+        // SEARCH_PRODUCTS step. This replaces the old
+        // productEvidenceAvailable-based short-circuit, which conflated
+        // "the system never looked" with "the customer must clarify" - see
+        // docs/releases/SALES-AGENT-R2-A11.1-*.md, Part 1/2 for the root
+        // cause this fixes (WA01 live bug).
+        // R2-07 (SALES-AGENT-R2-A07.5 architecture corpus): the semantic
+        // layer's own requirementResolver.ts may already carry real
+        // candidates from RecentCatalogContext (a search already done this
+        // conversation, via the legacy loop) - semanticIntentAdapter.ts
+        // attaches these as productCandidates. That is real evidence too;
+        // asking search_products again would be a redundant network call
+        // for information already in hand.
+        if (objective.inputs.productCandidates?.length) {
           objective.status = "WAITING_CUSTOMER";
-          objective.missingRequirements.push("PRODUCT_EVIDENCE");
-          objective.blockers.push(blocker("MISSING_PRODUCT_EVIDENCE", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+          objective.missingRequirements.push("PRODUCT_AMBIGUOUS");
+          objective.blockers.push(blocker("PRODUCT_AMBIGUOUS", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
           return;
         }
+        const searchExecution = latestSearchProductsExecution(input.recentCapabilityExecutions, objective.inputs.productReference);
+        if (!searchExecution) {
+          objective.status = "READY";
+          break;
+        }
+        if (searchExecution.executionStatus === "completed") {
+          const candidates = searchProductsCandidates(searchExecution);
+          objective.evidence.push(capabilityEvidence(searchExecution));
+          if (candidates.length === 1) {
+            const match = candidates[0];
+            objective.inputs = { ...objective.inputs, items: [{ productId: match.productId, combinationId: match.combinationId ?? null, quantity: objective.inputs.quantity }] };
+            objective.status = "READY";
+            break;
+          }
+          if (candidates.length > 1) {
+            objective.status = "WAITING_CUSTOMER";
+            objective.missingRequirements.push("PRODUCT_AMBIGUOUS");
+            objective.inputs = { ...objective.inputs, productCandidates: candidates.slice(0, 5) };
+            objective.blockers.push(blocker("PRODUCT_AMBIGUOUS", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+            return;
+          }
+          objective.status = "WAITING_CUSTOMER";
+          objective.missingRequirements.push("PRODUCT_NOT_FOUND");
+          objective.blockers.push(blocker("PRODUCT_NOT_FOUND", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+          return;
+        }
+        // Technical failure (catalog unavailable, invalid_arguments, etc.) -
+        // system-owned, never WAITING_CUSTOMER (Part 3/12: catalog failure is
+        // never treated as a customer question).
+        objective.evidence.push(capabilityEvidence(searchExecution, false, searchExecution.errorCode ?? undefined));
+        if (searchExecution.retryable) {
+          objective.status = "WAITING_SYSTEM";
+          objective.blockers.push(blocker("WAITING_SYSTEM", "objective", objective.objectiveId));
+          return;
+        }
+        objective.status = "FAILED";
+        return;
       }
       // A10 Part 12/13: items (and quantity/evidence) are structurally
       // present - normally READY - but if this exact carried objective was

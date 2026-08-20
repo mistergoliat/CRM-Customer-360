@@ -80,6 +80,13 @@ export type CommercialObjectiveInputs = {
   quantity?: number;
   items?: CommercialLineItem[];
   productEvidenceAvailable?: boolean;
+  /**
+   * SALES-AGENT-R2-A11.1, Part 2. Populated only when a real search_products
+   * capability execution resolved 2+ ambiguous matches for productReference -
+   * grounds buildMissingInfoQuestion's PRODUCT_AMBIGUOUS wording in real
+   * catalog names instead of inventing/guessing options.
+   */
+  productCandidates?: { productId: string; combinationId?: string; name: string }[];
   destinationText?: string;
   communeId?: number;
   canonicalDestinationName?: string;
@@ -97,6 +104,8 @@ export type CommercialObjectiveResolvedInputs = {
 export type CommercialMissingRequirement =
   | "PRODUCT"
   | "PRODUCT_EVIDENCE"
+  | "PRODUCT_AMBIGUOUS"
+  | "PRODUCT_NOT_FOUND"
   | "QUANTITY"
   | "DESTINATION"
   | "SELECTION"
@@ -116,6 +125,8 @@ export type CommercialEvidenceRef = {
 export type CommercialWorkBlockerCode =
   | "MISSING_PRODUCT"
   | "MISSING_PRODUCT_EVIDENCE"
+  | "PRODUCT_AMBIGUOUS"
+  | "PRODUCT_NOT_FOUND"
   | "MISSING_QUANTITY"
   | "MISSING_DESTINATION"
   | "MISSING_SELECTION"
@@ -189,6 +200,7 @@ export type CommercialCapabilityExecutionProjection = {
   executionStatus: "completed" | "missing_information" | "denied" | "requires_approval" | "temporarily_blocked" | "invalid_arguments" | "failed" | "not_executed";
   retryable?: boolean;
   errorCode?: string | null;
+  requestSummaryJson?: Record<string, unknown> | null;
   responseSummaryJson?: Record<string, unknown> | null;
   completedAt?: string | null;
 };

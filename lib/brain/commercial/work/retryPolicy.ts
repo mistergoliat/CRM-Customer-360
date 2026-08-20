@@ -13,6 +13,14 @@ const MINUTE = 60_000;
 
 export const COMMERCIAL_WORK_RETRY_POLICIES: readonly CommercialWorkRetryPolicy[] = [
   {
+    stepType: "SEARCH_PRODUCTS",
+    maxAttempts: 3,
+    baseDelayMs: MINUTE,
+    maxDelayMs: 5 * MINUTE,
+    retryableGatewayStatuses: ["temporarily_blocked"],
+    retryableOutcomeCodes: ["catalog_service_not_configured", "rate_limited", "unavailable", "timeout"]
+  },
+  {
     stepType: "SELECT_PRODUCTS",
     maxAttempts: 2,
     baseDelayMs: 30_000,

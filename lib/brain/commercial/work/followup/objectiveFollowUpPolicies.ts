@@ -35,6 +35,8 @@ export const OBJECTIVE_FOLLOW_UP_POLICY_REGISTRY: Record<ObjectiveFollowUpPolicy
     waitingReasons: [
       "MISSING_PRODUCT",
       "MISSING_PRODUCT_EVIDENCE",
+      "PRODUCT_AMBIGUOUS",
+      "PRODUCT_NOT_FOUND",
       "MISSING_QUANTITY",
       "MISSING_DESTINATION",
       "MISSING_SELECTION",
@@ -132,6 +134,12 @@ export function buildObjectiveFollowUpMessage(input: {
   }
   if (input.waitingReason === "MISSING_SELECTION" || input.waitingReason === "MISSING_PRODUCT") {
     return "Hola, para avanzar necesito que me confirmes que producto quieres considerar.";
+  }
+  if (input.waitingReason === "PRODUCT_AMBIGUOUS") {
+    return "Hola, encontré varias opciones para el producto que buscas. ¿Me confirmas cuál de ellas te interesa?";
+  }
+  if (input.waitingReason === "PRODUCT_NOT_FOUND") {
+    return "Hola, no encontré ese producto en el catálogo. ¿Puedes confirmarme el nombre exacto?";
   }
   return "Hola, quedo pendiente tu confirmacion para poder avanzar con la solicitud.";
 }

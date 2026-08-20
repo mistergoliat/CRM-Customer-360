@@ -365,7 +365,18 @@ test("Part 3: cancelling shipping preserves the product selection", async () => 
 test("Part 3: an untargeted cancellation cancels the whole work, never described as completed", async () => {
   const env = await setupR2BenchmarkEnvironment();
   try {
-    await turn(env, "quiero 2 Classic", { intents: [{ type: "select_products", productReference: "la classic", quantity: 2 }] });
+    // SALES-AGENT-R2-A11.1, Part 2. This benchmark's fixture catalog server
+    // (agent-loop/benchmark/environment.ts's catalogRequestHandler) always
+    // answers /v1/products/search with the same 2 fixed products regardless
+    // of query text (no seedProductSearchEvidence here) - any reference
+    // reaches search_products and lands ambiguous (2 candidates),
+    // WAITING_CUSTOMER, never COMPLETED. That is deliberate: this test's own
+    // purpose is cancelling a still-INCOMPLETE objective (WAITING_CUSTOMER ->
+    // CANCELLED is a valid transition), distinct from CANCEL04 below which
+    // cancels an already-COMPLETED one (forced to SUPERSEDED instead, per
+    // transitions.ts) via seedProductSearchEvidence's legacy-evidence fast
+    // path, which bypasses search_products entirely.
+    await turn(env, "quiero 2 de un producto inexistente", { intents: [{ type: "select_products", productReference: "producto ficticio zzz999 no existe", quantity: 2 }] });
     const result = await turn(env, "olvidalo", { intents: [{ type: "cancel", scope: "all" }] });
 
     assert.equal(result.work?.status, "CANCELLED");
@@ -373,6 +384,39 @@ test("Part 3: an untargeted cancellation cancels the whole work, never described
     assert.equal(result.dispatch?.disposition, "FINAL");
     assert.match(result.dispatch?.messageSent ?? "", /cancel/i);
     assert.doesNotMatch(result.dispatch?.messageSent ?? "", /complet/i);
+  } finally {
+    await env.teardown();
+  }
+});
+
+test("LINEAGE01 (A11.1) an in-place update never self-references previous_work_public_id", async () => {
+  const env = await setupR2BenchmarkEnvironment();
+  try {
+    await seedProductSearchEvidence(env, "31", "Classic");
+    // A single select_products objective completes and terminates the work
+    // in one turn (deriveCommercialWorkStatus: every objective COMPLETED ->
+    // work COMPLETED, a terminal status) - resolveCommercialWorkTarget would
+    // then treat turn 2 as "create" (a new work), never "update". Pairing it
+    // with get_shipping_quote with NO destination keeps the work
+    // WAITING_CUSTOMER (non-terminal) after turn 1, so turn 2 genuinely
+    // reconciles as an in-place update - the exact path
+    // withSequenceAndLineage's previousWorkPublicId fix targets (previously
+    // set unconditionally to previous.publicId, which for an update IS this
+    // same work's own publicId).
+    const first = await turn(env, "quiero 2 Classic, cuanto sale el despacho", {
+      intents: [
+        { type: "select_products", productReference: "la classic", quantity: 2 },
+        { type: "get_shipping_quote" }
+      ]
+    });
+    assert.notEqual(first.work?.status, "COMPLETED", "sanity check: this scenario must stay non-terminal after turn 1");
+    assert.notEqual(first.work?.previousWorkPublicId, first.work?.publicId, "a freshly created work must not self-reference either");
+
+    const second = await turn(env, "a Nunoa", { intents: [{ type: "get_shipping_quote", destination: "Nunoa" }] });
+
+    assert.ok(second.work);
+    assert.equal(second.work!.publicId, first.work!.publicId, "sanity check: this really is the same in-place-updated work");
+    assert.notEqual(second.work!.previousWorkPublicId, second.work!.publicId, "previous_work_public_id must never equal this same work's own public_id after an in-place update");
   } finally {
     await env.teardown();
   }
@@ -483,10 +527,21 @@ test("Part 5: a bare confirmation only maps to create_quote when the last agent 
 test("Part 6/7: an unresolved product reference asks for clarification instead of executing", async () => {
   const env = await setupR2BenchmarkEnvironment();
   try {
+    // SALES-AGENT-R2-A11.1, Part 2. The benchmark's fixture catalog server
+    // (lib/brain/commercial/agent-loop/benchmark/environment.ts's
+    // catalogRequestHandler) always answers /v1/products/search with the
+    // same 2 fixture products regardless of query text - "la Xtreme" now
+    // genuinely triggers a real search_products call (this task's whole
+    // point) that resolves to 2 ambiguous candidates, never 0. The
+    // original "evidence never resolves at all" scenario this test named is
+    // no longer reachable through this fixture once R2 can search for
+    // itself - PRODUCT_AMBIGUOUS (customer must pick one of the real
+    // options) is the equivalent "asks for clarification instead of
+    // executing" outcome now, and select_products is still never called.
     const result = await turn(env, "quiero la Xtreme", { intents: [{ type: "select_products", productReference: "la Xtreme", quantity: 1 }] });
     const objective = result.work?.objectives.find((o) => o.type === "SELECT_PRODUCTS");
     assert.equal(objective?.status, "WAITING_CUSTOMER");
-    assert.equal(objective?.missingRequirements.includes("PRODUCT_EVIDENCE"), true);
+    assert.equal(objective?.missingRequirements.includes("PRODUCT_AMBIGUOUS"), true);
     assert.equal(await countCapabilityExecutions(env.opportunityId, "select_products"), 0, "no capability call for unresolved evidence");
     assert.doesNotMatch(result.dispatch?.messageSent ?? "", /invalid_arguments|undefined|null/i);
   } finally {

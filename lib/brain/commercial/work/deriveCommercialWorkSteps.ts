@@ -85,7 +85,66 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
         );
         break;
       case "SELECT_PRODUCTS":
-      case "CHANGE_QUANTITY":
+      case "CHANGE_QUANTITY": {
+        // SALES-AGENT-R2-A11.1, Part 2. A READY objective with a
+        // productReference but no resolved items yet needs a real catalog
+        // search before SELECT_PRODUCTS can run - applyObjectiveState only
+        // reaches READY-with-no-items when latestSearchProductsExecution
+        // found nothing matching this exact reference yet (never READY on a
+        // bare unresolved reference otherwise). SELECT_PRODUCTS then depends
+        // on that step COMPLETING, reusing the same generic
+        // STEP_COMPLETED/activateUnblockedSteps reactivation mechanism
+        // CALCULATE_SHIPPING already relies on for FACT_CONFIRMED deps -
+        // no new engine behavior, just a new dependency edge.
+        const needsSearch = objective.status === "READY" && !objective.inputs.items?.length && Boolean(objective.inputs.productReference);
+        if (needsSearch) {
+          const searchStepId = `${stepPrefix}:SEARCH_PRODUCTS`;
+          steps.push(
+            makeStep({
+              stepId: searchStepId,
+              objectiveIds: [objective.objectiveId],
+              type: "SEARCH_PRODUCTS",
+              status: "READY",
+              dependencies: [],
+              capabilityName: "search_products",
+              input: objective.inputs,
+              evidence: [...objective.evidence],
+              blockers: []
+            })
+          );
+          steps.push(
+            makeStep({
+              stepId: `${stepPrefix}:SELECT_PRODUCTS`,
+              objectiveIds: [objective.objectiveId],
+              type: "SELECT_PRODUCTS",
+              status: "BLOCKED",
+              dependencies: [{ type: "STEP_COMPLETED", stepId: searchStepId }],
+              capabilityName: "select_products",
+              input: objective.inputs,
+              evidence: [...objective.evidence],
+              // SALES-AGENT-R2-A11.1, Part 2. commercialWorkExecutor.ts's
+              // activateUnblockedSteps auto-flips ANY BLOCKED step with empty
+              // blockers straight to READY the instant its STEP_COMPLETED
+              // dependency is satisfied - within the SAME executor pass that
+              // just ran SEARCH_PRODUCTS, before a fresh projection round
+              // ever gets to interpret the search result into
+              // objective.inputs.items. Left at blockers: [], this step would
+              // run select_products with empty items one full round early
+              // (reproduced live: search completes, this step reactivates
+              // immediately, calls select_products with items: [], capability
+              // fails, objective reads FAILED). MISSING_PRODUCT_EVIDENCE is
+              // not in canAutoActivateStep's allow-list, so this step only
+              // ever becomes READY/WAITING_CUSTOMER through the NEXT fresh
+              // buildCommercialWorkProjection round, by which point
+              // applyObjectiveState has already turned the search result into
+              // real items (or a real WAITING_CUSTOMER/WAITING_SYSTEM
+              // objective status) and re-derives this step's status from
+              // that, correctly, via the plain (non-needsSearch) branch below.
+              blockers: [blocker("MISSING_PRODUCT_EVIDENCE", "step", objective.objectiveId, `${stepPrefix}:SELECT_PRODUCTS`)]
+            })
+          );
+          break;
+        }
         steps.push(
           makeStep({
             stepId: `${stepPrefix}:SELECT_PRODUCTS`,
@@ -109,6 +168,7 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
           })
         );
         break;
+      }
       case "SET_DESTINATION":
         steps.push(
           makeStep({

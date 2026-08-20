@@ -189,7 +189,12 @@ const R2_07: R2ArchitectureScenario = {
   description: "Ambiguous product reference - two real candidates, zero guessed product.",
   customerTurns: [{ customerMessage: "dame la barra", recentCatalogContext: AMBIGUOUS_BAR_CATALOG_CONTEXT }],
   expected: {
-    objectives: [{ type: "SELECT_PRODUCTS", status: "WAITING_CUSTOMER", missingRequirements: ["PRODUCT_EVIDENCE"] }],
+    // SALES-AGENT-R2-A11.1, Part 6. PRODUCT_AMBIGUOUS replaces the old
+    // generic PRODUCT_EVIDENCE code - buildCommercialWorkFinalizerMessage.ts
+    // now distinguishes "ambiguous, here are the real options" from a
+    // system-owned search-not-yet-attempted gap, which PRODUCT_EVIDENCE used
+    // to conflate.
+    objectives: [{ type: "SELECT_PRODUCTS", status: "WAITING_CUSTOMER", missingRequirements: ["PRODUCT_AMBIGUOUS"] }],
     workStatus: "WAITING_CUSTOMER",
     stepStatuses: [{ type: "SELECT_PRODUCTS", status: "WAITING_CUSTOMER" }],
     durableFacts: {},

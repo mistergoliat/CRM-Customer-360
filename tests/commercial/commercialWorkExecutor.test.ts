@@ -329,13 +329,23 @@ test("CWEX18-CWEX21 isolates temporary failures, continues independent ready wor
 });
 
 test("CWEX22-CWEX24 blocks unsupported step types and conversation control before any gateway call", async () => {
-  const unsupportedCreated = await persist(project({ objectiveSeeds: [objectiveSeed("DISCOVER_PRODUCTS", { query: "barra" })] }));
+  // SALES-AGENT-R2-A11.1, Part 2: SEARCH_PRODUCTS (DISCOVER_PRODUCTS' own
+  // step) is now a real, executable step type, so it can no longer stand in
+  // as "an unsupported step type" here. Every OTHER still-unsupported type
+  // (RECOMMEND_PRODUCTS, SELECT_SHIPPING_OPTION, HANDOFF) has a real
+  // dependency that a fresh seed never satisfies on its own, so this
+  // synthesizes a READY, dependency-satisfied step and retypes it - same
+  // artificial-construction pattern the "cyclic" case above already uses in
+  // this file (mutating a freshly projected work before persisting it).
+  const unsupportedWork = project({ objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { items: [{ productId: "31", combinationId: null, quantity: 2 }] })] });
+  unsupportedWork.steps[0].type = "HANDOFF";
+  const unsupportedCreated = await persist(unsupportedWork);
   const facts: MutableFacts = { commercialLineItems: null, shippingDestination: null, selectedShippingOption: null, createdQuote: null };
   const gateway = makeGateway(facts);
 
   const unsupported = await executeCommercialWork(baseExecutionInput(unsupportedCreated.work.publicId, 1, facts, gateway.executeCapability));
   assert.equal(unsupported.records[0].errorCode, "unsupported_step_type");
-  assert.equal(step(unsupported.work!, "SEARCH_PRODUCTS").status, "BLOCKED");
+  assert.equal(step(unsupported.work!, "HANDOFF").status, "BLOCKED");
   assert.equal(gateway.calls.length, 0);
 
   const handoffCreated = await persist(project({ objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { items: [{ productId: "31", combinationId: null, quantity: 2 }] })] }));

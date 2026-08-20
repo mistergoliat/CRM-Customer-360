@@ -51,6 +51,27 @@ function shippingExecution(input: {
   };
 }
 
+function searchProductsExecution(input: {
+  query: string;
+  items?: Array<{ productId: string; combinationId?: string | null; name: string }>;
+  executionStatus?: CommercialCapabilityExecutionProjection["executionStatus"];
+  retryable?: boolean;
+  errorCode?: string | null;
+  publicId?: string;
+}): CommercialCapabilityExecutionProjection {
+  const executionStatus = input.executionStatus ?? "completed";
+  return {
+    publicId: input.publicId ?? "search-exec-1",
+    capabilityName: "search_products",
+    executionStatus,
+    retryable: input.retryable ?? false,
+    errorCode: input.errorCode ?? null,
+    completedAt: NOW,
+    requestSummaryJson: { query: input.query, limit: 5 },
+    responseSummaryJson: executionStatus === "completed" ? { query: input.query, items: input.items ?? [] } : null
+  };
+}
+
 function quote(selectionFactId = "selection-2-classic"): CreatedQuote {
   return {
     factId: "quote-fact-1",
@@ -199,12 +220,84 @@ test("CW09 shipping unavailable projects waiting system and retry candidate", ()
   assert.equal(step(work, "CALCULATE_SHIPPING").retryCandidate, true);
 });
 
-test("CW09b ambiguous/unresolved product evidence waits for customer clarification, never BLOCKED", () => {
-  const work = project({ objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "la barra", quantity: 1, productEvidenceAvailable: false })] });
-  assert.equal(objective(work, "SELECT_PRODUCTS").status, "WAITING_CUSTOMER");
-  assert.equal(objective(work, "SELECT_PRODUCTS").missingRequirements.includes("PRODUCT_EVIDENCE"), true);
+test("CW09b1 (A11.1) an unresolved product reference with no search yet is READY, not WAITING_CUSTOMER - system must search first", () => {
+  const work = project({ objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "la barra", quantity: 1 })] });
+  assert.equal(objective(work, "SELECT_PRODUCTS").status, "READY");
+  assert.equal(step(work, "SEARCH_PRODUCTS").status, "READY");
+  assert.equal(step(work, "SEARCH_PRODUCTS").capabilityName, "search_products");
+  const selectStep = work.steps.find((item) => item.type === "SELECT_PRODUCTS");
+  assert.ok(selectStep);
+  assert.equal(selectStep!.status, "BLOCKED");
+  assert.equal(selectStep!.dependencies.some((dependency) => dependency.type === "STEP_COMPLETED"), true);
+});
+
+test("CW09b2 (A11.1) a completed search with exactly one candidate auto-selects and proceeds to READY select_products", () => {
+  const work = project({
+    objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "barra olimpica classic 20kg", quantity: 2 })],
+    recentCapabilityExecutions: [
+      searchProductsExecution({ query: "barra olimpica classic 20kg", items: [{ productId: "31", name: "Barra Olimpica Classic 20kg" }] })
+    ]
+  });
+  assert.equal(objective(work, "SELECT_PRODUCTS").status, "READY");
+  assert.deepEqual(objective(work, "SELECT_PRODUCTS").inputs.items, [{ productId: "31", combinationId: null, quantity: 2 }]);
+  assert.equal(step(work, "SELECT_PRODUCTS").status, "READY");
+  assert.equal(work.steps.some((item) => item.type === "SEARCH_PRODUCTS"), false);
+});
+
+test("CW09b3 (A11.1) a completed search with 2+ candidates waits for customer with real candidate names, never BLOCKED", () => {
+  const work = project({
+    objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "discos olimpicos de 20kg", quantity: 2 })],
+    recentCapabilityExecutions: [
+      searchProductsExecution({
+        query: "discos olimpicos de 20kg",
+        items: [
+          { productId: "40", name: "Disco Olimpico Bumper 20kg" },
+          { productId: "41", name: "Disco Olimpico Fundido 20kg" }
+        ]
+      })
+    ]
+  });
+  const select = objective(work, "SELECT_PRODUCTS");
+  assert.equal(select.status, "WAITING_CUSTOMER");
+  assert.equal(select.missingRequirements.includes("PRODUCT_AMBIGUOUS"), true);
+  assert.equal(select.inputs.productCandidates?.length, 2);
   assert.equal(step(work, "SELECT_PRODUCTS").status, "WAITING_CUSTOMER");
   assert.equal(work.status, "WAITING_CUSTOMER");
+});
+
+test("CW09b4 (A11.1) a completed search with zero candidates waits for customer as not-found, never invents a product", () => {
+  const work = project({
+    objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "producto inexistente", quantity: 1 })],
+    recentCapabilityExecutions: [searchProductsExecution({ query: "producto inexistente", items: [] })]
+  });
+  const select = objective(work, "SELECT_PRODUCTS");
+  assert.equal(select.status, "WAITING_CUSTOMER");
+  assert.equal(select.missingRequirements.includes("PRODUCT_NOT_FOUND"), true);
+  assert.equal(select.inputs.items, undefined);
+});
+
+test("CW09b5 (A11.1) a technically failed, retryable search never becomes WAITING_CUSTOMER - system-owned, WAITING_SYSTEM instead", () => {
+  const work = project({
+    objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "discos olimpicos de 20kg", quantity: 2 })],
+    recentCapabilityExecutions: [
+      searchProductsExecution({ query: "discos olimpicos de 20kg", executionStatus: "temporarily_blocked", retryable: true, errorCode: "catalog_service_not_configured" })
+    ]
+  });
+  const select = objective(work, "SELECT_PRODUCTS");
+  assert.equal(select.status, "WAITING_SYSTEM");
+});
+
+test("BLOCK01 (A11.1) work.blockers never duplicates an objective's blocker via its step's verbatim copy", () => {
+  // deriveCommercialWorkSteps.ts copies blockers: [...objective.blockers]
+  // onto the SELECT_PRODUCTS step by design (source: "objective", no
+  // stepId - a step-level consumer should not have to cross-reference its
+  // objective) - a missing-product objective is the simplest reproduction:
+  // MISSING_PRODUCT ends up on both the objective and its step, and
+  // collectCommercialWorkBlockers (evaluateCommercialWork.ts) must not
+  // double-count it in the work-level aggregate.
+  const work = project({ objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS")] });
+  const missingProductBlockers = work.blockers.filter((item) => item.code === "MISSING_PRODUCT");
+  assert.equal(missingProductBlockers.length, 1, `expected exactly one MISSING_PRODUCT blocker, got ${missingProductBlockers.length}`);
 });
 
 test("CW10 quantity change invalidates dependent shipping evidence before the durable fact is updated", () => {
