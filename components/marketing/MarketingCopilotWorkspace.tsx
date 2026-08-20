@@ -1,243 +1,209 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { StatusChip } from "@/components/ui/StatusChip";
 import { SectionCard } from "@/components/p1m/SectionCard";
 import { InfoGrid } from "@/components/p1m/InfoGrid";
+import {
+  CUSTOMER_INTELLIGENCE_COPILOT_DEMO_QUESTIONS,
+  type CustomerIntelligenceCopilotResponse
+} from "@/lib/marketing/customerIntelligenceCopilot";
+
+void React;
 
 type MarketingCopilotWorkspaceProps = {
   data: {
-    messages: { id: string; role: string; label: string; body: string }[];
-    quickReplies: string[];
-    draft: {
-      name: string;
-      objective: string;
-      segment: string;
-      channels: string;
-      schedule: string;
-      approval: string;
-      utm: string;
-      subject: string;
-      preheader: string;
-      cta: string;
-      audience: string;
-      rules: string[];
-      exclusions: string[];
-      content: string[];
-      variants: { label: string; content: string }[];
-      lastEdit: string;
-    };
-    governance: string[];
-    summary: string[];
+    quickReplies?: string[];
   };
 };
 
-export function MarketingCopilotWorkspace({ data }: MarketingCopilotWorkspaceProps) {
-  const [messages, setMessages] = useState(data.messages);
-  const [draftText, setDraftText] = useState("");
-  const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
-  const [campaignDraft, setCampaignDraft] = useState(data.draft);
+type Turn = {
+  id: string;
+  question: string;
+  response: CustomerIntelligenceCopilotResponse;
+};
 
-  const recentMessage = useMemo(() => messages[messages.length - 1], [messages]);
+export function MarketingCopilotWorkspace({ data: _data }: MarketingCopilotWorkspaceProps) {
+  void _data;
+  const examples = CUSTOMER_INTELLIGENCE_COPILOT_DEMO_QUESTIONS;
+  const [question, setQuestion] = useState<string>(examples[1] ?? "");
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const pushMessage = (body: string, role: "user" | "copilot") => {
-    const next = { id: `${role}-${messages.length + 1}`, role, label: role === "user" ? "Usuario" : "Copilot", body };
-    setMessages((current) => [...current, next]);
-  };
+  const latest = turns[0] ?? null;
+  const canSubmit = question.trim().length > 0 && !loading;
 
-  const handleQuickReply = (reply: string) => {
-    setDraftText(reply);
-    pushMessage(reply, "user");
-    pushMessage(`Tomado: ${reply}. Ajusto la propuesta localmente para la demo.`, "copilot");
-    setCampaignDraft((current) => ({
-      ...current,
-      lastEdit: "Actualizado localmente",
-      subject: reply.includes("asunto") ? "Asunto ajustado" : current.subject,
-      preheader: reply.includes("tono") ? "Preheader más urgente" : current.preheader
-    }));
-  };
+  async function submit(nextQuestion = question) {
+    const trimmed = nextQuestion.trim();
+    if (!trimmed || loading) return;
+    setQuestion(trimmed);
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/marketing/copilot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: trimmed })
+      });
+      const payload = (await response.json()) as CustomerIntelligenceCopilotResponse | { code?: string; message?: string };
+      if (!("status" in payload)) {
+        setError(payload.message ?? "Copilot no disponible.");
+        return;
+      }
+      setTurns((current) => [{ id: `${Date.now()}`, question: trimmed, response: payload }, ...current].slice(0, 5));
+    } catch {
+      setError("No se pudo contactar Marketing Copilot.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  const handleSend = () => {
-    if (!draftText.trim()) return;
-    const message = draftText.trim();
-    setDraftText("");
-    pushMessage(message, "user");
-    pushMessage("Actualización local aplicada. La campaña queda como borrador visual sin side effects.", "copilot");
-  };
+  const provenanceItems = useMemo(() => {
+    if (!latest || latest.response.status !== "answered") return [];
+    const provenance = latest.response.provenance;
+    return [
+      { label: "Comercial", value: formatSnapshot(provenance.featureSnapshot.snapshotId, provenance.featureSnapshot.referenceTime) },
+      { label: "RFM", value: provenance.rfmSnapshot ? formatSnapshot(provenance.rfmSnapshot.snapshotId, provenance.rfmSnapshot.referenceTime) : "Sin snapshot compatible" },
+      { label: "Clustering", value: provenance.clusterSnapshot ? `${formatSnapshot(provenance.clusterSnapshot.snapshotId, provenance.clusterSnapshot.referenceTime)} - ${provenance.clusterSnapshot.modelVersion}` : "Sin snapshot compatible" },
+      { label: "Cobertura RFM", value: `${provenance.population.rfmCoveragePct}%` },
+      { label: "Cobertura clustering", value: `${provenance.population.clusterCoveragePct}%` },
+      { label: "Poblacion analitica", value: provenance.population.featurePopulation.toLocaleString("es-CL") }
+    ];
+  }, [latest]);
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
-      <SectionCard title="Chat" eyebrow="Copilot" description="Historial conversacional y composer local.">
-        <div className="flex flex-wrap gap-2">
-          {data.quickReplies.map((reply) => (
-            <button key={reply} type="button" className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-label-sm font-semibold text-slate-700 hover:bg-white" onClick={() => handleQuickReply(reply)}>
-              {reply}
-            </button>
-          ))}
-        </div>
-        <div className="mt-4 space-y-3 rounded-3xl border border-slate-200 bg-[#efeae2] p-4">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`max-w-[90%] rounded-3xl px-4 py-3 shadow-sm ${
-                message.role === "user"
-                  ? "ml-auto border border-emerald-100 bg-emerald-50"
-                  : "border border-slate-200 bg-white"
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <StatusChip label={message.label} tone={message.role === "user" ? "blue" : "amber"} />
-              </div>
-              <p className="mt-2 text-body-md text-on-surface">{message.body}</p>
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <label className="text-label-bold uppercase text-slate-500">Composer</label>
-          <textarea
-            value={draftText}
-            onChange={(event) => setDraftText(event.target.value)}
-            placeholder="Escribe una instrucción para el copilot..."
-            className="hub-textarea mt-3 min-h-28 w-full bg-white"
-          />
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-label-sm text-slate-500">Último mensaje: {recentMessage?.body}</p>
-            <button className="hub-button-primary" type="button" onClick={handleSend}>
-              Enviar
-            </button>
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Campaña estructurada" eyebrow="Draft" description="Estado local de la campaña generada.">
-        <div className="space-y-5">
-          <InfoGrid
-            items={[
-              { label: "Nombre", value: campaignDraft.name },
-              { label: "Objetivo", value: campaignDraft.objective },
-              { label: "Segmento", value: campaignDraft.segment },
-              { label: "Canales", value: campaignDraft.channels },
-              { label: "Programación", value: campaignDraft.schedule },
-              { label: "Aprobación", value: campaignDraft.approval },
-              { label: "UTM", value: campaignDraft.utm }
-            ]}
-            columns={3}
-          />
-
-          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-label-bold uppercase text-slate-500">Preview mode</p>
-                <p className="text-body-md text-slate-600">Desktop y mobile alternables localmente.</p>
-              </div>
-              <div className="flex gap-2">
-                <button type="button" onClick={() => setPreviewMode("desktop")} className={`rounded-full px-3 py-1.5 text-label-sm font-bold uppercase ${previewMode === "desktop" ? "bg-primary text-white" : "bg-white text-slate-600"}`}>
-                  Desktop
-                </button>
-                <button type="button" onClick={() => setPreviewMode("mobile")} className={`rounded-full px-3 py-1.5 text-label-sm font-bold uppercase ${previewMode === "mobile" ? "bg-primary text-white" : "bg-white text-slate-600"}`}>
-                  Mobile
-                </button>
-              </div>
-            </div>
-            <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-label-bold uppercase text-slate-500">{previewMode === "desktop" ? "Vista desktop" : "Vista mobile"}</p>
-                  <h3 className="mt-1 text-headline-md text-on-surface">{campaignDraft.subject}</h3>
-                  <p className="mt-1 text-body-md text-slate-500">{campaignDraft.preheader}</p>
-                </div>
-                <StatusChip label={previewMode === "desktop" ? "1280 px" : "390 px"} tone="blue" />
-              </div>
-              <div className={`mt-4 rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 ${previewMode === "mobile" ? "max-w-[390px]" : ""}`}>
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <StatusChip label="Email" tone="blue" />
-                    <StatusChip label={campaignDraft.approval} tone="amber" />
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    {campaignDraft.content.map((line) => (
-                      <div key={line} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-body-md text-slate-700">
-                        {line}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-4 rounded-2xl bg-primary-fixed p-4 text-primary">
-                    <p className="text-label-bold uppercase">CTA</p>
-                    <p className="mt-1 text-body-md font-semibold">{campaignDraft.cta}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-label-bold uppercase text-slate-500">Reglas</p>
-              <ul className="mt-2 list-disc space-y-2 pl-5 text-body-md text-slate-700">
-                {campaignDraft.rules.map((item) => <li key={item}>{item}</li>)}
-              </ul>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-label-bold uppercase text-slate-500">Exclusiones</p>
-              <ul className="mt-2 list-disc space-y-2 pl-5 text-body-md text-slate-700">
-                {campaignDraft.exclusions.map((item) => <li key={item}>{item}</li>)}
-              </ul>
-            </div>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-label-bold uppercase text-slate-500">Variantes</p>
-              <div className="mt-2 space-y-2">
-                {campaignDraft.variants.map((variant) => (
-                  <div key={variant.label} className="rounded-2xl border border-slate-200 bg-white p-3">
-                    <p className="text-label-bold uppercase text-slate-500">Versión {variant.label}</p>
-                    <p className="mt-1 text-body-md text-slate-700">{variant.content}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-label-bold uppercase text-slate-500">Última edición</p>
-              <p className="mt-2 text-body-md text-slate-700">{campaignDraft.lastEdit}</p>
-              <p className="mt-2 text-label-sm text-slate-500">La edición es local y no persiste en backend.</p>
-            </div>
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Governance" eyebrow="Approval" description="Límites y acciones disponibles en preview.">
+    <div className="grid gap-5 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)]">
+      <SectionCard title="Pregunta" eyebrow="Marketing Copilot" description="Consulta analitica read-only sobre Customer Intelligence.">
         <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2">
-            {data.summary.map((item) => (
-              <div key={item} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-body-md text-slate-700">{item}</p>
-              </div>
-            ))}
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <label htmlFor="marketing-copilot-question" className="text-label-bold uppercase text-slate-500">
+              Pregunta
+            </label>
+            <textarea
+              id="marketing-copilot-question"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder="Ej: Cuantos clientes hay en cada cluster?"
+              className="hub-textarea mt-3 min-h-32 w-full bg-white"
+              maxLength={4000}
+            />
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-label-sm text-slate-500">{question.trim().length}/4000</p>
+              <button className="hub-button-primary" type="button" disabled={!canSubmit} onClick={() => void submit()}>
+                {loading ? "Consultando..." : "Preguntar"}
+              </button>
+            </div>
           </div>
+
           <div>
-            <p className="text-label-bold uppercase text-slate-500">Controles</p>
-            <ul className="mt-2 list-disc space-y-2 pl-5 text-body-md text-slate-700">
-              {data.governance.map((item) => <li key={item}>{item}</li>)}
-            </ul>
-          </div>
-          <div className="grid gap-2">
-            <button className="hub-button-primary" type="button" disabled>
-              Guardar borrador
-            </button>
-            <button className="hub-button-secondary" type="button" disabled>
-              Solicitar aprobación
-            </button>
-            <button className="hub-button-secondary" type="button" disabled>
-              Programar
-            </button>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <p className="text-label-bold uppercase text-slate-500">Integración de salida</p>
-            <p className="mt-2 text-body-md text-slate-700">Todo permanece en preview. No se envía ninguna campaña real.</p>
+            <p className="text-label-bold uppercase text-slate-500">Checklist demo</p>
+            <div className="mt-2 grid gap-2">
+              {examples.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  disabled={loading}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-body-md text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  onClick={() => void submit(example)}
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </SectionCard>
+
+      <div className="space-y-5">
+        <SectionCard title="Respuesta" eyebrow="Resultado" description="Respuesta generada solo desde resultados analiticos ejecutados por el runtime.">
+          {loading ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-body-md text-slate-700">Consultando planner, runtime y answerer...</div>
+          ) : error ? (
+            <StateMessage tone="red" title="Copilot no disponible" body={error} />
+          ) : latest ? (
+            <CopilotResponseView turn={latest} />
+          ) : (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-body-md text-slate-700">Selecciona una pregunta del checklist o escribe una consulta analitica.</div>
+          )}
+        </SectionCard>
+
+        <SectionCard title="Provenance" eyebrow="Contexto" description="Snapshot y cobertura usados para auditar la respuesta.">
+          {latest?.response.status === "answered" ? (
+            <div className="space-y-4">
+              <InfoGrid items={provenanceItems} columns={3} />
+              <CoverageNote response={latest.response} />
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-body-md text-slate-700">
+              La provenance aparece cuando una consulta se responde con datos.
+            </div>
+          )}
+        </SectionCard>
+      </div>
     </div>
   );
+}
+
+function CopilotResponseView({ turn }: { turn: Turn }) {
+  const response = turn.response;
+  if (response.status === "answered") {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+          <div className="flex items-center gap-2">
+            <StatusChip label="Answered" tone="blue" />
+            <span className="text-label-sm text-slate-500">{response.analysis.queryCount} query runtime</span>
+          </div>
+          <p className="mt-3 whitespace-pre-wrap text-body-lg text-on-surface">{response.answer}</p>
+        </div>
+        <InfoGrid
+          items={[
+            { label: "Filas resultado", value: response.analysis.resultRowCount.toLocaleString("es-CL") },
+            { label: "Duracion runtime", value: `${response.analysis.executionDurationMs} ms` },
+            { label: "Planner", value: response.analysis.plannerModel ?? "No reportado" },
+            { label: "Answerer", value: response.analysis.answerModel ?? "No reportado" }
+          ]}
+          columns={4}
+        />
+      </div>
+    );
+  }
+
+  if (response.status === "clarification_required") {
+    return <StateMessage tone="amber" title="Necesita criterio" body={response.message} />;
+  }
+  if (response.status === "unsupported_data") {
+    return <StateMessage tone="amber" title="Dato no disponible" body={response.message} />;
+  }
+  if (response.status === "unsupported_operation") {
+    return <StateMessage tone="amber" title="Operacion no soportada" body={response.message} />;
+  }
+  if (response.status === "planner_invalid") {
+    return <StateMessage tone="red" title="Planner invalido" body={response.errors.join(" - ")} />;
+  }
+  return <StateMessage tone="red" title="Servicio degradado" body={response.message} />;
+}
+
+function StateMessage({ tone, title, body }: { tone: "amber" | "red"; title: string; body: string }) {
+  return (
+    <div className={`rounded-2xl border p-4 ${tone === "amber" ? "border-amber-200 bg-amber-50" : "border-red-200 bg-red-50"}`}>
+      <StatusChip label={title} tone={tone === "amber" ? "amber" : "red"} />
+      <p className="mt-3 text-body-md text-slate-700">{body}</p>
+    </div>
+  );
+}
+
+function CoverageNote({ response }: { response: Extract<CustomerIntelligenceCopilotResponse, { status: "answered" }> }) {
+  const { population } = response.provenance;
+  if (population.clusterCoveragePct >= 99 && population.rfmCoveragePct >= 99) return null;
+  return (
+    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-body-md text-slate-700">
+      Cobertura parcial: RFM cubre {population.rfmCoveragePct}% y clustering cubre {population.clusterCoveragePct}% de la poblacion analitica del snapshot.
+    </div>
+  );
+}
+
+function formatSnapshot(snapshotId: string, referenceTime: string) {
+  return `#${snapshotId} - ${new Date(referenceTime).toLocaleDateString("es-CL")}`;
 }
