@@ -1,5 +1,7 @@
-import { isValidElement, type ReactNode } from "react";
+import React, { isValidElement, type ReactNode } from "react";
 import { formatDateTime } from "@/lib/format";
+
+void React;
 
 type InfoItem = {
   label: string;
@@ -8,12 +10,13 @@ type InfoItem = {
 
 type InfoGridProps = {
   items: InfoItem[];
-  columns?: 2 | 3;
+  columns?: 2 | 3 | 4;
 };
 
 export function InfoGrid({ items, columns = 2 }: InfoGridProps) {
+  const gridClass = columns === 4 ? "grid gap-3 md:grid-cols-2 xl:grid-cols-4" : columns === 3 ? "grid gap-3 md:grid-cols-3" : "grid gap-3 md:grid-cols-2";
   return (
-    <dl className={columns === 3 ? "grid gap-3 md:grid-cols-3" : "grid gap-3 md:grid-cols-2"}>
+    <dl className={gridClass}>
       {items.map((item) => (
         <div key={item.label} className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <dt className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-500">{item.label}</dt>
