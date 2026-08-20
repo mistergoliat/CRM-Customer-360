@@ -236,6 +236,38 @@ export function loadCommercialWorkFollowUpEnabled(env: NodeJS.ProcessEnv = proce
   return readStrictBooleanFlagWithDefault("BRAIN_COMMERCIAL_WORK_FOLLOW_UP_ENABLED", env, false);
 }
 
+/**
+ * SALES-AGENT-R2-A11, Part 59/60/61. Optional activation-boundary ISO
+ * timestamp - unset by default (no filtering). When an operator flips
+ * BRAIN_COMMERCIAL_WORK_WORKER_ENABLED / BRAIN_COMMERCIAL_WORK_FOLLOW_UP_ENABLED
+ * to true for the first time against a database that already has a
+ * historical backlog (rows created during earlier development/testing,
+ * before this rollout), setting the matching cutoff here makes the
+ * worker/follow-up dispatcher skip - never execute or send for - anything
+ * created before it. Reviewed once via the backlog dry-run report
+ * (scripts/autonomous-runtime-backlog-report.ts) before being set.
+ */
+export function loadCommercialWorkWorkerActivationCutoff(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.BRAIN_COMMERCIAL_WORK_WORKER_ACTIVATION_CUTOFF?.trim();
+  if (!raw) return null;
+  return Number.isNaN(Date.parse(raw)) ? null : raw;
+}
+
+export function loadCommercialWorkFollowUpActivationCutoff(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.BRAIN_COMMERCIAL_WORK_FOLLOW_UP_ACTIVATION_CUTOFF?.trim();
+  if (!raw) return null;
+  return Number.isNaN(Date.parse(raw)) ? null : raw;
+}
+
+/** True when createdAt predates the configured cutoff (always false when no cutoff is configured). */
+export function isBeforeActivationCutoff(createdAt: string | null | undefined, cutoffIso: string | null): boolean {
+  if (!cutoffIso || !createdAt) return false;
+  const created = Date.parse(createdAt);
+  const cutoff = Date.parse(cutoffIso);
+  if (Number.isNaN(created) || Number.isNaN(cutoff)) return false;
+  return created < cutoff;
+}
+
 export type AutonomousRuntimePreflightReport = {
   ok: boolean;
   pilotAllowlistCount: number;

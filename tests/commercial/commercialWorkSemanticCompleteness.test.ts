@@ -26,7 +26,8 @@ Object.assign(process.env, {
   // SALES-AGENT-R2-A11: opens the new worker-level autonomy/access gates for
   // this file's pre-A11 tests, none of which exercise those gates themselves.
   BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
-  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false",
+  BRAIN_COMMERCIAL_WORK_WORKER_ENABLED: "true"
 });
 
 import { randomUUID } from "node:crypto";

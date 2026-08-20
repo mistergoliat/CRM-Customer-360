@@ -6,8 +6,12 @@ import {
   isWaIdAuthorizedForPilot,
   loadWhatsAppAccessGateConfig,
   isWaIdAllowedByAccessGate,
-  loadAutonomousResponsesEnabled
+  loadAutonomousResponsesEnabled,
+  loadCommercialWorkFollowUpEnabled,
+  loadCommercialWorkFollowUpActivationCutoff,
+  isBeforeActivationCutoff
 } from "@/lib/brain/runtime/autonomousRuntimeConfig";
+import { shouldRouteToCommercialWork } from "@/lib/brain/commercial/config/commercialCycleConfig";
 import { checkCustomerOptOutStatus } from "@/lib/brain/commercial/optOutStore";
 import { resolveSalesAgentConfiguration } from "@/lib/brain/commercial/sales-agent-configuration";
 import { findNextAllowedWindowStartIso, isInstantWithinAllowedWindow } from "./computeFollowUpSchedule";
@@ -59,6 +63,8 @@ export type FollowUpCandidate = {
   followup_configuration_source: string | null;
   /** SALES-AGENT-R2-A11, Part 19/22. Raw payload, inspected only to route to the R2 objective-aware processor - never parsed here beyond the "kind" check below. Optional so existing legacy-shaped test fixtures need no update. */
   draft_payload_json?: unknown;
+  /** A11, Part 59/60/61. Used only for the R2 objective-aware branch's optional activation-cutoff check. Optional so existing test fixtures need no update. */
+  created_at?: string | null;
 };
 
 /**
@@ -99,6 +105,10 @@ export type FollowupTickResult = {
   skippedAccessGate: string[];
   /** A11, Part 4/21/36. Blocked by the global autonomy killswitch (BRAIN_AUTONOMOUS_RESPONSES_ENABLED=false) - row untouched, never claimed, retriable once autonomy is re-enabled. */
   skippedAutonomyDisabled: string[];
+  /** A11, Part 20/22. An R2 objective-aware row, but BRAIN_COMMERCIAL_WORK_FOLLOW_UP_ENABLED is false or this wa_id is no longer R2-eligible - row untouched, never claimed. Never applies to legacy rows. */
+  skippedCommercialWorkFollowUpIneligible: string[];
+  /** A11, Part 59/60/61. An R2 objective-aware row created before the configured activation cutoff - row untouched, never claimed. */
+  skippedBeforeActivationCutoff: string[];
   /** ACS-R1-05.1-T02.3D: due, but outside the CURRENT allowed window - moved forward to the next window start, never executed or cancelled. */
   rescheduled: Array<{ actionId: string; scheduledFor: string }>;
   /**
@@ -136,6 +146,12 @@ export type FollowupTickOptions = {
    * between claim and re-entry, without relying on real elapsed time.
    */
   onAfterClaim?: (candidate: FollowUpCandidate) => Promise<void> | void;
+  /** A11, Part 20. Test-only injection point; production callers default to the real env-backed reader. Only gates the R2 objective-aware branch. */
+  commercialWorkFollowUpEnabled?: boolean;
+  /** A11, Part 14/20. Test-only injection point; production callers default to the real shouldRouteToCommercialWork. Only gates the R2 objective-aware branch. */
+  isWaIdEligibleForCommercialWork?: (waId: string | null | undefined) => boolean;
+  /** A11, Part 59/60/61. Test-only injection point; production callers default to the real env-backed reader (null = no cutoff configured). Only gates the R2 objective-aware branch. */
+  commercialWorkFollowUpActivationCutoff?: string | null;
 };
 
 export async function selectDueFollowUps(limit: number, actionIds?: string[]): Promise<FollowUpCandidate[]> {
@@ -143,7 +159,7 @@ export async function selectDueFollowUps(limit: number, actionIds?: string[]): P
   // otherwise consume the LIMIT before an in-memory filter could apply.
   const scope = actionIds && actionIds.length > 0 ? ` AND action_id IN (${actionIds.map(() => "?").join(",")})` : "";
   const result = await safeQueryRows<FollowUpCandidate>(
-    `SELECT id, action_id, wa_id, conversation_case_id, opportunity_id, scheduled_for, draft_message, status, attempt_number, max_attempts, followup_configuration_source, draft_payload_json
+    `SELECT id, action_id, wa_id, conversation_case_id, opportunity_id, scheduled_for, draft_message, status, attempt_number, max_attempts, followup_configuration_source, draft_payload_json, created_at
       FROM crm_agent_actions
       WHERE action_type = 'schedule_followup'
         AND (
@@ -521,6 +537,8 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     skippedUnauthorized: [],
     skippedAccessGate: [],
     skippedAutonomyDisabled: [],
+    skippedCommercialWorkFollowUpIneligible: [],
+    skippedBeforeActivationCutoff: [],
     rescheduled: [],
     technicalFailures: []
   };
@@ -538,6 +556,12 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
   // shape.
   const accessGate = loadWhatsAppAccessGateConfig();
   const autonomyEnabled = loadAutonomousResponsesEnabled();
+  // A11 Part 20/59-61: only ever consulted for the R2 objective-aware
+  // branch below - never affects legacy dispatch.
+  const commercialWorkFollowUpEnabled = options.commercialWorkFollowUpEnabled ?? loadCommercialWorkFollowUpEnabled();
+  const eligibleForCommercialWork = options.isWaIdEligibleForCommercialWork ?? shouldRouteToCommercialWork;
+  const commercialWorkFollowUpCutoff =
+    options.commercialWorkFollowUpActivationCutoff !== undefined ? options.commercialWorkFollowUpActivationCutoff : loadCommercialWorkFollowUpActivationCutoff();
 
   for (const candidate of candidates) {
     if (!isWaIdAuthorizedForPilot(candidate.wa_id, pilotAllowlist)) {
@@ -578,6 +602,22 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     // avoids a circular dependency (objectiveAwareFollowUp.ts already
     // imports this file's claim primitives).
     if (isObjectiveAwareFollowUpPayload(candidate.draft_payload_json)) {
+      // A11 Part 20: the R2 follow-up worker's own enablement flag, plus
+      // Part 14's "still currently R2-eligible" revalidation, applied here
+      // (never to the legacy branch, which has no notion of R2 eligibility).
+      if (!commercialWorkFollowUpEnabled || !eligibleForCommercialWork(candidate.wa_id)) {
+        log(`[worker:followup] skipping objective-aware follow-up ${candidate.action_id}: R2 follow-up disabled or wa_id no longer R2-eligible`);
+        result.skippedCommercialWorkFollowUpIneligible.push(candidate.action_id);
+        continue;
+      }
+      // A11 Part 59/60/61: never autonomously send a reminder for an
+      // objective-aware follow-up scheduled before the configured rollout
+      // cutoff.
+      if (isBeforeActivationCutoff(candidate.created_at, commercialWorkFollowUpCutoff)) {
+        log(`[worker:followup] skipping objective-aware follow-up ${candidate.action_id}: created before activation cutoff`);
+        result.skippedBeforeActivationCutoff.push(candidate.action_id);
+        continue;
+      }
       const { processObjectiveAwareFollowUpDue } = await import("../work/followup/objectiveAwareFollowUp");
       const outcome = await processObjectiveAwareFollowUpDue({ actionId: candidate.action_id, now: options.now });
       log(`[worker:followup] objective-aware follow-up ${candidate.action_id}: ${outcome.status}`);

@@ -12,6 +12,9 @@ import type { AgentLoopResult } from "@/lib/brain/commercial/agent-loop/agentSte
  * reactivated the loop instead of reaching the human who was promised.
  */
 Object.assign(process.env, {
+  // SALES-AGENT-R2-A11: opens runNativeAutonomousCycle's new autonomy/access gates - unrelated to this file's own pre-A11 assertions.
+  BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false",
   NODE_ENV: "development",
   DB_HOST: "127.0.0.1",
   DB_PORT: "3306",

@@ -40,7 +40,8 @@ Object.assign(process.env, {
   // this file's pre-A11 tests, none of which exercise those gates themselves
   // (see commercialWorkAccessAndAutonomyGates.test.ts for dedicated coverage).
   BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
-  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false",
+  BRAIN_COMMERCIAL_WORK_WORKER_ENABLED: "true"
 });
 
 const NOW = "2026-08-17T12:00:00.000Z";

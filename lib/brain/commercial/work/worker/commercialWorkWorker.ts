@@ -13,6 +13,9 @@ import {
   loadAutonomousResponsesEnabled,
   loadWhatsAppAccessGateConfig,
   isWaIdAllowedByAccessGate,
+  loadCommercialWorkWorkerEnabled,
+  loadCommercialWorkWorkerActivationCutoff,
+  isBeforeActivationCutoff,
   type WhatsAppAccessGateConfig
 } from "@/lib/brain/runtime/autonomousRuntimeConfig";
 
@@ -34,6 +37,8 @@ export type DueCommercialWorkStepRow = {
   lock_until: string | null;
   /** SALES-AGENT-R2-A11, Part 13/14. The conversation's external contact id - resolved here so the worker can revalidate the WhatsApp access gate and R2 eligibility fresh, before claiming, for a step that may have been created long before this tick runs. Optional so existing test fixtures need no update. */
   wa_id?: string | null;
+  /** A11, Part 59/60/61. The owning work's creation time - used only for the optional activation-cutoff check. Optional so existing test fixtures need no update. */
+  work_created_at?: string | null;
 };
 
 export type CommercialWorkTickOptions = {
@@ -63,6 +68,10 @@ export type CommercialWorkTickOptions = {
    * specific wa_id is currently R2-allowlisted.
    */
   isWaIdEligibleForCommercialWork?: (waId: string | null | undefined) => boolean;
+  /** A11, Part 9. Test-only injection point; production callers default to the real env-backed reader. When false the tick is a complete no-op (not even selectDueCommercialWorkSteps runs). */
+  workerEnabled?: boolean;
+  /** A11, Part 59/60/61. Test-only injection point; production callers default to the real env-backed reader (null = no cutoff configured). */
+  activationCutoff?: string | null;
 };
 
 export type CommercialWorkTickResult = {
@@ -118,7 +127,8 @@ export async function selectDueCommercialWorkSteps(input: { limit: number; now: 
         s.next_attempt_at,
         s.lock_owner,
         s.lock_until,
-        c.external_contact_id AS wa_id
+        c.external_contact_id AS wa_id,
+        w.created_at AS work_created_at
       FROM crm_commercial_work_steps s
       INNER JOIN crm_commercial_work w ON w.id = s.commercial_work_id
       LEFT JOIN conversation c ON c.id = w.conversation_id
@@ -232,6 +242,12 @@ export async function runCommercialWorkTick(options: CommercialWorkTickOptions =
     versionConflicts: []
   };
 
+  // SALES-AGENT-R2-A11, Part 9. A disabled worker is a complete no-op - it
+  // does not even select candidates, so a disabled worker process polling on
+  // a schedule produces zero DB reads beyond this flag check.
+  const workerEnabled = options.workerEnabled ?? loadCommercialWorkWorkerEnabled();
+  if (!workerEnabled) return result;
+
   const candidates = await selectDueCommercialWorkSteps({ limit: batchSize, now, workPublicIds: options.workPublicIds });
   result.selected = candidates.length;
 
@@ -240,8 +256,16 @@ export async function runCommercialWorkTick(options: CommercialWorkTickOptions =
   // revalidated fresh here, never assumed from when it was created.
   const autonomyEnabled = options.autonomousResponsesEnabled ?? loadAutonomousResponsesEnabled();
   const accessGate = options.whatsAppAccessGate ?? loadWhatsAppAccessGateConfig();
+  const activationCutoff = options.activationCutoff !== undefined ? options.activationCutoff : loadCommercialWorkWorkerActivationCutoff();
 
   for (const candidate of candidates) {
+    // A11 Part 59/60/61: a historical step created before the configured
+    // rollout cutoff is never autonomously continued - checked before any
+    // claim, row left untouched (an operator can still resolve it manually).
+    if (isBeforeActivationCutoff(candidate.work_created_at, activationCutoff)) {
+      result.skipped.push({ workPublicId: candidate.work_public_id, stepId: candidate.step_id, reason: "skipped_before_activation_cutoff" });
+      continue;
+    }
     // A11 Part 4/12: the global autonomy killswitch - checked before any
     // claim, so a disabled worker leaves every due row untouched (retriable
     // once autonomy is re-enabled), never partially claimed.

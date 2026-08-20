@@ -27,7 +27,9 @@
     "test": "npx --yes tsx@4.20.5 scripts/run-tests.ts",
     "worker:outbox": "npx --yes tsx@4.20.5 scripts/autonomous-outbox-worker.ts",
     "worker:followup": "npx --yes tsx@4.20.5 scripts/autonomous-followup-worker.ts",
+    "worker:commercial-work": "npx --yes tsx@4.20.5 scripts/autonomous-commercial-work-worker.ts",
     "preflight:autonomous": "npx --yes tsx@4.20.5 scripts/autonomous-runtime-preflight.ts",
+    "backlog:report": "npx --yes tsx@4.20.5 scripts/autonomous-runtime-backlog-report.ts",
     "customer-identity:evaluate": "npx --yes tsx@4.20.5 scripts/customer-identity/evaluate-candidates.ts"
   },
   "dependencies": {

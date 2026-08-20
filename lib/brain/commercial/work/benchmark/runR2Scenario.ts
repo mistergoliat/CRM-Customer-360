@@ -22,6 +22,22 @@ import { buildR2ExecuteCapability } from "./capabilityGateway";
 import { seedBenchmarkSelection, seedBenchmarkShippingDestination, setConversationControl, type R2BenchmarkEnvironment } from "./environment";
 import type { R2ArchitectureScenario, R2ScenarioRunOutcome } from "./types";
 import type { CommercialWorkStatus } from "@/lib/brain/commercial/work/statuses";
+import type { CommercialWorkTickOptions } from "@/lib/brain/commercial/work/worker/commercialWorkWorker";
+
+/**
+ * SALES-AGENT-R2-A11. This offline scenario harness drives runCommercialWorkTick
+ * directly to simulate a real worker process recovering RETRY_SCHEDULED/crashed
+ * work (R2-05/R2-06) - it is testing A05/A06 retry/crash-recovery mechanics, not
+ * A11's own new gates. Explicitly opens all three worker-level A11 gates so this
+ * pre-A11 harness keeps exercising exactly what it always exercised, matching the
+ * same pattern applied to the direct test files that call runCommercialWorkTick.
+ */
+const BENCHMARK_WORKER_GATES_OPEN: Pick<CommercialWorkTickOptions, "workerEnabled" | "autonomousResponsesEnabled" | "whatsAppAccessGate" | "isWaIdEligibleForCommercialWork"> = {
+  workerEnabled: true,
+  autonomousResponsesEnabled: true,
+  whatsAppAccessGate: { testModeEnabled: false, testWaIds: [] },
+  isWaIdEligibleForCommercialWork: () => true
+};
 
 const TERMINAL_WORK_STATUSES = new Set<CommercialWorkStatus>(["COMPLETED", "CANCELLED", "SUPERSEDED", "HANDOFF", "FAILED"]);
 
@@ -177,7 +193,7 @@ export async function runR2Scenario(input: RunR2ScenarioInput): Promise<R2Scenar
       // design, matching the real worker), so the "crash" is a real thrown
       // exception here too. Caught, never rethrown: the scenario continues
       // to its recovery pass exactly like a real restarted worker process.
-      await runCommercialWorkTick({ now: turnNow, workPublicIds: [work.publicId], executeCapability, context: { correlationId } }).catch(() => null);
+      await runCommercialWorkTick({ now: turnNow, workPublicIds: [work.publicId], executeCapability, context: { correlationId }, ...BENCHMARK_WORKER_GATES_OPEN }).catch(() => null);
       const reloaded = await getCommercialWorkByPublicId(work.publicId);
       if (reloaded) work = reloaded;
     } else {
@@ -214,7 +230,7 @@ export async function runR2Scenario(input: RunR2ScenarioInput): Promise<R2Scenar
     if (stillPendingRecovery) {
       const recoveryNow = addMinutes(turnNow, 10);
       const recoveryCorrelationId = `r2-${scenario.scenarioId}-run${input.runIndex}-recovery-${randomUUID()}`;
-      await runCommercialWorkTick({ now: recoveryNow, workPublicIds: [work.publicId], executeCapability, context: { correlationId: recoveryCorrelationId } }).catch(() => null);
+      await runCommercialWorkTick({ now: recoveryNow, workPublicIds: [work.publicId], executeCapability, context: { correlationId: recoveryCorrelationId }, ...BENCHMARK_WORKER_GATES_OPEN }).catch(() => null);
       const reloaded = await getCommercialWorkByPublicId(work.publicId);
       if (reloaded) work = reloaded;
       commercialCompletionLatencyMs = Date.now() - turnStartMs;

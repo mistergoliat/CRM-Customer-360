@@ -51,7 +51,8 @@ Object.assign(process.env, {
   // WC04 tests that the worker never claims a WAITING_CUSTOMER step, not
   // that these newer gates block it.
   BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
-  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false",
+  BRAIN_COMMERCIAL_WORK_WORKER_ENABLED: "true"
 });
 
 const NOW = "2026-08-20T13:00:00.000Z";
