@@ -5,6 +5,29 @@ function asCancelScope(value: unknown): CommercialIntentCancelScope | undefined 
   return typeof value === "string" && (CANCEL_SCOPES as readonly string[]).includes(value) ? (value as CommercialIntentCancelScope) : undefined;
 }
 
+const MAX_ADDITIONAL_CANCEL_SCOPES = 3;
+
+/**
+ * SALES-AGENT-R2-A08.7, Part 7. Bounded, deduped, never "all" (a specific
+ * additional target and an untargeted-everything scope are contradictory -
+ * "all" here is silently dropped rather than trusted, same fail-closed
+ * discipline as an unrecognized scope elsewhere in this file), never repeats
+ * the primary scope.
+ */
+function asAdditionalCancelScopes(value: unknown, primaryScope: CommercialIntentCancelScope): Exclude<CommercialIntentCancelScope, "all">[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<CommercialIntentCancelScope>([primaryScope]);
+  const result: Exclude<CommercialIntentCancelScope, "all">[] = [];
+  for (const entry of value) {
+    const scope = asCancelScope(entry);
+    if (!scope || scope === "all" || seen.has(scope)) continue;
+    seen.add(scope);
+    result.push(scope);
+    if (result.length >= MAX_ADDITIONAL_CANCEL_SCOPES) break;
+  }
+  return result.length > 0 ? result : undefined;
+}
+
 /**
  * LLM-R1-T09A, Part 2/20. Hand-rolled bounded validation for the planner
  * LLM's raw JSON output - no Zod/schema-validation library exists anywhere
@@ -60,7 +83,9 @@ function parseKnownIntent(raw: Record<string, unknown>): CommercialIntent | null
     // default (Part 3: no unsafe broad cancellation) - it degrades to
     // unsupported instead, same discipline as any other malformed intent.
     const scope = asCancelScope(raw.scope);
-    return scope ? { type: "cancel", scope } : null;
+    if (!scope) return null;
+    const additionalScopes = asAdditionalCancelScopes(raw.additionalScopes, scope);
+    return { type: "cancel", scope, ...(additionalScopes ? { additionalScopes } : {}) };
   }
   if (raw.type === "unsupported") {
     const description = asBoundedText(raw.description);

@@ -246,6 +246,9 @@ async function main() {
   // PART 12: CANCELLATION SCOPE
   // ---------------------------------------------------------------------
   const cancelVariants: Array<{ text: string; expectedScope: "whole_work" | "shipping" | "quote" }> = [
+    // SALES-AGENT-R2-A08.7, Part 18. Full minimum corpus (5 whole + 5
+    // shipping + 5 quote) - extended from A08.6's 9-phrase corpus to match
+    // the required benchmark size after the planner prompt fix.
     { text: "olvidalo", expectedScope: "whole_work" },
     { text: "olvídalo todo", expectedScope: "whole_work" },
     { text: "déjalo", expectedScope: "whole_work" },
@@ -253,8 +256,14 @@ async function main() {
     { text: "cancela eso", expectedScope: "whole_work" },
     { text: "no necesito despacho", expectedScope: "shipping" },
     { text: "olvida el despacho", expectedScope: "shipping" },
+    { text: "cancela el despacho", expectedScope: "shipping" },
+    { text: "ya no quiero despacho", expectedScope: "shipping" },
+    { text: "sin despacho", expectedScope: "shipping" },
     { text: "no quiero cotización", expectedScope: "quote" },
-    { text: "mejor no cotices", expectedScope: "quote" }
+    { text: "mejor no cotices", expectedScope: "quote" },
+    { text: "olvida la cotización", expectedScope: "quote" },
+    { text: "cancela la cotización", expectedScope: "quote" },
+    { text: "no me hagas la cotización", expectedScope: "quote" }
   ];
   type CancelResult = { text: string; expectedScope: string; observedScope: string; correct: boolean };
   const cancelResults: CancelResult[] = [];
@@ -264,27 +273,58 @@ async function main() {
       const env = await setupR2BenchmarkEnvironment();
       try {
         await seedProductSearchEvidence(env, "31", "Classic");
-        const setup = await liveTurn(env, "quiero 2 Classic y despacho a Ñuñoa");
+        // SALES-AGENT-R2-A08.7, Part 1 audit finding. A setup turn with only
+        // select+shipping completes both objectives same-cycle, so the
+        // CommercialWork itself goes terminal (COMPLETED) before the cancel
+        // turn ever arrives - resolveCommercialWorkTarget then starts a BRAND
+        // NEW work for the cancel turn with nothing carried forward, which
+        // this script's own before/after diff misread as "everything
+        // cancelled" (whole_work) even when the real planner seed was
+        // correctly scoped. This is exactly the pitfall
+        // commercialWorkSemanticCompleteness.test.ts's "Part 3: cancelling
+        // shipping preserves the product selection" already documents and
+        // works around (adding create_quote, which never completes in this
+        // fixture-only environment) - applying the same proven pattern here.
+        const setup = await liveTurn(env, "quiero 2 Classic y despacho a Ñuñoa, hazme una cotización");
         const before = setup.result.work;
+        // SALES-AGENT-R2-A08.7, Part 1 audit finding. SET_DESTINATION and
+        // GET_SHIPPING_QUOTE are two DISTINCT families to deriveCommercialObjectives.ts's
+        // own commercialObjectiveSupersessionFamily ("destination" vs
+        // "shipping") - cancel scope "shipping" only targets GET_SHIPPING_QUOTE
+        // (normalizeTargetType maps it that way), SET_DESTINATION legitimately
+        // stays COMPLETED. Tracking both together under one "still active"
+        // .find() let the untouched, still-active SET_DESTINATION mask a
+        // correctly-cancelled GET_SHIPPING_QUOTE - only GET_SHIPPING_QUOTE is
+        // the real target for this corpus's "shipping" scope.
+        const shippingFamily = (o: { type: string }) => o.type === "GET_SHIPPING_QUOTE";
         const selectBefore = before ? activeObjective(before, "SELECT_PRODUCTS") : undefined;
-        const shippingBefore =
-          before?.objectives.find((o) => (o.type === "SET_DESTINATION" || o.type === "GET_SHIPPING_QUOTE") && o.status !== "SUPERSEDED" && o.status !== "CANCELLED") ?? undefined;
+        const shippingBefore = before?.objectives.find((o) => shippingFamily(o) && o.status !== "SUPERSEDED" && o.status !== "CANCELLED") ?? undefined;
+        const quoteBefore = before ? activeObjective(before, "CREATE_QUOTE") : undefined;
 
         const { result: after } = await liveTurn(env, variant.text);
         const work = after.work;
         const selectAfter = work ? activeObjective(work, "SELECT_PRODUCTS") : undefined;
-        const shippingAfter = work?.objectives.find((o) => (o.type === "SET_DESTINATION" || o.type === "GET_SHIPPING_QUOTE") && o.status !== "SUPERSEDED" && o.status !== "CANCELLED");
+        const shippingAfter = work?.objectives.find((o) => shippingFamily(o) && o.status !== "SUPERSEDED" && o.status !== "CANCELLED");
+        const quoteAfter = work ? activeObjective(work, "CREATE_QUOTE") : undefined;
 
         const selectionCancelled = Boolean(selectBefore) && !selectAfter;
         const shippingCancelled = Boolean(shippingBefore) && !shippingAfter;
+        const quoteCancelled = Boolean(quoteBefore) && !quoteAfter;
 
+        // Exact scope classification - every family's before/after state is
+        // now tracked (Part 1 audit fix: quote is no longer inferred from a
+        // negative heuristic), so "correct" means the EXACT expected family
+        // was cancelled and nothing else - matching Part 19's hard
+        // requirement that a wrong-scope/over-cancellation rate must read 0%,
+        // not just "not literally whole_work".
         let observedScope: string;
-        if (selectionCancelled && shippingCancelled) observedScope = "whole_work";
-        else if (shippingCancelled && !selectionCancelled) observedScope = "shipping";
-        else if (!shippingCancelled && !selectionCancelled) observedScope = "none";
-        else observedScope = "selection_only";
+        if (selectionCancelled && shippingCancelled && quoteCancelled) observedScope = "whole_work";
+        else if (shippingCancelled && !selectionCancelled && !quoteCancelled) observedScope = "shipping";
+        else if (quoteCancelled && !selectionCancelled && !shippingCancelled) observedScope = "quote";
+        else if (!selectionCancelled && !shippingCancelled && !quoteCancelled) observedScope = "none";
+        else observedScope = `partial(select=${selectionCancelled},shipping=${shippingCancelled},quote=${quoteCancelled})`;
 
-        const correct = observedScope === variant.expectedScope || (variant.expectedScope === "quote" && observedScope !== "whole_work" && !selectionCancelled);
+        const correct = observedScope === variant.expectedScope;
         cancelResults.push({ text: variant.text, expectedScope: variant.expectedScope, observedScope, correct });
         console.log(`[cancel] "${variant.text}" -> expected=${variant.expectedScope} observed=${observedScope} correct=${correct}`);
       } finally {
@@ -339,9 +379,16 @@ async function main() {
 
   const cCorrect = cancelResults.filter((r) => r.correct).length;
   const cWrongScope = cancelResults.filter((r) => !r.correct).length;
+  const scopedResults = cancelResults.filter((r) => r.expectedScope !== "whole_work");
+  const scopedFalsePositives = scopedResults.filter((r) => r.observedScope === "whole_work").length;
   console.log(`\nCancellation: ${cancelResults.length} samples`);
   console.log(`  correct scope: ${cCorrect}/${cancelResults.length} (${((cCorrect / cancelResults.length) * 100).toFixed(1)}%)`);
   console.log(`  wrong-scope rate: ${((cWrongScope / cancelResults.length) * 100).toFixed(1)}%`);
+  // SALES-AGENT-R2-A08.7, Part 19/PRIMARY SUCCESS CRITERION. The single
+  // hardest gate: a scoped phrase must never collapse to whole-work.
+  console.log(
+    `  scoped->whole-work false-positive rate: ${scopedResults.length > 0 ? ((scopedFalsePositives / scopedResults.length) * 100).toFixed(1) : "n/a"}% (${scopedFalsePositives}/${scopedResults.length})`
+  );
 
   const quReached = quoteResults.filter((r) => r.reachedObjective).length;
   const quDuplicate = quoteResults.filter((r) => r.duplicateOnRetry).length;

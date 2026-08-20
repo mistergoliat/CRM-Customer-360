@@ -103,7 +103,8 @@ const CANCEL_SCOPE_INTENT_TYPES: Record<Exclude<CommercialIntentCancelScope, "al
 
 function cancelDiscardsIntentType(cancel: CommercialIntentCancel, intentType: CommercialIntent["type"]): boolean {
   if (cancel.scope === "all") return true;
-  return CANCEL_SCOPE_INTENT_TYPES[cancel.scope] === intentType;
+  const scopes = [cancel.scope, ...(cancel.additionalScopes ?? [])];
+  return scopes.some((scope) => CANCEL_SCOPE_INTENT_TYPES[scope] === intentType);
 }
 
 export function mergeCommercialIntents(pendingRecords: PendingCommercialIntentRecord[], newIntents: CommercialIntent[]): CommercialIntent[] {

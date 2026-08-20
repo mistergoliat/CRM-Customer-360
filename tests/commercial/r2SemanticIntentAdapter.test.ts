@@ -144,3 +144,35 @@ test("R2SEM07 a structurally invalid plan shape classifies as SEMANTIC_PLANNING,
   assert.equal(result.kind, "invalid_output");
   assert.equal(result.failureClassification, "SEMANTIC_PLANNING");
 });
+
+// SALES-AGENT-R2-A08.7, Part 1/15. Deterministic coverage for the adapter's
+// half of the cancel-scope contract: scope maps to targetType 1:1, "all"
+// omits targetType entirely (reconciliation.ts's own "all" convention), and
+// additionalScopes becomes one extra cancel seed per named scope.
+
+test("R2SEM08 a scoped cancel intent maps to a single cancel seed with targetType set", async () => {
+  const provider = createOfflinePlannerProvider([{ kind: "plan", plan: { intents: [{ type: "cancel", scope: "shipping" }] } }]);
+  const result = await planCommercialObjectiveSeeds(baseInput({ provider, customerMessage: "olvida el despacho" }));
+  assert.equal(result.kind, "planned");
+  if (result.kind !== "planned") return;
+  assert.deepEqual(result.seeds, [{ kind: "cancel", targetType: "shipping" }]);
+});
+
+test("R2SEM09 an untargeted cancel intent maps to a cancel seed with no targetType (the 'all' convention)", async () => {
+  const provider = createOfflinePlannerProvider([{ kind: "plan", plan: { intents: [{ type: "cancel", scope: "all" }] } }]);
+  const result = await planCommercialObjectiveSeeds(baseInput({ provider, customerMessage: "olvidalo" }));
+  assert.equal(result.kind, "planned");
+  if (result.kind !== "planned") return;
+  assert.deepEqual(result.seeds, [{ kind: "cancel" }]);
+});
+
+test("R2SEM10 a multi-scope cancel intent maps to one cancel seed per named scope, never collapsing to whole-work", async () => {
+  const provider = createOfflinePlannerProvider([{ kind: "plan", plan: { intents: [{ type: "cancel", scope: "shipping", additionalScopes: ["quote"] }] } }]);
+  const result = await planCommercialObjectiveSeeds(baseInput({ provider, customerMessage: "no quiero despacho ni cotizacion" }));
+  assert.equal(result.kind, "planned");
+  if (result.kind !== "planned") return;
+  assert.deepEqual(result.seeds, [
+    { kind: "cancel", targetType: "shipping" },
+    { kind: "cancel", targetType: "quote" }
+  ]);
+});

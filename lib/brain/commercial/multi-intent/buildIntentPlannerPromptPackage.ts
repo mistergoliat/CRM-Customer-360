@@ -35,9 +35,50 @@ const INTENT_SHAPES = [
   '{"type":"select_products","productReference":"...","quantity":N}',
   '{"type":"get_shipping_quote","destination":"..."}',
   '{"type":"create_quote"}',
-  '{"type":"cancel","scope":"selection"|"destination"|"shipping"|"quote"|"all"}',
+  '{"type":"cancel","scope":"selection"|"destination"|"shipping"|"quote"|"all","additionalScopes":["shipping"|"quote"|"selection"|"destination", ...]}',
   '{"type":"unsupported","description":"..."}'
 ].join(" | ");
+
+/**
+ * SALES-AGENT-R2-A08.7, Part 14. The A08.6 cancel-scope rule was a single
+ * prose sentence buried inside a long instruction list - live-validated
+ * (SALES-AGENT-R2-A08.6-semantic-completeness-integration-closure.md, item
+ * 15) to be followed 10/10 for untargeted phrases but 0/8 for phrases naming
+ * a specific target, despite those exact phrases already being listed in the
+ * prose. Root cause was prompt salience, not a wiring gap - every downstream
+ * layer (parser/resolver/adapter/reconciliation) already carries scope
+ * correctly once the planner emits it (see parseCommercialIntentPlan.ts,
+ * semanticIntentAdapter.ts, reconciliation.ts's cancelTargetFamily). This
+ * table format - one line per literal phrase-to-scope mapping, separated from
+ * the rest of the instructions - is the fix: an explicit input->output example
+ * a model can pattern-match, not a rule it has to apply from a description.
+ */
+const CANCEL_SCOPE_EXAMPLES = [
+  '"olvidalo" -> {"scope":"all"}',
+  '"olvidalo todo" -> {"scope":"all"}',
+  '"dejalo" -> {"scope":"all"}',
+  '"no importa" -> {"scope":"all"}',
+  '"cancela eso" -> {"scope":"all"} (only when nothing more specific was named this turn)',
+  '"cancela todo" -> {"scope":"all"}',
+  '"mejor no" -> {"scope":"all"}',
+  '"ya no quiero nada" -> {"scope":"all"}',
+  '"no necesito despacho" -> {"scope":"shipping"}',
+  '"olvida el despacho" -> {"scope":"shipping"}',
+  '"cancela el despacho" -> {"scope":"shipping"}',
+  '"ya no quiero despacho" -> {"scope":"shipping"}',
+  '"sin despacho" -> {"scope":"shipping"}',
+  '"no cotices el envio" -> {"scope":"shipping"}',
+  '"no calcules despacho" -> {"scope":"shipping"}',
+  '"no quiero cotizacion" -> {"scope":"quote"}',
+  '"mejor no cotices" -> {"scope":"quote"}',
+  '"olvida la cotizacion" -> {"scope":"quote"}',
+  '"cancela la cotizacion" -> {"scope":"quote"}',
+  '"no me hagas la cotizacion" -> {"scope":"quote"}',
+  '"ya no necesito la cotizacion" -> {"scope":"quote"}',
+  '"quita los productos" / "olvida la seleccion" -> {"scope":"selection"}',
+  '"no quiero despacho ni cotizacion" -> {"scope":"shipping","additionalScopes":["quote"]}',
+  '"olvida el despacho, solo quiero los productos" -> {"scope":"shipping"} (plus a separate select_products intent for "solo quiero los productos" if it adds new information, otherwise nothing extra)'
+].join("\n");
 
 function buildSystemInstructions(priorAttemptFailure: IntentPlannerPriorAttemptFailure | null | undefined): string {
   const repairLines =
@@ -62,7 +103,8 @@ function buildSystemInstructions(priorAttemptFailure: IntentPlannerPriorAttemptF
     'If the customer only asks how much shipping/delivery costs without naming a specific commune or city, omit destination entirely - never use a generic shipping word itself (e.g. "despacho", "envio", "delivery") as if it were a place name.',
     'create_quote is for the customer explicitly asking to prepare/generate/send a quote or price document ("hazme una cotizacion", "cotizame esto", "quiero una cotizacion", "mandame una cotizacion", "puedes cotizarme estas 2", "preparame la cotizacion"). It never carries any fields.',
     'If lastAgentMessage below shows the agent just asked something like "would you like me to prepare a quote" and the customer\'s current message is a short, clear, unqualified affirmative ("si", "sí", "dale", "ya", "obvio", "porfavor") with no other content, that is create_quote too - the confirmation is answering exactly that question, nothing else. If lastAgentMessage did not ask about a quote, or the customer\'s reply could plausibly mean something else, do not guess - use unsupported instead. A bare "si" is NEVER create_quote unless lastAgentMessage makes the referent unambiguous.',
-    'cancel is for the customer explicitly withdrawing, dropping, or rejecting something already in progress ("olvidalo", "olvidalo todo", "dejalo", "no importa", "ya no lo quiero", "cancela eso", "cancela todo", "mejor no", "no necesito despacho", "olvida el despacho", "no quiero cotizacion", "mejor no cotices"). Choose the narrowest scope the customer\'s own words actually name: "shipping" only when they specifically mention despacho/envio/delivery; "quote"/"cotizacion" only when they specifically mention the quote; "selection" only when they specifically mean the product(s) chosen; "destination" only when they specifically mean the delivery address/commune itself (not the shipping cost); "all" only for a general, untargeted cancellation with no specific target named ("olvidalo", "cancela todo", "mejor no", "dejalo"). Never pick a narrower scope than what the customer actually said, and never pick "all" when they named something specific.',
+    'cancel is for the customer explicitly withdrawing, dropping, or rejecting something already in progress. Choose the NARROWEST scope the customer\'s own words actually name - "shipping" only for despacho/envio/delivery, "quote"/"cotizacion" only for the quote, "selection" only for the product(s) chosen, "destination" only for the delivery address/commune itself, "all" ONLY for a general, untargeted cancellation with no specific target named. Never pick "all" when a specific target was named - this is the single most common mistake, avoid it. If the message names more than one specific target, put the first in scope and the rest in additionalScopes (never omit a second named target, never use additionalScopes to add "all"). The exact mapping below is authoritative - match the customer\'s message against these examples first:',
+    CANCEL_SCOPE_EXAMPLES,
     "If pendingIntents below lists an intent still missing a field, and the customer's current message plausibly answers exactly that missing field (e.g. a bare commune name while get_shipping_quote is missing destination, or a bare product name/quantity while select_products is missing one), emit that same intent type again with the field now filled in from this message - a short, on-topic reply is never \"unsupported\".",
     'Only use select_products, get_shipping_quote, create_quote, or cancel when the message actually matches one of those - as described above. Anything else this system does not implement (holding an item for someone else, custom requests, complaints, unrelated questions, anything you are not sure maps to one of the four types above) must be {"type":"unsupported"} with a short description - never invent a fifth type, never force-fit it into one of the four.',
     "You never invent that a product was selected, added, that shipping was calculated, that a quote was created, or that something was cancelled - you only report what the customer is asking for."

@@ -373,6 +373,34 @@ test("Part 3: an untargeted cancellation cancels the whole work, never described
   }
 });
 
+test("SALES-AGENT-R2-A08.7 Part 7/CANCEL04: multi-scope cancellation cancels shipping and quote, preserves selection", async () => {
+  const env = await setupR2BenchmarkEnvironment();
+  try {
+    await seedProductSearchEvidence(env, "31", "Classic");
+    await turn(env, "quiero 2 Classic y despacho a Nunoa, hazme una cotizacion", {
+      intents: [
+        { type: "select_products", productReference: "la classic", quantity: 2 },
+        { type: "get_shipping_quote", destination: "Nunoa" },
+        { type: "create_quote" }
+      ]
+    });
+    const result = await turn(env, "no quiero despacho ni cotizacion", {
+      intents: [{ type: "cancel", scope: "shipping", additionalScopes: ["quote"] }]
+    });
+
+    const objectives = result.work?.objectives ?? [];
+    const wasCancelled = (type: string) =>
+      objectives.some((o) => o.type === type && (o.status === "CANCELLED" || o.blockers.some((blocker) => blocker.code === "CANCELLED")));
+
+    assert.equal(wasCancelled("GET_SHIPPING_QUOTE") || wasCancelled("SET_DESTINATION"), true, "shipping must be cancelled");
+    assert.equal(wasCancelled("CREATE_QUOTE"), true, "quote must be cancelled");
+    assert.equal(objectives.some((o) => o.type === "SELECT_PRODUCTS" && o.status === "COMPLETED"), true, "selection must be preserved");
+    assert.notEqual(result.work?.status, "CANCELLED", "must not collapse to whole-work cancellation");
+  } finally {
+    await env.teardown();
+  }
+});
+
 // ==========================================================================
 // Part 4/5/20: CREATE_QUOTE
 // ==========================================================================

@@ -75,6 +75,16 @@ export type CommercialIntentCancelScope = (typeof CANCEL_SCOPES)[number];
 export type CommercialIntentCancel = {
   type: "cancel";
   scope: CommercialIntentCancelScope;
+  /**
+   * SALES-AGENT-R2-A08.7, Part 7. Additional distinct scopes explicitly named
+   * in the same message (e.g. "no quiero despacho ni cotizacion" -> scope
+   * "shipping", additionalScopes ["quote"]). Only one cancel intent survives
+   * per plan (parseCommercialIntentPlan.ts's dedupeByType), so a second
+   * explicitly-named target has nowhere else to go - never inferred, never
+   * includes "all", only ever narrows further. Absent/empty for the common
+   * single-scope case.
+   */
+  additionalScopes?: Exclude<CommercialIntentCancelScope, "all">[];
 };
 
 /**

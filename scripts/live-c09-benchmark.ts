@@ -57,6 +57,10 @@ async function main() {
   const runs = Number.parseInt(readArg("runs") ?? "10", 10);
   const skipSimple = readFlag("skip-simple");
   const skipMultiTurn = readFlag("skip-multiturn");
+  // SALES-AGENT-R2-A08.7, Part 23/24. The simple-case and multi-turn batches
+  // were already R2-only; only the C09 comparison itself ran both harnesses.
+  // Same skip-flag pattern as skip-simple/skip-multiturn, never a second script.
+  const skipLegacy = readFlag("skip-legacy");
 
   const { getPool, safeQueryRows } = await import("../lib/db");
   const { runBenchmarkCase } = await import("../lib/brain/commercial/agent-loop/benchmark/runCorpus");
@@ -215,7 +219,7 @@ async function main() {
   const c09 = BENCHMARK_CORPUS.find((c) => c.caseId === "C09");
   if (!c09) throw new Error("C09 not found in legacy corpus");
   const legacyRuns: Array<{ llmCalls: number; toolExecutions: number; selectionCompleted: boolean; destinationCompleted: boolean; shippingCompleted: boolean; turnLatencyMs: number; finalMessage: string | null; terminalReason: string }> = [];
-  for (let i = 0; i < runs; i += 1) {
+  for (let i = 0; i < (skipLegacy ? 0 : runs); i += 1) {
     // 30s (matched to R2's single-call deadline) was too tight for the legacy
     // loop's own up-to-4 sequential real DeepSeek round trips per turn -
     // every one of the first 10 live runs hit that wall before finalizing,

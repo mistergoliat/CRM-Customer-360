@@ -88,6 +88,47 @@ test("[MI-Parse-9] more intents than the plan bound are truncated, never process
   assert.ok(result.intents.length <= 6);
 });
 
+// SALES-AGENT-R2-A08.7, Part 15. Deterministic coverage for the typed cancel
+// scope contract itself - whole work, single scope, multi-scope, and the
+// fail-closed defaults for malformed input.
+
+test("[MI-Parse-11] cancel with scope 'all' parses cleanly and carries no additionalScopes", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "cancel", scope: "all" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "cancel", scope: "all" }]);
+});
+
+test("[MI-Parse-12] cancel with a single named scope (shipping/quote) parses cleanly", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "cancel", scope: "shipping" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "cancel", scope: "shipping" }]);
+});
+
+test("[MI-Parse-13] cancel with additionalScopes parses a multi-scope cancellation, deduped and 'all'-free", () => {
+  const result = parseCommercialIntentPlan({
+    intents: [{ type: "cancel", scope: "shipping", additionalScopes: ["quote", "shipping", "all", "shipping"] }]
+  });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "cancel", scope: "shipping", additionalScopes: ["quote"] }]);
+});
+
+test("[MI-Parse-14] cancel with an unrecognized scope degrades to unsupported, never defaults to 'all'", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "cancel", scope: "everything_please" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.equal(result.intents[0].type, "unsupported");
+});
+
+test("[MI-Parse-15] cancel with additionalScopes but no other valid entries omits the field entirely", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "cancel", scope: "quote", additionalScopes: ["all", "quote", "not_a_scope"] }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "cancel", scope: "quote" }]);
+});
+
 test("[MI-Parse-10] parseCommercialIntent (single-intent parser reused by pendingIntentState) matches the same rules", () => {
   assert.deepEqual(parseCommercialIntent({ type: "get_shipping_quote", destination: "Las Condes" }), { type: "get_shipping_quote", destination: "Las Condes" });
   assert.equal(parseCommercialIntent({ type: "unknown_thing" }).type, "unsupported");

@@ -86,8 +86,17 @@ export function commercialObjectiveSeedsFromResolvedIntent(resolved: ResolvedInt
   // SALES-AGENT-R2-A08.6, Part 3/9. targetType omitted means "all" to
   // reconciliation.ts's cancelTargetFamily/deriveCommercialObjectives.ts's
   // cancel handling - matches this intent's own "all" scope exactly.
+  //
+  // SALES-AGENT-R2-A08.7, Part 7. additionalScopes (never present alongside
+  // "all", see parseCommercialIntentPlan.ts) becomes one extra cancel seed
+  // per named scope - deriveCommercialObjectives.ts already loops seeds one
+  // at a time, so N cancel seeds in the same turn narrow N families
+  // independently with no engine change needed.
   if (resolved.intent.type === "cancel") {
     seeds.push({ kind: "cancel", ...(resolved.intent.scope !== "all" ? { targetType: resolved.intent.scope } : {}) });
+    for (const scope of resolved.intent.additionalScopes ?? []) {
+      seeds.push({ kind: "cancel", targetType: scope });
+    }
     return seeds;
   }
 
