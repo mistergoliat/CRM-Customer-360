@@ -46,7 +46,12 @@ Object.assign(process.env, {
   DB_PASSWORD: "una_clave_local",
   DB_URL: "",
   DATABASE_URL: "",
-  DB_WRITE_ENABLED: "true"
+  DB_WRITE_ENABLED: "true",
+  // SALES-AGENT-R2-A11: opens the new worker-level autonomy/access gates -
+  // WC04 tests that the worker never claims a WAITING_CUSTOMER step, not
+  // that these newer gates block it.
+  BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
 });
 
 const NOW = "2026-08-20T13:00:00.000Z";
@@ -253,7 +258,7 @@ test("WC04 the retry worker never selects or claims a WAITING_CUSTOMER step", as
   const due = await selectDueCommercialWorkSteps({ limit: 10, now: NOW, workPublicIds: [work.publicId] });
   assert.equal(due.length, 0, "a WAITING_CUSTOMER work must never surface as a due step for the worker");
 
-  const tick = await runCommercialWorkTick({ workPublicIds: [work.publicId], now: NOW, executeCapability: gateway.executeCapability });
+  const tick = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true, workPublicIds: [work.publicId], now: NOW, executeCapability: gateway.executeCapability });
   assert.equal(tick.selected, 0);
   assert.equal(tick.claimed, 0);
   assert.equal(gateway.calls.length, 1, "worker tick must not call the capability again");

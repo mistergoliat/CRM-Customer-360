@@ -22,7 +22,11 @@ Object.assign(process.env, {
   BRAIN_EXECUTION_GATE_ENABLED: "true",
   BRAIN_OUTBOX_BRIDGE_ENABLED: "true",
   BRAIN_AUTONOMOUS_SANDBOX_ENABLED: "true",
-  BRAIN_AUTONOMOUS_REPLY_ENABLED: "true"
+  BRAIN_AUTONOMOUS_REPLY_ENABLED: "true",
+  // SALES-AGENT-R2-A11: opens the new worker-level autonomy/access gates for
+  // this file's pre-A11 tests, none of which exercise those gates themselves.
+  BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
 });
 
 import { randomUUID } from "node:crypto";
@@ -522,7 +526,7 @@ test("Part 12: a real shipping retry recovers through a manual worker tick, zero
 
     // Original inbound cycle has ended - advance time and run a manual tick,
     // same script scripts/manual-test/commercial-work-worker-tick.ts uses.
-    const tick = await runCommercialWorkTick({
+    const tick = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true,
       now: new Date(Date.now() + 5 * 60_000),
       workPublicIds: [result.work!.publicId]
     });
@@ -827,7 +831,7 @@ test("Part 18: cancelling shipping while a retry is scheduled stops the retry fr
 
     // The worker still ticks (it does not know about the cancellation ahead
     // of time) but a cancelled step must never actually execute the carrier again.
-    await runCommercialWorkTick({ now: new Date(Date.now() + 10 * 60_000), workPublicIds: [result.work!.publicId] }).catch(() => null);
+    await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true, now: new Date(Date.now() + 10 * 60_000), workPublicIds: [result.work!.publicId] }).catch(() => null);
     assert.equal(failingCarrier.calls.length, callsBeforeCancel, "no carrier call after cancellation");
 
     const followUpSendRows = await queryRows<{ count: number }>(

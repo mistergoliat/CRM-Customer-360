@@ -11,7 +11,12 @@ Object.assign(process.env, {
   DB_URL: "",
   DATABASE_URL: "",
   DB_WRITE_ENABLED: "true",
-  BRAIN_COMMERCIAL_POLICY_ENABLED: "true"
+  BRAIN_COMMERCIAL_POLICY_ENABLED: "true",
+  // SALES-AGENT-R2-A11: opens runFollowupTick's new autonomy/access gates -
+  // this file exercises pre-A11 restart-recovery behavior, not these newer
+  // gates themselves.
+  BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
 });
 
 import { getPool, queryRows, safeExecute, safeQueryRows, resetPoolForTests } from "@/lib/db";

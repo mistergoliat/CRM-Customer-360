@@ -87,7 +87,12 @@ const CYCLE_ENV = {
   // Never a real send, at any layer, for the whole test.
   BRAIN_META_SEND_ENABLED: "false",
   BRAIN_OUTBOX_WORKER_ENABLED: "false",
-  BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND: "false"
+  BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND: "false",
+  // SALES-AGENT-R2-A11: opens runNativeAutonomousCycle's and runFollowupTick's
+  // new autonomy/access gates - this test exercises pre-A11 direct runtime
+  // validation, not these newer gates themselves.
+  BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
 };
 
 async function seedConversation() {

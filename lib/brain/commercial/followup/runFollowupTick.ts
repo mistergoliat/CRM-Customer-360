@@ -1,7 +1,13 @@
 import { safeExecute, safeQueryRows } from "@/lib/db";
 import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import { redactErrorMessage } from "@/lib/brain/commercial/redactErrorMessage";
-import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
+import {
+  loadAutonomousPilotAllowlist,
+  isWaIdAuthorizedForPilot,
+  loadWhatsAppAccessGateConfig,
+  isWaIdAllowedByAccessGate,
+  loadAutonomousResponsesEnabled
+} from "@/lib/brain/runtime/autonomousRuntimeConfig";
 import { checkCustomerOptOutStatus } from "@/lib/brain/commercial/optOutStore";
 import { resolveSalesAgentConfiguration } from "@/lib/brain/commercial/sales-agent-configuration";
 import { findNextAllowedWindowStartIso, isInstantWithinAllowedWindow } from "./computeFollowUpSchedule";
@@ -51,7 +57,36 @@ export type FollowUpCandidate = {
   max_attempts: number;
   /** ACS-R1-05.1-T02.3D: which Sales Agent Configuration governed this row's scheduling - null for rows created before this task (or seeded outside the config-aware pipeline), which never had one and are never revalidated against a config. */
   followup_configuration_source: string | null;
+  /** SALES-AGENT-R2-A11, Part 19/22. Raw payload, inspected only to route to the R2 objective-aware processor - never parsed here beyond the "kind" check below. Optional so existing legacy-shaped test fixtures need no update. */
+  draft_payload_json?: unknown;
 };
+
+/**
+ * SALES-AGENT-R2-A11, Part 19/22. schedule_followup rows come from two
+ * producers sharing the same table/claim primitives (persistAgentAction.ts's
+ * legitimate second-persister exception, followUpRuntimeAuthority.test.ts):
+ * the legacy sales-consultative scheduler (draft_payload_json is its own
+ * shape or absent) and R2's scheduleObjectiveAwareFollowUp
+ * (objectiveAwareFollowUp.ts, payload kind "objective_aware_followup"). This
+ * tick's loop must route each due row to the correct processor - never feed
+ * an R2 follow-up's own reminder text into runNativeAutonomousCycle as if it
+ * were a customer message. Deliberately minimal (only the "kind" field) to
+ * avoid a circular import with objectiveAwareFollowUp.ts, which already
+ * imports this file's claim primitives - the actual full parse/revalidation
+ * still happens once, inside processObjectiveAwareFollowUpDue itself.
+ */
+export function isObjectiveAwareFollowUpPayload(value: unknown): boolean {
+  let parsed = value;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return false;
+    }
+  }
+  if (typeof parsed !== "object" || parsed === null) return false;
+  return (parsed as Record<string, unknown>).kind === "objective_aware_followup";
+}
 
 export type FollowupTickResult = {
   processed: number;
@@ -60,6 +95,10 @@ export type FollowupTickResult = {
   failed: string[];
   /** ACS-R1-05-T06.1: candidates skipped for pilot isolation - row and attempt_number left untouched, never claimed. */
   skippedUnauthorized: string[];
+  /** SALES-AGENT-R2-A11, Part 3/27/36. Blocked by the WhatsApp access gate (BRAIN_WHATSAPP_TEST_MODE_ENABLED) - row untouched, never claimed, retriable once the wa_id is allowlisted or TEST_MODE is turned off. */
+  skippedAccessGate: string[];
+  /** A11, Part 4/21/36. Blocked by the global autonomy killswitch (BRAIN_AUTONOMOUS_RESPONSES_ENABLED=false) - row untouched, never claimed, retriable once autonomy is re-enabled. */
+  skippedAutonomyDisabled: string[];
   /** ACS-R1-05.1-T02.3D: due, but outside the CURRENT allowed window - moved forward to the next window start, never executed or cancelled. */
   rescheduled: Array<{ actionId: string; scheduledFor: string }>;
   /**
@@ -104,7 +143,7 @@ export async function selectDueFollowUps(limit: number, actionIds?: string[]): P
   // otherwise consume the LIMIT before an in-memory filter could apply.
   const scope = actionIds && actionIds.length > 0 ? ` AND action_id IN (${actionIds.map(() => "?").join(",")})` : "";
   const result = await safeQueryRows<FollowUpCandidate>(
-    `SELECT id, action_id, wa_id, conversation_case_id, opportunity_id, scheduled_for, draft_message, status, attempt_number, max_attempts, followup_configuration_source
+    `SELECT id, action_id, wa_id, conversation_case_id, opportunity_id, scheduled_for, draft_message, status, attempt_number, max_attempts, followup_configuration_source, draft_payload_json
       FROM crm_agent_actions
       WHERE action_type = 'schedule_followup'
         AND (
@@ -480,6 +519,8 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     executed: [],
     failed: [],
     skippedUnauthorized: [],
+    skippedAccessGate: [],
+    skippedAutonomyDisabled: [],
     rescheduled: [],
     technicalFailures: []
   };
@@ -492,6 +533,11 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
   // any claim CAS runs - the row and its attempt_number stay exactly as they
   // were, never touched, unlike a cancellation (which writes cancel_reason).
   const pilotAllowlist = loadAutonomousPilotAllowlist();
+  // SALES-AGENT-R2-A11, Part 21/27. Read once per tick, applies uniformly to
+  // both legacy and R2 rows below - neither gate is specific to one payload
+  // shape.
+  const accessGate = loadWhatsAppAccessGateConfig();
+  const autonomyEnabled = loadAutonomousResponsesEnabled();
 
   for (const candidate of candidates) {
     if (!isWaIdAuthorizedForPilot(candidate.wa_id, pilotAllowlist)) {
@@ -500,9 +546,52 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
       continue;
     }
 
+    // A11 Part 3/27: WHO-may-access, checked before any claim - row and
+    // attempt_number left untouched, retriable once eligible.
+    if (!isWaIdAllowedByAccessGate(candidate.wa_id, accessGate)) {
+      log(`[worker:followup] skipping action ${candidate.action_id}: blocked by WhatsApp access gate`);
+      result.skippedAccessGate.push(candidate.action_id);
+      continue;
+    }
+    // A11 Part 4/21/28: the independent global autonomy killswitch - checked
+    // before any claim, applies to both legacy re-entry and the R2
+    // objective-aware processor below.
+    if (!autonomyEnabled) {
+      log(`[worker:followup] skipping action ${candidate.action_id}: autonomous responses disabled`);
+      result.skippedAutonomyDisabled.push(candidate.action_id);
+      continue;
+    }
+
     if (options.dryRun) {
       log(`[worker:followup] DRY RUN — would process action ${candidate.action_id} (origin status=${candidate.status})`);
       result.processed++;
+      continue;
+    }
+
+    // SALES-AGENT-R2-A11, Part 19/22. R2's own objective-aware follow-up
+    // (scheduleObjectiveAwareFollowUp) shares this table/action_type with the
+    // legacy scheduler - delegate entirely to its own processor (which does
+    // its own claim/revalidation/canonical-outbox dispatch) rather than
+    // falling through to the legacy claim + runNativeAutonomousCycle
+    // re-entry below, which would otherwise feed this row's own reminder
+    // text back in as if it were a new customer message. Dynamic import
+    // avoids a circular dependency (objectiveAwareFollowUp.ts already
+    // imports this file's claim primitives).
+    if (isObjectiveAwareFollowUpPayload(candidate.draft_payload_json)) {
+      const { processObjectiveAwareFollowUpDue } = await import("../work/followup/objectiveAwareFollowUp");
+      const outcome = await processObjectiveAwareFollowUpDue({ actionId: candidate.action_id, now: options.now });
+      log(`[worker:followup] objective-aware follow-up ${candidate.action_id}: ${outcome.status}`);
+      if (outcome.status === "sent") {
+        result.executed.push(candidate.action_id);
+        result.processed++;
+      } else if (outcome.status === "cancelled") {
+        result.cancelled.push({ actionId: candidate.action_id, reason: outcome.reason });
+      } else if (outcome.status === "failed") {
+        result.failed.push(candidate.action_id);
+      }
+      // "skipped" (not due / already claimed) and "legacy_unaffected"
+      // (payload turned out not to parse after all) need no bucket - neither
+      // mutated anything.
       continue;
     }
 

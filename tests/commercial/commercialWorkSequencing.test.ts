@@ -30,7 +30,11 @@ Object.assign(process.env, {
   DB_PASSWORD: "una_clave_local",
   DB_URL: "",
   DATABASE_URL: "",
-  DB_WRITE_ENABLED: "true"
+  DB_WRITE_ENABLED: "true",
+  // SALES-AGENT-R2-A11: opens the new worker-level autonomy/access gates for
+  // this file's pre-A11 tests, none of which exercise those gates themselves.
+  BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
 });
 
 const NOW = "2026-08-18T12:00:00.000Z";
@@ -394,7 +398,7 @@ test("CWSEQ08 CWSEQ22 CWSEQ23 CWSEQ24 retry worker skips stale anchors but prese
     )
   );
   const calls: string[] = [];
-  const tick = await runCommercialWorkTick({
+  const tick = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true,
     batchSize: 1,
     now: NOW,
     workerId: "cwseq-worker",

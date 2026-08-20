@@ -18,13 +18,17 @@ export class AutonomousRuntimeConfigError extends Error {
   }
 }
 
-function readStrictBooleanFlag(name: string, env: NodeJS.ProcessEnv): boolean {
+function readStrictBooleanFlagWithDefault(name: string, env: NodeJS.ProcessEnv, defaultValue: boolean): boolean {
   const raw = env[name];
-  if (raw === undefined) return false;
+  if (raw === undefined) return defaultValue;
   const normalized = raw.trim().toLowerCase();
   if (normalized === "true") return true;
   if (normalized === "false") return false;
   throw new AutonomousRuntimeConfigError(`${name} must be "true" or "false" (received ${JSON.stringify(raw)}).`);
+}
+
+function readStrictBooleanFlag(name: string, env: NodeJS.ProcessEnv): boolean {
+  return readStrictBooleanFlagWithDefault(name, env, false);
 }
 
 /**
@@ -166,6 +170,70 @@ export function assertFollowUpWorkerRuntimeConfigIsSafe(config: FollowUpWorkerRu
     `Follow-up worker configuration is partial - these flags must be either all "true" or all "false": ${summary}. ` +
       "A partial chain silently drops the follow-up somewhere between the LLM call and the outbox write - refusing to start."
   );
+}
+
+/**
+ * SALES-AGENT-R2-A11, Part 2/3/30/31. A dedicated, fail-closed WHO-MAY-ACCESS
+ * gate - deliberately distinct from loadAutonomousPilotAllowlist above (that
+ * one governs the outbox worker's own real-send safety net, unchanged by
+ * this task) and from the R2 routing allowlist (loadCommercialWorkRuntimeAllowlist,
+ * which decides WHICH runtime a customer uses, never whether they may be
+ * processed at all). Conflating any of these three is exactly what A11's own
+ * architecture principle forbids.
+ *
+ * BRAIN_WHATSAPP_TEST_MODE_ENABLED defaults to true (unlike every other flag
+ * in this file) - a fresh deployment with no A11 env configured must never
+ * accidentally open the bot to the public. BRAIN_WHATSAPP_TEST_WA_IDS reuses
+ * the same digit-normalization as the pilot allowlist.
+ */
+export type WhatsAppAccessGateConfig = { testModeEnabled: boolean; testWaIds: string[] };
+
+export function loadWhatsAppAccessGateConfig(env: NodeJS.ProcessEnv = process.env): WhatsAppAccessGateConfig {
+  return {
+    testModeEnabled: readStrictBooleanFlagWithDefault("BRAIN_WHATSAPP_TEST_MODE_ENABLED", env, true),
+    testWaIds: readWaIdAllowlist("BRAIN_WHATSAPP_TEST_WA_IDS", env)
+  };
+}
+
+/**
+ * Part 30: TEST_MODE=true with an EMPTY allowlist is not "unrestricted" (the
+ * opposite convention from isWaIdAuthorizedForPilot's empty-allowlist
+ * handling above) - it blocks everyone. TEST_MODE=false always allows any
+ * normalizable wa_id, regardless of the list's contents.
+ */
+export function isWaIdAllowedByAccessGate(waId: string | null | undefined, config: WhatsAppAccessGateConfig): boolean {
+  // Public mode: any identified conversation may enter (Part 29 - "any valid
+  // WhatsApp user"). Deliberately does NOT require waId to normalize to a
+  // phone-number shape - that would reject any non-phone-shaped conversation
+  // identifier, which is not what "public" means. Only a genuinely missing
+  // identifier (nothing to reply to) is blocked either way.
+  if (!config.testModeEnabled) return Boolean(waId && waId.trim());
+  if (config.testWaIds.length === 0) return false;
+  const normalized = normalizeWhatsAppRecipientDigits(waId ?? null);
+  if (normalized === null) return false;
+  return config.testWaIds.includes(normalized);
+}
+
+/**
+ * SALES-AGENT-R2-A11, Part 4/5. The independent MAY-THE-BOT-RESPOND
+ * killswitch - defaults to false, so a fresh deployment never autonomously
+ * responds until an operator explicitly turns it on (Stage 0 -> Stage 1).
+ * Gates system-originated autonomous actions only (LLM calls, capability
+ * execution, autonomous follow-up sends, worker-triggered replies) - never
+ * manual operator replies, handoff, or explicitly operator-generated outbox
+ * actions, none of which route through this flag's call sites.
+ */
+export function loadAutonomousResponsesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return readStrictBooleanFlagWithDefault("BRAIN_AUTONOMOUS_RESPONSES_ENABLED", env, false);
+}
+
+/** SALES-AGENT-R2-A11, Part 9/20. Both default false - inert unless explicitly enabled. */
+export function loadCommercialWorkWorkerEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return readStrictBooleanFlagWithDefault("BRAIN_COMMERCIAL_WORK_WORKER_ENABLED", env, false);
+}
+
+export function loadCommercialWorkFollowUpEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return readStrictBooleanFlagWithDefault("BRAIN_COMMERCIAL_WORK_FOLLOW_UP_ENABLED", env, false);
 }
 
 export type AutonomousRuntimePreflightReport = {

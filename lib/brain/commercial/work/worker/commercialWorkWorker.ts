@@ -8,6 +8,13 @@ import type { PersistedCommercialWork } from "../persistenceTypes";
 import { getCommercialWorkByPublicId, updateCommercialWorkAggregate } from "../repository";
 import { getCommercialWorkRetryPolicy } from "../retryPolicy";
 import type { CommercialWork, CommercialWorkBlocker, CommercialWorkStep } from "../types";
+import { shouldRouteToCommercialWork } from "../../config/commercialCycleConfig";
+import {
+  loadAutonomousResponsesEnabled,
+  loadWhatsAppAccessGateConfig,
+  isWaIdAllowedByAccessGate,
+  type WhatsAppAccessGateConfig
+} from "@/lib/brain/runtime/autonomousRuntimeConfig";
 
 export const DEFAULT_COMMERCIAL_WORK_WORKER_BATCH_SIZE = 5;
 export const DEFAULT_COMMERCIAL_WORK_STEP_LOCK_SECONDS = 60;
@@ -25,6 +32,8 @@ export type DueCommercialWorkStepRow = {
   next_attempt_at: string | null;
   lock_owner: string | null;
   lock_until: string | null;
+  /** SALES-AGENT-R2-A11, Part 13/14. The conversation's external contact id - resolved here so the worker can revalidate the WhatsApp access gate and R2 eligibility fresh, before claiming, for a step that may have been created long before this tick runs. Optional so existing test fixtures need no update. */
+  wa_id?: string | null;
 };
 
 export type CommercialWorkTickOptions = {
@@ -42,6 +51,18 @@ export type CommercialWorkTickOptions = {
   /** SALES-AGENT-R2-A09, Part 24. The worker's own CAS-claimed step always executes alone (executeCommercialWork's selectReadyCandidates never widens a claimed step's own round) - these only affect any CASCADE rounds within the same tick, after the claimed step's round completes. Default OFF, same as the executor's own default. */
   parallelExecutionEnabled?: boolean;
   maxParallelSteps?: number;
+  /** SALES-AGENT-R2-A11, Part 12. Test-only injection point; production callers default to the real env-backed reader. */
+  autonomousResponsesEnabled?: boolean;
+  /** A11, Part 13. Test-only injection point; production callers default to the real env-backed reader. */
+  whatsAppAccessGate?: WhatsAppAccessGateConfig;
+  /**
+   * A11, Part 14. Test-only injection point; production callers default to
+   * the real shouldRouteToCommercialWork. A pre-A11 test exercising the
+   * worker's own retry/claim mechanics (not rollout policy) can pass
+   * `() => true` here - it is testing something orthogonal to whether this
+   * specific wa_id is currently R2-allowlisted.
+   */
+  isWaIdEligibleForCommercialWork?: (waId: string | null | undefined) => boolean;
 };
 
 export type CommercialWorkTickResult = {
@@ -96,9 +117,11 @@ export async function selectDueCommercialWorkSteps(input: { limit: number; now: 
         s.max_attempts,
         s.next_attempt_at,
         s.lock_owner,
-        s.lock_until
+        s.lock_until,
+        c.external_contact_id AS wa_id
       FROM crm_commercial_work_steps s
       INNER JOIN crm_commercial_work w ON w.id = s.commercial_work_id
+      LEFT JOIN conversation c ON c.id = w.conversation_id
       WHERE w.status IN ('ACTIVE', 'WAITING_SYSTEM')
         ${scopeSql}
         AND (
@@ -212,7 +235,36 @@ export async function runCommercialWorkTick(options: CommercialWorkTickOptions =
   const candidates = await selectDueCommercialWorkSteps({ limit: batchSize, now, workPublicIds: options.workPublicIds });
   result.selected = candidates.length;
 
+  // SALES-AGENT-R2-A11, Part 12/13/14. Read once per tick - a claimed step
+  // may have been created long before this tick runs, so its eligibility is
+  // revalidated fresh here, never assumed from when it was created.
+  const autonomyEnabled = options.autonomousResponsesEnabled ?? loadAutonomousResponsesEnabled();
+  const accessGate = options.whatsAppAccessGate ?? loadWhatsAppAccessGateConfig();
+
   for (const candidate of candidates) {
+    // A11 Part 4/12: the global autonomy killswitch - checked before any
+    // claim, so a disabled worker leaves every due row untouched (retriable
+    // once autonomy is re-enabled), never partially claimed.
+    if (!autonomyEnabled) {
+      result.skipped.push({ workPublicId: candidate.work_public_id, stepId: candidate.step_id, reason: "skipped_autonomy_disabled" });
+      continue;
+    }
+    // A11 Part 13: a work item created for a non-test wa_id must not bypass
+    // the access gate merely because it is being resumed by a background
+    // worker - resolved and revalidated fresh here (never from creation time).
+    if (!isWaIdAllowedByAccessGate(candidate.wa_id, accessGate)) {
+      result.skipped.push({ workPublicId: candidate.work_public_id, stepId: candidate.step_id, reason: "skipped_access_gate" });
+      continue;
+    }
+    // A11 Part 14: a stale historical R2 work item must not bypass current
+    // rollout policy - re-checked against the live R2 allowlist every tick,
+    // never assumed from when the work was created.
+    const eligibleForCommercialWork = options.isWaIdEligibleForCommercialWork ?? shouldRouteToCommercialWork;
+    if (!eligibleForCommercialWork(candidate.wa_id)) {
+      result.skipped.push({ workPublicId: candidate.work_public_id, stepId: candidate.step_id, reason: "skipped_r2_ineligible" });
+      continue;
+    }
+
     const policy = getCommercialWorkRetryPolicy({ type: candidate.step_type });
     const maxAttempts = candidate.max_attempts ?? policy?.maxAttempts ?? 1;
     if (candidate.attempt_count >= maxAttempts) {

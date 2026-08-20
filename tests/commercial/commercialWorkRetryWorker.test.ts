@@ -35,7 +35,12 @@ Object.assign(process.env, {
   DB_PASSWORD: "una_clave_local",
   DB_URL: "",
   DATABASE_URL: "",
-  DB_WRITE_ENABLED: "true"
+  DB_WRITE_ENABLED: "true",
+  // SALES-AGENT-R2-A11: opens the new worker-level autonomy/access gates for
+  // this file's pre-A11 tests, none of which exercise those gates themselves
+  // (see commercialWorkAccessAndAutonomyGates.test.ts for dedicated coverage).
+  BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
 });
 
 const NOW = "2026-08-17T12:00:00.000Z";
@@ -223,7 +228,7 @@ test("CWRT01-CWRT04-CWRT20-CWRT25 critical autonomous continuation: shipping ret
   const created = await persist(work);
   const firstGateway = makeDbGateway({ calculate_shipping: "temporarily_blocked" });
 
-  const first = await runCommercialWorkTick({
+  const first = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true,
     batchSize: 1,
     now: NOW,
     workerId: "cwrt-worker-a",
@@ -240,7 +245,7 @@ test("CWRT01-CWRT04-CWRT20-CWRT25 critical autonomous continuation: shipping ret
   const shippingKey = step(waiting!, "CALCULATE_SHIPPING").idempotencyKey;
 
   const secondGateway = makeDbGateway();
-  const second = await runCommercialWorkTick({
+  const second = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true,
     batchSize: 1,
     now: DUE,
     workerId: "cwrt-worker-b",
@@ -266,13 +271,13 @@ test("CWRT03-CWRT09-CWRT10 quote retry preserves idempotency and increments atte
   await setCommercialLineItemsForOpportunity({ opportunityId, items: [{ productId: "31", combinationId: null, quantity: 2 }] });
   const created = await persist(project({ commercialLineItems: await getActiveCommercialLineItemsForOpportunity(opportunityId), objectiveSeeds: [objectiveSeed("CREATE_QUOTE")] }));
   const firstGateway = makeDbGateway({ create_quote: "temporarily_blocked" });
-  await runCommercialWorkTick({ batchSize: 1, now: NOW, workerId: "quote-a", workPublicIds: [created.work.publicId], executeCapability: firstGateway.executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
+  await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true, batchSize: 1, now: NOW, workerId: "quote-a", workPublicIds: [created.work.publicId], executeCapability: firstGateway.executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
   const scheduled = await getCommercialWorkByPublicId(created.work.publicId);
   const quoteKey = step(scheduled!, "CREATE_QUOTE").idempotencyKey;
   assert.equal(step(scheduled!, "CREATE_QUOTE").status, "RETRY_SCHEDULED");
 
   const secondGateway = makeDbGateway();
-  await runCommercialWorkTick({ batchSize: 1, now: DUE, workerId: "quote-b", workPublicIds: [created.work.publicId], executeCapability: secondGateway.executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
+  await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true, batchSize: 1, now: DUE, workerId: "quote-b", workPublicIds: [created.work.publicId], executeCapability: secondGateway.executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
   const completed = await getCommercialWorkByPublicId(created.work.publicId);
   assert.equal(step(completed!, "CREATE_QUOTE").status, "COMPLETED");
   assert.equal(step(completed!, "CREATE_QUOTE").idempotencyKey, quoteKey);
@@ -306,7 +311,7 @@ test("CWRT05-CWRT08 stale RUNNING after side effect is repaired without duplicat
   await updateCommercialWorkAggregate({ publicId: running!.publicId, expectedVersion: running!.version, nextWork: staleWork });
 
   const calls: string[] = [];
-  const tick = await runCommercialWorkTick({
+  const tick = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true,
     batchSize: 1,
     now: NOW,
     workerId: "repair-worker",
@@ -336,10 +341,10 @@ test("CWRT06-CWRT07-CWRT19-CWRT20 active leases, two-worker CAS, not-due work an
   assert.equal(firstClaim, true);
   assert.equal(secondClaim, false);
 
-  const protectedTick = await runCommercialWorkTick({ batchSize: 10, now: NOW, workerId: "worker-two", workPublicIds: [workA.work.publicId], executeCapability: makeDbGateway().executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
+  const protectedTick = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true, batchSize: 10, now: NOW, workerId: "worker-two", workPublicIds: [workA.work.publicId], executeCapability: makeDbGateway().executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
   assert.equal(protectedTick.skipped.some((item) => item.stepId === candidate.step_id), false);
 
-  const batchTick = await runCommercialWorkTick({ batchSize: 1, now: NOW, workerId: "batch-worker", workPublicIds: [workB.work.publicId], executeCapability: makeDbGateway().executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
+  const batchTick = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true, batchSize: 1, now: NOW, workerId: "batch-worker", workPublicIds: [workB.work.publicId], executeCapability: makeDbGateway().executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
   assert.ok(batchTick.selected <= 1);
   assert.ok(workB.work.publicId);
 });
@@ -355,18 +360,18 @@ test("CWRT11-CWRT12-CWRT13 retry exhaustion and business failures are not blindl
     steps: exhausted.work.steps.map((item) => (item.type === "CREATE_QUOTE" ? { ...item, status: "RETRY_SCHEDULED" as const, attemptCount: 3, maxAttempts: 3, nextAttemptAt: NOW } : item))
   };
   await updateCommercialWorkAggregate({ publicId: exhausted.work.publicId, expectedVersion: exhausted.work.version, nextWork: exhaustedWork });
-  const exhaustedTick = await runCommercialWorkTick({ batchSize: 1, now: NOW, workerId: "exhausted", workPublicIds: [exhausted.work.publicId], executeCapability: makeDbGateway().executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
+  const exhaustedTick = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true, batchSize: 1, now: NOW, workerId: "exhausted", workPublicIds: [exhausted.work.publicId], executeCapability: makeDbGateway().executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
   const failed = await getCommercialWorkByPublicId(exhausted.work.publicId);
   assert.equal(exhaustedTick.failed, 1);
   assert.equal(step(failed!, "CREATE_QUOTE").status, "FAILED");
 
   const waitingCustomer = await persist(project({ commercialLineItems: sel.selection, objectiveSeeds: [objectiveSeed("GET_SHIPPING_QUOTE")] }));
-  const noRetry = await runCommercialWorkTick({ batchSize: 5, now: NOW, workerId: "no-customer", workPublicIds: [waitingCustomer.work.publicId], executeCapability: makeDbGateway().executeCapability, loadCurrentFacts: loadFacts });
+  const noRetry = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true, batchSize: 5, now: NOW, workerId: "no-customer", workPublicIds: [waitingCustomer.work.publicId], executeCapability: makeDbGateway().executeCapability, loadCurrentFacts: loadFacts });
   assert.equal(noRetry.selected === 0 || noRetry.skipped.every((item) => item.workPublicId !== waitingCustomer.work.publicId), true);
 
   opportunityId = await seedOpportunity();
   const invalid = await persist(project({ objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { items: [{ productId: "31", combinationId: null, quantity: 2 }] })] }));
-  await runCommercialWorkTick({ batchSize: 1, now: NOW, workerId: "invalid", workPublicIds: [invalid.work.publicId], executeCapability: makeDbGateway({ select_products: "invalid_arguments" }).executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
+  await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true, batchSize: 1, now: NOW, workerId: "invalid", workPublicIds: [invalid.work.publicId], executeCapability: makeDbGateway({ select_products: "invalid_arguments" }).executeCapability, loadCurrentFacts: loadFacts, loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }) });
   const invalidWork = await getCommercialWorkByPublicId(invalid.work.publicId);
   assert.equal(step(invalidWork!, "SELECT_PRODUCTS").status, "FAILED");
   assert.equal(step(invalidWork!, "SELECT_PRODUCTS").nextAttemptAt, null);
@@ -382,7 +387,7 @@ test("CWRT14-CWRT15-CWRT16-CWRT17 superseded/cancelled/handoff/AI-disabled work 
     terminalWorkIds.push(created.work.publicId);
   }
   const calls: string[] = [];
-  const tick = await runCommercialWorkTick({
+  const tick = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true,
     batchSize: 10,
     now: NOW,
     workerId: "terminal-skip",
@@ -398,7 +403,7 @@ test("CWRT14-CWRT15-CWRT16-CWRT17 superseded/cancelled/handoff/AI-disabled work 
   assert.deepEqual(calls.filter((name) => name === "select_products"), []);
 
   const human = await persist(project({ objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { items: [{ productId: "31", combinationId: null, quantity: 2 }] })] }));
-  const handoff = await runCommercialWorkTick({
+  const handoff = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true,
     batchSize: 10,
     now: NOW,
     workerId: "human-block",
@@ -415,7 +420,7 @@ test("CWRT14-CWRT15-CWRT16-CWRT17 superseded/cancelled/handoff/AI-disabled work 
 test("CWRT18 version conflict after claim stops without insisting", async () => {
   opportunityId = await seedOpportunity();
   const created = await persist(project({ objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { items: [{ productId: "31", combinationId: null, quantity: 2 }] })] }));
-  const tick = await runCommercialWorkTick({
+  const tick = await runCommercialWorkTick({ isWaIdEligibleForCommercialWork: () => true,
     batchSize: 1,
     now: NOW,
     workerId: "conflict-worker",

@@ -35,7 +35,13 @@ import type { RecentCatalogContextLoadResult } from "../agent-loop/recentCatalog
 import { loadPendingCatalogAction } from "../agent-loop/pendingCatalogAction";
 import type { PendingCatalogActionLoadResult } from "../agent-loop/pendingCatalogAction";
 import { buildNativeBrainContextShim } from "./buildNativeBrainContextShim";
-import { loadAutonomousPilotAllowlist, isWaIdAuthorizedForPilot } from "@/lib/brain/runtime/autonomousRuntimeConfig";
+import {
+  loadAutonomousPilotAllowlist,
+  isWaIdAuthorizedForPilot,
+  loadWhatsAppAccessGateConfig,
+  isWaIdAllowedByAccessGate,
+  loadAutonomousResponsesEnabled
+} from "@/lib/brain/runtime/autonomousRuntimeConfig";
 import {
   checkCustomerOptOutStatus,
   detectExplicitOptInCommand,
@@ -165,6 +171,25 @@ function dedupeWarnings(values: string[]): string[] {
 export async function runNativeAutonomousCycle(
   input: NativeAutonomousCycleInput
 ): Promise<NativeAutonomousCycleResult> {
+  // Step -1 (SALES-AGENT-R2-A11, Part 2/3): the WhatsApp access gate - WHO
+  // may even enter autonomous processing at all. Checked before everything
+  // else, including the pre-existing pilot allowlist below (a distinct,
+  // narrower mechanism that governs the outbox worker's own real-send safety
+  // net - see autonomousRuntimeConfig.ts). Fail closed: TEST_MODE defaults
+  // true, and an empty allowlist while TEST_MODE is true blocks everyone.
+  const accessGate = loadWhatsAppAccessGateConfig();
+  if (!isWaIdAllowedByAccessGate(input.waId, accessGate)) {
+    return { ran: false, reason: "wa_id_not_authorized_for_access_gate", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
+  }
+
+  // Step -0.5 (A11, Part 4/5): the independent global autonomy killswitch.
+  // Defaults false - a fresh deployment never autonomously responds until an
+  // operator explicitly enables it. Manual operator actions never route
+  // through this function, so they are never affected by this gate.
+  if (!loadAutonomousResponsesEnabled()) {
+    return { ran: false, reason: "autonomous_responses_disabled", shadow: null, loop: null, bridge: null, catalogCapability: null, commercialNeed: null, warnings: [] };
+  }
+
   // Step 0 (ACS-R1-05-T06.1, P1-5 pilot isolation): when BRAIN_AUTONOMOUS_TEST_WA_IDS
   // is configured, a wa_id outside it gets zero autonomous side effects - no
   // LLM call, no Customer 360 load, no resolveNativeCustomerSession (which can

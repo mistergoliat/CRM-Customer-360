@@ -36,7 +36,12 @@ Object.assign(process.env, {
   BRAIN_SALES_AGENT_ENABLED: "false",
   BRAIN_COMMERCIAL_SHADOW_ENABLED: "false",
   BRAIN_COMMERCIAL_OPERATIONAL_LOOP_ENABLED: "false",
-  BRAIN_MULTI_REQUEST_RUNTIME_ENABLED: "false"
+  BRAIN_MULTI_REQUEST_RUNTIME_ENABLED: "false",
+  // SALES-AGENT-R2-A11: opens runFollowupTick's own new autonomy/access
+  // gates - this file's tests exercise the pre-A11 claim/revalidation/
+  // cycle-re-entry behavior, not these newer gates themselves.
+  BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false"
 });
 
 after(async () => {

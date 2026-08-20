@@ -12,6 +12,9 @@ import type { SalesAgentProvider } from "@/lib/brain/commercial/sales-agent/runt
 // (a thrown "must not be called" from the injected provider/loader, or a DB
 // connection error) instead of silently passing.
 Object.assign(process.env, {
+  // SALES-AGENT-R2-A11: opens runNativeAutonomousCycle's new autonomy/access gates - unrelated to this file's own pre-A11 assertions.
+  BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
+  BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false",
   BRAIN_AUTONOMOUS_TEST_WA_IDS: "56900000000" // never the waId used below
 });
 
