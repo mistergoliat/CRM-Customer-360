@@ -1,5 +1,7 @@
-import type { ReactNode } from "react";
+import React, { type ReactNode } from "react";
 import clsx from "clsx";
+
+void React;
 
 type SectionCardProps = {
   title: string;

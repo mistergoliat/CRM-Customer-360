@@ -1,6 +1,6 @@
-import { PageHeader } from "@/components/ui/PageHeader";
-import { SurfaceBadge } from "@/components/p1m/SurfaceBadge";
 import { MarketingCopilotWorkspace } from "@/components/marketing/MarketingCopilotWorkspace";
+import { SurfaceBadge } from "@/components/p1m/SurfaceBadge";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { getMarketingCopilotViewModel } from "@/lib/p1m/read-models";
 
 export default function MarketingCopilotPage() {
@@ -11,8 +11,8 @@ export default function MarketingCopilotPage() {
       <PageHeader
         eyebrow="Crecimiento"
         title="Marketing Copilot"
-        description="Creación conversacional de campañas con validación y governance a la derecha."
-        status="Preview"
+        description="Consulta analitica interna sobre Customer Intelligence con provenance y estados controlados."
+        status="Interno"
         actions={<SurfaceBadge kind="fixture" />}
       />
 
