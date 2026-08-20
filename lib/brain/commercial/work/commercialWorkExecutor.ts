@@ -1,6 +1,8 @@
 import { executeGovernedCapability } from "@/lib/brain/commercial/capability-gateway";
 import type { CapabilityGatewayContext, CapabilityGatewayResult } from "@/lib/brain/commercial/capability-gateway";
 import { queryRows } from "@/lib/db";
+import { buildSafeExecutionWave } from "./buildSafeExecutionWave";
+import type { ExecutionWaveDecision } from "./buildSafeExecutionWave";
 import { getActiveCommercialLineItemsForOpportunity } from "@/lib/domains/commercial-line-items";
 import type { CommercialLineItemSelection } from "@/lib/domains/commercial-line-items";
 import { getActiveCreatedQuoteForOpportunity } from "@/lib/domains/created-quote";
@@ -66,6 +68,18 @@ export type ExecuteCommercialWorkInput = {
   workerId?: string;
   scheduleRetries?: boolean;
   now?: string | Date;
+  /**
+   * SALES-AGENT-R2-A09, Part 13. Default OFF (undefined/false reproduces the
+   * exact pre-A09 sequential behavior - one READY step per loop iteration,
+   * byte-for-byte). When true, buildSafeExecutionWave may select more than
+   * one mutually-independent, explicitly read_only step per iteration to run
+   * concurrently. Never applies when claimedStepId is set (Part 24/25) - a
+   * worker-claimed step always executes alone, preserving the existing CAS
+   * claim contract unchanged.
+   */
+  parallelExecutionEnabled?: boolean;
+  /** Part 12. Bounded, clamped to [1,10]. Ignored (effectively 1) when parallelExecutionEnabled is false. */
+  maxParallelSteps?: number;
 };
 
 export type ExecuteCommercialWorkResult = {
@@ -77,6 +91,8 @@ export type ExecuteCommercialWorkResult = {
   executedStepCount: number;
   records: CommercialWorkStepExecutionRecord[];
   remainingReadyStepIds: string[];
+  /** Part 29. One entry per round that actually considered a wave (even a single-step one) - explains every inclusion/exclusion decision, never silent. */
+  waveDecisions: ExecutionWaveDecision[];
 };
 
 function evidenceForFact(factType: NonNullable<CommercialEvidenceRef["factType"]>, id: string | number | undefined | null, stale = false, reason?: string): CommercialEvidenceRef[] {
@@ -196,14 +212,34 @@ function priority(step: CommercialWorkStep): number {
   }
 }
 
-function selectNextReadyStep(work: PersistedCommercialWork, facts: CurrentFacts, options: Pick<ExecuteCommercialWorkInput, "claimedStepId" | "workerId"> = {}): CommercialWorkStep | null {
-  if (options.claimedStepId) {
-    const claimed = work.steps.find((step) => step.stepId === options.claimedStepId && step.status === "RUNNING");
-    if (claimed && (!options.workerId || claimed.lockOwner === options.workerId) && dependenciesSatisfied(claimed, work, facts)) return claimed;
-  }
+function sortedReadySteps(work: PersistedCommercialWork, facts: CurrentFacts): CommercialWorkStep[] {
   return work.steps
     .filter((step) => step.status === "READY" && dependenciesSatisfied(step, work, facts))
-    .sort((left, right) => priority(left) - priority(right) || left.stepId.localeCompare(right.stepId))[0] ?? null;
+    .sort((left, right) => priority(left) - priority(right) || left.stepId.localeCompare(right.stepId));
+}
+
+/**
+ * SALES-AGENT-R2-A09, Part 24/25. Unchanged claimed-step semantics: a
+ * worker-claimed step (RUNNING, matching lockOwner, dependencies still
+ * satisfied) is always the sole candidate this round - never widened into a
+ * wave, preserving the existing per-step CAS claim contract exactly.
+ * Falling through to the general READY-step list (when no claim applies, or
+ * an existing claim no longer qualifies) is exactly pre-A09
+ * selectNextReadyStep's own fallthrough - only THAT list may ever be
+ * wave-widened.
+ */
+function selectReadyCandidates(
+  work: PersistedCommercialWork,
+  facts: CurrentFacts,
+  options: Pick<ExecuteCommercialWorkInput, "claimedStepId" | "workerId"> = {}
+): { candidates: CommercialWorkStep[]; waveEligible: boolean } {
+  if (options.claimedStepId) {
+    const claimed = work.steps.find((step) => step.stepId === options.claimedStepId && step.status === "RUNNING");
+    if (claimed && (!options.workerId || claimed.lockOwner === options.workerId) && dependenciesSatisfied(claimed, work, facts)) {
+      return { candidates: [claimed], waveEligible: false };
+    }
+  }
+  return { candidates: sortedReadySteps(work, facts), waveEligible: true };
 }
 
 function destinationMatches(step: CommercialWorkStep, destination: ShippingDestination | null): boolean {
@@ -342,42 +378,59 @@ function refreshObjectiveState(objective: CommercialObjective, steps: readonly C
   return { ...objective, status, resolvedInputs, evidence };
 }
 
+/**
+ * SALES-AGENT-R2-A09, Part 15/16. One step's outcome for one round -
+ * generalizes the pre-A09 single "completedRecord" into an array so N
+ * concurrently-executed wave members can be applied in one deterministic
+ * pass and persisted with one updateCommercialWorkAggregate call (never N
+ * racing persists against the same expectedVersion). forcedBlockers, when
+ * present, reproduces the two stale-evidence special cases (pre- and
+ * post-side-effect) that set a step directly to BLOCKED with explicit
+ * blockers rather than going through the normal statusFromRecord/
+ * blockersFromRecord/retry-scheduling derivation.
+ */
+type StepOutcome = { record: CommercialWorkStepExecutionRecord; forcedBlockers?: CommercialWorkBlocker[] };
+
 function activateUnblockedSteps(
   work: PersistedCommercialWork,
   facts: CurrentFacts,
-  completedRecord?: CommercialWorkStepExecutionRecord,
+  outcomes: StepOutcome[] = [],
   options: Pick<ExecuteCommercialWorkInput, "scheduleRetries" | "now"> = {}
 ): CommercialWorkStep[] {
+  const outcomeByStepId = new Map(outcomes.map((outcome) => [outcome.record.stepId, outcome]));
   let steps = work.steps.map((step) => {
-    if (completedRecord && step.stepId === completedRecord.stepId) {
-      const nextStatus = statusFromRecord(completedRecord, step, options);
-      const policy = getCommercialWorkRetryPolicy(step);
-      const maxAttempts = step.maxAttempts ?? policy?.maxAttempts ?? null;
-      const nextAttemptAt =
-        nextStatus === "RETRY_SCHEDULED" && policy
-          ? calculateCommercialWorkNextAttemptAt({ policy, attemptCount: Math.max(1, step.attemptCount), now: options.now ?? new Date() })
-          : null;
-      const normalizedRecord =
-        nextStatus === "FAILED" && completedRecord.status === "waiting_system"
-          ? { ...completedRecord, status: "failed" as const, errorCode: "retry_attempts_exhausted" }
-          : completedRecord;
-      const blockers = blockersFromRecord(step, normalizedRecord);
-      return {
-        ...step,
-        status: nextStatus,
-        evidence: completedRecord.evidence.length ? completedRecord.evidence : step.evidence,
-        blockers,
-        retryable: nextStatus === "WAITING_SYSTEM" || nextStatus === "RETRY_SCHEDULED",
-        retryCandidate: nextStatus === "WAITING_SYSTEM" || nextStatus === "RETRY_SCHEDULED",
-        maxAttempts,
-        nextAttemptAt,
-        lockOwner: null,
-        lockUntil: null,
-        startedAt: nextStatus === "RETRY_SCHEDULED" ? step.startedAt : null,
-        lastAttemptAt: step.lastAttemptAt ?? isoFrom(options.now)
-      };
+    const outcome = outcomeByStepId.get(step.stepId);
+    if (!outcome) return step;
+    const { record: completedRecord, forcedBlockers } = outcome;
+    if (forcedBlockers) {
+      return { ...step, status: "BLOCKED" as const, blockers: forcedBlockers, evidence: completedRecord.evidence, lockOwner: null, lockUntil: null, startedAt: null };
     }
-    return step;
+    const nextStatus = statusFromRecord(completedRecord, step, options);
+    const policy = getCommercialWorkRetryPolicy(step);
+    const maxAttempts = step.maxAttempts ?? policy?.maxAttempts ?? null;
+    const nextAttemptAt =
+      nextStatus === "RETRY_SCHEDULED" && policy
+        ? calculateCommercialWorkNextAttemptAt({ policy, attemptCount: Math.max(1, step.attemptCount), now: options.now ?? new Date() })
+        : null;
+    const normalizedRecord =
+      nextStatus === "FAILED" && completedRecord.status === "waiting_system"
+        ? { ...completedRecord, status: "failed" as const, errorCode: "retry_attempts_exhausted" }
+        : completedRecord;
+    const blockers = blockersFromRecord(step, normalizedRecord);
+    return {
+      ...step,
+      status: nextStatus,
+      evidence: completedRecord.evidence.length ? completedRecord.evidence : step.evidence,
+      blockers,
+      retryable: nextStatus === "WAITING_SYSTEM" || nextStatus === "RETRY_SCHEDULED",
+      retryCandidate: nextStatus === "WAITING_SYSTEM" || nextStatus === "RETRY_SCHEDULED",
+      maxAttempts,
+      nextAttemptAt,
+      lockOwner: null,
+      lockUntil: null,
+      startedAt: nextStatus === "RETRY_SCHEDULED" ? step.startedAt : null,
+      lastAttemptAt: step.lastAttemptAt ?? isoFrom(options.now)
+    };
   });
 
   const view = { ...work, steps };
@@ -404,11 +457,11 @@ function deriveNextWorkStatus(currentStatus: CommercialWorkStatus, objectives: r
 function nextAggregate(
   work: PersistedCommercialWork,
   facts: CurrentFacts,
-  record?: CommercialWorkStepExecutionRecord,
+  outcomes: StepOutcome[] = [],
   extraBlockers: CommercialWorkBlocker[] = [],
   options: Pick<ExecuteCommercialWorkInput, "scheduleRetries" | "now"> = {}
 ): CommercialWork {
-  const steps = activateUnblockedSteps(work, facts, record, options);
+  const steps = activateUnblockedSteps(work, facts, outcomes, options);
   const objectives = work.objectives.map((objective) => refreshObjectiveState(objective, steps, facts));
   const blockers = [...extraBlockers, ...objectives.flatMap((objective) => objective.blockers), ...steps.flatMap((step) => step.blockers)];
   const wantedStatus = deriveNextWorkStatus(work.status, objectives, steps, blockers);
@@ -423,23 +476,45 @@ async function persistNext(publicId: string, expectedVersion: number, work: Comm
 
 export async function executeCommercialWork(input: ExecuteCommercialWorkInput): Promise<ExecuteCommercialWorkResult> {
   const maxSteps = Math.max(1, Math.min(input.maxSteps ?? 10, 50));
+  const maxParallelSteps = Math.max(1, Math.min(input.maxParallelSteps ?? 1, 10));
   const executeCapability = input.executeCapability ?? executeGovernedCapability;
   const records: CommercialWorkStepExecutionRecord[] = [];
+  const waveDecisions: ExecutionWaveDecision[] = [];
   let work = await getCommercialWorkByPublicId(input.workPublicId, input.adapter);
   if (!work) {
-    return { outcome: "not_found", reason: "commercial_work_not_found", work: null, initialVersion: null, finalVersion: null, executedStepCount: 0, records, remainingReadyStepIds: [] };
+    return { outcome: "not_found", reason: "commercial_work_not_found", work: null, initialVersion: null, finalVersion: null, executedStepCount: 0, records, remainingReadyStepIds: [], waveDecisions };
   }
   const initialVersion = work.version;
   if (work.version !== input.expectedVersion) {
-    return { outcome: "version_conflict", reason: "expected_version_mismatch", work, initialVersion, finalVersion: work.version, executedStepCount: 0, records, remainingReadyStepIds: work.steps.filter((step) => step.status === "READY").map((step) => step.stepId) };
+    return {
+      outcome: "version_conflict",
+      reason: "expected_version_mismatch",
+      work,
+      initialVersion,
+      finalVersion: work.version,
+      executedStepCount: 0,
+      records,
+      remainingReadyStepIds: work.steps.filter((step) => step.status === "READY").map((step) => step.stepId),
+      waveDecisions
+    };
   }
   if (hasDependencyCycle(work.steps)) {
-    return { outcome: "blocked", reason: "dependency_cycle", work, initialVersion, finalVersion: work.version, executedStepCount: 0, records, remainingReadyStepIds: [] };
+    return { outcome: "blocked", reason: "dependency_cycle", work, initialVersion, finalVersion: work.version, executedStepCount: 0, records, remainingReadyStepIds: [], waveDecisions };
   }
 
   for (let index = 0; index < maxSteps; index += 1) {
     if (TERMINAL_WORK_STATUSES.has(work.status)) {
-      return { outcome: work.status === "HANDOFF" ? "handoff" : records.length > 0 ? "executed" : "terminal", reason: work.status, work, initialVersion, finalVersion: work.version, executedStepCount: records.length, records, remainingReadyStepIds: [] };
+      return {
+        outcome: work.status === "HANDOFF" ? "handoff" : records.length > 0 ? "executed" : "terminal",
+        reason: work.status,
+        work,
+        initialVersion,
+        finalVersion: work.version,
+        executedStepCount: records.length,
+        records,
+        remainingReadyStepIds: [],
+        waveDecisions
+      };
     }
 
     const control = await (input.loadConversationControl ?? defaultLoadConversationControl)(work);
@@ -462,89 +537,222 @@ export async function executeCommercialWork(input: ExecuteCommercialWorkInput): 
       work = await persistNext(
         work.publicId,
         work.version,
-        nextAggregate(work, await (input.loadCurrentFacts ?? defaultLoadFacts)(work), record, blockers, { scheduleRetries: input.scheduleRetries, now: input.now }),
+        nextAggregate(work, await (input.loadCurrentFacts ?? defaultLoadFacts)(work), record ? [{ record }] : [], blockers, { scheduleRetries: input.scheduleRetries, now: input.now }),
         input.adapter
       );
-      return { outcome: "handoff", reason: blockers[0]?.code ?? "conversation_control_blocked", work, initialVersion, finalVersion: work.version, executedStepCount: records.length, records, remainingReadyStepIds: [] };
+      return { outcome: "handoff", reason: blockers[0]?.code ?? "conversation_control_blocked", work, initialVersion, finalVersion: work.version, executedStepCount: records.length, records, remainingReadyStepIds: [], waveDecisions };
     }
 
     const factsBefore = await (input.loadCurrentFacts ?? defaultLoadFacts)(work);
-    const step = selectNextReadyStep(work, factsBefore, { claimedStepId: input.claimedStepId, workerId: input.workerId });
-    if (!step) {
-      const refreshed = nextAggregate(work, factsBefore, undefined, [], { scheduleRetries: input.scheduleRetries, now: input.now });
+    const { candidates, waveEligible } = selectReadyCandidates(work, factsBefore, { claimedStepId: input.claimedStepId, workerId: input.workerId });
+    if (candidates.length === 0) {
+      const refreshed = nextAggregate(work, factsBefore, [], [], { scheduleRetries: input.scheduleRetries, now: input.now });
       if (JSON.stringify(refreshed.metrics) !== JSON.stringify(work.metrics) || refreshed.status !== work.status) {
         work = await persistNext(work.publicId, work.version, refreshed, input.adapter);
       }
-      return { outcome: records.length > 0 ? "executed" : "no_ready_steps", reason: null, work, initialVersion, finalVersion: work.version, executedStepCount: records.length, records, remainingReadyStepIds: work.steps.filter((item) => item.status === "READY").map((item) => item.stepId) };
-    }
-
-    if (!EXECUTABLE_STEP_TYPES.has(step.type)) {
-      const record: CommercialWorkStepExecutionRecord = { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "blocked", errorCode: "unsupported_step_type", evidence: [] };
-      records.push(record);
-      work = await persistNext(work.publicId, work.version, nextAggregate(work, factsBefore, record, [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);
-      continue;
-    }
-
-    const staleBlockers = staleBlockersForStep(step, work, factsBefore);
-    if (staleBlockers.length > 0) {
-      const record: CommercialWorkStepExecutionRecord = { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "blocked", errorCode: "stale_evidence", evidence: staleBlockers.flatMap((item) => item.evidence ?? []) };
-      records.push(record);
-      const steps = work.steps.map((item) =>
-        item.stepId === step.stepId ? { ...item, status: "BLOCKED" as const, blockers: staleBlockers, evidence: record.evidence, lockOwner: null, lockUntil: null, startedAt: null } : item
-      );
-      const blockedWork = { ...work, steps, blockers: staleBlockers, metrics: deriveCommercialWorkMetrics({ ...work, steps, blockers: staleBlockers }) };
-      work = await persistNext(work.publicId, work.version, blockedWork, input.adapter);
-      continue;
-    }
-
-    const repaired = repairEvidence(step, factsBefore);
-    if (repaired) {
-      records.push(repaired);
-      work = await persistNext(work.publicId, work.version, nextAggregate(work, factsBefore, repaired, [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);
-      continue;
-    }
-
-    if (!step.capabilityName) {
-      const record: CommercialWorkStepExecutionRecord = { stepId: step.stepId, stepType: step.type, capabilityName: null, status: "blocked", errorCode: "missing_capability_name", evidence: [] };
-      records.push(record);
-      work = await persistNext(work.publicId, work.version, nextAggregate(work, factsBefore, record, [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);
-      continue;
-    }
-
-    const result = await executeCapability(step.capabilityName, buildGatewayInput(step), {
-      ...input.context,
-      opportunityId: work.opportunityId,
-      conversationId: work.conversationId,
-      requestId: work.publicId,
-      actionId: step.stepId
-    });
-    const factsAfter = await (input.loadCurrentFacts ?? defaultLoadFacts)(work);
-    const postSideEffectStaleBlockers = staleBlockersForStep(step, work, factsAfter);
-    if (postSideEffectStaleBlockers.length > 0) {
-      const record: CommercialWorkStepExecutionRecord = {
-        stepId: step.stepId,
-        stepType: step.type,
-        capabilityName: step.capabilityName,
-        status: "blocked",
-        gatewayStatus: result.status,
-        errorCode: "stale_evidence",
-        evidence: [...evidenceForCapability(result), ...postSideEffectStaleBlockers.flatMap((item) => item.evidence ?? [])]
+      return {
+        outcome: records.length > 0 ? "executed" : "no_ready_steps",
+        reason: null,
+        work,
+        initialVersion,
+        finalVersion: work.version,
+        executedStepCount: records.length,
+        records,
+        remainingReadyStepIds: work.steps.filter((item) => item.status === "READY").map((item) => item.stepId),
+        waveDecisions
       };
+    }
+
+    // SALES-AGENT-R2-A09, Part 2/11. buildSafeExecutionWave decides whether
+    // this round is 1 step (pre-A09 behavior, always true when
+    // parallelExecutionEnabled is off or the primary candidate is not
+    // read_only) or N mutually-independent read_only steps.
+    const waveResult = buildSafeExecutionWave({
+      readyCandidates: candidates,
+      parallelExecutionEnabled: waveEligible && (input.parallelExecutionEnabled ?? false),
+      maxParallelSteps
+    });
+    waveDecisions.push(...waveResult.decisions);
+    const wave = waveResult.wave;
+
+    if (wave.length <= 1) {
+      // Unchanged pre-A09 single-step path, verbatim - zero behavior
+      // difference whether parallelExecutionEnabled is on or off, since a
+      // one-step wave is exactly what selectNextReadyStep always returned.
+      const step = wave[0];
+
+      if (!EXECUTABLE_STEP_TYPES.has(step.type)) {
+        const record: CommercialWorkStepExecutionRecord = { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "blocked", errorCode: "unsupported_step_type", evidence: [] };
+        records.push(record);
+        work = await persistNext(work.publicId, work.version, nextAggregate(work, factsBefore, [{ record }], [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);
+        continue;
+      }
+
+      const staleBlockers = staleBlockersForStep(step, work, factsBefore);
+      if (staleBlockers.length > 0) {
+        const record: CommercialWorkStepExecutionRecord = { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "blocked", errorCode: "stale_evidence", evidence: staleBlockers.flatMap((item) => item.evidence ?? []) };
+        records.push(record);
+        const steps = work.steps.map((item) =>
+          item.stepId === step.stepId ? { ...item, status: "BLOCKED" as const, blockers: staleBlockers, evidence: record.evidence, lockOwner: null, lockUntil: null, startedAt: null } : item
+        );
+        const blockedWork = { ...work, steps, blockers: staleBlockers, metrics: deriveCommercialWorkMetrics({ ...work, steps, blockers: staleBlockers }) };
+        work = await persistNext(work.publicId, work.version, blockedWork, input.adapter);
+        continue;
+      }
+
+      const repaired = repairEvidence(step, factsBefore);
+      if (repaired) {
+        records.push(repaired);
+        work = await persistNext(work.publicId, work.version, nextAggregate(work, factsBefore, [{ record: repaired }], [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);
+        continue;
+      }
+
+      if (!step.capabilityName) {
+        const record: CommercialWorkStepExecutionRecord = { stepId: step.stepId, stepType: step.type, capabilityName: null, status: "blocked", errorCode: "missing_capability_name", evidence: [] };
+        records.push(record);
+        work = await persistNext(work.publicId, work.version, nextAggregate(work, factsBefore, [{ record }], [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);
+        continue;
+      }
+
+      const result = await executeCapability(step.capabilityName, buildGatewayInput(step), {
+        ...input.context,
+        opportunityId: work.opportunityId,
+        conversationId: work.conversationId,
+        requestId: work.publicId,
+        actionId: step.stepId
+      });
+      const factsAfter = await (input.loadCurrentFacts ?? defaultLoadFacts)(work);
+      const postSideEffectStaleBlockers = staleBlockersForStep(step, work, factsAfter);
+      if (postSideEffectStaleBlockers.length > 0) {
+        const record: CommercialWorkStepExecutionRecord = {
+          stepId: step.stepId,
+          stepType: step.type,
+          capabilityName: step.capabilityName,
+          status: "blocked",
+          gatewayStatus: result.status,
+          errorCode: "stale_evidence",
+          evidence: [...evidenceForCapability(result), ...postSideEffectStaleBlockers.flatMap((item) => item.evidence ?? [])]
+        };
+        records.push(record);
+        const steps = work.steps.map((item) =>
+          item.stepId === step.stepId ? { ...item, status: "BLOCKED" as const, blockers: postSideEffectStaleBlockers, evidence: record.evidence, lockOwner: null, lockUntil: null, startedAt: null } : item
+        );
+        const blockedWork = { ...work, steps, blockers: postSideEffectStaleBlockers, metrics: deriveCommercialWorkMetrics({ ...work, steps, blockers: postSideEffectStaleBlockers }) };
+        work = await persistNext(work.publicId, work.version, blockedWork, input.adapter);
+        continue;
+      }
+      const record = stepRecordFromGateway(step, result, factsAfter);
       records.push(record);
-      const steps = work.steps.map((item) =>
-        item.stepId === step.stepId ? { ...item, status: "BLOCKED" as const, blockers: postSideEffectStaleBlockers, evidence: record.evidence, lockOwner: null, lockUntil: null, startedAt: null } : item
-      );
-      const blockedWork = { ...work, steps, blockers: postSideEffectStaleBlockers, metrics: deriveCommercialWorkMetrics({ ...work, steps, blockers: postSideEffectStaleBlockers }) };
-      work = await persistNext(work.publicId, work.version, blockedWork, input.adapter);
+      work = await persistNext(work.publicId, work.version, nextAggregate(work, factsAfter, [{ record }], [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);
       continue;
     }
-    const record = stepRecordFromGateway(step, result, factsAfter);
-    records.push(record);
-    work = await persistNext(work.publicId, work.version, nextAggregate(work, factsAfter, record, [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);
+
+    // SALES-AGENT-R2-A09, Part 14/15/16. Multi-step wave - only reachable
+    // when parallelExecutionEnabled is on AND buildSafeExecutionWave proved
+    // 2+ mutually-independent read_only steps ready this round (never true
+    // for today's real production graph - see release doc). Pre-flight
+    // checks (unsupported type / stale-pre / evidence repair / missing
+    // capability name) are synchronous and run per-step first, exactly the
+    // same logic as the single-step path; only steps that actually need a
+    // capability call are awaited concurrently (Part 14). All outcomes are
+    // collected before any are applied (Part 15/16) - one deterministic
+    // nextAggregate pass, one persist, never N racing persists against the
+    // same expectedVersion.
+    const outcomes: StepOutcome[] = [];
+    const toCall: CommercialWorkStep[] = [];
+    for (const step of wave) {
+      if (!EXECUTABLE_STEP_TYPES.has(step.type)) {
+        outcomes.push({ record: { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "blocked", errorCode: "unsupported_step_type", evidence: [] } });
+        continue;
+      }
+      const staleBlockers = staleBlockersForStep(step, work, factsBefore);
+      if (staleBlockers.length > 0) {
+        const record: CommercialWorkStepExecutionRecord = { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "blocked", errorCode: "stale_evidence", evidence: staleBlockers.flatMap((item) => item.evidence ?? []) };
+        outcomes.push({ record, forcedBlockers: staleBlockers });
+        continue;
+      }
+      const repaired = repairEvidence(step, factsBefore);
+      if (repaired) {
+        outcomes.push({ record: repaired });
+        continue;
+      }
+      if (!step.capabilityName) {
+        outcomes.push({ record: { stepId: step.stepId, stepType: step.type, capabilityName: null, status: "blocked", errorCode: "missing_capability_name", evidence: [] } });
+        continue;
+      }
+      toCall.push(step);
+    }
+
+    let finalFacts = factsBefore;
+    let waveRejection: unknown = null;
+    if (toCall.length > 0) {
+      const workForWave = work;
+      // SALES-AGENT-R2-A09, Part 17. allSettled, never Promise.all: a
+      // genuine crash/thrown failure on ONE concurrent call must not discard
+      // the successful, real external side effects of its siblings - an
+      // all-or-nothing Promise.all would leave a successful sibling's step
+      // still READY (never persisted as COMPLETED this round), and the next
+      // attempt would call that already-succeeded capability a second time.
+      // A rejected step is left completely untouched here (no outcome
+      // pushed) - it stays exactly as it was before this round (still
+      // READY, still retryable next round/call), the same "recoverable, not
+      // silently repeated" contract a real crash needs.
+      const settled = await Promise.allSettled(
+        toCall.map((step) =>
+          executeCapability(step.capabilityName as string, buildGatewayInput(step), {
+            ...input.context,
+            opportunityId: workForWave.opportunityId,
+            conversationId: workForWave.conversationId,
+            requestId: workForWave.publicId,
+            actionId: step.stepId
+          })
+        )
+      );
+      const factsAfter = await (input.loadCurrentFacts ?? defaultLoadFacts)(workForWave);
+      finalFacts = factsAfter;
+      waveRejection = settled.find((item): item is PromiseRejectedResult => item.status === "rejected")?.reason ?? null;
+      toCall.forEach((step, callIndex) => {
+        const settledResult = settled[callIndex];
+        if (settledResult.status === "rejected") return;
+        const result = settledResult.value;
+        const postSideEffectStaleBlockers = staleBlockersForStep(step, workForWave, factsAfter);
+        if (postSideEffectStaleBlockers.length > 0) {
+          const record: CommercialWorkStepExecutionRecord = {
+            stepId: step.stepId,
+            stepType: step.type,
+            capabilityName: step.capabilityName,
+            status: "blocked",
+            gatewayStatus: result.status,
+            errorCode: "stale_evidence",
+            evidence: [...evidenceForCapability(result), ...postSideEffectStaleBlockers.flatMap((item) => item.evidence ?? [])]
+          };
+          outcomes.push({ record, forcedBlockers: postSideEffectStaleBlockers });
+        } else {
+          outcomes.push({ record: stepRecordFromGateway(step, result, factsAfter) });
+        }
+      });
+    }
+
+    // Part 15. Deterministic application order = wave order (priority then
+    // stepId), never whichever Promise settled first.
+    const orderedOutcomes = wave
+      .map((step) => outcomes.find((outcome) => outcome.record.stepId === step.stepId))
+      .filter((outcome): outcome is StepOutcome => Boolean(outcome));
+    records.push(...orderedOutcomes.map((outcome) => outcome.record));
+    work = await persistNext(work.publicId, work.version, nextAggregate(work, finalFacts, orderedOutcomes, [], { scheduleRetries: input.scheduleRetries, now: input.now }), input.adapter);
+    // Part 17. A genuinely rejected concurrent call (simulating a real
+    // process crash, or an actual thrown gateway failure) is surfaced to the
+    // caller only AFTER its successful siblings are safely persisted -
+    // never silently retried in a tight loop within this same call. The
+    // rejected step itself was left untouched above (still READY), so a
+    // fresh call (a real restart, or the retry worker's next tick) picks it
+    // up cleanly through the same evidence-repair/idempotency path any
+    // other pending step already uses.
+    if (waveRejection !== null) throw waveRejection;
   }
 
   const remainingReadyStepIds = work.steps.filter((step) => step.status === "READY").map((step) => step.stepId);
-  return { outcome: "max_steps_reached", reason: "max_steps_reached", work, initialVersion, finalVersion: work.version, executedStepCount: records.length, records, remainingReadyStepIds };
+  return { outcome: "max_steps_reached", reason: "max_steps_reached", work, initialVersion, finalVersion: work.version, executedStepCount: records.length, records, remainingReadyStepIds, waveDecisions };
 }
 
 export function isCommercialWorkPersistenceVersionConflict(error: unknown): boolean {

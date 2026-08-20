@@ -11,6 +11,8 @@ export * from "./buildCommercialWorkProjection";
 export * from "./formatCommercialWorkProjection";
 export * from "./repository";
 export * from "./commercialWorkExecutor";
+export * from "./parallelStepConflictModel";
+export * from "./buildSafeExecutionWave";
 export * from "./retryPolicy";
 export * from "./worker";
 export * from "./followup";

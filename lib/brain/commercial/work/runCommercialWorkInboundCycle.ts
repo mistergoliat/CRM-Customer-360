@@ -10,6 +10,7 @@ import { getActiveCreatedQuoteForOpportunity } from "@/lib/domains/created-quote
 import { assignCommercialTriggerSequence } from "./sequencing";
 import { reconcileCommercialTrigger } from "./reconciliation";
 import { executeCommercialWork } from "./commercialWorkExecutor";
+import { buildCommercialWorkParallelExecutionFeatureFlags } from "../config/commercialCycleConfig";
 import { settleCommercialWorkProjection } from "./settleCommercialWorkProjection";
 import { loadRecentCommercialCapabilityExecutions } from "./capabilityExecutionReader";
 import { planCommercialObjectiveSeeds } from "./semanticIntentAdapter";
@@ -284,13 +285,16 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       return { ran: true, reason: "commercial_work_stale_turn_ignored", work: reconciled.work, dispatch: null, humanOwnerActive, aiBlocked, warnings };
     }
 
+    const parallelExecutionFlags = buildCommercialWorkParallelExecutionFeatureFlags();
     let work = reconciled.work;
     const executed = await executeCommercialWork({
       workPublicId: work.publicId,
       expectedVersion: work.version,
       context: { correlationId: input.correlationId, conversationId: input.conversationId, opportunityId },
       scheduleRetries: true,
-      now: input.currentTime
+      now: input.currentTime,
+      parallelExecutionEnabled: parallelExecutionFlags.parallelExecutionEnabled,
+      maxParallelSteps: parallelExecutionFlags.maxParallelSteps
     });
     if (executed.work) work = executed.work;
 
@@ -299,7 +303,9 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       conversationId: input.conversationId,
       opportunityId,
       correlationId: input.correlationId,
-      now: new Date(input.currentTime)
+      now: new Date(input.currentTime),
+      parallelExecutionEnabled: parallelExecutionFlags.parallelExecutionEnabled,
+      maxParallelSteps: parallelExecutionFlags.maxParallelSteps
     });
 
     const dispatch = await dispatchCommercialWorkResponse({

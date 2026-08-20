@@ -16,6 +16,9 @@ export type SettleCommercialWorkProjectionInput = {
   executeCapability?: typeof executeGovernedCapability;
   scheduleRetries?: boolean;
   maxRounds?: number;
+  /** SALES-AGENT-R2-A09. Forwarded unchanged into the executeCommercialWork call this settle loop makes each round - default OFF, same as the executor's own default. */
+  parallelExecutionEnabled?: boolean;
+  maxParallelSteps?: number;
 };
 
 /**
@@ -97,7 +100,9 @@ export async function settleCommercialWorkProjection(input: SettleCommercialWork
       executeCapability: input.executeCapability,
       scheduleRetries: input.scheduleRetries ?? true,
       now,
-      adapter: input.adapter
+      adapter: input.adapter,
+      parallelExecutionEnabled: input.parallelExecutionEnabled,
+      maxParallelSteps: input.maxParallelSteps
     });
     if (executed.work) work = executed.work;
   }

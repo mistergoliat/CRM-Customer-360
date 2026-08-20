@@ -221,6 +221,23 @@ export function shouldRouteToCommercialWork(waId: string | null | undefined, env
   return isWaIdAuthorizedForPilot(waId, allowlist);
 }
 
+/**
+ * SALES-AGENT-R2-A09, Part 13/45. Fail-closed (default false), independent
+ * of BRAIN_COMMERCIAL_WORK_RUNTIME_ENABLED - an internal executor scheduling
+ * behavior, never a customer-routing decision, so it needs no allowlist of
+ * its own (unlike shouldRouteToCommercialWork above). OFF reproduces the
+ * exact pre-A09 sequential executor behavior everywhere it is read.
+ * maxParallelSteps is bounded again inside executeCommercialWork itself
+ * (clamped to [1,10]) - this resolver only supplies the configured value.
+ */
+export function buildCommercialWorkParallelExecutionFeatureFlags(overrides?: Partial<{ parallelExecutionEnabled: boolean; maxParallelSteps: number }>) {
+  return {
+    parallelExecutionEnabled: readEnvFlag("BRAIN_COMMERCIAL_WORK_PARALLEL_EXECUTION_ENABLED", false),
+    maxParallelSteps: readEnvPositiveInt("BRAIN_COMMERCIAL_WORK_PARALLEL_MAX_STEPS", 3),
+    ...(overrides ?? {})
+  };
+}
+
 export function buildCommercialSalesAgentDryRun(): boolean {
   const raw = process.env.BRAIN_SALES_AGENT_DRY_RUN?.trim().toLowerCase();
   if (raw === "true") return true;

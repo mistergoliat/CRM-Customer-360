@@ -875,3 +875,55 @@ test("Part 19: cancelling a WAITING_CUSTOMER objective with a scheduled follow-u
     await env.teardown();
   }
 });
+
+// ==========================================================================
+// SALES-AGENT-R2-A09: parallel execution flag parity through the real
+// inbound cycle (CWPAR20/CWPAR22). runCommercialWorkInboundCycle resolves
+// BRAIN_COMMERCIAL_WORK_PARALLEL_EXECUTION_ENABLED internally per call
+// (buildCommercialWorkParallelExecutionFeatureFlags), so this toggles the
+// env var directly around two otherwise-identical runs - the same technique
+// every other env-flag test in this repo already uses.
+// ==========================================================================
+
+test("SALES-AGENT-R2-A09 CWPAR20: the C09 bundle produces the identical business outcome with the parallel-execution flag OFF and ON", async () => {
+  async function runC09(parallelEnabled: boolean) {
+    const previous = process.env.BRAIN_COMMERCIAL_WORK_PARALLEL_EXECUTION_ENABLED;
+    process.env.BRAIN_COMMERCIAL_WORK_PARALLEL_EXECUTION_ENABLED = parallelEnabled ? "true" : "false";
+    try {
+      const env = await setupR2BenchmarkEnvironment();
+      try {
+        await seedProductSearchEvidence(env, "31", "Classic");
+        const result = await turn(env, "quiero 2 de la classic y cuanto sale el despacho a Nunoa", {
+          intents: [
+            { type: "select_products", productReference: "la classic", quantity: 2 },
+            { type: "get_shipping_quote", destination: "Nunoa" }
+          ]
+        });
+        return result;
+      } finally {
+        await env.teardown();
+      }
+    } finally {
+      if (previous === undefined) delete process.env.BRAIN_COMMERCIAL_WORK_PARALLEL_EXECUTION_ENABLED;
+      else process.env.BRAIN_COMMERCIAL_WORK_PARALLEL_EXECUTION_ENABLED = previous;
+    }
+  }
+
+  const off = await runC09(false);
+  const on = await runC09(true);
+
+  for (const [label, result] of [["OFF", off] as const, ["ON", on] as const]) {
+    const selection = result.work?.objectives.find((o) => o.type === "SELECT_PRODUCTS");
+    const shipping = result.work?.objectives.find((o) => o.type === "GET_SHIPPING_QUOTE");
+    assert.equal(selection?.status, "COMPLETED", `[${label}] selection completed`);
+    assert.equal(shipping?.status, "COMPLETED", `[${label}] shipping completed`);
+    assert.equal(result.work?.status, "COMPLETED", `[${label}] work fully completed same-cycle`);
+    // CWPAR22: the finalizer describes the final reconciled state, never an
+    // intermediate/mid-wave narration - both runs converge to the identical
+    // durable state, so both must produce the identical customer-visible message.
+    assert.match(result.dispatch?.messageSent ?? "", /despacho/i, `[${label}] finalizer message reflects completed shipping`);
+  }
+
+  assert.equal(off.dispatch?.messageSent, on.dispatch?.messageSent, "identical business outcome and identical customer-visible message regardless of the parallel-execution flag");
+  assert.equal(off.work?.status, on.work?.status);
+});

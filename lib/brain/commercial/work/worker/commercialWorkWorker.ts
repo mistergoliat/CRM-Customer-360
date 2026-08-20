@@ -39,6 +39,9 @@ export type CommercialWorkTickOptions = {
   executeCapability?: ExecuteCommercialWorkInput["executeCapability"];
   onAfterClaim?: (candidate: DueCommercialWorkStepRow) => Promise<void> | void;
   workPublicIds?: string[];
+  /** SALES-AGENT-R2-A09, Part 24. The worker's own CAS-claimed step always executes alone (executeCommercialWork's selectReadyCandidates never widens a claimed step's own round) - these only affect any CASCADE rounds within the same tick, after the claimed step's round completes. Default OFF, same as the executor's own default. */
+  parallelExecutionEnabled?: boolean;
+  maxParallelSteps?: number;
 };
 
 export type CommercialWorkTickResult = {
@@ -242,7 +245,9 @@ export async function runCommercialWorkTick(options: CommercialWorkTickOptions =
       now,
       loadCurrentFacts: options.loadCurrentFacts,
       loadConversationControl: options.loadConversationControl,
-      executeCapability: options.executeCapability
+      executeCapability: options.executeCapability,
+      parallelExecutionEnabled: options.parallelExecutionEnabled,
+      maxParallelSteps: options.maxParallelSteps
     });
 
     if (execution.outcome === "version_conflict") {
