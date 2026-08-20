@@ -347,9 +347,26 @@ function blockersFromRecord(step: CommercialWorkStep, record: CommercialWorkStep
   return step.objectiveIds.map((objectiveId) => blocker(code, "step", objectiveId, step.stepId, record.evidence));
 }
 
+/**
+ * SALES-AGENT-R2-A10, Part 12/13 fix. "WAITING_CUSTOMER" is deliberately
+ * excluded: that code (and status) means a capability was actually called and
+ * explicitly asked the customer for more information (missing_information) -
+ * the step's own pre-call dependency check being satisfied is exactly why it
+ * ran in the first place, so re-checking dependenciesSatisfied here can never
+ * prove new customer input arrived and would immediately re-execute the same
+ * capability within the same cycle (A09 Section 14's documented defect).
+ * MISSING_SELECTION/MISSING_DESTINATION/MISSING_PRODUCT/MISSING_QUANTITY
+ * remain auto-activatable: those mark a step BLOCKED purely because an
+ * earlier sibling step's fact had not landed yet at projection time (Case A -
+ * a same-turn cascade, e.g. CALCULATE_SHIPPING unblocking once SELECT_PRODUCTS
+ * completes), never a capability-level customer-facing question (Case B).
+ * Cross-turn reactivation for a genuine new customer message is handled
+ * entirely by reconciliation.ts/buildCommercialWorkProjection.ts (supersession
+ * from a fresh objective seed), never by this function.
+ */
 function canAutoActivateStep(step: CommercialWorkStep): boolean {
   if (step.blockers.length === 0) return true;
-  return step.blockers.every((item) => item.code === "MISSING_SELECTION" || item.code === "MISSING_DESTINATION" || item.code === "MISSING_PRODUCT" || item.code === "MISSING_QUANTITY" || item.code === "WAITING_CUSTOMER" || item.code === "WAITING_SYSTEM");
+  return step.blockers.every((item) => item.code === "MISSING_SELECTION" || item.code === "MISSING_DESTINATION" || item.code === "MISSING_PRODUCT" || item.code === "MISSING_QUANTITY" || item.code === "WAITING_SYSTEM");
 }
 
 function isoFrom(value: string | Date | undefined): string | null {
@@ -435,7 +452,10 @@ function activateUnblockedSteps(
 
   const view = { ...work, steps };
   steps = steps.map((step) => {
-    if ((step.status === "BLOCKED" || step.status === "PENDING" || step.status === "WAITING_CUSTOMER") && canAutoActivateStep(step) && dependenciesSatisfied(step, view, facts)) {
+    // A10 Part 12/13: WAITING_CUSTOMER intentionally excluded from this
+    // status set too (belt-and-suspenders with canAutoActivateStep above) -
+    // see that function's comment for the full rationale.
+    if ((step.status === "BLOCKED" || step.status === "PENDING") && canAutoActivateStep(step) && dependenciesSatisfied(step, view, facts)) {
       return { ...step, status: "READY", blockers: [], retryable: false, retryCandidate: false };
     }
     return step;

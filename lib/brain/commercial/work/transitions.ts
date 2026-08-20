@@ -26,7 +26,12 @@ const OBJECTIVE_TRANSITIONS: Record<CommercialObjectiveStatus, readonly Commerci
 
 const STEP_TRANSITIONS: Record<CommercialWorkStepStatus, readonly CommercialWorkStepStatus[]> = {
   PENDING: ["READY", "RUNNING", "BLOCKED", "WAITING_CUSTOMER", "WAITING_SYSTEM", "CANCELLED", "SUPERSEDED", "FAILED"],
-  READY: ["RUNNING", "COMPLETED", "WAITING_SYSTEM", "RETRY_SCHEDULED", "FAILED", "CANCELLED", "SUPERSEDED", "BLOCKED"],
+  // SALES-AGENT-R2-A10, Part 12. WAITING_CUSTOMER added: a READY step's
+  // capability call can itself return missing_information. Previously
+  // unreachable in persistence (never actually validated) because
+  // canAutoActivateStep's pre-fix bug flipped the step back to READY again
+  // before the aggregate was ever persisted - see commercialWorkExecutor.ts.
+  READY: ["RUNNING", "COMPLETED", "WAITING_CUSTOMER", "WAITING_SYSTEM", "RETRY_SCHEDULED", "FAILED", "CANCELLED", "SUPERSEDED", "BLOCKED"],
   RUNNING: ["COMPLETED", "WAITING_SYSTEM", "RETRY_SCHEDULED", "WAITING_CUSTOMER", "FAILED", "CANCELLED", "SUPERSEDED", "BLOCKED"],
   COMPLETED: ["SUPERSEDED"],
   BLOCKED: ["READY", "WAITING_CUSTOMER", "WAITING_SYSTEM", "CANCELLED", "SUPERSEDED", "FAILED"],

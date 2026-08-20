@@ -12,3 +12,6 @@ yarn-error.log*
 pnpm-debug.log*
 *.tsbuildinfo
 docs/.obsidian/
+
+# SALES-AGENT-R2-A10
+.test-logs/

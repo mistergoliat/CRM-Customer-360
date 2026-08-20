@@ -1,6 +1,7 @@
 import type { CommercialLineItem } from "@/lib/domains/commercial-line-items";
 import type { CommercialObjective, CommercialWork, CommercialWorkBlocker, CommercialWorkProjectionInput, CommercialCapabilityExecutionProjection, CommercialEvidenceRef } from "./types";
-import { deriveCommercialObjectives } from "./deriveCommercialObjectives";
+import type { CommercialObjectiveStatus } from "./statuses";
+import { deriveCommercialObjectives, carriedObjectiveStatusById } from "./deriveCommercialObjectives";
 import { deriveCommercialWorkSteps } from "./deriveCommercialWorkSteps";
 import { collectCommercialWorkBlockers, deriveCommercialWorkMetrics, deriveCommercialWorkStatus } from "./evaluateCommercialWork";
 
@@ -94,7 +95,25 @@ function destinationMatches(input: CommercialWorkProjectionInput, objective: Com
   return true;
 }
 
-function applyObjectiveState(objective: CommercialObjective, input: CommercialWorkProjectionInput) {
+/**
+ * SALES-AGENT-R2-A10, Part 12/13. True only for a CARRIED objective (same
+ * objectiveId, never a fresh/superseding one - a genuinely new semantic seed
+ * never carries a status) whose last known real status was WAITING_CUSTOMER.
+ * A carried objective's inputs are copied verbatim by
+ * reconciliation.ts#objectiveSeedFromPersisted, so "still WAITING_CUSTOMER"
+ * here means no new same-family customer input has arrived since - the
+ * structural-presence checks below (items.length, destinationText, a
+ * selectionFactId) cannot tell "never attempted" apart from "already
+ * attempted, capability explicitly asked the customer for more" on their
+ * own, since both look identical structurally. Reused across every branch
+ * below that would otherwise fall through to READY on structural presence
+ * alone.
+ */
+function stillWaitingOnCustomer(carriedStatus: CommercialObjectiveStatus | undefined): boolean {
+  return carriedStatus === "WAITING_CUSTOMER";
+}
+
+function applyObjectiveState(objective: CommercialObjective, input: CommercialWorkProjectionInput, carriedStatus?: CommercialObjectiveStatus) {
   if (objective.status === "CANCELLED" || objective.status === "SUPERSEDED") return;
 
   switch (objective.type) {
@@ -140,6 +159,17 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
           return;
         }
       }
+      // A10 Part 12/13: items (and quantity/evidence) are structurally
+      // present - normally READY - but if this exact carried objective was
+      // already WAITING_CUSTOMER (the capability itself rejected these same
+      // items as missing_information last round), structural presence alone
+      // is not new evidence. Stay WAITING_CUSTOMER until a genuinely new
+      // same-family customer input supersedes this objective instead.
+      if (stillWaitingOnCustomer(carriedStatus)) {
+        objective.status = "WAITING_CUSTOMER";
+        objective.blockers.push(blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+        return;
+      }
       objective.status = "READY";
       break;
     }
@@ -149,6 +179,12 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
         objective.resolvedInputs.shippingDestinationFactId = input.shippingDestination?.factId;
         objective.evidence.push(...requestFactEvidence("shipping_destination", input.shippingDestination?.factId));
       } else if (objective.inputs.destinationText || objective.inputs.canonicalDestinationName || typeof objective.inputs.communeId === "number") {
+        // Same rationale as SELECT_PRODUCTS/CHANGE_QUANTITY above.
+        if (stillWaitingOnCustomer(carriedStatus)) {
+          objective.status = "WAITING_CUSTOMER";
+          objective.blockers.push(blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+          return;
+        }
         objective.status = "READY";
       } else {
         objective.status = "WAITING_CUSTOMER";
@@ -236,6 +272,14 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
         if (input.createdQuote && input.createdQuote.selectionFactId !== selectionFactId) {
           objective.evidence.push({ kind: "request_fact", factType: "created_quote", id: input.createdQuote.factId, stale: true, reason: "selection_changed" });
           objective.blockers.push(blocker("STALE_EVIDENCE", "objective", objective.objectiveId));
+        } else if (stillWaitingOnCustomer(carriedStatus)) {
+          // Same rationale as SELECT_PRODUCTS/CHANGE_QUANTITY/SET_DESTINATION
+          // above: selection is present but no created_quote fact landed -
+          // if that is because create_quote itself already asked the
+          // customer for more information, do not silently retry it.
+          objective.status = "WAITING_CUSTOMER";
+          objective.blockers.push(blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+          break;
         }
         objective.status = "READY";
       }
@@ -314,7 +358,8 @@ export function buildCommercialWorkProjection(input: CommercialWorkProjectionInp
     seedIdPrefix: id
   });
 
-  for (const objective of objectives) applyObjectiveState(objective, input);
+  const carriedStatuses = carriedObjectiveStatusById(input.objectiveSeeds ?? []);
+  for (const objective of objectives) applyObjectiveState(objective, input, carriedStatuses.get(objective.objectiveId));
   applyPendingMutationInvalidations(objectives);
   const conversationBlockers = applyConversationAutonomy(input, objectives);
   const steps = deriveCommercialWorkSteps(objectives);

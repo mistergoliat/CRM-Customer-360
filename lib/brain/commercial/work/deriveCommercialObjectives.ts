@@ -5,7 +5,28 @@ import type {
   CommercialObjectiveOrigin
 } from "./types";
 import type { CommercialObjectiveType } from "./objectiveTypes";
+import type { CommercialObjectiveStatus } from "./statuses";
 import { canTransitionObjectiveStatus } from "./transitions";
+
+/**
+ * SALES-AGENT-R2-A10, Part 12/13. Shared by deriveCommercialObjectives'
+ * own cancel-handling (below) and buildCommercialWorkProjection's
+ * applyObjectiveState - the only place a carried (non-fresh, same
+ * objectiveId) objective's real persisted status survives past
+ * baseObjective's unconditional status:"PENDING" reset. A seed only carries
+ * this when reconciliation.ts's objectiveSeedFromPersisted produced it -
+ * never for a brand-new semantic seed, which is exactly the distinction
+ * Part 13 needs between "never attempted" (normal derivation) and "already
+ * attempted, capability asked the customer for more" (must not silently
+ * re-derive back to READY from structural inputs alone).
+ */
+export function carriedObjectiveStatusById(seeds: readonly CommercialObjectiveSeed[]): Map<string, CommercialObjectiveStatus> {
+  return new Map(
+    seeds
+      .filter((seed): seed is Extract<CommercialObjectiveSeed, { kind?: "objective" }> => seed.kind !== "cancel" && Boolean(seed.seedId) && Boolean(seed.carriedStatus))
+      .map((seed) => [seed.seedId as string, seed.carriedStatus!])
+  );
+}
 
 function normalizeTargetType(targetType: CommercialObjectiveSeed & { kind: "cancel" }): CommercialObjectiveType | null {
   switch (targetType.targetType) {
@@ -105,11 +126,7 @@ export function deriveCommercialObjectives(input: {
   // the cancel handling below what the objective's real, already-persisted
   // status is - only reconciliation.ts's objectiveSeedFromPersisted knows
   // that (carriedStatus), for a carried (non-fresh) objective specifically.
-  const carriedStatusById = new Map(
-    seeds
-      .filter((seed): seed is Extract<CommercialObjectiveSeed, { kind?: "objective" }> => seed.kind !== "cancel" && Boolean(seed.seedId) && Boolean(seed.carriedStatus))
-      .map((seed) => [seed.seedId as string, seed.carriedStatus!])
-  );
+  const carriedStatusById = carriedObjectiveStatusById(seeds);
 
   for (const [index, seed] of seeds.entries()) {
     if (seed.kind === "cancel") {
