@@ -11,9 +11,9 @@ export default function MarketingCopilotPage() {
       <PageHeader
         eyebrow="Crecimiento"
         title="Marketing Copilot"
-        description="Consulta analitica interna sobre Customer Intelligence con provenance y estados controlados."
+        description="Workspace conversacional interno sobre Customer Intelligence con sesiones, provenance y export XLSX."
         status="Interno"
-        actions={<SurfaceBadge kind="fixture" />}
+        actions={<SurfaceBadge kind="readOnly" />}
       />
 
       <MarketingCopilotWorkspace data={data} />
