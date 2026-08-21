@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { createCatalogPort, type CatalogPort, type CatalogPortError, type CatalogProduct, type CatalogSearchResultItem } from "@/lib/catalog";
+import { DEFAULT_RECOMMENDATION_LIMIT, MAX_RECOMMENDATION_LIMIT } from "@/lib/catalog/consoleLimits";
 import { createCatalogSearchProductsV2Client, type CatalogSearchProductsV2Client, type SearchProductsV2ClientError, type SearchProductsV2ProductSummary } from "@/lib/catalog/search-products-v2";
 
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 20;
-const DEFAULT_RECOMMENDATION_LIMIT = 5;
 const MAX_QUERY_LENGTH = 120;
 const PRODUCT_ID_PATTERN = /^\d{1,20}$/;
 
 export type CatalogConsoleErrorCode =
   | "invalid_query"
   | "invalid_product_id"
+  | "invalid_limit"
   | "catalog_not_configured"
   | "catalog_unauthorized"
   | "catalog_unavailable"
@@ -43,7 +44,10 @@ export type CatalogConsoleRecommendation = CatalogConsoleProduct & {
   rank: number;
   score: number;
   commercialScore: number;
+  affinityScore: number;
+  affinityConfidence: string;
   commercialReason: string;
+  warnings: string[];
   relationship: {
     type: string;
     reliability: number;
@@ -57,19 +61,42 @@ export type CatalogConsoleRecommendation = CatalogConsoleProduct & {
   };
 };
 
+export type CatalogRecommendationExcludedItem = {
+  productId: string;
+  combinationId?: string;
+  code: string;
+};
+
+export type CatalogRecommendationStatistics = {
+  recommendationsReturned: number;
+  commercialCandidates: number;
+  affinityCandidates: number;
+  personalizedRecommendations: number;
+  excludedRecommendations: number;
+  warningsGenerated: number;
+};
+
+type CatalogRecommendationsBaseBlock = {
+  requestedLimit: number;
+  shownCount: number;
+  truncatedByLimitCount: number;
+  excluded: CatalogRecommendationExcludedItem[];
+  statistics: CatalogRecommendationStatistics;
+  warnings: string[];
+  execution: { degraded: boolean; stages: Record<string, string> };
+  snapshot: { id: string; modelVersion: string };
+};
+
 export type CatalogSearchProductsResult =
   | { ok: true; query: string; items: CatalogConsoleProduct[] }
   | { ok: false; error: CatalogConsoleError };
 
 export type CatalogRecommendationsBlock =
-  | {
+  | (CatalogRecommendationsBaseBlock & {
       status: "available";
       items: CatalogConsoleRecommendation[];
-      warnings: string[];
-      execution: { degraded: boolean; stages: Record<string, string> };
-      snapshot: { id: string; modelVersion: string };
-    }
-  | { status: "empty"; warnings: string[]; execution: { degraded: boolean; stages: Record<string, string> }; snapshot: { id: string; modelVersion: string } }
+    })
+  | (CatalogRecommendationsBaseBlock & { status: "empty" })
   | { status: "error"; error: CatalogConsoleError };
 
 export type CatalogProductContextResult =
@@ -91,6 +118,14 @@ function normalizeQuery(query: string): string | null {
 function normalizeLimit(limit: number | undefined): number {
   if (!Number.isInteger(limit) || limit === undefined || limit < 1) return DEFAULT_SEARCH_LIMIT;
   return Math.min(limit, MAX_SEARCH_LIMIT);
+}
+
+export function normalizeCatalogRecommendationLimit(limit: number | undefined): { ok: true; value: number } | { ok: false; error: CatalogConsoleError } {
+  if (limit === undefined) return { ok: true, value: DEFAULT_RECOMMENDATION_LIMIT };
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RECOMMENDATION_LIMIT) {
+    return { ok: false, error: { code: "invalid_limit", message: `Recommendation limit must be an integer between 1 and ${MAX_RECOMMENDATION_LIMIT}.`, retryable: false } };
+  }
+  return { ok: true, value: limit };
 }
 
 export function isValidCatalogConsoleProductId(productId: string): boolean {
@@ -223,10 +258,16 @@ export async function searchCatalogConsoleProducts(query: string, limit?: number
 }
 
 export async function getCatalogConsoleProductContext(productId: string, deps: Deps = {}): Promise<CatalogProductContextResult> {
+  return getCatalogConsoleProductContextWithLimit(productId, DEFAULT_RECOMMENDATION_LIMIT, deps);
+}
+
+export async function getCatalogConsoleProductContextWithLimit(productId: string, recommendationLimit: number | undefined, deps: Deps = {}): Promise<CatalogProductContextResult> {
   const normalizedProductId = productId.trim();
   if (!isValidCatalogConsoleProductId(normalizedProductId)) {
     return { ok: false, error: { code: "invalid_product_id", message: "Product id must be numeric.", retryable: false } };
   }
+  const normalizedLimit = normalizeCatalogRecommendationLimit(recommendationLimit);
+  if (!normalizedLimit.ok) return { ok: false, error: normalizedLimit.error };
 
   const correlationId = deps.correlationId ?? randomUUID();
   const catalogPort = deps.catalogPort ?? createCatalogPort();
@@ -236,7 +277,7 @@ export async function getCatalogConsoleProductContext(productId: string, deps: D
     catalogPort
       ? catalogPort.getProductDetails({ productId: normalizedProductId }, { correlationId })
       : Promise.resolve({ ok: false as const, error: { code: "not_configured" as const, message: "Catalog Service is not configured.", retryable: false } }),
-    recommendationsClient.searchProducts({ sourceProduct: { productId: normalizedProductId }, limit: DEFAULT_RECOMMENDATION_LIMIT }, { correlationId })
+    recommendationsClient.searchProducts({ sourceProduct: { productId: normalizedProductId }, limit: normalizedLimit.value }, { correlationId })
   ]);
 
   const warnings: string[] = [];
@@ -253,14 +294,17 @@ export async function getCatalogConsoleProductContext(productId: string, deps: D
   let recommendations: CatalogRecommendationsBlock;
   if (recommendationsResult.ok) {
     if (product === null) product = mapProductSummary(recommendationsResult.value.sourceProduct);
-    const mappedRecommendations = recommendationsResult.value.recommendations.slice(0, DEFAULT_RECOMMENDATION_LIMIT).map((recommendation) => {
+    const mappedRecommendations = recommendationsResult.value.recommendations.slice(0, normalizedLimit.value).map((recommendation) => {
       const mappedProduct = mapProductSummary(recommendation.product);
       return {
         ...mappedProduct,
         rank: recommendation.rank,
         score: recommendation.score,
         commercialScore: recommendation.commercialScore,
+        affinityScore: recommendation.affinityScore,
+        affinityConfidence: recommendation.affinityConfidence,
         commercialReason: recommendation.commercialReason.label,
+        warnings: recommendation.warnings.map((warning) => warning.code),
         relationship: {
           type: recommendation.relationship.type,
           reliability: recommendation.relationship.reliability,
@@ -275,7 +319,24 @@ export async function getCatalogConsoleProductContext(productId: string, deps: D
       };
     });
 
+    const excluded = recommendationsResult.value.excluded.map((excludedItem) => ({
+      productId: excludedItem.product.productId,
+      combinationId: excludedItem.product.combinationId,
+      code: excludedItem.code
+    }));
     const base = {
+      requestedLimit: normalizedLimit.value,
+      shownCount: mappedRecommendations.length,
+      truncatedByLimitCount: recommendationsResult.value.excluded.filter((excludedItem) => excludedItem.code === "RESULT_LIMIT_TRUNCATION").length,
+      excluded,
+      statistics: {
+        recommendationsReturned: recommendationsResult.value.recommendations.length,
+        commercialCandidates: recommendationsResult.value.statistics.commercialCandidates,
+        affinityCandidates: recommendationsResult.value.statistics.affinityCandidates,
+        personalizedRecommendations: recommendationsResult.value.statistics.personalizedRecommendations,
+        excludedRecommendations: recommendationsResult.value.statistics.excludedRecommendations,
+        warningsGenerated: recommendationsResult.value.statistics.warningsGenerated
+      },
       warnings: recommendationsResult.value.warnings.map((warning) => warning.code),
       execution: { degraded: recommendationsResult.value.execution.degraded, stages: recommendationsResult.value.execution.stages },
       snapshot: recommendationsResult.value.snapshot
@@ -301,6 +362,7 @@ export function statusForCatalogConsoleError(error: CatalogConsoleError): number
   switch (error.code) {
     case "invalid_query":
     case "invalid_product_id":
+    case "invalid_limit":
       return 400;
     case "product_not_found":
       return 404;

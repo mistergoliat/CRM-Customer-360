@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   getCatalogConsoleProductContext,
+  getCatalogConsoleProductContextWithLimit,
   searchCatalogConsoleProducts,
   statusForCatalogConsoleError,
   type CatalogConsoleError
@@ -210,6 +211,72 @@ test("context calls recommendations V2 without customer and returns detail plus 
   if (result.recommendations.status === "available") {
     assert.equal(result.recommendations.items[0].commercialReason, "Comprado frecuentemente junto al producto consultado");
     assert.equal(result.recommendations.items[0].relationship.evidence.jointCount, 8);
+    assert.equal(result.recommendations.items[0].commercialScore, 0.88);
+    assert.equal(result.recommendations.items[0].score, 0.91);
+    assert.equal(result.recommendations.items[0].affinityConfidence, "none");
+  }
+});
+
+test("context forwards an explicit valid recommendation limit to V2", async () => {
+  let capturedRequest: SearchProductsV2ClientRequest | null = null;
+  const result = await getCatalogConsoleProductContextWithLimit("10", 20, {
+    catalogPort: fakeCatalogPort(),
+    recommendationsClient: fakeRecommendationsClient((request) => {
+      capturedRequest = request;
+      return recommendationsResponse();
+    })
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(capturedRequest, { sourceProduct: { productId: "10" }, limit: 20 });
+});
+
+test("invalid recommendation limit is rejected before V2 is called", async () => {
+  let calls = 0;
+  const result = await getCatalogConsoleProductContextWithLimit("10", 21, {
+    catalogPort: fakeCatalogPort(),
+    recommendationsClient: fakeRecommendationsClient(() => {
+      calls += 1;
+      return recommendationsResponse();
+    })
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(calls, 0);
+  if (!result.ok) {
+    assert.equal(result.error.code, "invalid_limit");
+    assert.equal(statusForCatalogConsoleError(result.error), 400);
+  }
+});
+
+test("context exposes truncation count only for RESULT_LIMIT_TRUNCATION exclusions", async () => {
+  const response = recommendationsResponse();
+  assert.equal(response.ok, true);
+  if (!response.ok) return;
+  response.value.excluded = [
+    { product: { productId: "11" }, code: "RESULT_LIMIT_TRUNCATION" },
+    { product: { productId: "12" }, code: "OUT_OF_STOCK_FILTERED" },
+    { product: { productId: "13" }, code: "RESULT_LIMIT_TRUNCATION" }
+  ];
+  response.value.statistics = {
+    ...response.value.statistics,
+    commercialCandidates: 9,
+    excludedRecommendations: 3
+  };
+
+  const result = await getCatalogConsoleProductContext("10", {
+    catalogPort: fakeCatalogPort(),
+    recommendationsClient: fakeRecommendationsClient(() => response)
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.recommendations.status, "available");
+  if (result.recommendations.status === "available") {
+    assert.equal(result.recommendations.truncatedByLimitCount, 2);
+    assert.equal(result.recommendations.excluded.length, 3);
+    assert.equal(result.recommendations.statistics.commercialCandidates, 9);
+    assert.equal(result.recommendations.statistics.excludedRecommendations, 3);
   }
 });
 
