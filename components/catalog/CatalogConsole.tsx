@@ -7,6 +7,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { Icon } from "@/components/ui/Icon";
 import { StatusChip } from "@/components/ui/StatusChip";
 import type { CatalogConsoleError, CatalogConsoleProduct, CatalogProductContextResult, CatalogSearchProductsResult } from "@/lib/catalog/consoleService";
+import { DEFAULT_RECOMMENDATION_LIMIT } from "@/lib/catalog/consoleLimits";
 import { availabilityLabel, errorMessage, formatMoney, formatStock } from "./catalogDisplay";
 import { ProductIdentity } from "./ProductIdentity";
 import { RecommendationList } from "./RecommendationList";
@@ -14,7 +15,6 @@ import { createRelatedRecommendationsCache, type RelatedRecommendationsCache } f
 
 const MIN_SEARCH_LENGTH = 2;
 const SEARCH_DEBOUNCE_MS = 350;
-const DEFAULT_RECOMMENDATION_LIMIT = 5;
 
 function ProductResultRow({ product, selected, onSelect }: { product: CatalogConsoleProduct; selected: boolean; onSelect: (product: CatalogConsoleProduct) => void }) {
   return (

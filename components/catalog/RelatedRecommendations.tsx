@@ -6,11 +6,10 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { Icon } from "@/components/ui/Icon";
 import { StatusChip } from "@/components/ui/StatusChip";
 import type { CatalogConsoleRecommendation, CatalogProductContextResult } from "@/lib/catalog/consoleService";
+import { SECONDARY_RECOMMENDATION_LIMIT } from "@/lib/catalog/consoleLimits";
 import { formatMoney, formatStock, formatPercent, errorMessage } from "./catalogDisplay";
 import { ProductIdentity } from "./ProductIdentity";
 import { RecommendationEvidence } from "./RecommendationEvidence";
-
-const SECONDARY_RECOMMENDATION_LIMIT = 5;
 
 type RelatedRecommendationsProps = {
   recommendation: CatalogConsoleRecommendation;

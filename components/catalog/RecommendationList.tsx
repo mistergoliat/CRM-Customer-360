@@ -4,10 +4,9 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { StatusChip } from "@/components/ui/StatusChip";
 import type { CatalogProductContextResult } from "@/lib/catalog/consoleService";
+import { RECOMMENDATION_LIMIT_OPTIONS } from "@/lib/catalog/consoleLimits";
 import { errorMessage } from "./catalogDisplay";
 import { RecommendationCard } from "./RecommendationCard";
-
-const RECOMMENDATION_LIMIT_OPTIONS = [5, 10, 20] as const;
 
 type RecommendationListProps = {
   context: Extract<CatalogProductContextResult, { ok: true }>;

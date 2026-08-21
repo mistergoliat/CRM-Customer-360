@@ -1,13 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createCatalogPort, type CatalogPort, type CatalogPortError, type CatalogProduct, type CatalogSearchResultItem } from "@/lib/catalog";
+import { DEFAULT_RECOMMENDATION_LIMIT, MAX_RECOMMENDATION_LIMIT } from "@/lib/catalog/consoleLimits";
 import { createCatalogSearchProductsV2Client, type CatalogSearchProductsV2Client, type SearchProductsV2ClientError, type SearchProductsV2ProductSummary } from "@/lib/catalog/search-products-v2";
 
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 20;
-export const DEFAULT_RECOMMENDATION_LIMIT = 5;
-export const SECONDARY_RECOMMENDATION_LIMIT = 5;
-export const MAX_RECOMMENDATION_LIMIT = 20;
-export const RECOMMENDATION_LIMIT_OPTIONS = [5, 10, 20] as const;
 const MAX_QUERY_LENGTH = 120;
 const PRODUCT_ID_PATTERN = /^\d{1,20}$/;
 
