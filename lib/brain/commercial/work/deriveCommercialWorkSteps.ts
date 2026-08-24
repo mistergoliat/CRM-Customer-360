@@ -221,7 +221,67 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
         );
         break;
       }
-      case "SELECT_SHIPPING_OPTION":
+      case "SELECT_SHIPPING_OPTION": {
+        // SALES-AGENT-R2-A11.4. Mirrors the SELECT_PRODUCTS/CHANGE_QUANTITY
+        // needsSearch chain above: applyObjectiveState computes BLOCKED +
+        // MISSING_SHIPPING specifically when shipping evidence is stale or
+        // missing (never for any other reason - MISSING_SELECTION/
+        // MISSING_DESTINATION are separate blocker codes handled by the
+        // plain branch below). The old dependency here,
+        // {type:"CAPABILITY_EVIDENCE", capabilityName:"calculate_shipping"},
+        // was structurally unsatisfiable: GET_SHIPPING_QUOTE and
+        // SELECT_SHIPPING_OPTION share the "shipping" supersession family
+        // (deriveCommercialObjectives.ts), so a live SELECT_SHIPPING_OPTION
+        // objective always means any prior GET_SHIPPING_QUOTE (the only
+        // producer of a calculate_shipping step) was already SUPERSEDED -
+        // no real turn ever has both a COMPLETED calculate_shipping step and
+        // a live SELECT_SHIPPING_OPTION objective in the same work. Deriving
+        // a CALCULATE_SHIPPING step from THIS objective instead - the same
+        // capability, same dependencies GET_SHIPPING_QUOTE's own case uses -
+        // lets a single objective refresh its own evidence and then proceed,
+        // entirely within the same turn's reprojection rounds.
+        const needsRecalculation = objective.status === "BLOCKED" && objective.blockers.some((item) => item.code === "MISSING_SHIPPING");
+        if (needsRecalculation) {
+          const calcStepId = `${stepPrefix}:CALCULATE_SHIPPING`;
+          steps.push(
+            makeStep({
+              stepId: calcStepId,
+              objectiveIds: [objective.objectiveId],
+              type: "CALCULATE_SHIPPING",
+              status: "READY",
+              dependencies: [
+                { type: "FACT_CONFIRMED", factType: "commercial_line_items" },
+                { type: "FACT_CONFIRMED", factType: "shipping_destination" }
+              ],
+              capabilityName: "calculate_shipping",
+              input: objective.inputs,
+              evidence: [...objective.evidence],
+              blockers: []
+            })
+          );
+          steps.push(
+            makeStep({
+              stepId: `${stepPrefix}:SELECT_SHIPPING_OPTION`,
+              objectiveIds: [objective.objectiveId],
+              type: "SELECT_SHIPPING_OPTION",
+              status: "BLOCKED",
+              dependencies: [{ type: "STEP_COMPLETED", stepId: calcStepId }],
+              capabilityName: "select_shipping_option",
+              input: objective.inputs,
+              evidence: [...objective.evidence],
+              // MISSING_SHIPPING is deliberately not in canAutoActivateStep's
+              // whitelist - this step only reactivates via the NEXT fresh
+              // buildCommercialWorkProjection round (once applyObjectiveState
+              // has re-resolved optionReference against the fresh
+              // calculate_shipping result), never the same-round
+              // activateUnblockedSteps pass right after the calc step
+              // completes - same safety property needsSearch's
+              // MISSING_PRODUCT_EVIDENCE blocker relies on above.
+              blockers: [blocker("MISSING_SHIPPING", "step", objective.objectiveId, `${stepPrefix}:SELECT_SHIPPING_OPTION`)]
+            })
+          );
+          break;
+        }
         steps.push(
           makeStep({
             stepId: `${stepPrefix}:SELECT_SHIPPING_OPTION`,
@@ -237,7 +297,10 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
                     ? "WAITING_CUSTOMER"
                     : "READY"
             ),
-            dependencies: [{ type: "CAPABILITY_EVIDENCE", capabilityName: "calculate_shipping" }],
+            dependencies: [
+              { type: "FACT_CONFIRMED", factType: "commercial_line_items" },
+              { type: "FACT_CONFIRMED", factType: "shipping_destination" }
+            ],
             capabilityName: "select_shipping_option",
             input: objective.inputs,
             evidence: [...objective.evidence],
@@ -245,6 +308,7 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
           })
         );
         break;
+      }
       case "CREATE_QUOTE":
         steps.push(
           makeStep({

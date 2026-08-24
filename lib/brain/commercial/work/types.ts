@@ -91,6 +91,23 @@ export type CommercialObjectiveInputs = {
   communeId?: number;
   canonicalDestinationName?: string;
   optionIndex?: number;
+  /**
+   * SALES-AGENT-R2-A11.4. The customer's raw shipping-option reference (e.g.
+   * "la segunda" / "Chilexpress" / "la mas barata") - the durable input for
+   * SELECT_SHIPPING_OPTION, never mutated. optionIndex above is derived from
+   * this fresh on every projection pass (buildCommercialWorkProjection.ts's
+   * applyObjectiveState), never trusted across passes on its own - an index
+   * is positional and means nothing once shipping is recalculated, the raw
+   * text is what the customer actually meant.
+   */
+  optionReference?: string;
+  /**
+   * SALES-AGENT-R2-A11.4. Populated only when matchShippingOptionReference
+   * found 2+ real candidates for optionReference this pass - grounds
+   * buildMissingInfoQuestion's SHIPPING_OPTION_AMBIGUOUS/_RECALCULATED
+   * wording in real calculate_shipping options, never invented ones.
+   */
+  shippingOptionCandidates?: { index: number; carrierName: string; serviceType: string; totalCost: number; estimatedDelivery: string }[];
 };
 
 export type CommercialObjectiveResolvedInputs = {
@@ -110,6 +127,9 @@ export type CommercialMissingRequirement =
   | "DESTINATION"
   | "SELECTION"
   | "SHIPPING"
+  | "SHIPPING_OPTION_AMBIGUOUS"
+  | "SHIPPING_OPTION_NOT_FOUND"
+  | "SHIPPING_OPTION_RECALCULATED"
   | "QUOTE";
 
 export type CommercialEvidenceRef = {
@@ -131,6 +151,9 @@ export type CommercialWorkBlockerCode =
   | "MISSING_DESTINATION"
   | "MISSING_SELECTION"
   | "MISSING_SHIPPING"
+  | "SHIPPING_OPTION_AMBIGUOUS"
+  | "SHIPPING_OPTION_NOT_FOUND"
+  | "SHIPPING_OPTION_RECALCULATED"
   | "CAPABILITY_UNAVAILABLE"
   | "WAITING_CUSTOMER"
   | "WAITING_SYSTEM"

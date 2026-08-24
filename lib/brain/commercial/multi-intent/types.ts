@@ -22,7 +22,7 @@ export const MAX_INTENTS_PER_PLAN = 6;
 export const MAX_INTENT_TEXT_FIELD_LENGTH = 200;
 export const MAX_QUANTITY = 9999;
 
-export const COMMERCIAL_INTENT_TYPES = ["select_products", "get_shipping_quote", "create_quote", "cancel", "unsupported"] as const;
+export const COMMERCIAL_INTENT_TYPES = ["select_products", "get_shipping_quote", "select_shipping_option", "create_quote", "cancel", "unsupported"] as const;
 export type CommercialIntentType = (typeof COMMERCIAL_INTENT_TYPES)[number];
 
 export type CommercialIntentSelectProducts = {
@@ -50,6 +50,20 @@ export type CommercialIntentGetShippingQuote = {
   type: "get_shipping_quote";
   /** Free text naming the destination commune, e.g. "Ñuñoa" - never a communeId. */
   destination?: string;
+};
+
+/**
+ * SALES-AGENT-R2-A11.4. The model supplies only the customer's raw
+ * shipping-option reference in their own words ("la segunda" / "Chilexpress"
+ * / "la mas barata") - never an index/number, structurally cannot (no
+ * numeric field exists on this type at all). Resolved deterministically
+ * against real calculate_shipping evidence downstream
+ * (buildCommercialWorkProjection.ts's applyObjectiveState via
+ * matchShippingOptionReference), never by the model and never at this layer.
+ */
+export type CommercialIntentSelectShippingOption = {
+  type: "select_shipping_option";
+  optionReference?: string;
 };
 
 /**
@@ -100,6 +114,7 @@ export type CommercialIntentUnsupported = {
 export type CommercialIntent =
   | CommercialIntentSelectProducts
   | CommercialIntentGetShippingQuote
+  | CommercialIntentSelectShippingOption
   | CommercialIntentCreateQuote
   | CommercialIntentCancel
   | CommercialIntentUnsupported;
@@ -120,6 +135,7 @@ export const COMMERCIAL_REQUIREMENT_TYPES = [
   "QUANTITY",
   "DESTINATION",
   "PRODUCT_SELECTION",
+  "SHIPPING_OPTION",
   "CUSTOMER_IDENTITY",
   "DELIVERY_ADDRESS",
   "EMAIL"
@@ -127,7 +143,7 @@ export const COMMERCIAL_REQUIREMENT_TYPES = [
 export type CommercialRequirementType = (typeof COMMERCIAL_REQUIREMENT_TYPES)[number];
 
 /** Requirements T09A actually resolves/executes against - the rest of COMMERCIAL_REQUIREMENT_TYPES exists only as a documented future extension point. */
-export const IMPLEMENTED_REQUIREMENT_TYPES: readonly CommercialRequirementType[] = ["PRODUCT", "QUANTITY", "DESTINATION", "PRODUCT_SELECTION"];
+export const IMPLEMENTED_REQUIREMENT_TYPES: readonly CommercialRequirementType[] = ["PRODUCT", "QUANTITY", "DESTINATION", "PRODUCT_SELECTION", "SHIPPING_OPTION"];
 
 /**
  * Part 29 (IntentDefinition registry). Fixed, backend-owned - the model
@@ -142,6 +158,7 @@ export type IntentDefinition = {
 export const COMMERCIAL_INTENT_DEFINITIONS: Record<Exclude<CommercialIntentType, "unsupported">, IntentDefinition> = {
   select_products: { type: "select_products", requirements: ["PRODUCT", "QUANTITY"] },
   get_shipping_quote: { type: "get_shipping_quote", requirements: ["PRODUCT_SELECTION", "DESTINATION"] },
+  select_shipping_option: { type: "select_shipping_option", requirements: ["SHIPPING_OPTION"] },
   create_quote: { type: "create_quote", requirements: ["PRODUCT_SELECTION"] },
   cancel: { type: "cancel", requirements: [] }
 };

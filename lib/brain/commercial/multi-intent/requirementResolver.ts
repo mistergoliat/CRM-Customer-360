@@ -206,6 +206,23 @@ function resolveQuantityRequirement(intent: { quantity?: number }): RequirementR
   return { type: "QUANTITY", status: "missing" };
 }
 
+/**
+ * SALES-AGENT-R2-A11.4. Deliberately a presence-check only, unlike
+ * resolveProductRequirement - the customer's raw reference is resolved
+ * against real calculate_shipping evidence downstream, in
+ * buildCommercialWorkProjection.ts's applyObjectiveState (via
+ * matchShippingOptionReference), because that evidence is inherently
+ * re-computable across a single objective's lifecycle (destination/cart can
+ * change mid-selection, forcing a recalculation) in a way catalog evidence
+ * for a product selection is not - resolving it once here and caching an
+ * index would go stale exactly when it matters most. See A11.4's release
+ * doc for the full design.
+ */
+function resolveShippingOptionRequirement(intent: { optionReference?: string }): RequirementResolution {
+  if (intent.optionReference) return { type: "SHIPPING_OPTION", status: "resolved", source: "explicit", value: intent.optionReference };
+  return { type: "SHIPPING_OPTION", status: "missing" };
+}
+
 function resolveDestinationRequirement(intent: { destination?: string }, context: RequirementResolverContext): RequirementResolution {
   if (intent.destination) return { type: "DESTINATION", status: "resolved", source: "explicit", value: intent.destination };
   const durable = readDurableShippingDestination(context.commercialContextSummary);
@@ -248,6 +265,9 @@ export function resolveCommercialIntentPlan(intents: CommercialIntent[], context
   intents.forEach((intent, intentIndex) => {
     if (intent.type === "select_products") {
       const requirements = [resolveProductRequirement(intent, context), resolveQuantityRequirement(intent)];
+      results[intentIndex] = { intentIndex, intent, requirements, status: overallStatus(requirements) };
+    } else if (intent.type === "select_shipping_option") {
+      const requirements = [resolveShippingOptionRequirement(intent)];
       results[intentIndex] = { intentIndex, intent, requirements, status: overallStatus(requirements) };
     } else if (intent.type === "unsupported") {
       results[intentIndex] = { intentIndex, intent, requirements: [], status: "needs_clarification" };

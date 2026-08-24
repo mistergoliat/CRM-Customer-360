@@ -176,3 +176,24 @@ test("R2SEM10 a multi-scope cancel intent maps to one cancel seed per named scop
     { kind: "cancel", targetType: "quote" }
   ]);
 });
+
+// SALES-AGENT-R2-A11.4. select_shipping_option always pushes exactly one
+// unconditional seed carrying the raw optionReference forward - no
+// ambiguous/missing branching at this layer, unlike select_products. Real
+// matching against calculate_shipping evidence happens only downstream in
+// buildCommercialWorkProjection.ts's applyObjectiveState.
+test("R2SEM11 select_shipping_option maps to a single SELECT_SHIPPING_OPTION seed carrying the raw optionReference, never a resolved index", async () => {
+  const provider = createOfflinePlannerProvider([{ kind: "plan", plan: { intents: [{ type: "select_shipping_option", optionReference: "la segunda" }] } }]);
+  const result = await planCommercialObjectiveSeeds(baseInput({ provider, customerMessage: "quiero la segunda opcion" }));
+  assert.equal(result.kind, "planned");
+  if (result.kind !== "planned") return;
+  assert.deepEqual(result.seeds, [{ type: "SELECT_SHIPPING_OPTION", origin: "customer_requested", inputs: { optionReference: "la segunda" } }]);
+});
+
+test("R2SEM12 select_shipping_option with no optionReference still emits a seed, never dropped silently", async () => {
+  const provider = createOfflinePlannerProvider([{ kind: "plan", plan: { intents: [{ type: "select_shipping_option" }] } }]);
+  const result = await planCommercialObjectiveSeeds(baseInput({ provider, customerMessage: "esa" }));
+  assert.equal(result.kind, "planned");
+  if (result.kind !== "planned") return;
+  assert.deepEqual(result.seeds, [{ type: "SELECT_SHIPPING_OPTION", origin: "customer_requested", inputs: { optionReference: undefined } }]);
+});

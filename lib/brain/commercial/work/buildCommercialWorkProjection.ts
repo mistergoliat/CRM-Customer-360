@@ -3,6 +3,8 @@ import type { CommercialObjective, CommercialWork, CommercialWorkBlocker, Commer
 import type { CommercialObjectiveStatus } from "./statuses";
 import { deriveCommercialObjectives, carriedObjectiveStatusById } from "./deriveCommercialObjectives";
 import { deriveCommercialWorkSteps } from "./deriveCommercialWorkSteps";
+import { matchShippingOptionReference } from "./matchShippingOptionReference";
+import type { ShippingOptionCandidate } from "./matchShippingOptionReference";
 import { collectCommercialWorkBlockers, deriveCommercialWorkMetrics, deriveCommercialWorkStatus } from "./evaluateCommercialWork";
 
 function toIso(value: string | Date | undefined): string {
@@ -56,6 +58,30 @@ function latestCalculateShippingExecution(executions: readonly CommercialCapabil
     const right = b.completedAt ? new Date(b.completedAt).getTime() : 0;
     return right - left;
   })[0] ?? null;
+}
+
+/**
+ * SALES-AGENT-R2-A11.4. Extracts the real options[] a calculate_shipping
+ * execution returned (calculateShippingCapability.ts's completed() payload)
+ * for matchShippingOptionReference - never fabricates an entry, an item
+ * missing a required field is silently dropped rather than guessed.
+ */
+function parseShippingOptionCandidates(execution: CommercialCapabilityExecutionProjection | null): ShippingOptionCandidate[] {
+  const payload = execution?.responseSummaryJson;
+  const rawOptions = payload && Array.isArray(payload.options) ? payload.options : [];
+  const candidates: ShippingOptionCandidate[] = [];
+  rawOptions.forEach((raw: unknown, fallbackIndex: number) => {
+    if (typeof raw !== "object" || raw === null) return;
+    const item = raw as Record<string, unknown>;
+    const index = typeof item.index === "number" ? item.index : fallbackIndex;
+    const carrierName = typeof item.carrierName === "string" ? item.carrierName : "";
+    const serviceType = typeof item.serviceType === "string" ? item.serviceType : "";
+    const totalCost = typeof item.totalCost === "number" ? item.totalCost : null;
+    const estimatedDelivery = typeof item.estimatedDelivery === "string" ? item.estimatedDelivery : "";
+    if (totalCost === null) return;
+    candidates.push({ index, carrierName, serviceType, totalCost, estimatedDelivery });
+  });
+  return candidates;
 }
 
 /**
@@ -328,27 +354,86 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
       }
       break;
     }
-    case "SELECT_SHIPPING_OPTION":
+    case "SELECT_SHIPPING_OPTION": {
       if (input.selectedShippingOption && input.commercialLineItems && input.shippingDestination && input.selectedShippingOption.selectionFactId === input.commercialLineItems.factId && input.selectedShippingOption.destinationFactId === input.shippingDestination.factId) {
         objective.status = "COMPLETED";
         objective.resolvedInputs.selectedShippingOptionFactId = input.selectedShippingOption.factId;
         objective.evidence.push(...requestFactEvidence("selected_shipping_option", input.selectedShippingOption.factId));
-      } else {
-        const shipping = executionAnchorStatus({
-          execution: latestCalculateShippingExecution(input.recentCapabilityExecutions),
-          selectionFactId: input.commercialLineItems?.factId ?? null,
-          destinationFactId: input.shippingDestination?.factId ?? null
-        });
-        if (shipping.status === "fresh" && typeof objective.inputs.optionIndex === "number") {
-          objective.status = "READY";
-          objective.evidence.push(...shipping.evidence);
+        break;
+      }
+
+      const selectionFactId = input.commercialLineItems?.factId ?? null;
+      const destinationFactId = input.shippingDestination?.factId ?? null;
+      if (!selectionFactId) {
+        objective.status = "BLOCKED";
+        objective.missingRequirements.push("SELECTION");
+        objective.blockers.push(blocker("MISSING_SELECTION", "objective", objective.objectiveId));
+        break;
+      }
+      if (!destinationFactId) {
+        objective.status = "BLOCKED";
+        objective.missingRequirements.push("DESTINATION");
+        objective.blockers.push(blocker("MISSING_DESTINATION", "objective", objective.objectiveId));
+        break;
+      }
+
+      const shippingExecution = latestCalculateShippingExecution(input.recentCapabilityExecutions);
+      const shipping = executionAnchorStatus({ execution: shippingExecution, selectionFactId, destinationFactId });
+
+      if (shipping.status === "fresh") {
+        objective.evidence.push(...shipping.evidence);
+        const candidates = parseShippingOptionCandidates(shippingExecution);
+        const match = matchShippingOptionReference(objective.inputs.optionReference, candidates);
+        if (match.status === "resolved") {
+          // SALES-AGENT-R2-A11.4. A position-based reference ("la segunda")
+          // only means something relative to the exact list the customer was
+          // looking at - if this fresh evidence is the direct result of a
+          // recalculation that just ran (carriedStatus was BLOCKED, which
+          // MISSING_SHIPPING below is the only thing that sets), the same
+          // index in the NEW list may be a different real option than the
+          // one the customer meant. Never auto-select in that case - ask
+          // again against the refreshed list. Carrier/cheapest references
+          // resolve by what the option IS, so they stay safe either way.
+          if (match.matchKind === "position" && carriedStatus === "BLOCKED") {
+            objective.status = "WAITING_CUSTOMER";
+            objective.missingRequirements.push("SHIPPING_OPTION_RECALCULATED");
+            objective.inputs.shippingOptionCandidates = candidates;
+            objective.blockers.push(blocker("SHIPPING_OPTION_RECALCULATED", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+          } else {
+            objective.status = "READY";
+            objective.inputs.optionIndex = match.index;
+            objective.resolvedInputs.shippingCalculationExecutionId = String(shippingExecution?.publicId ?? "");
+          }
+        } else if (match.status === "ambiguous") {
+          objective.status = "WAITING_CUSTOMER";
+          objective.missingRequirements.push("SHIPPING_OPTION_AMBIGUOUS");
+          objective.inputs.shippingOptionCandidates = match.candidates;
+          objective.blockers.push(blocker("SHIPPING_OPTION_AMBIGUOUS", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
         } else {
-          objective.status = "BLOCKED";
-          objective.missingRequirements.push("SHIPPING");
-          objective.blockers.push(blocker("MISSING_SHIPPING", "objective", objective.objectiveId));
+          objective.status = "WAITING_CUSTOMER";
+          objective.missingRequirements.push("SHIPPING_OPTION_NOT_FOUND");
+          objective.blockers.push(blocker("SHIPPING_OPTION_NOT_FOUND", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
         }
+      } else if (shipping.status === "retryable_failure") {
+        objective.status = "WAITING_SYSTEM";
+        objective.evidence.push(...shipping.evidence);
+        objective.blockers.push(blocker("WAITING_SYSTEM", "objective", objective.objectiveId));
+      } else if (shipping.status === "failed") {
+        objective.status = "FAILED";
+        objective.evidence.push(...shipping.evidence);
+      } else {
+        // stale or absent (no calculate_shipping execution matches current
+        // facts yet) - needs a fresh calculation. deriveCommercialWorkSteps.ts
+        // reads this exact BLOCKED+MISSING_SHIPPING combination to derive a
+        // CALCULATE_SHIPPING step ahead of this one, mirroring SELECT_PRODUCTS'
+        // needsSearch chain - never a dead end, the next reprojection round
+        // re-evaluates this same objective against the fresh result.
+        objective.status = "BLOCKED";
+        objective.missingRequirements.push("SHIPPING");
+        objective.blockers.push(blocker("MISSING_SHIPPING", "objective", objective.objectiveId));
       }
       break;
+    }
     case "CREATE_QUOTE": {
       const selectionFactId = input.commercialLineItems?.factId ?? null;
       if (!selectionFactId) {

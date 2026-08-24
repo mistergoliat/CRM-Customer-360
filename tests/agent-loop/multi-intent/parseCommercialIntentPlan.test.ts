@@ -133,3 +133,25 @@ test("[MI-Parse-10] parseCommercialIntent (single-intent parser reused by pendin
   assert.deepEqual(parseCommercialIntent({ type: "get_shipping_quote", destination: "Las Condes" }), { type: "get_shipping_quote", destination: "Las Condes" });
   assert.equal(parseCommercialIntent({ type: "unknown_thing" }).type, "unsupported");
 });
+
+// SALES-AGENT-R2-A11.4.
+test("[MI-Parse-16] select_shipping_option parses the customer's raw reference text, never a number", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "select_shipping_option", optionReference: "la segunda" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "select_shipping_option", optionReference: "la segunda" }]);
+});
+
+test("[MI-Parse-17] select_shipping_option with a numeric optionReference is coerced to unsupported (not a string), never trusted as an index", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "select_shipping_option", optionReference: 1 }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "select_shipping_option" }]);
+});
+
+test("[MI-Parse-18] select_shipping_option with no optionReference at all still parses, field omitted", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "select_shipping_option" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "select_shipping_option" }]);
+});
