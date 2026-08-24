@@ -53,15 +53,36 @@ const searchQueries: string[] = [];
 before(async () => {
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (url.pathname === "/v1/products/search") {
-      const q = url.searchParams.get("q") ?? "";
-      searchQueries.push(q);
-      const expensive = !/econ|barat/i.test(q);
-      const item = expensive
-        ? { productId: 501, combinationId: 0, sku: "JLA-501", name: "Jaula de entrenamiento premium", variantLabel: null, shortDescription: null, physicalQuantity: 4, available: true, matchType: "partial_name" }
-        : { productId: 502, combinationId: 0, sku: "JLA-502", name: "Jaula de entrenamiento economica", variantLabel: null, shortDescription: null, physicalQuantity: 2, available: true, matchType: "partial_name" };
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ query: q, items: [item], freshness: { cached: false, generatedAt: new Date().toISOString() } }));
+    // SALES-AGENT-R2-A11.2-C: search_products now resolves via T12 (POST /api/v2/catalog/resolve-product-intent).
+    if (req.method === "POST" && url.pathname === "/api/v2/catalog/resolve-product-intent") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const parsed = JSON.parse(body || "{}") as { query?: string };
+        const q = parsed.query ?? "";
+        searchQueries.push(q);
+        const expensive = !/econ|barat/i.test(q);
+        const productId = expensive ? "501" : "502";
+        const name = expensive ? "Jaula de entrenamiento premium" : "Jaula de entrenamiento economica";
+        const reference = expensive ? "JLA-501" : "JLA-502";
+        const quantity = expensive ? 4 : 2;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            query: { original: q, normalized: q },
+            resolution: { status: "resolved", confidence: 0.9, sourceProduct: { productId } },
+            candidates: [
+              {
+                product: { productId, name, reference, price: null, stock: { status: "in_stock", available: true, quantity } },
+                match: { rank: 1, score: 0.9, reasons: ["NAME_TOKEN_MATCH"] }
+              }
+            ],
+            statistics: { retrieved: 1, eligible: 1, returned: 1 },
+            warnings: [],
+            correlationId: "corr-fixture"
+          })
+        );
+      });
       return;
     }
     function buildProductPayload(productId: number) {

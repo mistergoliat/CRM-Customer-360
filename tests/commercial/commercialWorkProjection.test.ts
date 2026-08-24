@@ -51,15 +51,41 @@ function shippingExecution(input: {
   };
 }
 
+/**
+ * SALES-AGENT-R2-A11.2-C. Builds a T12 (resolve-product-intent)-shaped
+ * `productIntent` payload the way registry.ts's
+ * searchProductsCapabilityDataFromProductIntent really produces it -
+ * resolution.status is derived from candidate count the same way the real
+ * Catalog Service would decide it (0 -> no_match, 1 -> resolved, 2+ ->
+ * clarification_required), never hand-picked per test to dodge the real
+ * branching in buildCommercialWorkProjection.ts.
+ */
 function searchProductsExecution(input: {
   query: string;
-  items?: Array<{ productId: string; combinationId?: string | null; name: string }>;
+  items?: Array<{ productId: string; combinationId?: string | null; name: string; price?: { amount: number; currency: string } | null }>;
   executionStatus?: CommercialCapabilityExecutionProjection["executionStatus"];
   retryable?: boolean;
   errorCode?: string | null;
   publicId?: string;
 }): CommercialCapabilityExecutionProjection {
   const executionStatus = input.executionStatus ?? "completed";
+  const items = input.items ?? [];
+  const resolution =
+    items.length === 1
+      ? { status: "resolved", confidence: 0.9, sourceProduct: { productId: items[0].productId, ...(items[0].combinationId ? { combinationId: items[0].combinationId } : {}) } }
+      : items.length > 1
+        ? { status: "clarification_required", confidence: 0.5 }
+        : { status: "no_match", confidence: 0 };
+  const candidates = items.map((item, index) => ({
+    product: {
+      productId: item.productId,
+      ...(item.combinationId ? { combinationId: item.combinationId } : {}),
+      name: item.name,
+      price: item.price ?? null,
+      stock: { status: "unknown", available: true }
+    },
+    match: { rank: index + 1, score: 0.8, reasons: ["NAME_TOKEN_MATCH"] }
+  }));
   return {
     publicId: input.publicId ?? "search-exec-1",
     capabilityName: "search_products",
@@ -68,7 +94,21 @@ function searchProductsExecution(input: {
     errorCode: input.errorCode ?? null,
     completedAt: NOW,
     requestSummaryJson: { query: input.query, limit: 5 },
-    responseSummaryJson: executionStatus === "completed" ? { query: input.query, items: input.items ?? [] } : null
+    responseSummaryJson:
+      executionStatus === "completed"
+        ? {
+            query: input.query,
+            items: candidates.map((candidate) => ({ productId: candidate.product.productId, combinationId: candidate.product.combinationId ?? "0", name: candidate.product.name })),
+            productIntent: {
+              query: { original: input.query, normalized: input.query },
+              resolution,
+              candidates,
+              ...(resolution.status === "clarification_required" ? { clarification: { dimension: "unspecified", options: [] } } : {}),
+              statistics: { retrieved: items.length, eligible: items.length, returned: items.length },
+              warnings: []
+            }
+          }
+        : null
   };
 }
 
@@ -285,6 +325,54 @@ test("CW09b5 (A11.1) a technically failed, retryable search never becomes WAITIN
   });
   const select = objective(work, "SELECT_PRODUCTS");
   assert.equal(select.status, "WAITING_SYSTEM");
+});
+
+test("CATC06 (A11.2-C) a resolved candidate's price is not lost on the way to a clarification list - preserved verbatim on ambiguous candidates", () => {
+  const work = project({
+    objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "disco olimpico 20kg", quantity: 1 })],
+    recentCapabilityExecutions: [
+      searchProductsExecution({
+        query: "disco olimpico 20kg",
+        items: [
+          { productId: "40", name: "Disco Olimpico Bumper 20kg", price: { amount: 39990, currency: "CLP" } },
+          { productId: "41", name: "Disco Olimpico Fundido 20kg", price: { amount: 24990, currency: "CLP" } }
+        ]
+      })
+    ]
+  });
+  const select = objective(work, "SELECT_PRODUCTS");
+  assert.equal(select.status, "WAITING_CUSTOMER");
+  assert.deepEqual(select.inputs.productCandidates?.[0].price, { amount: 39990, currency: "CLP" });
+  assert.deepEqual(select.inputs.productCandidates?.[1].price, { amount: 24990, currency: "CLP" });
+});
+
+test("CATC05 (A11.2-C) a completed execution whose productIntent payload does not parse is a system-owned FAILED, never WAITING_CUSTOMER", () => {
+  const malformed = searchProductsExecution({ query: "producto raro", items: [{ productId: "1", name: "x" }] });
+  // Simulate a real contract violation (T12 returning something
+  // buildCommercialWorkProjection.ts's parseProductIntentResolution cannot
+  // recognize) rather than the well-formed fixture searchProductsExecution
+  // normally builds.
+  malformed.responseSummaryJson = { query: "producto raro", items: [] };
+  const work = project({
+    objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "producto raro", quantity: 1 })],
+    recentCapabilityExecutions: [malformed]
+  });
+  const select = objective(work, "SELECT_PRODUCTS");
+  assert.equal(select.status, "FAILED");
+});
+
+test("CATC14 (A11.2-C) restart/reprojection: a resolution persisted in a prior turn is still interpretable read fresh from the projection", () => {
+  const executions = [searchProductsExecution({ query: "barra olimpica classic 20kg", items: [{ productId: "31", name: "Barra Olimpica Classic 20kg" }] })];
+  const firstPass = project({
+    objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "barra olimpica classic 20kg", quantity: 2 })],
+    recentCapabilityExecutions: executions
+  });
+  const secondPass = project({
+    objectiveSeeds: [objectiveSeed("SELECT_PRODUCTS", { productReference: "barra olimpica classic 20kg", quantity: 2 })],
+    recentCapabilityExecutions: executions
+  });
+  assert.deepEqual(objective(firstPass, "SELECT_PRODUCTS").inputs.items, objective(secondPass, "SELECT_PRODUCTS").inputs.items);
+  assert.equal(objective(secondPass, "SELECT_PRODUCTS").status, "READY");
 });
 
 test("BLOCK01 (A11.1) work.blockers never duplicates an objective's blocker via its step's verbatim copy", () => {

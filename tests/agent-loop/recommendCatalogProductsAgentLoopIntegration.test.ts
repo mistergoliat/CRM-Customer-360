@@ -433,8 +433,8 @@ test("16. a sourceProduct combinationId never observed is blocked even though th
 // 17. Authorized via this-turn live evidence (search_products), not recentCatalogContext
 test("17. a sourceProduct observed by this same turn's own search_products call authorizes recommend_catalog_products, no recentCatalogContext needed", async () => {
   handler = (req, res) => {
-    if (req.url?.startsWith("/v1/products/search")) {
-      return sendJson(res, 200, { query: "kettlebell", items: [{ productId: 100, combinationId: 1, sku: "KB", name: "Producto fuente", variantLabel: null, shortDescription: null, physicalQuantity: 5, available: true, matchType: "exact_name" }], freshness: { cached: false } });
+    if (req.url === "/api/v2/catalog/resolve-product-intent" && req.method === "POST") {
+      return sendJson(res, 200, productIntentResponse([{ productId: 100, name: "Producto fuente" }]));
     }
     return sendJson(res, 200, baseResponse());
   };
@@ -481,8 +481,8 @@ test("18. a recommend_catalog_products candidate cannot be used as the sourcePro
 // each id sourced from the previous observation, no id fabricated, no code-driven candidate selection.
 test("19-20. search_products -> recommend_catalog_products -> get_product_details chains on real, observed identity within one turn, no new search required", async () => {
   handler = (req, res) => {
-    if (req.url?.startsWith("/v1/products/search")) {
-      return sendJson(res, 200, { query: "kettlebell", items: [{ productId: 100, combinationId: 1, sku: "KB", name: "Producto fuente", variantLabel: null, shortDescription: null, physicalQuantity: 5, available: true, matchType: "exact_name" }], freshness: { cached: false } });
+    if (req.url === "/api/v2/catalog/resolve-product-intent" && req.method === "POST") {
+      return sendJson(res, 200, productIntentResponse([{ productId: 100, name: "Producto fuente" }]));
     }
     if (req.url === "/api/v2/recommendations/search-products") {
       return sendJson(res, 200, baseResponse());
@@ -543,11 +543,24 @@ test("21. two conversations' evidence never cross - one conversation's observed 
 
 // --- CP-R1-T10B8D (correction pass): get_product_details continuity end-to-end, sourced from a real recommend_catalog_products result ---
 
-function searchItemsResponse(items: Array<{ productId: number; name: string }>) {
+/**
+ * SALES-AGENT-R2-A11.2-C. search_products now resolves via T12 (POST
+ * /api/v2/catalog/resolve-product-intent). resolveObservedRecommendationSourceProduct
+ * only cares that a search_products observation's items[] carries the
+ * productId (the evidence gate never reads resolution.status).
+ */
+function productIntentResponse(items: Array<{ productId: number; name: string }>) {
   return {
-    query: "x",
-    items: items.map((item) => ({ productId: item.productId, combinationId: 1, sku: `SKU-${item.productId}`, name: item.name, variantLabel: null, shortDescription: null, physicalQuantity: 5, available: true, matchType: "exact_name" })),
-    freshness: { cached: false }
+    query: { original: "x", normalized: "x" },
+    resolution: items.length === 1 ? { status: "resolved", confidence: 0.9, sourceProduct: { productId: String(items[0].productId), combinationId: "1" } } : { status: "clarification_required", confidence: 0.5 },
+    candidates: items.map((item, index) => ({
+      product: { productId: String(item.productId), combinationId: "1", name: item.name, price: null, stock: { status: "in_stock", available: true, quantity: 5 } },
+      match: { rank: index + 1, score: 0.9, reasons: ["EXACT_NAME_MATCH"] }
+    })),
+    ...(items.length > 1 ? { clarification: { dimension: "unspecified" as const, options: [] } } : {}),
+    statistics: { retrieved: items.length, eligible: items.length, returned: items.length },
+    warnings: [],
+    correlationId: "corr-fixture"
   };
 }
 
@@ -721,7 +734,7 @@ test("25. an unresolved trustedCustomerSession still gets full recommendation co
 // 26. Empty invalidates a prior active recommendation pendingCatalogAction
 test("26. a completed recommendation with empty candidates invalidates a prior active recommendation pendingCatalogAction", async () => {
   handler = (req, res) => {
-    if (req.url?.startsWith("/v1/products/search")) return sendJson(res, 200, searchItemsResponse([{ productId: 100, name: "Producto A" }, { productId: 300, name: "Producto C" }]));
+    if (req.url === "/api/v2/catalog/resolve-product-intent" && req.method === "POST") return sendJson(res, 200, productIntentResponse([{ productId: 100, name: "Producto A" }, { productId: 300, name: "Producto C" }]));
     if (req.url === "/api/v2/recommendations/search-products") {
       const parsed = JSON.parse(lastBody) as { sourceProduct?: { productId?: string } };
       if (parsed.sourceProduct?.productId === "300") return sendJson(res, 200, baseResponse({ recommendations: [] }));
@@ -748,7 +761,7 @@ test("26. a completed recommendation with empty candidates invalidates a prior a
 // 27. Renewal: latest successful recommendation replaces prior candidates entirely, no merging
 test("27. the latest successful recommendation replaces prior candidates entirely, never merges across recommendations", async () => {
   handler = (req, res) => {
-    if (req.url?.startsWith("/v1/products/search")) return sendJson(res, 200, searchItemsResponse([{ productId: 100, name: "Producto A" }, { productId: 300, name: "Producto C" }]));
+    if (req.url === "/api/v2/catalog/resolve-product-intent" && req.method === "POST") return sendJson(res, 200, productIntentResponse([{ productId: 100, name: "Producto A" }, { productId: 300, name: "Producto C" }]));
     if (req.url === "/api/v2/recommendations/search-products") {
       const parsed = JSON.parse(lastBody) as { sourceProduct?: { productId?: string } };
       if (parsed.sourceProduct?.productId === "300") {

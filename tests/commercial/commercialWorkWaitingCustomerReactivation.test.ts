@@ -235,6 +235,26 @@ async function createWaitingCustomerWork() {
 }
 
 /**
+ * SALES-AGENT-R2-A11.2-C. The real search_products capability now persists
+ * T12's productIntent alongside the legacy items[] view - see registry.ts's
+ * searchProductsCapabilityDataFromProductIntent. 2+ items always means
+ * clarification_required (matching a real ambiguous search).
+ */
+function productIntentPayloadFor(query: string, items: Array<{ productId: string; name: string }>) {
+  return {
+    query: { original: query, normalized: query },
+    resolution: { status: "clarification_required", confidence: 0.5 },
+    candidates: items.map((item, index) => ({
+      product: { productId: item.productId, name: item.name, price: null, stock: { status: "unknown", available: true } },
+      match: { rank: index + 1, score: 0.8, reasons: ["NAME_TOKEN_MATCH"] }
+    })),
+    clarification: { dimension: "unspecified", options: [] },
+    statistics: { retrieved: items.length, eligible: items.length, returned: items.length },
+    warnings: []
+  };
+}
+
+/**
  * SALES-AGENT-R2-A11.1, Part 2/4. Seeds a real, completed search_products
  * execution row directly (same table/shape executeGovernedCapability itself
  * persists) so settleCommercialWorkProjection's real DB reload
@@ -242,6 +262,7 @@ async function createWaitingCustomerWork() {
  * SEARCH_PRODUCTS step execution would have left behind.
  */
 async function seedSearchProductsExecution(query: string, items: Array<{ productId: string; name: string }>): Promise<void> {
+  const responseSummary = { query, items, productIntent: productIntentPayloadFor(query, items) };
   await getPool().execute(
     `INSERT INTO crm_capability_executions (
       public_id, correlation_id, capability_name, capability_version,
@@ -249,7 +270,7 @@ async function seedSearchProductsExecution(query: string, items: Array<{ product
       request_summary_json, response_summary_json, evidence_json,
       opportunity_id, conversation_id, started_at, completed_at
     ) VALUES (?, ?, 'search_products', '1.0', 'available', 'completed', 0, 0, NULL, ?, ?, ?, ?, ?, ?, ?)`,
-    [randomUUID(), unique("search-corr"), JSON.stringify({ query, limit: 5 }), JSON.stringify({ query, items }), JSON.stringify({}), opportunityId, conversationId, toMysqlDatetime(new Date(NOW)), toMysqlDatetime(new Date(NOW))]
+    [randomUUID(), unique("search-corr"), JSON.stringify({ query, limit: 5 }), JSON.stringify(responseSummary), JSON.stringify({}), opportunityId, conversationId, toMysqlDatetime(new Date(NOW)), toMysqlDatetime(new Date(NOW))]
   );
 }
 
@@ -279,7 +300,7 @@ async function createAmbiguousProductWaitingWork() {
           capabilityName: "search_products",
           executionStatus: "completed",
           requestSummaryJson: { query: productReference, limit: 5 },
-          responseSummaryJson: { query: productReference, items: candidateItems },
+          responseSummaryJson: { query: productReference, items: candidateItems, productIntent: productIntentPayloadFor(productReference, candidateItems) },
           completedAt: NOW
         }
       ]

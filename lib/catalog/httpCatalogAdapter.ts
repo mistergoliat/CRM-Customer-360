@@ -36,7 +36,22 @@ import {
   type CatalogRequestContext,
   type CatalogSearchResult,
   type CatalogSearchResultItem,
-  type ProductPublicLink
+  type ProductIntentCandidate,
+  type ProductIntentCandidateProduct,
+  type ProductIntentClarification,
+  type ProductIntentClarificationDimension,
+  type ProductIntentClarificationOption,
+  type ProductIntentPrice,
+  type ProductIntentReference,
+  type ProductIntentResolutionResult,
+  type ProductIntentResolutionStatus,
+  type ProductIntentStock,
+  type ProductIntentStockStatus,
+  type ProductIntentWarning,
+  type ProductPublicLink,
+  PRODUCT_INTENT_CLARIFICATION_DIMENSIONS,
+  PRODUCT_INTENT_RESOLUTION_STATUSES,
+  PRODUCT_INTENT_STOCK_STATUSES
 } from "./types";
 
 /** Real service contract (POST /v1/products/batch): max 20 items per call. */
@@ -174,6 +189,21 @@ function mapProviderErrorCode(providerCode: string | undefined, httpStatus: numb
     case "invalid_sort":
     case "invalid_request":
       return { code: "invalid_input", retryable: false };
+    // POST /api/v2/catalog/resolve-product-intent (T12) uses its own
+    // UPPER_SNAKE vocabulary, distinct from both the codes above and from
+    // the legacy search/details/batch ones (confirmed against
+    // MS-pesaschile-catalog-service's ProductIntentResolutionError/
+    // resolveProductIntentController.ts). INVALID_REQUEST is a 400 (bad
+    // input), INVALID_CATALOG_RESULT is a 422 (T12 could not map its own
+    // retrieval into the public contract - a provider defect, not a client
+    // one), CATALOG_SEARCH_UNAVAILABLE is a 503. INTERNAL_ERROR already
+    // falls into the shared "unavailable"/retryable case below.
+    case "INVALID_REQUEST":
+      return { code: "invalid_input", retryable: false };
+    case "INVALID_CATALOG_RESULT":
+      return { code: "invalid_response", retryable: false };
+    case "CATALOG_SEARCH_UNAVAILABLE":
+      return { code: "unavailable", retryable: true };
     default:
       if (httpStatus >= 500) return { code: "unavailable", retryable: true };
       if (httpStatus === 401 || httpStatus === 403) return { code: "unauthorized", retryable: false };
@@ -460,6 +490,149 @@ function parseExploreResponse(payload: unknown, retrievedAt: string): CatalogExp
   };
 }
 
+function parseProductIntentReference(value: unknown): ProductIntentReference | null {
+  if (!isRecord(value)) return null;
+  const productId = asString(value.productId);
+  if (productId === null) return null;
+  const combinationId = asString(value.combinationId);
+  return { productId, ...(combinationId !== null ? { combinationId } : {}) };
+}
+
+function parseProductIntentPrice(value: unknown): ProductIntentPrice | null {
+  if (!isRecord(value)) return null;
+  const amount = asNumber(value.amount);
+  const currency = asString(value.currency);
+  if (amount === null || currency === null) return null;
+  return { amount, currency };
+}
+
+function parseProductIntentStock(value: unknown): ProductIntentStock | null {
+  if (!isRecord(value)) return null;
+  const status = asString(value.status);
+  if (status === null || !(PRODUCT_INTENT_STOCK_STATUSES as readonly string[]).includes(status)) return null;
+  if (typeof value.available !== "boolean") return null;
+  const quantity = asNumber(value.quantity);
+  return { status: status as ProductIntentStockStatus, available: value.available, ...(quantity !== null ? { quantity } : {}) };
+}
+
+function parseProductIntentCandidateProduct(value: unknown): ProductIntentCandidateProduct | null {
+  if (!isRecord(value)) return null;
+  const productId = asString(value.productId);
+  const name = asString(value.name);
+  const stock = parseProductIntentStock(value.stock);
+  if (productId === null || name === null || stock === null) return null;
+  const combinationId = asString(value.combinationId);
+  const reference = asString(value.reference);
+  const description = asString(value.description);
+  // price is nullable at the source (contracts.ts: productIntentPriceSchema.nullable()) -
+  // distinct from "absent" elsewhere, so an explicit null is preserved, never coerced away.
+  const price = value.price === null ? null : parseProductIntentPrice(value.price);
+  if (value.price !== null && value.price !== undefined && price === null) return null;
+  const publicLink = parsePublicLink(value.publicLink);
+  return {
+    productId,
+    ...(combinationId !== null ? { combinationId } : {}),
+    name,
+    ...(reference !== null ? { reference } : {}),
+    ...(description !== null ? { description } : {}),
+    price,
+    stock,
+    ...(publicLink !== undefined ? { publicLink } : {})
+  };
+}
+
+function parseProductIntentReasons(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function parseProductIntentCandidate(value: unknown): ProductIntentCandidate | null {
+  if (!isRecord(value)) return null;
+  const product = parseProductIntentCandidateProduct(value.product);
+  const match = isRecord(value.match) ? value.match : null;
+  if (product === null || match === null) return null;
+  const rank = asNumber(match.rank);
+  const score = asNumber(match.score);
+  if (rank === null || score === null) return null;
+  return { product, rank, score, reasons: parseProductIntentReasons(match.reasons) };
+}
+
+function parseProductIntentClarificationOption(value: unknown): ProductIntentClarificationOption | null {
+  if (!isRecord(value)) return null;
+  const optionValue = asString(value.value);
+  const label = asString(value.label);
+  if (optionValue === null || label === null || !Array.isArray(value.productIds)) return null;
+  const productIds = value.productIds.filter((entry): entry is string => typeof entry === "string");
+  if (productIds.length !== value.productIds.length) return null;
+  return { value: optionValue, label, productIds };
+}
+
+function parseProductIntentClarification(value: unknown): ProductIntentClarification | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return undefined;
+  const dimension = asString(value.dimension);
+  if (dimension === null || !(PRODUCT_INTENT_CLARIFICATION_DIMENSIONS as readonly string[]).includes(dimension)) return undefined;
+  if (!Array.isArray(value.options)) return undefined;
+  const options = value.options.map(parseProductIntentClarificationOption).filter((option): option is ProductIntentClarificationOption => option !== null);
+  if (options.length !== value.options.length) return undefined;
+  return { dimension: dimension as ProductIntentClarificationDimension, options };
+}
+
+function parseProductIntentWarning(value: unknown): ProductIntentWarning | null {
+  if (!isRecord(value)) return null;
+  const code = asString(value.code);
+  if (code === null) return null;
+  const details = isRecord(value.details) ? value.details : undefined;
+  return { code, ...(details !== undefined ? { details } : {}) };
+}
+
+function parseProductIntentResponse(payload: unknown, retrievedAt: string): ProductIntentResolutionResult | null {
+  if (!isRecord(payload)) return null;
+  const query = isRecord(payload.query) ? payload.query : null;
+  const original = query ? asString(query.original) : null;
+  const normalized = query ? asString(query.normalized) : null;
+  if (original === null || normalized === null) return null;
+
+  const resolutionRaw = isRecord(payload.resolution) ? payload.resolution : null;
+  const status = resolutionRaw ? asString(resolutionRaw.status) : null;
+  const confidence = resolutionRaw ? asNumber(resolutionRaw.confidence) : null;
+  if (status === null || !(PRODUCT_INTENT_RESOLUTION_STATUSES as readonly string[]).includes(status) || confidence === null) return null;
+  const sourceProduct = resolutionRaw && resolutionRaw.sourceProduct !== undefined ? parseProductIntentReference(resolutionRaw.sourceProduct) : null;
+  // Contract invariant (contracts.ts's resolveProductIntentResultSchema
+  // superRefine): "resolved" always carries sourceProduct, no other status
+  // ever does. A violation here means T12 broke its own contract - treated
+  // as an unparseable response (never guessed) so the caller gets
+  // invalid_response/failed instead of silently proceeding without evidence.
+  if (status === "resolved" && sourceProduct === null) return null;
+
+  if (!Array.isArray(payload.candidates)) return null;
+  const candidates = payload.candidates.map(parseProductIntentCandidate).filter((candidate): candidate is ProductIntentCandidate => candidate !== null);
+  if (candidates.length !== payload.candidates.length) return null;
+
+  const clarification = parseProductIntentClarification(payload.clarification);
+  if (status === "clarification_required" && clarification === undefined) return null;
+
+  const statistics = isRecord(payload.statistics) ? payload.statistics : null;
+  const retrieved = statistics ? asNumber(statistics.retrieved) : null;
+  const eligible = statistics ? asNumber(statistics.eligible) : null;
+  const returned = statistics ? asNumber(statistics.returned) : null;
+  if (retrieved === null || eligible === null || returned === null) return null;
+
+  if (!Array.isArray(payload.warnings)) return null;
+  const warnings = payload.warnings.map(parseProductIntentWarning).filter((warning): warning is ProductIntentWarning => warning !== null);
+  if (warnings.length !== payload.warnings.length) return null;
+
+  return {
+    query: { original, normalized },
+    resolution: { status: status as ProductIntentResolutionStatus, confidence, ...(sourceProduct !== null ? { sourceProduct } : {}) },
+    candidates,
+    ...(clarification !== undefined ? { clarification } : {}),
+    statistics: { retrieved, eligible, returned },
+    warnings,
+    provenance: { source: "catalog_service_http", retrievedAt, cached: false }
+  };
+}
+
 async function fetchJson(
   config: HttpCatalogAdapterConfig,
   path: string,
@@ -567,6 +740,13 @@ export function createHttpCatalogAdapter(config: HttpCatalogAdapterConfig): Cata
     },
     async exploreCatalog(input, context) {
       return requestOnce(config, "/v1/products/explore", context, parseExploreResponse, { method: "POST", body: buildExploreRequestBody(input) });
+    },
+    async resolveProductIntent(input, context) {
+      const query = input.query.trim();
+      const body: Record<string, unknown> = { query };
+      if (input.limit !== undefined) body.limit = input.limit;
+      if (input.inStockOnly !== undefined) body.filters = { inStockOnly: input.inStockOnly };
+      return requestOnce(config, "/api/v2/catalog/resolve-product-intent", context, parseProductIntentResponse, { method: "POST", body });
     }
   };
 }

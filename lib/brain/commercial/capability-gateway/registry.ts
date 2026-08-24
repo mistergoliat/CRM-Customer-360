@@ -1,5 +1,6 @@
 import { createCatalogPort } from "@/lib/catalog";
 import type {
+  CatalogAvailabilityStatus,
   CatalogBatchItemInput,
   CatalogBatchResult,
   CatalogExploreAvailabilityFilter,
@@ -9,7 +10,10 @@ import type {
   CatalogExploreSort,
   CatalogPort,
   CatalogProduct,
-  CatalogSearchResult
+  CatalogSearchResult,
+  CatalogSearchResultItem,
+  ProductIntentCandidate,
+  ProductIntentResolutionResult
 } from "@/lib/catalog";
 import type { CapabilityGatewayContext, CapabilityGatewayDefinition, CapabilityGovernanceMetadata } from "./types";
 import { CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS } from "./customerIdentityCapabilities";
@@ -49,11 +53,76 @@ export const SEARCH_PRODUCTS_INPUT_SCHEMA = {
   }
 } as const;
 
-function searchProductsCapability(getPort: () => CatalogPort | null): CapabilityGatewayDefinition<{ query: string; limit?: number }, CatalogSearchResult> {
+/**
+ * SALES-AGENT-R2-A11.2-C. What the search_products Gateway capability
+ * returns - a superset of the legacy CatalogSearchResult shape (query/items/
+ * provenance, kept byte-for-byte compatible for the consumers that share
+ * this ONE registered capability across both runtimes: the legacy Agent
+ * Tool Loop's buildToolObservation.ts/rankCatalogSearchResults.ts/
+ * buildCatalogGroundedMessage.ts, and RecentCatalogContext, which R2's own
+ * requirementResolver.ts also reads - see recentCatalogContext.ts) plus the
+ * full, unmodified T12 result under `productIntent`, which is the only
+ * field buildCommercialWorkProjection.ts's applyObjectiveState reads to
+ * drive resolved/clarification_required/no_match. `items[]` is a DERIVED
+ * view of `productIntent.candidates`, never a second independent list -
+ * there is exactly one retrieval per execution.
+ */
+export type SearchProductsCapabilityData = CatalogSearchResult & { productIntent: ProductIntentResolutionResult };
+
+const PRODUCT_INTENT_MATCH_TYPE_BY_REASON: [string, CatalogSearchResultItem["matchType"]][] = [
+  ["EXACT_REFERENCE_MATCH", "exact_sku"],
+  ["EXACT_NAME_MATCH", "exact_name"],
+  ["NAME_TOKEN_MATCH", "partial_name"],
+  ["SYNONYM_MATCH", "partial_name"]
+];
+
+/** Best-effort only - T12 already ranks candidates by score; this only feeds the legacy fallback runtime's own secondary sort (rankCatalogSearchResults.ts), which never runs on T12 data directly otherwise. */
+function matchTypeFromProductIntentReasons(reasons: readonly string[]): CatalogSearchResultItem["matchType"] {
+  for (const [reason, matchType] of PRODUCT_INTENT_MATCH_TYPE_BY_REASON) {
+    if (reasons.includes(reason)) return matchType;
+  }
+  return "description";
+}
+
+function availabilityFromProductIntentStock(stock: ProductIntentCandidate["product"]["stock"]): CatalogAvailabilityStatus {
+  if (stock.status === "in_stock" || stock.status === "available_for_order") return "in_stock";
+  if (stock.status === "out_of_stock") return "out_of_stock";
+  return "unknown";
+}
+
+/** PrestaShop's own "no combination" sentinel, matching the convention normalizeCombinationId already applies elsewhere in this codebase (requirementResolver.ts) - never a bare undefined, since CatalogSearchResultItem.combinationId is a required string. */
+function legacyCombinationId(candidate: ProductIntentCandidate): string {
+  return candidate.product.combinationId ?? "0";
+}
+
+function catalogSearchItemFromProductIntentCandidate(candidate: ProductIntentCandidate): CatalogSearchResultItem {
+  return {
+    productId: candidate.product.productId,
+    combinationId: legacyCombinationId(candidate),
+    sku: candidate.product.reference ?? null,
+    name: candidate.product.name,
+    variantLabel: null,
+    shortDescription: candidate.product.description ?? null,
+    stockQuantity: candidate.product.stock.quantity ?? null,
+    availability: availabilityFromProductIntentStock(candidate.product.stock),
+    matchType: matchTypeFromProductIntentReasons(candidate.reasons)
+  };
+}
+
+function searchProductsCapabilityDataFromProductIntent(productIntent: ProductIntentResolutionResult): SearchProductsCapabilityData {
+  return {
+    query: productIntent.query.original,
+    items: productIntent.candidates.map(catalogSearchItemFromProductIntentCandidate),
+    provenance: productIntent.provenance,
+    productIntent
+  };
+}
+
+function searchProductsCapability(getPort: () => CatalogPort | null): CapabilityGatewayDefinition<{ query: string; limit?: number }, SearchProductsCapabilityData> {
   return {
     capability: "search_products",
     version: CAPABILITY_GATEWAY_VERSION,
-    description: "Search the real product catalog by free text via the catalog microservice.",
+    description: "Search the real product catalog by free text via the catalog microservice (T12 product intent resolution: resolved/clarification_required/no_match).",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: SEARCH_PRODUCTS_INPUT_SCHEMA,
     maxRetries: 1,
@@ -73,21 +142,22 @@ function searchProductsCapability(getPort: () => CatalogPort | null): Capability
         return { status: "invalid_arguments", data: null, errorCode: "query_required", retryable: false, evidence: [] };
       }
 
-      const result = await port.searchProducts({ query, limit: input.limit ?? 5 }, { correlationId: context.correlationId });
+      const result = await port.resolveProductIntent({ query, limit: input.limit ?? 5 }, { correlationId: context.correlationId });
       if (!result.ok) {
         return mapCatalogErrorToOutcome(result.error);
       }
 
+      const data = searchProductsCapabilityDataFromProductIntent(result.value);
       return {
         status: "completed",
-        data: result.value,
+        data,
         errorCode: null,
         retryable: false,
         evidence: [
           {
-            source: result.value.provenance.source,
-            summary: `search_products returned ${result.value.items.length} item(s) for "${result.value.query}".`,
-            capturedAt: result.value.provenance.retrievedAt
+            source: data.provenance.source,
+            summary: `search_products resolved "${data.query}" as ${result.value.resolution.status} (${data.items.length} candidate item(s)).`,
+            capturedAt: data.provenance.retrievedAt
           }
         ]
       };

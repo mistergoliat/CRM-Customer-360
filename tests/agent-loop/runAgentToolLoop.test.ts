@@ -69,13 +69,53 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+/**
+ * SALES-AGENT-R2-A11.2-C. search_products now resolves via T12
+ * (POST /api/v2/catalog/resolve-product-intent) instead of the legacy
+ * /v1/products/search - this mock reflects that real contract. Nothing in
+ * this file asserts raw matchType/availability off the search observation
+ * itself (only get_product_details/publicLink fields, an untouched
+ * endpoint), so this is a faithful, minimal port of the same fixture data.
+ */
+function productIntentResolvedPayload() {
+  return {
+    query: { original: "kettlebell", normalized: "kettlebell" },
+    resolution: { status: "resolved", confidence: 0.92, sourceProduct: { productId: "501", combinationId: "1" } },
+    candidates: [
+      {
+        product: {
+          productId: "501",
+          combinationId: "1",
+          name: "Kettlebell 16kg",
+          reference: "KB-16",
+          description: "Kettlebell de fundicion 16kg.",
+          price: null,
+          stock: { status: "in_stock", available: true, quantity: 4 }
+        },
+        match: { rank: 1, score: 0.92, reasons: ["EXACT_NAME_MATCH"] }
+      }
+    ],
+    statistics: { retrieved: 1, eligible: 1, returned: 1 },
+    warnings: [],
+    correlationId: "c"
+  };
+}
+
+function productIntentNoMatchPayload() {
+  return {
+    query: { original: "kettlebell", normalized: "kettlebell" },
+    resolution: { status: "no_match", confidence: 0 },
+    candidates: [],
+    statistics: { retrieved: 0, eligible: 0, returned: 0 },
+    warnings: [],
+    correlationId: "c"
+  };
+}
+
 function catalogUp(itemCount: number) {
   handler = (req, res) => {
-    if (req.url?.includes("/v1/products/search")) {
-      const items = itemCount === 0 ? [] : [
-        { productId: 501, combinationId: 1, sku: "KB-16", name: "Kettlebell 16kg", variantLabel: null, shortDescription: "Kettlebell de fundicion 16kg.", physicalQuantity: 4, available: true, matchType: "exact_name" }
-      ];
-      return sendJson(res, 200, { query: "kettlebell", items, freshness: { cached: false } });
+    if (req.url === "/api/v2/catalog/resolve-product-intent" && req.method === "POST") {
+      return sendJson(res, 200, itemCount === 0 ? productIntentNoMatchPayload() : productIntentResolvedPayload());
     }
     if (req.url?.startsWith("/v1/products/501")) {
       return sendJson(res, 200, {
@@ -93,14 +133,8 @@ function catalogUp(itemCount: number) {
 
 function catalogUpWithPublicLink(publicLink: Record<string, unknown>) {
   handler = (req, res) => {
-    if (req.url?.includes("/v1/products/search")) {
-      return sendJson(res, 200, {
-        query: "kettlebell",
-        items: [
-          { productId: 501, combinationId: 1, sku: "KB-16", name: "Kettlebell 16kg", variantLabel: null, shortDescription: "Kettlebell de fundicion 16kg.", physicalQuantity: 4, available: true, matchType: "exact_name" }
-        ],
-        freshness: { cached: false }
-      });
+    if (req.url === "/api/v2/catalog/resolve-product-intent" && req.method === "POST") {
+      return sendJson(res, 200, productIntentResolvedPayload());
     }
     if (req.url?.startsWith("/v1/products/501")) {
       return sendJson(res, 200, {

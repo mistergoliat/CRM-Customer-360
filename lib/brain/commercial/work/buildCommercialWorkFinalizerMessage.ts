@@ -211,9 +211,9 @@ function buildMissingInfoQuestion(waitingCustomerObjectives: readonly Commercial
 
   if (missing.includes("PRODUCT_AMBIGUOUS")) {
     const objective = waitingCustomerObjectives.find((item) => item.missingRequirements.includes("PRODUCT_AMBIGUOUS"));
-    const names = (objective?.inputs.productCandidates ?? []).map((candidate) => candidate.name).filter(Boolean);
-    return names.length > 0
-      ? `Encontré varias opciones para "${objective?.inputs.productReference ?? ""}": ${names.join(", ")}. ¿Cuál de estas te interesa?`
+    const options = productCandidatesList(objective?.inputs.productCandidates);
+    return options
+      ? `Encontré varias opciones para "${objective?.inputs.productReference ?? ""}": ${options}. ¿Cuál de estas te interesa?`
       : "Encontré varias opciones para ese producto. ¿Puedes darme más detalle (marca, modelo o peso) para saber cuál necesitas?";
   }
   if (missing.includes("PRODUCT_NOT_FOUND")) {
@@ -252,4 +252,15 @@ function buildMissingInfoQuestion(waitingCustomerObjectives: readonly Commercial
 
 function shippingOptionsList(candidates: { carrierName: string; serviceType: string; totalCost: number }[] | undefined): string {
   return (candidates ?? []).map((candidate, index) => `${index + 1}) ${candidate.carrierName} ${candidate.serviceType} - $${candidate.totalCost}`).join(", ");
+}
+
+/**
+ * SALES-AGENT-R2-A11.2-C. Real T12 evidence only - price is appended when
+ * the candidate carried one (never invented/guessed for a candidate T12
+ * itself could not price).
+ */
+function productCandidatesList(candidates: { name: string; price?: { amount: number; currency: string } | null }[] | undefined): string {
+  return (candidates ?? [])
+    .map((candidate, index) => `${index + 1}) ${candidate.name}${candidate.price ? ` - $${candidate.price.amount}` : ""}`)
+    .join(", ");
 }

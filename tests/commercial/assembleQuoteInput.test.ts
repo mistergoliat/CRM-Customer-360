@@ -52,7 +52,8 @@ function fakeCatalogPort(resolve: (input: CatalogBatchItemInput) => CatalogBatch
     async batchGetProducts(input) {
       return { ok: true, value: { items: input.items.map(resolve), provenance: { source: "catalog_service_http", retrievedAt: "2026-08-14T00:00:00.000Z", cached: false } } };
     },
-    async exploreCatalog() { throw new Error("not used"); }
+    async exploreCatalog() { throw new Error("not used"); },
+    async resolveProductIntent() { throw new Error("not used"); }
   };
 }
 
@@ -61,7 +62,8 @@ function unavailableCatalogPort(): CatalogPort {
     async searchProducts() { throw new Error("not used"); },
     async getProductDetails() { throw new Error("not used"); },
     async batchGetProducts() { return { ok: false, error: { code: "unavailable", message: "down", retryable: true } }; },
-    async exploreCatalog() { throw new Error("not used"); }
+    async exploreCatalog() { throw new Error("not used"); },
+    async resolveProductIntent() { throw new Error("not used"); }
   };
 }
 
@@ -171,7 +173,8 @@ test("section 25 - order: batch returns items in a different order than the dura
         const reversed = [...input.items].reverse();
         return { ok: true, value: { items: reversed.map((item) => ({ ok: true, input: item, product: product({ productId: item.productId }) })), provenance: { source: "catalog_service_http", retrievedAt: "x", cached: false } } };
       },
-      async exploreCatalog() { throw new Error("not used"); }
+      async exploreCatalog() { throw new Error("not used"); },
+      async resolveProductIntent() { throw new Error("not used"); }
     })
   });
   const result = await assembleQuoteInput(baseInput(), deps);

@@ -93,13 +93,26 @@ test("search_products reports temporarily_blocked (retryable) when the catalog s
   assert.equal(row!.execution_status, "temporarily_blocked");
 });
 
-test("search_products executes over HTTP, persists the execution, and returns evidence", async () => {
-  handler = (_req, res) =>
+test("search_products executes over T12 (resolve-product-intent), persists the execution, and returns evidence", async () => {
+  let requestPath: string | undefined;
+  let requestMethod: string | undefined;
+  handler = (req, res) => {
+    requestPath = req.url;
+    requestMethod = req.method;
     sendJson(res, 200, {
-      query: "jaula",
-      items: [{ productId: 1, combinationId: 0, sku: "SKU-1", name: "Jaula de entrenamiento", variantLabel: null, shortDescription: null, physicalQuantity: 3, available: true, matchType: "partial_name" }],
-      freshness: { cached: false, generatedAt: new Date().toISOString() }
+      query: { original: "jaula", normalized: "jaula" },
+      resolution: { status: "resolved", confidence: 0.9, sourceProduct: { productId: "1" } },
+      candidates: [
+        {
+          product: { productId: "1", name: "Jaula de entrenamiento", price: { amount: 199990, currency: "CLP" }, stock: { status: "in_stock", available: true, quantity: 3 } },
+          match: { rank: 1, score: 0.9, reasons: ["EXACT_NAME_MATCH"] }
+        }
+      ],
+      statistics: { retrieved: 1, eligible: 1, returned: 1 },
+      warnings: [],
+      correlationId: "c"
     });
+  };
   configureCatalogEnv();
 
   const correlationId = `cap-test-search-${Date.now()}`;
@@ -113,6 +126,8 @@ test("search_products executes over HTTP, persists the execution, and returns ev
   assert.equal(result.availability, "available");
   assert.ok(result.evidence.length > 0);
   assert.equal(result.executionPublicId !== null, true);
+  assert.equal(requestMethod, "POST");
+  assert.equal(requestPath, "/api/v2/catalog/resolve-product-intent");
 
   const row = await loadExecutionRow(correlationId);
   assert.equal(row!.execution_status, "completed");
@@ -121,6 +136,12 @@ test("search_products executes over HTTP, persists the execution, and returns ev
   assert.equal(row!.opportunity_id, 7);
   assert.ok(row!.response_summary_json, "response summary should be persisted");
   assert.ok(row!.evidence_json, "evidence should be persisted");
+
+  const raw = row!.response_summary_json;
+  const responseSummary = typeof raw === "string" ? JSON.parse(raw) : (raw as Record<string, any>);
+  assert.equal(responseSummary.productIntent.resolution.status, "resolved");
+  assert.equal(responseSummary.items[0].productId, "1");
+  assert.equal(responseSummary.items[0].availability, "in_stock");
 });
 
 test("get_product_details without a productId is rejected as invalid_arguments before any HTTP call", async () => {
@@ -281,7 +302,14 @@ test("a retryable failure is retried exactly once at the capability level - the 
     // (2nd physical request). If the adapter ever retried on its own this
     // would take 3+ requests instead of 2.
     if (requestCount === 1) return sendJson(res, 500, { error: { code: "DATABASE_UNAVAILABLE", message: "db down", correlationId: "c" } });
-    return sendJson(res, 200, { query: "q", items: [], freshness: { cached: false, generatedAt: new Date().toISOString() } });
+    return sendJson(res, 200, {
+      query: { original: "q", normalized: "q" },
+      resolution: { status: "no_match", confidence: 0 },
+      candidates: [],
+      statistics: { retrieved: 0, eligible: 0, returned: 0 },
+      warnings: [],
+      correlationId: "c"
+    });
   };
   configureCatalogEnv();
 
