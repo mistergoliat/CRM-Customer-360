@@ -93,7 +93,7 @@ Sin cambios en `deriveCommercialWorkSteps.ts`/`commercialWorkExecutor.ts`. El me
 
 ## 10. Live smoke (Parte 13)
 
-Ejecutado contra el Catalog Service local real (`C:\Users\Goli\Pesas Chile\MS\MS-Stock\services`, `npm run dev`, puerto 4010, RDS read-only `pc_consultor`/`pesas_productiva`, apagado al terminar - cero escrituras) **con el fix de stopwords de A11.2-B presente en el working tree de ese repo (sin commitear todavía)**:
+Ejecutado contra el Catalog Service local real (`C:\Users\Goli\Pesas Chile\MS\MS-Stock\services`, `npm run dev`, puerto 4010, RDS read-only `pc_consultor`/`pesas_productiva`, apagado al terminar - cero escrituras) con el fix de stopwords de A11.2-B presente. **Corrección post-cierre (2026-08-24)**: al momento de este smoke, A11.2-B estaba en el working tree local sin commitear; horas más tarde, ese mismo día, A11.2-B se commiteó y pusheó a `origin/main` de `MS-pesaschile-catalog-service` (`b60b624 fix(catalog): ignore stopwords in token fallback`, verificado - `main` local y `origin/main` coinciden exactamente en ese commit, working tree limpio). El smoke local sigue siendo evidencia válida del comportamiento (mismo código, ahora además commiteado), pero **no** es evidencia de que ese commit esté desplegado en el Catalog Service de producción - ver Parte 12:
 
 | Query | `resolution.status` | Resultado |
 |---|---|---|
@@ -106,21 +106,29 @@ Confirma que B+C combinados resuelven el bug reportado (WA01). C sola, sin B, se
 
 ## 11. Riesgos/deuda
 
-- El fix de stopwords (A11.2-B) vive sin commitear en el working tree de `MS-pesaschile-catalog-service` - esta tarea no lo commiteó ni lo tocó (fuera de alcance, repo ajeno). Producción real de CRM sigue expuesta al bug hasta que ese repo despliegue el fix.
+- El fix de stopwords (A11.2-B) ya está commiteado y pusheado a `origin/main` de `MS-pesaschile-catalog-service` (`b60b624`, verificado 2026-08-24) - esta tarea no lo tocó (fuera de alcance, repo ajeno), solo confirma su estado. La única precondición real pendiente es que ese commit esté **desplegado** en el Catalog Service de producción antes del smoke owner-only final de A11.2-C (Parte 12) - commiteado en `main` no implica desplegado.
 - `matchType`/`availability` derivados de `productIntent` para el shape legacy son aproximaciones (best-effort), no una reimplementación exacta del legacy `matchType` original - aceptable porque ningún consumer legacy depende de exactitud fina en ese campo (confirmado leyendo cada consumer real: `buildToolObservation.ts` no lo lee, `rankCatalogSearchResults.ts` lo usa solo como tie-breaker secundario sobre un orden que T12 ya entrega razonablemente bueno).
 - A11.2-D (exponer explícitamente price/stock de T12 en el evidence "sin nuevo step") no se implementó como slice separado - su necesidad mínima ya quedó cubierta dentro de A11.2-C (Parte 6/9 lo exigían para el criterio de aceptación de esta misma tarea: `productCandidates[].price` y el mensaje de clarificación con precio real). No hay gap adicional conocido que justifique un A11.2-D separado hoy.
 - `G4` (ranking T12 para queries genéricas de una palabra, ej. "una barra" prioriza mal accesorios sobre el producto principal) es deuda documentada en A11.2 original, dentro del propio Catalog Service - no corregible desde CRM sin duplicar lógica de ranking (prohibido explícitamente).
 
 ## 12. Secuencia de despliegue
 
-Orden obligatorio (definido por el usuario al cerrar esta tarea, 2026-08-24):
+Estado por componente (verificado 2026-08-24):
 
-1. Desplegar `MS-pesaschile-catalog-service` con A11.2-B (fix de stopwords, ver Parte 11 - hoy sin commitear en ese repo, debe commitearse/desplegarse ahí primero).
-2. Desplegar `CRM-Customer-360` con A11.2-C (este cambio).
+| Componente | Tarea | Estado |
+|---|---|---|
+| `MS-pesaschile-catalog-service` | A11.2-B (fix de stopwords) | `main`/`origin/main` en `b60b624` - commiteado y pusheado. **Pendiente: despliegue a producción.** |
+| `CRM-Customer-360` | A11.4 (SELECT_SHIPPING_OPTION) | Mergeado en `develop` (PR #100). |
+| `CRM-Customer-360` | A11.2-C (este cambio) | Commit `35a3c41`, branch `feat/sales-agent-r2-a11-2-c-catalog-t12-wiring` - PR abierto contra `develop`. |
+
+Precondición real (única): **A11.2-B debe estar desplegado en el Catalog Service de producción antes del smoke final de A11.2-C** - estar en `main` no basta. Orden obligatorio:
+
+1. Confirmar/ejecutar el despliegue de `MS-pesaschile-catalog-service` (`main@b60b624` o posterior) al entorno de producción real.
+2. Desplegar `CRM-Customer-360` con A11.2-C (este cambio, una vez mergeado).
 3. Reiniciar ambos runtimes.
 4. Smoke owner-only con el caso WA01 ("2 discos olimpicos de 20kg" o equivalente) contra el entorno real desplegado.
 
-Deployar C sin B (o en el orden inverso) dejaría el bug reportado sin resolver: T12 hereda el retrieval compartido y seguiría devolviendo `no_match` para la frase literal (Parte 1.5.1 del audit original). A11.2-D no se abre como tarea separada - su evidencia mínima (price/stock en `productCandidates`, mensaje de clarificación con precio) ya quedó cubierta dentro de A11.2-C (Parte 5/9).
+Desplegar C sin que B ya esté en el Catalog Service de producción dejaría el bug reportado sin resolver: T12 hereda el retrieval compartido y seguiría devolviendo `no_match` para la frase literal (Parte 1.5.1 del audit original). No hace falta más desarrollo de catálogo después de este merge - el siguiente trabajo es despliegue controlado B->C y la prueba owner-only WA01, no otro fix de código. A11.2-D no se abre como tarea separada - su evidencia mínima (price/stock en `productCandidates`, mensaje de clarificación con precio) ya quedó cubierta dentro de A11.2-C (Parte 5/9).
 
 ## Veredicto
 
