@@ -456,7 +456,7 @@ test("provider unavailable does not block deterministic shipping step when facts
   assert.equal(step(work, "CALCULATE_SHIPPING").status, "READY");
 });
 
-test("selected shipping option completes only when freshness anchors match current facts", () => {
+test("SHIP13: selected shipping option completes (objective and step) only when freshness anchors match current facts", () => {
   const work = project({
     commercialLineItems: selection(),
     shippingDestination: destination(),
@@ -464,6 +464,157 @@ test("selected shipping option completes only when freshness anchors match curre
     objectiveSeeds: [objectiveSeed("SELECT_SHIPPING_OPTION", { optionIndex: 0 })]
   });
   assert.equal(objective(work, "SELECT_SHIPPING_OPTION").status, "COMPLETED");
+  assert.equal(step(work, "SELECT_SHIPPING_OPTION").status, "COMPLETED");
+});
+
+test("SHIP02: a content-based reference resolves to the real matching option and the step becomes READY", () => {
+  const work = project({
+    commercialLineItems: selection(),
+    shippingDestination: destination(),
+    recentCapabilityExecutions: [shippingExecution({ selectionFactId: "selection-2-classic", destinationFactId: "destination-nunoa" })],
+    objectiveSeeds: [objectiveSeed("SELECT_SHIPPING_OPTION", { optionReference: "BlueExpress" })]
+  });
+  const found = objective(work, "SELECT_SHIPPING_OPTION");
+  assert.equal(found.status, "READY");
+  assert.equal(found.inputs.optionIndex, 0);
+  assert.equal(step(work, "SELECT_SHIPPING_OPTION").status, "READY");
+});
+
+test("SELECT_SHIPPING_OPTION with no commercial selection at all is blocked on MISSING_SELECTION, never on shipping", () => {
+  const work = project({ objectiveSeeds: [objectiveSeed("SELECT_SHIPPING_OPTION", { optionReference: "BlueExpress" })] });
+  const found = objective(work, "SELECT_SHIPPING_OPTION");
+  assert.equal(found.status, "BLOCKED");
+  assert.ok(found.blockers.some((item) => item.code === "MISSING_SELECTION"));
+});
+
+test("SHIP11: destination changed since the last calculation derives a recalculation step, never a dead BLOCKED", () => {
+  const work = project({
+    commercialLineItems: selection(),
+    shippingDestination: destination(),
+    recentCapabilityExecutions: [shippingExecution({ selectionFactId: "selection-2-classic", destinationFactId: "OLD-destination" })],
+    objectiveSeeds: [objectiveSeed("SELECT_SHIPPING_OPTION", { optionReference: "BlueExpress" })]
+  });
+  assert.equal(objective(work, "SELECT_SHIPPING_OPTION").status, "BLOCKED");
+  assert.ok(objective(work, "SELECT_SHIPPING_OPTION").blockers.some((item) => item.code === "MISSING_SHIPPING"));
+  assert.equal(step(work, "CALCULATE_SHIPPING").status, "READY");
+  const selectStep = step(work, "SELECT_SHIPPING_OPTION");
+  assert.equal(selectStep.status, "BLOCKED");
+  assert.deepEqual(selectStep.dependencies, [{ type: "STEP_COMPLETED", stepId: step(work, "CALCULATE_SHIPPING").stepId }]);
+});
+
+test("SHIP12: commercial line items changed since the last calculation derives the same recalculation chain", () => {
+  const work = project({
+    commercialLineItems: selection(),
+    shippingDestination: destination(),
+    recentCapabilityExecutions: [shippingExecution({ selectionFactId: "OLD-selection", destinationFactId: "destination-nunoa" })],
+    objectiveSeeds: [objectiveSeed("SELECT_SHIPPING_OPTION", { optionReference: "BlueExpress" })]
+  });
+  assert.equal(objective(work, "SELECT_SHIPPING_OPTION").status, "BLOCKED");
+  assert.equal(step(work, "CALCULATE_SHIPPING").status, "READY");
+  assert.equal(step(work, "SELECT_SHIPPING_OPTION").status, "BLOCKED");
+});
+
+test("no calculate_shipping execution at all also derives the recalculation chain, not an unreachable BLOCKED", () => {
+  const work = project({
+    commercialLineItems: selection(),
+    shippingDestination: destination(),
+    objectiveSeeds: [objectiveSeed("SELECT_SHIPPING_OPTION", { optionReference: "BlueExpress" })]
+  });
+  assert.equal(objective(work, "SELECT_SHIPPING_OPTION").status, "BLOCKED");
+  assert.equal(step(work, "CALCULATE_SHIPPING").status, "READY");
+});
+
+test("an ambiguous reference lands WAITING_CUSTOMER with the real candidates attached, never picks silently", () => {
+  const twoOptionsExecution = shippingExecution({ selectionFactId: "selection-2-classic", destinationFactId: "destination-nunoa" });
+  twoOptionsExecution.responseSummaryJson = {
+    ...twoOptionsExecution.responseSummaryJson,
+    options: [
+      { index: 0, carrierName: "Chilexpress", serviceType: "Express", totalCost: 8000, estimatedDelivery: "1 dia" },
+      { index: 1, carrierName: "Chilexpress", serviceType: "Normal", totalCost: 5000, estimatedDelivery: "3 dias" }
+    ]
+  };
+  const work = project({
+    commercialLineItems: selection(),
+    shippingDestination: destination(),
+    recentCapabilityExecutions: [twoOptionsExecution],
+    objectiveSeeds: [objectiveSeed("SELECT_SHIPPING_OPTION", { optionReference: "Chilexpress" })]
+  });
+  const found = objective(work, "SELECT_SHIPPING_OPTION");
+  assert.equal(found.status, "WAITING_CUSTOMER");
+  assert.equal(found.missingRequirements[0], "SHIPPING_OPTION_AMBIGUOUS");
+  assert.equal(found.inputs.shippingOptionCandidates?.length, 2);
+  assert.equal(step(work, "SELECT_SHIPPING_OPTION").status, "WAITING_CUSTOMER");
+});
+
+test("a reference matching no real option lands WAITING_CUSTOMER with SHIPPING_OPTION_NOT_FOUND, never invents", () => {
+  const work = project({
+    commercialLineItems: selection(),
+    shippingDestination: destination(),
+    recentCapabilityExecutions: [shippingExecution({ selectionFactId: "selection-2-classic", destinationFactId: "destination-nunoa" })],
+    objectiveSeeds: [objectiveSeed("SELECT_SHIPPING_OPTION", { optionReference: "DHL" })]
+  });
+  const found = objective(work, "SELECT_SHIPPING_OPTION");
+  assert.equal(found.status, "WAITING_CUSTOMER");
+  assert.equal(found.missingRequirements[0], "SHIPPING_OPTION_NOT_FOUND");
+});
+
+test("SHIP17: a positional reference is never auto-trusted against a list that was just recalculated", () => {
+  const freshExecution = shippingExecution({ selectionFactId: "selection-2-classic", destinationFactId: "destination-nunoa" });
+  freshExecution.responseSummaryJson = {
+    ...freshExecution.responseSummaryJson,
+    options: [
+      { index: 0, carrierName: "BlueExpress", serviceType: "standard", totalCost: 3990, estimatedDelivery: "2 dias" },
+      { index: 1, carrierName: "Starken", serviceType: "standard", totalCost: 5500, estimatedDelivery: "3 dias" }
+    ]
+  };
+  const work = project({
+    commercialLineItems: selection(),
+    shippingDestination: destination(),
+    recentCapabilityExecutions: [freshExecution],
+    objectiveSeeds: [
+      { type: "SELECT_SHIPPING_OPTION", seedId: "ship17-seed", origin: "customer_requested", inputs: { optionReference: "la segunda" }, carriedStatus: "BLOCKED" }
+    ]
+  });
+  const found = objective(work, "SELECT_SHIPPING_OPTION");
+  assert.equal(found.status, "WAITING_CUSTOMER");
+  assert.equal(found.missingRequirements[0], "SHIPPING_OPTION_RECALCULATED");
+  assert.equal(found.inputs.optionIndex, undefined);
+  assert.equal(step(work, "SELECT_SHIPPING_OPTION").status, "WAITING_CUSTOMER");
+});
+
+test("SHIP18: a content-based reference still auto-resolves after a recalculation (control for SHIP17)", () => {
+  const freshExecution = shippingExecution({ selectionFactId: "selection-2-classic", destinationFactId: "destination-nunoa" });
+  freshExecution.responseSummaryJson = {
+    ...freshExecution.responseSummaryJson,
+    options: [
+      { index: 0, carrierName: "BlueExpress", serviceType: "standard", totalCost: 3990, estimatedDelivery: "2 dias" },
+      { index: 1, carrierName: "Chilexpress", serviceType: "standard", totalCost: 5500, estimatedDelivery: "3 dias" }
+    ]
+  };
+  const work = project({
+    commercialLineItems: selection(),
+    shippingDestination: destination(),
+    recentCapabilityExecutions: [freshExecution],
+    objectiveSeeds: [
+      { type: "SELECT_SHIPPING_OPTION", seedId: "ship18-seed", origin: "customer_requested", inputs: { optionReference: "Chilexpress" }, carriedStatus: "BLOCKED" }
+    ]
+  });
+  const found = objective(work, "SELECT_SHIPPING_OPTION");
+  assert.equal(found.status, "READY");
+  assert.equal(found.inputs.optionIndex, 1);
+  assert.equal(step(work, "SELECT_SHIPPING_OPTION").status, "READY");
+});
+
+test("a positional reference resolves normally when evidence was already fresh (no recalculation happened)", () => {
+  const work = project({
+    commercialLineItems: selection(),
+    shippingDestination: destination(),
+    recentCapabilityExecutions: [shippingExecution({ selectionFactId: "selection-2-classic", destinationFactId: "destination-nunoa" })],
+    objectiveSeeds: [objectiveSeed("SELECT_SHIPPING_OPTION", { optionReference: "la primera" })]
+  });
+  const found = objective(work, "SELECT_SHIPPING_OPTION");
+  assert.equal(found.status, "READY");
+  assert.equal(found.inputs.optionIndex, 0);
 });
 
 test("projection is deterministic with injected now", () => {

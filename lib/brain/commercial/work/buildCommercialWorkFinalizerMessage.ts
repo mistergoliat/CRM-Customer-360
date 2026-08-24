@@ -225,5 +225,31 @@ function buildMissingInfoQuestion(waitingCustomerObjectives: readonly Commercial
   }
   if (missing.includes("PRODUCT") || missing.includes("PRODUCT_EVIDENCE")) return "¿Qué producto te interesa?";
   if (missing.includes("QUANTITY")) return "¿Cuántas unidades necesitas?";
+
+  // SALES-AGENT-R2-A11.4. Real candidates only, from
+  // buildCommercialWorkProjection.ts's applyObjectiveState (matchShippingOptionReference's
+  // output) - never invented options.
+  if (missing.includes("SHIPPING_OPTION_RECALCULATED")) {
+    const objective = waitingCustomerObjectives.find((item) => item.missingRequirements.includes("SHIPPING_OPTION_RECALCULATED"));
+    const options = shippingOptionsList(objective?.inputs.shippingOptionCandidates);
+    return options
+      ? `Los valores de despacho se actualizaron. Estas son las opciones vigentes: ${options}. ¿Cuál prefieres?`
+      : "Los valores de despacho se actualizaron. ¿Puedes confirmarme de nuevo qué opción de envío prefieres?";
+  }
+  if (missing.includes("SHIPPING_OPTION_AMBIGUOUS")) {
+    const objective = waitingCustomerObjectives.find((item) => item.missingRequirements.includes("SHIPPING_OPTION_AMBIGUOUS"));
+    const options = shippingOptionsList(objective?.inputs.shippingOptionCandidates);
+    return options
+      ? `Hay varias opciones de despacho que podrían ser esa: ${options}. ¿Cuál prefieres?`
+      : "Hay varias opciones de despacho que podrían coincidir. ¿Puedes darme más detalle (transportista o precio)?";
+  }
+  if (missing.includes("SHIPPING_OPTION_NOT_FOUND")) {
+    return 'No encontré esa opción de despacho entre las disponibles. ¿Puedes indicarme el nombre del transportista o la posición (por ejemplo, "la primera")?';
+  }
+
   return "¿Puedes darme un poco más de detalle para continuar?";
+}
+
+function shippingOptionsList(candidates: { carrierName: string; serviceType: string; totalCost: number }[] | undefined): string {
+  return (candidates ?? []).map((candidate, index) => `${index + 1}) ${candidate.carrierName} ${candidate.serviceType} - $${candidate.totalCost}`).join(", ");
 }

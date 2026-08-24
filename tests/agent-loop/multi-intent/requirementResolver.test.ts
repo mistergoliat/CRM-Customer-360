@@ -170,3 +170,21 @@ test("[MI-Resolve-12] get_shipping_quote with neither product selection nor dest
   const missing = resolved.requirements.filter((r) => r.status === "missing").map((r) => r.type);
   assert.deepEqual(missing.sort(), ["DESTINATION", "PRODUCT_SELECTION"]);
 });
+
+// SALES-AGENT-R2-A11.4. select_shipping_option is deliberately a
+// presence-check only at this layer - real matching against calculate_shipping
+// evidence happens downstream in buildCommercialWorkProjection.ts's
+// applyObjectiveState, never here (no RecentShippingQuoteContext exists on
+// this contract at all).
+test("[MI-Resolve-13] select_shipping_option with a raw reference resolves SHIPPING_OPTION as explicit, unresolved by this layer", () => {
+  const [resolved] = resolveCommercialIntentPlan([{ type: "select_shipping_option", optionReference: "la segunda" }], baseContext());
+  assert.equal(resolved.status, "ready");
+  assert.deepEqual(resolved.requirements, [{ type: "SHIPPING_OPTION", status: "resolved", source: "explicit", value: "la segunda" }]);
+});
+
+// SHIP16 (multi-intent layer): no optionReference at all is missing, never invents.
+test("[MI-Resolve-14] SHIP16: select_shipping_option with no optionReference leaves SHIPPING_OPTION missing", () => {
+  const [resolved] = resolveCommercialIntentPlan([{ type: "select_shipping_option" }], baseContext());
+  assert.equal(resolved.status, "waiting_for_information");
+  assert.deepEqual(resolved.requirements, [{ type: "SHIPPING_OPTION", status: "missing" }]);
+});

@@ -78,6 +78,15 @@ function parseKnownIntent(raw: Record<string, unknown>): CommercialIntent | null
   if (raw.type === "create_quote") {
     return { type: "create_quote" };
   }
+  if (raw.type === "select_shipping_option") {
+    // SALES-AGENT-R2-A11.4. The model supplies only the customer's raw
+    // reference words - never an index/number, structurally cannot (this
+    // type has no numeric field at all) - resolveShippingOptionRequirement/
+    // buildCommercialWorkProjection.ts's applyObjectiveState resolve it
+    // deterministically against real evidence, never the model.
+    const optionReference = asBoundedText(raw.optionReference);
+    return { type: "select_shipping_option", ...(optionReference !== undefined ? { optionReference } : {}) };
+  }
   if (raw.type === "cancel") {
     // A cancel without a recognizable scope is not trusted as "all" by
     // default (Part 3: no unsafe broad cancellation) - it degrades to

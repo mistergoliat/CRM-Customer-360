@@ -42,7 +42,7 @@ export const STEP_FACT_PROFILE: Record<CommercialWorkStepType, StepFactProfile> 
   SELECT_PRODUCTS: { reads: [], writes: ["commercial_line_items"] },
   SET_SHIPPING_DESTINATION: { reads: [], writes: ["shipping_destination"] },
   CALCULATE_SHIPPING: { reads: ["commercial_line_items", "shipping_destination"], writes: [] },
-  SELECT_SHIPPING_OPTION: { reads: ["commercial_line_items"], writes: ["selected_shipping_option"] },
+  SELECT_SHIPPING_OPTION: { reads: ["commercial_line_items", "shipping_destination"], writes: ["selected_shipping_option"] },
   CREATE_QUOTE: { reads: ["commercial_line_items", "shipping_destination", "selected_shipping_option"], writes: ["created_quote"] },
   HANDOFF: { reads: [], writes: [] }
 };

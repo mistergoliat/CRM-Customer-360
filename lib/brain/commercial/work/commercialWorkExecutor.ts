@@ -9,7 +9,7 @@ import { getActiveCreatedQuoteForOpportunity } from "@/lib/domains/created-quote
 import type { CreatedQuote } from "@/lib/domains/created-quote";
 import { getActiveShippingDestinationForOpportunity } from "@/lib/domains/shipping-destination";
 import type { ShippingDestination } from "@/lib/domains/shipping-destination";
-import { getActiveSelectedShippingOptionForOpportunity } from "@/lib/domains/selected-shipping-option";
+import { getActiveSelectedShippingOptionForOpportunity, SHIPPING_CALCULATION_STALE_ERROR_CODE } from "@/lib/domains/selected-shipping-option";
 import type { SelectedShippingOption } from "@/lib/domains/selected-shipping-option";
 import { deriveCommercialWorkMetrics, dedupeCommercialWorkBlockers } from "./evaluateCommercialWork";
 import type { CommercialWorkStatus, CommercialWorkStepStatus } from "./statuses";
@@ -20,7 +20,7 @@ import { calculateCommercialWorkNextAttemptAt, getCommercialWorkRetryPolicy } fr
 import { canTransitionCommercialWorkStatus } from "./transitions";
 import type { CommercialEvidenceRef, CommercialObjective, CommercialWork, CommercialWorkBlocker, CommercialWorkStep } from "./types";
 
-const EXECUTABLE_STEP_TYPES = new Set(["SEARCH_PRODUCTS", "SELECT_PRODUCTS", "SET_SHIPPING_DESTINATION", "CALCULATE_SHIPPING", "CREATE_QUOTE"]);
+const EXECUTABLE_STEP_TYPES = new Set(["SEARCH_PRODUCTS", "SELECT_PRODUCTS", "SET_SHIPPING_DESTINATION", "CALCULATE_SHIPPING", "SELECT_SHIPPING_OPTION", "CREATE_QUOTE"]);
 const TERMINAL_WORK_STATUSES = new Set<CommercialWorkStatus>(["COMPLETED", "CANCELLED", "SUPERSEDED", "HANDOFF", "FAILED"]);
 
 type CurrentFacts = {
@@ -205,6 +205,8 @@ function priority(step: CommercialWorkStep): number {
       return 20;
     case "CALCULATE_SHIPPING":
       return 30;
+    case "SELECT_SHIPPING_OPTION":
+      return 35;
     case "CREATE_QUOTE":
       return 40;
     default:
@@ -285,6 +287,8 @@ function buildGatewayInput(step: CommercialWorkStep): Record<string, unknown> {
       return { items: step.input.items ?? [] };
     case "SET_SHIPPING_DESTINATION":
       return { destination: step.input.destinationText ?? step.input.canonicalDestinationName ?? "" };
+    case "SELECT_SHIPPING_OPTION":
+      return { optionIndex: step.input.optionIndex };
     default:
       return {};
   }
@@ -294,6 +298,21 @@ function stepRecordFromGateway(step: CommercialWorkStep, result: CapabilityGatew
   const evidence = evidenceForCapability(result);
   if (result.status === "temporarily_blocked") return { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "waiting_system", gatewayStatus: result.status, errorCode: result.errorCode, evidence };
   if (result.status === "missing_information") return { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "waiting_customer", gatewayStatus: result.status, errorCode: result.errorCode, evidence };
+  // SALES-AGENT-R2-A11.4. selectShippingOptionCapability's own independent
+  // freshness re-check (defense-in-depth against a concurrent-modification
+  // race - buildCommercialWorkProjection.ts's applyObjectiveState should
+  // already prevent normal dispatch with stale evidence) rejects as
+  // invalid_arguments, which the blanket branch below maps to "failed" - a
+  // genuinely terminal work status. That would dead-end a transient,
+  // recoverable condition. Mapped to "blocked" instead so the next
+  // reprojection round (which re-derives freshness from scratch) self-heals
+  // it the same way the normal stale-evidence case does. Every other
+  // invalid_arguments reason for this capability (fabricated/out-of-range
+  // optionIndex, no recent calculation at all) should never happen if the
+  // projection layer did its job, and correctly stays "failed" below.
+  if (step.type === "SELECT_SHIPPING_OPTION" && result.status === "invalid_arguments" && result.errorCode === SHIPPING_CALCULATION_STALE_ERROR_CODE) {
+    return { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "blocked", gatewayStatus: result.status, errorCode: result.errorCode, evidence };
+  }
   if (result.status === "failed" || result.status === "denied" || result.status === "invalid_arguments" || result.status === "requires_approval") {
     return { stepId: step.stepId, stepType: step.type, capabilityName: step.capabilityName, status: "failed", gatewayStatus: result.status, errorCode: result.errorCode, evidence };
   }

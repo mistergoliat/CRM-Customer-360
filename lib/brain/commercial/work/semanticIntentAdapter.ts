@@ -82,6 +82,18 @@ export function commercialObjectiveSeedsFromResolvedIntent(resolved: ResolvedInt
     return seeds;
   }
 
+  // SALES-AGENT-R2-A11.4. Unlike select_products, no ambiguous/missing
+  // branching happens here at all - a single seed always carries the raw
+  // optionReference forward unconditionally. Every real resolution (single
+  // match, ambiguous, not-found, or a stale-evidence recalculation) happens
+  // downstream in buildCommercialWorkProjection.ts's applyObjectiveState,
+  // the only place that ever sees real calculate_shipping option data - see
+  // that file's SELECT_SHIPPING_OPTION case and A11.4's release doc.
+  if (resolved.intent.type === "select_shipping_option") {
+    seeds.push({ type: "SELECT_SHIPPING_OPTION", origin: "customer_requested", inputs: { optionReference: resolved.intent.optionReference } });
+    return seeds;
+  }
+
   // SALES-AGENT-R2-A08.6, Part 9. create_quote reuses the existing
   // CREATE_QUOTE objective/step/executor/capability unchanged - no new
   // fields, since createQuoteCapability.ts takes none either.

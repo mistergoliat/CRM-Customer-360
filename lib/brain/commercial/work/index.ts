@@ -6,6 +6,7 @@ export * from "./persistenceTypes";
 export * from "./transitions";
 export * from "./deriveCommercialObjectives";
 export * from "./deriveCommercialWorkSteps";
+export * from "./matchShippingOptionReference";
 export * from "./evaluateCommercialWork";
 export * from "./buildCommercialWorkProjection";
 export * from "./formatCommercialWorkProjection";
