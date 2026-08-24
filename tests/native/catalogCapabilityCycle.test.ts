@@ -36,7 +36,8 @@ let searchRequests: string[] = [];
 
 before(async () => {
   server = http.createServer((req, res) => {
-    if (req.url?.includes("/v1/products/search")) searchRequests.push(req.url);
+    // SALES-AGENT-R2-A11.2-C: search_products now resolves via T12 (POST /api/v2/catalog/resolve-product-intent).
+    if (req.url === "/api/v2/catalog/resolve-product-intent" && req.method === "POST") searchRequests.push(req.url);
     handler(req, res);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -210,13 +211,25 @@ async function seedConversation() {
 test("runNativeAutonomousCycle executes search_products over HTTP, persists it, and grounds the reply in real data", async () => {
   searchRequests = [];
   handler = (req, res) => {
-    if (req.url?.includes("/v1/products/search")) {
+    if (req.url === "/api/v2/catalog/resolve-product-intent" && req.method === "POST") {
       return sendJson(res, 200, {
-        query: "jaula entrenamiento",
-        items: [
-          { productId: 501, combinationId: 0, sku: "JLA-501", name: "Jaula de entrenamiento compacta", variantLabel: null, shortDescription: null, physicalQuantity: 4, available: true, matchType: "partial_name" }
+        query: { original: "jaula entrenamiento", normalized: "jaula entrenamiento" },
+        resolution: { status: "resolved", confidence: 0.9, sourceProduct: { productId: "501" } },
+        candidates: [
+          {
+            product: {
+              productId: "501",
+              name: "Jaula de entrenamiento compacta",
+              reference: "JLA-501",
+              price: null,
+              stock: { status: "in_stock", available: true, quantity: 4 }
+            },
+            match: { rank: 1, score: 0.9, reasons: ["NAME_TOKEN_MATCH"] }
+          }
         ],
-        freshness: { cached: false, generatedAt: new Date().toISOString() }
+        statistics: { retrieved: 1, eligible: 1, returned: 1 },
+        warnings: [],
+        correlationId: "corr-fixture"
       });
     }
     if (req.method === "POST" && req.url === "/v1/products/batch") {

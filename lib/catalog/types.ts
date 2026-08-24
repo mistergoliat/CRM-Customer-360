@@ -201,6 +201,108 @@ export type CatalogExploreResult = {
   provenance: CatalogProvenance;
 };
 
+/**
+ * SALES-AGENT-R2-A11.2-C. POST /api/v2/catalog/resolve-product-intent ("T12
+ * Product Intent Resolution") - a natural-language product query resolved
+ * into resolved | clarification_required | no_match, with synonym expansion,
+ * unit normalization and explicit-constraint ranking the legacy
+ * /v1/products/search endpoint does not have (see
+ * docs/audits/SALES-AGENT-R2-A11.2-catalog-service-integration-audit.md).
+ * Field shapes mirror MS-pesaschile-catalog-service's own zod contract
+ * (src/application/catalog/product-intent/contracts.ts) exactly - only
+ * fields CRM actually reads are kept, unread fields (availability,
+ * pricing.discount*, imageUrl, etc.) are intentionally absent rather than
+ * carried as dead weight.
+ */
+export const PRODUCT_INTENT_RESOLUTION_STATUSES = ["resolved", "clarification_required", "no_match"] as const;
+export type ProductIntentResolutionStatus = (typeof PRODUCT_INTENT_RESOLUTION_STATUSES)[number];
+
+export type ProductIntentReference = {
+  productId: string;
+  combinationId?: string;
+};
+
+/** Unlike CatalogProductPrice, T12 never returns a price object with a null amount - the whole field is absent instead (contracts.ts's productIntentPriceSchema has no nullable amount). */
+export type ProductIntentPrice = {
+  amount: number;
+  currency: string;
+};
+
+export const PRODUCT_INTENT_STOCK_STATUSES = ["in_stock", "out_of_stock", "available_for_order", "unknown"] as const;
+export type ProductIntentStockStatus = (typeof PRODUCT_INTENT_STOCK_STATUSES)[number];
+
+export type ProductIntentStock = {
+  status: ProductIntentStockStatus;
+  quantity?: number;
+  available: boolean;
+};
+
+export const PRODUCT_INTENT_CLARIFICATION_DIMENSIONS = [
+  "product_type",
+  "weight",
+  "diameter",
+  "length",
+  "category",
+  "brand",
+  "variant",
+  "unspecified"
+] as const;
+export type ProductIntentClarificationDimension = (typeof PRODUCT_INTENT_CLARIFICATION_DIMENSIONS)[number];
+
+export type ProductIntentClarificationOption = {
+  value: string;
+  label: string;
+  productIds: string[];
+};
+
+export type ProductIntentClarification = {
+  dimension: ProductIntentClarificationDimension;
+  options: ProductIntentClarificationOption[];
+};
+
+export type ProductIntentCandidateProduct = {
+  productId: string;
+  combinationId?: string;
+  name: string;
+  reference?: string;
+  description?: string;
+  price: ProductIntentPrice | null;
+  stock: ProductIntentStock;
+  publicLink?: ProductPublicLink;
+};
+
+/**
+ * Match reasons are kept as an open string[] rather than duplicating the
+ * Catalog Service's closed 13-value enum here - CRM only ever displays/logs
+ * these (evidence/audit, Part 15 of the A11.2-C task), it never branches on
+ * a specific reason value, so mirroring the enum would be dead precision.
+ */
+export type ProductIntentCandidate = {
+  product: ProductIntentCandidateProduct;
+  rank: number;
+  score: number;
+  reasons: string[];
+};
+
+export type ProductIntentWarning = {
+  code: string;
+  details?: Record<string, unknown>;
+};
+
+export type ProductIntentResolutionResult = {
+  query: { original: string; normalized: string };
+  resolution: {
+    status: ProductIntentResolutionStatus;
+    confidence: number;
+    sourceProduct?: ProductIntentReference;
+  };
+  candidates: ProductIntentCandidate[];
+  clarification?: ProductIntentClarification;
+  statistics: { retrieved: number; eligible: number; returned: number };
+  warnings: ProductIntentWarning[];
+  provenance: CatalogProvenance;
+};
+
 export const CATALOG_PORT_ERROR_CODES = [
   "invalid_input",
   "unauthorized",
@@ -257,6 +359,19 @@ export type CatalogPort = {
     input: CatalogExploreInput,
     context: CatalogRequestContext
   ): Promise<CatalogPortResult<CatalogExploreResult>>;
+  /**
+   * SALES-AGENT-R2-A11.2-C. Real service contract: POST
+   * /api/v2/catalog/resolve-product-intent (T12). A distinct method from
+   * searchProducts, never a shape change to it - searchProducts keeps
+   * calling the legacy /v1/products/search endpoint unchanged for its own
+   * existing callers (e.g. the admin catalog console), while the Capability
+   * Gateway's search_products capability is the one caller that switches to
+   * this method (see capability-gateway/registry.ts).
+   */
+  resolveProductIntent(
+    input: { query: string; limit?: number; inStockOnly?: boolean },
+    context: CatalogRequestContext
+  ): Promise<CatalogPortResult<ProductIntentResolutionResult>>;
 };
 
 export const CATALOG_ADAPTER_CONTRACT_VERSION = "catalog-service.v1" as const;

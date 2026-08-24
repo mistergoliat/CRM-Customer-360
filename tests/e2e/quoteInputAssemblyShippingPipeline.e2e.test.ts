@@ -100,7 +100,8 @@ function fakeCatalogPort(): CatalogPort {
       const items: CatalogBatchItemResult[] = input.items.map((item) => ({ ok: true, input: item, product: PRODUCT }));
       return { ok: true, value: { items, provenance: PRODUCT.provenance } };
     },
-    async exploreCatalog() { throw new Error("not used"); }
+    async exploreCatalog() { throw new Error("not used"); },
+    async resolveProductIntent() { throw new Error("not used"); }
   };
 }
 

@@ -91,6 +91,28 @@ function searchItemPayload(product: BenchmarkFixtureProduct) {
   };
 }
 
+/**
+ * SALES-AGENT-R2-A11.2-C. search_products now resolves via T12 (POST
+ * /api/v2/catalog/resolve-product-intent) instead of this GET endpoint -
+ * kept below only for any caller still exercising the legacy port method
+ * directly. Mirrors the same "always both fixture products, ignoring query
+ * text" behavior the GET handler already had (never query-aware) - two
+ * candidates is always clarification_required, matching every existing
+ * benchmark scenario that already expected an ambiguous outcome here.
+ */
+function productIntentCandidate(product: BenchmarkFixtureProduct, rank: number) {
+  return {
+    product: {
+      productId: product.productId,
+      name: product.name,
+      description: product.shortDescription,
+      price: { amount: product.price, currency: "CLP" },
+      stock: { status: product.available ? "in_stock" : "out_of_stock", available: product.available, quantity: product.stockQuantity }
+    },
+    match: { rank, score: 0.8, reasons: ["NAME_TOKEN_MATCH"] }
+  };
+}
+
 function catalogRequestHandler(req: http.IncomingMessage, res: http.ServerResponse) {
   const url = req.url ?? "";
 
@@ -100,6 +122,25 @@ function catalogRequestHandler(req: http.IncomingMessage, res: http.ServerRespon
       items: [searchItemPayload(BENCHMARK_PRODUCTS["31"]), searchItemPayload(BENCHMARK_PRODUCTS["32"])],
       freshness: { cached: false }
     });
+  }
+
+  if (req.method === "POST" && url === "/api/v2/catalog/resolve-product-intent") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const parsed = JSON.parse(body || "{}") as { query?: string };
+      const query = parsed.query ?? "barra olimpica";
+      return sendJson(res, 200, {
+        query: { original: query, normalized: query },
+        resolution: { status: "clarification_required", confidence: 0.5 },
+        candidates: [productIntentCandidate(BENCHMARK_PRODUCTS["31"], 1), productIntentCandidate(BENCHMARK_PRODUCTS["32"], 2)],
+        clarification: { dimension: "unspecified", options: [] },
+        statistics: { retrieved: 2, eligible: 2, returned: 2 },
+        warnings: [],
+        correlationId: "benchmark"
+      });
+    });
+    return;
   }
 
   if (req.method === "POST" && url === "/v1/products/explore") {

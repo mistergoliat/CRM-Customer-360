@@ -113,21 +113,62 @@ function latestSearchProductsExecution(
   })[0] ?? null;
 }
 
-type SearchProductsCandidate = { productId: string; combinationId?: string; name: string };
+type SearchProductsCandidate = { productId: string; combinationId?: string; name: string; price?: { amount: number; currency: string } | null };
 
-function searchProductsCandidates(execution: CommercialCapabilityExecutionProjection): SearchProductsCandidate[] {
-  const rawItems = execution.responseSummaryJson?.items;
-  if (!Array.isArray(rawItems)) return [];
-  return rawItems
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-    .map((item) => {
-      const productId = typeof item.productId === "string" ? item.productId : typeof item.productId === "number" ? String(item.productId) : null;
-      if (!productId) return null;
-      const combinationId = typeof item.combinationId === "string" && item.combinationId !== "0" ? item.combinationId : undefined;
-      const name = typeof item.name === "string" && item.name.trim() ? item.name.trim() : typeof item.sku === "string" ? item.sku : productId;
-      return { productId, ...(combinationId ? { combinationId } : {}), name } satisfies SearchProductsCandidate;
-    })
-    .filter((candidate): candidate is SearchProductsCandidate => candidate !== null);
+type SearchProductsResolution =
+  | { status: "resolved"; sourceProduct: { productId: string; combinationId?: string } }
+  | { status: "clarification_required" | "no_match" };
+
+/**
+ * SALES-AGENT-R2-A11.2-C. Parses `productIntent` (the raw T12 result the
+ * search_products capability now persists verbatim - registry.ts's
+ * searchProductsCapabilityDataFromProductIntent) out of a completed
+ * execution's responseSummaryJson. Replaces the old candidate-counting
+ * logic (0/1/N) with the real resolution.status T12 already computed - see
+ * docs/audits/SALES-AGENT-R2-A11.2-catalog-service-integration-audit.md
+ * Parte 6/11. Returns null for anything structurally unrecognizable (a
+ * contract violation, or - pre-A11.2-C - a legacy items-only payload with no
+ * productIntent field at all), which applyObjectiveState treats as a
+ * technical failure rather than guessing.
+ */
+function parseProductIntentResolution(raw: unknown): { resolution: SearchProductsResolution; candidates: SearchProductsCandidate[] } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const resolutionRaw = record.resolution;
+  if (!resolutionRaw || typeof resolutionRaw !== "object") return null;
+  const status = (resolutionRaw as Record<string, unknown>).status;
+  if (status !== "resolved" && status !== "clarification_required" && status !== "no_match") return null;
+
+  const candidatesRaw = Array.isArray(record.candidates) ? record.candidates : [];
+  const candidates: SearchProductsCandidate[] = [];
+  for (const entry of candidatesRaw) {
+    if (!entry || typeof entry !== "object") continue;
+    const product = (entry as Record<string, unknown>).product;
+    if (!product || typeof product !== "object") continue;
+    const productRecord = product as Record<string, unknown>;
+    const productId = typeof productRecord.productId === "string" ? productRecord.productId : null;
+    const name = typeof productRecord.name === "string" ? productRecord.name : null;
+    if (!productId || !name) continue;
+    const combinationId = typeof productRecord.combinationId === "string" ? productRecord.combinationId : undefined;
+    const priceRaw = productRecord.price;
+    const price =
+      priceRaw === null
+        ? null
+        : priceRaw && typeof priceRaw === "object" && typeof (priceRaw as Record<string, unknown>).amount === "number" && typeof (priceRaw as Record<string, unknown>).currency === "string"
+          ? { amount: (priceRaw as Record<string, unknown>).amount as number, currency: (priceRaw as Record<string, unknown>).currency as string }
+          : undefined;
+    candidates.push({ productId, ...(combinationId ? { combinationId } : {}), name, ...(price !== undefined ? { price } : {}) });
+  }
+
+  if (status === "resolved") {
+    const sourceProductRaw = (resolutionRaw as Record<string, unknown>).sourceProduct;
+    if (!sourceProductRaw || typeof sourceProductRaw !== "object") return null;
+    const productId = typeof (sourceProductRaw as Record<string, unknown>).productId === "string" ? ((sourceProductRaw as Record<string, unknown>).productId as string) : null;
+    if (!productId) return null;
+    const combinationId = typeof (sourceProductRaw as Record<string, unknown>).combinationId === "string" ? ((sourceProductRaw as Record<string, unknown>).combinationId as string) : undefined;
+    return { resolution: { status: "resolved", sourceProduct: { productId, ...(combinationId ? { combinationId } : {}) } }, candidates };
+  }
+  return { resolution: { status }, candidates };
 }
 
 function executionAnchorStatus(input: {
@@ -247,18 +288,27 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
           break;
         }
         if (searchExecution.executionStatus === "completed") {
-          const candidates = searchProductsCandidates(searchExecution);
+          const parsed = parseProductIntentResolution(searchExecution.responseSummaryJson?.productIntent);
           objective.evidence.push(capabilityEvidence(searchExecution));
-          if (candidates.length === 1) {
-            const match = candidates[0];
+          if (!parsed) {
+            // T12 always returns a well-formed resolution for a "completed"
+            // execution (Part 12/13: no_match/clarification_required are
+            // business outcomes, never technical failures) - an
+            // unrecognizable payload here means a real contract violation,
+            // not a customer question. System-owned, never WAITING_CUSTOMER.
+            objective.status = "FAILED";
+            return;
+          }
+          if (parsed.resolution.status === "resolved") {
+            const match = parsed.resolution.sourceProduct;
             objective.inputs = { ...objective.inputs, items: [{ productId: match.productId, combinationId: match.combinationId ?? null, quantity: objective.inputs.quantity }] };
             objective.status = "READY";
             break;
           }
-          if (candidates.length > 1) {
+          if (parsed.resolution.status === "clarification_required") {
             objective.status = "WAITING_CUSTOMER";
             objective.missingRequirements.push("PRODUCT_AMBIGUOUS");
-            objective.inputs = { ...objective.inputs, productCandidates: candidates.slice(0, 5) };
+            objective.inputs = { ...objective.inputs, productCandidates: parsed.candidates.slice(0, 5) };
             objective.blockers.push(blocker("PRODUCT_AMBIGUOUS", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
             return;
           }

@@ -152,7 +152,8 @@ function fakeCatalogPort(resolve: (input: CatalogBatchItemInput) => CatalogBatch
     async batchGetProducts(input) {
       return { ok: true, value: { items: input.items.map(resolve), provenance: { source: "catalog_service_http", retrievedAt: "2026-08-15T00:00:00.000Z", cached: false } } };
     },
-    async exploreCatalog() { throw new Error("not used"); }
+    async exploreCatalog() { throw new Error("not used"); },
+    async resolveProductIntent() { throw new Error("not used"); }
   };
 }
 

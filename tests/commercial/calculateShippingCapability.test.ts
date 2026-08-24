@@ -90,7 +90,8 @@ function fakeCatalogPort(resolve: (input: CatalogBatchItemInput) => CatalogBatch
     async batchGetProducts(input) {
       return { ok: true, value: { items: input.items.map(resolve), provenance: { source: "catalog_service_http", retrievedAt: "2026-08-10T00:00:00.000Z", cached: false } } };
     },
-    async exploreCatalog() { throw new Error("not used"); }
+    async exploreCatalog() { throw new Error("not used"); },
+    async resolveProductIntent() { throw new Error("not used"); }
   };
 }
 
@@ -99,7 +100,8 @@ function unavailableCatalogPort(): CatalogPort {
     async searchProducts() { throw new Error("not used"); },
     async getProductDetails() { throw new Error("not used"); },
     async batchGetProducts() { return { ok: false, error: { code: "unavailable", message: "down", retryable: true } }; },
-    async exploreCatalog() { throw new Error("not used"); }
+    async exploreCatalog() { throw new Error("not used"); },
+    async resolveProductIntent() { throw new Error("not used"); }
   };
 }
 

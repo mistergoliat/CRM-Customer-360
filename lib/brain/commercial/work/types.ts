@@ -85,8 +85,13 @@ export type CommercialObjectiveInputs = {
    * capability execution resolved 2+ ambiguous matches for productReference -
    * grounds buildMissingInfoQuestion's PRODUCT_AMBIGUOUS wording in real
    * catalog names instead of inventing/guessing options.
+   *
+   * SALES-AGENT-R2-A11.2-C. `price` is additive: present (an amount/currency
+   * pair, or explicitly null) only when the T12 candidate carried one -
+   * never invented when the field is simply absent from an older/legacy
+   * payload shape.
    */
-  productCandidates?: { productId: string; combinationId?: string; name: string }[];
+  productCandidates?: { productId: string; combinationId?: string; name: string; price?: { amount: number; currency: string } | null }[];
   destinationText?: string;
   communeId?: number;
   canonicalDestinationName?: string;

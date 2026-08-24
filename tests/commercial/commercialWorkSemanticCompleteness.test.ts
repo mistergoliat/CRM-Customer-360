@@ -215,7 +215,20 @@ async function seedProductSearchEvidence(env: R2BenchmarkEnvironment, productId:
       randomUUID(),
       correlationId,
       JSON.stringify({ query: productName }),
-      JSON.stringify({ items: [{ productId, name: productName, position: 1 }] }),
+      JSON.stringify({
+        items: [{ productId, name: productName, position: 1 }],
+        // SALES-AGENT-R2-A11.2-C: search_products now persists T12's
+        // productIntent alongside items[] - a single seeded product mirrors
+        // a real "resolved" T12 outcome (see registry.ts's
+        // searchProductsCapabilityDataFromProductIntent).
+        productIntent: {
+          query: { original: productName, normalized: productName },
+          resolution: { status: "resolved", confidence: 0.9, sourceProduct: { productId } },
+          candidates: [{ product: { productId, name: productName, price: null, stock: { status: "unknown", available: true } }, match: { rank: 1, score: 0.9, reasons: ["EXACT_NAME_MATCH"] } }],
+          statistics: { retrieved: 1, eligible: 1, returned: 1 },
+          warnings: []
+        }
+      }),
       JSON.stringify({}),
       eventId,
       env.opportunityId,

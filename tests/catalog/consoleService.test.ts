@@ -155,6 +155,9 @@ function fakeCatalogPort(overrides: Partial<CatalogPort> = {}): CatalogPort {
     async exploreCatalog() {
       throw new Error("not used");
     },
+    async resolveProductIntent() {
+      throw new Error("not used");
+    },
     ...overrides
   };
 }

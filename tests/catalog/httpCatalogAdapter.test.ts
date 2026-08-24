@@ -629,3 +629,144 @@ test("error messages never leak the configured API key", async () => {
   if (result.ok) return;
   assert.doesNotMatch(result.error.message, /super-secret-value/);
 });
+
+// SALES-AGENT-R2-A11.2-C - resolveProductIntent (T12: POST /api/v2/catalog/resolve-product-intent)
+
+function productIntentPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    query: { original: "disco olimpico 20kg", normalized: "disco olimpico 20 kg" },
+    resolution: { status: "resolved", confidence: 0.9, sourceProduct: { productId: "1499" } },
+    candidates: [
+      {
+        product: {
+          productId: "1499",
+          name: "Par Discos Olimpicos Grip Rubber 20kg | PROmachine",
+          reference: "DISC-1499",
+          price: { amount: 39990, currency: "CLP" },
+          stock: { status: "in_stock", available: true, quantity: 6 },
+          publicLink: { canonicalUrl: "https://pesaschile.cl/1499-p.html", scope: "exact_product", available: true, requiresVariantSelection: false, variantAttributeLabels: [] }
+        },
+        match: { rank: 1, score: 0.91, reasons: ["EXACT_NAME_MATCH", "EXPLICIT_WEIGHT_MATCH"] }
+      }
+    ],
+    statistics: { retrieved: 1, eligible: 1, returned: 1 },
+    warnings: [],
+    correlationId: "corr-t12",
+    ...overrides
+  };
+}
+
+// CATC01
+test("resolveProductIntent CATC01: 'resolved' maps sourceProduct, candidate price/stock/publicLink and score/reasons", async () => {
+  let requestBody: Record<string, unknown> = {};
+  handler = (req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      requestBody = JSON.parse(raw);
+      sendJson(res, 200, productIntentPayload());
+    });
+  };
+
+  const result = await makeAdapter().resolveProductIntent({ query: "disco olimpico 20kg", limit: 5 }, { correlationId: "corr-t12" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.resolution.status, "resolved");
+  assert.equal(result.value.resolution.sourceProduct?.productId, "1499");
+  const candidate = result.value.candidates[0];
+  assert.equal(candidate.product.price?.amount, 39990);
+  assert.equal(candidate.product.stock.quantity, 6);
+  assert.equal(candidate.product.publicLink?.canonicalUrl, "https://pesaschile.cl/1499-p.html");
+  assert.equal(candidate.score, 0.91);
+  assert.deepEqual(candidate.reasons, ["EXACT_NAME_MATCH", "EXPLICIT_WEIGHT_MATCH"]);
+  assert.deepEqual(requestBody, { query: "disco olimpico 20kg", limit: 5 });
+});
+
+// CATC02
+test("resolveProductIntent CATC02: 'clarification_required' preserves dimension and grouped options", async () => {
+  handler = (_req, res) =>
+    sendJson(
+      res,
+      200,
+      productIntentPayload({
+        resolution: { status: "clarification_required", confidence: 0.5 },
+        clarification: {
+          dimension: "weight",
+          options: [
+            { value: "15kg", label: "15 kg", productIds: ["1171"] },
+            { value: "20kg", label: "20 kg", productIds: ["31"] }
+          ]
+        }
+      })
+    );
+
+  const result = await makeAdapter().resolveProductIntent({ query: "barra classic" }, { correlationId: "corr-t12" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.resolution.status, "clarification_required");
+  assert.equal(result.value.clarification?.dimension, "weight");
+  assert.equal(result.value.clarification?.options.length, 2);
+});
+
+// CATC03
+test("resolveProductIntent CATC03: 'no_match' is a completed business outcome, not an error", async () => {
+  handler = (_req, res) =>
+    sendJson(res, 200, productIntentPayload({ resolution: { status: "no_match", confidence: 0 }, candidates: [], statistics: { retrieved: 0, eligible: 0, returned: 0 } }));
+
+  const result = await makeAdapter().resolveProductIntent({ query: "producto inexistente xyz" }, { correlationId: "corr-t12" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.resolution.status, "no_match");
+  assert.equal(result.value.candidates.length, 0);
+});
+
+// CATC04
+test("resolveProductIntent CATC04: a 503 CATALOG_SEARCH_UNAVAILABLE is retryable", async () => {
+  handler = (_req, res) => sendJson(res, 503, { error: { code: "CATALOG_SEARCH_UNAVAILABLE", message: "search unavailable", retryable: true, correlationId: "c" } });
+  const result = await makeAdapter().resolveProductIntent({ query: "q" }, { correlationId: "corr-t12" });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error.code, "unavailable");
+  assert.equal(result.error.retryable, true);
+});
+
+// CATC05
+test("resolveProductIntent CATC05: a 422 INVALID_CATALOG_RESULT is a non-retryable invalid_response", async () => {
+  handler = (_req, res) => sendJson(res, 422, { error: { code: "INVALID_CATALOG_RESULT", message: "bad provider output", retryable: false, correlationId: "c" } });
+  const result = await makeAdapter().resolveProductIntent({ query: "q" }, { correlationId: "corr-t12" });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error.code, "invalid_response");
+  assert.equal(result.error.retryable, false);
+});
+
+test("resolveProductIntent a 400 INVALID_REQUEST is a non-retryable invalid_input", async () => {
+  handler = (_req, res) => sendJson(res, 400, { error: { code: "INVALID_REQUEST", message: "bad request", retryable: false, correlationId: "c" } });
+  const result = await makeAdapter().resolveProductIntent({ query: "q" }, { correlationId: "corr-t12" });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error.code, "invalid_input");
+  assert.equal(result.error.retryable, false);
+});
+
+test("resolveProductIntent rejects a 'resolved' status with no sourceProduct as invalid_response, never guesses", async () => {
+  handler = (_req, res) => sendJson(res, 200, productIntentPayload({ resolution: { status: "resolved", confidence: 0.9 } }));
+  const result = await makeAdapter().resolveProductIntent({ query: "q" }, { correlationId: "corr-t12" });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error.code, "invalid_response");
+});
+
+test("resolveProductIntent sends inStockOnly under filters and omits limit/filters when not provided", async () => {
+  let requestBody: Record<string, unknown> = {};
+  handler = (req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      requestBody = JSON.parse(raw);
+      sendJson(res, 200, productIntentPayload());
+    });
+  };
+  await makeAdapter().resolveProductIntent({ query: "disco olimpico 20kg", inStockOnly: true }, { correlationId: "corr-t12" });
+  assert.deepEqual(requestBody, { query: "disco olimpico 20kg", filters: { inStockOnly: true } });
+});
