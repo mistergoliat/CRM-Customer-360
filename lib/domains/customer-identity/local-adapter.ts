@@ -1,5 +1,6 @@
 import { findDistinctCustomersByNormalizedValueAcrossProviders, findExternalIdentityByProviderExternalId } from "@/lib/integrations/customer-external-identity";
-import type { CustomerIdentityLookupResult, CustomerIdentityPort } from "./types";
+import { findPrestashopCustomerIdsByEmail, findPrestashopCustomerIdsByOrderReference } from "@/lib/integrations/prestashop-mirror";
+import type { CustomerIdentityLookupResult, CustomerIdentityPort, PrestashopCandidateLookupResult } from "./types";
 
 export type LocalCustomerIdentityAdapter = CustomerIdentityPort;
 
@@ -38,6 +39,20 @@ export function createLocalCustomerIdentityAdapter(): LocalCustomerIdentityAdapt
         return { ok: false, error: result.error ?? "customer_external_identity_query_failed" };
       }
       return { ok: true, candidateCustomerIds: Array.from(new Set(result.customerIds.map(String))) };
+    },
+
+    // Candidate discovery over the ps_customer mirror table - never a
+    // customer_external_identity write/read, never proof of ownership.
+    async findPrestashopCustomerIdsByEmail({ normalizedEmail }): Promise<PrestashopCandidateLookupResult> {
+      const result = await findPrestashopCustomerIdsByEmail(normalizedEmail);
+      if (!result.ok) return { ok: false, error: result.error ?? "prestashop_mirror_query_failed" };
+      return { ok: true, candidatePrestashopCustomerIds: result.prestashopCustomerIds };
+    },
+
+    async findPrestashopCustomerIdsByOrderReference({ orderReference }): Promise<PrestashopCandidateLookupResult> {
+      const result = await findPrestashopCustomerIdsByOrderReference(orderReference);
+      if (!result.ok) return { ok: false, error: result.error ?? "prestashop_mirror_query_failed" };
+      return { ok: true, candidatePrestashopCustomerIds: result.prestashopCustomerIds };
     }
   };
 }

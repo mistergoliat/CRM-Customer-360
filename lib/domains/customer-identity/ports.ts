@@ -1,1 +1,1 @@
-export type { CustomerIdentityLookupResult, CustomerIdentityPort } from "./types";
+export type { CustomerIdentityLookupResult, CustomerIdentityPort, PrestashopCandidateLookupResult } from "./types";
