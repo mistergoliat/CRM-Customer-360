@@ -16,7 +16,6 @@ export {
   parseCustomerPurchaseBehaviorResponse,
   parseCustomerRfmResponse,
   validateCustomerId,
-  validateMasterCustomerId,
   validateOrderReference,
   validatePurchaseBehaviorTopProducts,
   validatePurchaseBehaviorTopVariants,

@@ -47,7 +47,6 @@ export const CUSTOMER_PROFILE_CONTEXT_REASON_CODES = [
   "PROFILE_AVAILABLE",
   "ORDER_STATUS_AVAILABLE",
   "RFM_AVAILABLE",
-  "RFM_IDENTITY_UNAVAILABLE",
   "RFM_CUSTOMER_NOT_FOUND",
   "RFM_NOT_AVAILABLE",
   "RFM_DEGRADED",
@@ -155,7 +154,7 @@ export type CustomerProfileRecommendationHistoryMatch = {
 export type CustomerRfmContext =
   | {
       readonly status: "AVAILABLE";
-      readonly masterCustomerId: string;
+      readonly customerId: string;
       readonly snapshot: {
         readonly referenceTime: string;
         readonly publishedAt: string;
@@ -179,7 +178,7 @@ export type CustomerRfmContext =
     }
   | {
       readonly status: "NO_CUSTOMER" | "NO_RFM" | "RFM_DEGRADED" | "PROVIDER_ERROR";
-      readonly masterCustomerId: string;
+      readonly customerId: string;
       readonly reasonCode: CustomerProfileContextReasonCode;
     };
 
@@ -223,8 +222,11 @@ export type CustomerProfileContextConfig = {
 };
 
 export type LoadCustomerCommercialHistoryContextInput = {
+  // SALES-AGENT-R2-ID-R2-A10. Always ps_customer.id_customer (the
+  // RuntimeIdentityContext.prestashopCustomerId space) - never
+  // master_customer.id. Every capability this loader calls, RFM included, is
+  // keyed by this same single id; there is no separate master-customer input.
   readonly customerId: number | null;
-  readonly masterCustomerId: string | null;
   readonly commercialIntent: boolean;
   readonly historyNeeds: readonly CustomerHistoryNeed[];
   readonly requestId?: string;

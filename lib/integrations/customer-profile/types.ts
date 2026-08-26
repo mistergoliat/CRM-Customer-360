@@ -4,7 +4,6 @@ export const CUSTOMER_PROFILE_IDENTITY_SOURCE = "PRESTASHOP" as const;
 export const CUSTOMER_PROFILE_IDENTITY_STATUS = "DIRECT_SOURCE" as const;
 
 export type CustomerProfileCustomerId = number;
-export type CustomerProfileMasterCustomerId = string;
 
 export type CustomerDataSourceEntity =
   | "ps_customer"
@@ -277,8 +276,14 @@ export type GetCustomerOrderStatusInput = CustomerProfileRequestMetadata & {
   readonly orderReference: string;
 };
 
+// SALES-AGENT-R2-ID-R2-A10. Deliberately CustomerProfileCustomerId (the same
+// ps_customer.id_customer space as every other operation on this client) -
+// never a master_customer.id. RFM's primary route is
+// `/v1/customers/:customerId/rfm`, identical id space to profile/
+// commercial-summary/purchased-products/purchase-behavior; there is no
+// separate "master customer id" input on this client.
 export type GetCustomerRfmInput = CustomerProfileRequestMetadata & {
-  readonly masterCustomerId: CustomerProfileMasterCustomerId;
+  readonly customerId: CustomerProfileCustomerId;
 };
 
 export type CustomerProfileClientAvailableMetadata = {
@@ -290,7 +295,7 @@ export type CustomerProfileClientAvailableMetadata = {
 };
 
 export type CustomerRfmClientAvailableMetadata = {
-  readonly requestedMasterCustomerId: CustomerProfileMasterCustomerId;
+  readonly requestedCustomerId: CustomerProfileCustomerId;
   readonly contractVersion: string;
   readonly segmentVersion: string | null;
   readonly referenceTime: string;
@@ -301,7 +306,6 @@ export type CustomerRfmClientAvailableMetadata = {
 export type CustomerProfileNotFoundReason = "CUSTOMER_NOT_FOUND" | "ORDER_NOT_FOUND";
 export type CustomerProfileInvalidRequestReason =
   | "INVALID_CUSTOMER_ID"
-  | "INVALID_MASTER_CUSTOMER_ID"
   | "INVALID_LIMIT"
   | "INVALID_OFFSET"
   | "INVALID_TOP_PRODUCTS"
@@ -320,7 +324,15 @@ export type CustomerProfileContractErrorReason =
 
 export type CustomerRfmResponse = {
   readonly status: "available";
-  readonly masterCustomerId: CustomerProfileMasterCustomerId;
+  // SALES-AGENT-R2-ID-R2-A10. The wire body's own field is literally named
+  // "masterCustomerId" (external contract this repo does not own - see
+  // schemas.ts#parseCustomerRfmResponse), but it echoes back the same
+  // ps_customer.id_customer-space value this client requested via
+  // GetCustomerRfmInput.customerId - never a real master_customer.id. Named
+  // `customerId` here, matching every sibling response type on this client,
+  // so nothing downstream re-derives the historical "pass master_customer.id"
+  // mistake from this type's own field name.
+  readonly customerId: CustomerProfileCustomerId;
   readonly snapshot: {
     readonly snapshotId: string;
     readonly calculationVersion: string;
@@ -350,7 +362,7 @@ export type CustomerRfmUnavailableReason = "CUSTOMER_PROFILE_TIMEOUT" | "CUSTOME
 export type CustomerRfmContractErrorReason =
   | "INVALID_RESPONSE"
   | "CONTRACT_VERSION_UNSUPPORTED"
-  | "MASTER_CUSTOMER_ID_MISMATCH";
+  | "PROVENANCE_MISMATCH";
 
 export type CustomerRfmResult =
   | {
@@ -364,7 +376,7 @@ export type CustomerRfmResult =
     }
   | {
       readonly status: "INVALID_REQUEST";
-      readonly reason: "INVALID_MASTER_CUSTOMER_ID";
+      readonly reason: "INVALID_CUSTOMER_ID";
     }
   | {
       readonly status: "UNAVAILABLE";

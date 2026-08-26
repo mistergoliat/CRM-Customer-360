@@ -16,11 +16,13 @@ import {
 
 type ParseSuccess<T> = { ok: true; value: T };
 type ParseFailure = { ok: false; reason: "INVALID_RESPONSE" | "CONTRACT_VERSION_UNSUPPORTED" | "PROVENANCE_MISMATCH" };
-type CustomerRfmParseFailure = { ok: false; reason: "INVALID_RESPONSE" | "CONTRACT_VERSION_UNSUPPORTED" | "MASTER_CUSTOMER_ID_MISMATCH" };
+type CustomerRfmParseFailure = { ok: false; reason: "INVALID_RESPONSE" | "CONTRACT_VERSION_UNSUPPORTED" | "PROVENANCE_MISMATCH" };
 
 const DECIMAL_STRING_PATTERN = /^\d+(\.\d+)?$/;
 const ORDER_REFERENCE_PATTERN = /^[A-Za-z0-9]{1,32}$/;
-const MASTER_CUSTOMER_ID_PATTERN = /^\d{1,20}$/;
+// The RFM wire body's numeric-id field is a big-int-safe string (external
+// contract, see CustomerRfmResponse.customerId's comment in types.ts).
+const RFM_WIRE_CUSTOMER_ID_PATTERN = /^\d{1,20}$/;
 
 type RecordValue = Record<string, unknown>;
 
@@ -432,10 +434,6 @@ function parseDeliveryEstimate(value: unknown): CustomerOrderStatusDeliveryEstim
 
 export function validateCustomerId(value: unknown): boolean {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-}
-
-export function validateMasterCustomerId(value: unknown): boolean {
-  return typeof value === "string" && MASTER_CUSTOMER_ID_PATTERN.test(value) && !/^0+$/.test(value);
 }
 
 export function validatePurchasedProductsLimit(value: unknown): boolean {
@@ -866,17 +864,25 @@ export function parseCustomerProfileReadinessResponse(value: unknown): ParseSucc
   return { ok: false, reason: "INVALID_RESPONSE" };
 }
 
-export function parseCustomerRfmResponse(value: unknown, requestedMasterCustomerId: string): ParseSuccess<CustomerRfmResponse> | CustomerRfmParseFailure {
+export function parseCustomerRfmResponse(value: unknown, requestedCustomerId: number): ParseSuccess<CustomerRfmResponse> | CustomerRfmParseFailure {
   if (!isRecord(value) || !hasOnlyKeys(value, ["status", "masterCustomerId", "snapshot", "rfm", "segment", "contractVersion"])) {
     return { ok: false, reason: "INVALID_RESPONSE" };
   }
   if (value.status !== "available") return { ok: false, reason: "INVALID_RESPONSE" };
-  const masterCustomerId = asNonEmptyString(value.masterCustomerId);
-  if (masterCustomerId === null || !validateMasterCustomerId(masterCustomerId)) {
+  // Wire key is literally "masterCustomerId" (external contract, see
+  // CustomerRfmResponse.customerId's comment) - parsed here and re-exposed as
+  // `customerId`, the same ps_customer.id_customer space as every sibling
+  // response on this client.
+  const rawWireCustomerId = asNonEmptyString(value.masterCustomerId);
+  if (rawWireCustomerId === null || !RFM_WIRE_CUSTOMER_ID_PATTERN.test(rawWireCustomerId) || /^0+$/.test(rawWireCustomerId)) {
     return { ok: false, reason: "INVALID_RESPONSE" };
   }
-  if (masterCustomerId !== requestedMasterCustomerId) {
-    return { ok: false, reason: "MASTER_CUSTOMER_ID_MISMATCH" };
+  const customerId = asPositiveInteger(Number(rawWireCustomerId));
+  if (customerId === null) {
+    return { ok: false, reason: "INVALID_RESPONSE" };
+  }
+  if (customerId !== requestedCustomerId) {
+    return { ok: false, reason: "PROVENANCE_MISMATCH" };
   }
   if (value.contractVersion !== CUSTOMER_RFM_CONTRACT_VERSION) {
     return { ok: false, reason: "CONTRACT_VERSION_UNSUPPORTED" };
@@ -950,7 +956,7 @@ export function parseCustomerRfmResponse(value: unknown, requestedMasterCustomer
     ok: true,
     value: {
       status: "available",
-      masterCustomerId,
+      customerId,
       snapshot: {
         snapshotId,
         calculationVersion,
