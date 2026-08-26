@@ -1,5 +1,7 @@
 import { recentInboundMessages, recentOutboundMessages } from "./cases";
 import { safeScalar } from "./db";
+import { PrestashopDbConfigurationError, readPrestashopDbConfig } from "./integrations/prestashop-mirror/config";
+import { getPrestashopQueryExecutor } from "./integrations/prestashop-mirror/pool";
 import { isDbWriteEnabled } from "./write-access";
 
 export type HealthItem = {
@@ -61,6 +63,41 @@ export async function getSystemHealth(): Promise<{ generatedAt: string; items: H
         : "Falta META_ACCESS_TOKEN o DEFAULT_PHONE_NUMBER_ID.",
     details: "Validación local de configuración solamente."
   });
+
+  // ID-R2-A11.1 PARTE 12: identity onboarding's PrestaShop candidate reads
+  // (email/order-reference) depend on this source. A misconfigured
+  // production_db surfaces as "error" here without ever falling back to
+  // main_management; a live column probe distinguishes "reachable" from
+  // "unavailable" the same way the "db" item above does, and never takes
+  // down the rest of this health report (own try/catch, own item).
+  try {
+    const config = readPrestashopDbConfig();
+    const executor = getPrestashopQueryExecutor();
+    const columns = await executor.getColumns("ps_customer");
+    const available = columns.length > 0;
+    items.push({
+      key: "prestashop_identity_db",
+      title: "PrestaShop identity source",
+      status: available ? "ok" : "warning",
+      description:
+        config.source === "production_db"
+          ? available
+            ? `Conectado a la base productiva configurada (${config.database}).`
+            : `PRESTASHOP_IDENTITY_SOURCE=production_db (${config.database}) configurado, pero ps_customer no respondió.`
+          : available
+            ? "Usando el mirror local compartido (PRESTASHOP_IDENTITY_SOURCE no configurado)."
+            : "Usando el mirror local compartido; ps_customer no disponible.",
+      details: config.source === "production_db" ? `source=production_db host=${config.host}` : "source=local_mirror"
+    });
+  } catch (error) {
+    items.push({
+      key: "prestashop_identity_db",
+      title: "PrestaShop identity source",
+      status: "error",
+      description: "PRESTASHOP_IDENTITY_SOURCE=production_db configurado de forma incompleta o inválida.",
+      details: error instanceof PrestashopDbConfigurationError ? error.message : error instanceof Error ? error.message : String(error)
+    });
+  }
 
   items.push({
     key: "db_write",
