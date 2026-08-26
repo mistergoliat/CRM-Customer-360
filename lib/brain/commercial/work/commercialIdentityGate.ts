@@ -43,6 +43,14 @@ export const COMMERCIAL_OBJECTIVE_TYPE_TO_OPERATION: Partial<Record<CommercialOb
   // other objective here: never a second, hand-rolled identity check inside
   // applyObjectiveState's REPEAT_PURCHASE case.
   REPEAT_PURCHASE: "customer_profile_history",
+  // SALES-AGENT-R2-ID-R2-A12. Same operation as REPEAT_PURCHASE, same
+  // rationale - a personalized recommendation reads the same LEVEL_3
+  // purchase-history boundary. Unlike REPEAT_PURCHASE, a Customer Profile
+  // failure or empty history never blocks here (applyCustomerAwareRecommendationObjectiveState
+  // degrades to a generic Catalog search instead) - that is a
+  // capability-output decision, not a gate decision, so it does not change
+  // this mapping.
+  CUSTOMER_AWARE_RECOMMENDATION: "customer_profile_history",
   // PARTE 7: mapped for completeness/testability, but structurally never
   // gated in practice - applyObjectiveState's own HANDOFF case sets
   // objective.status = "COMPLETED" unconditionally, so this gate (which only

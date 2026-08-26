@@ -22,7 +22,7 @@ export const MAX_INTENTS_PER_PLAN = 6;
 export const MAX_INTENT_TEXT_FIELD_LENGTH = 200;
 export const MAX_QUANTITY = 9999;
 
-export const COMMERCIAL_INTENT_TYPES = ["select_products", "get_shipping_quote", "select_shipping_option", "create_quote", "repeat_purchase", "cancel", "unsupported"] as const;
+export const COMMERCIAL_INTENT_TYPES = ["select_products", "get_shipping_quote", "select_shipping_option", "create_quote", "repeat_purchase", "customer_aware_recommendation", "cancel", "unsupported"] as const;
 export type CommercialIntentType = (typeof COMMERCIAL_INTENT_TYPES)[number];
 
 export type CommercialIntentSelectProducts = {
@@ -131,12 +131,34 @@ export type CommercialIntentUnsupported = {
   description?: string;
 };
 
+/**
+ * SALES-AGENT-R2-ID-R2-A12. "Recommend something based on what I usually
+ * buy" - distinct from repeat_purchase (a SPECIFIC previous purchase) and
+ * from select_products (a product named directly this turn). No
+ * identity/customerId/history field exists here (this planner never sees
+ * Customer Profile identity or history) - LEVEL_3 gating and history
+ * resolution happen entirely downstream (CommercialWork's
+ * CUSTOMER_AWARE_RECOMMENDATION objective, A06/A07 gate, then A10's Customer
+ * Profile boundary).
+ */
+export type CommercialIntentCustomerAwareRecommendation = {
+  type: "customer_aware_recommendation";
+  /**
+   * Free text narrowing what the customer wants THIS turn (e.g. "económico",
+   * "para entrenar en casa", "discos") - omitted (never invented) for a bare
+   * "qué me recomiendas" with nothing to narrow by. Always takes precedence
+   * over any historical signal when present (buildCommercialWorkProjection.ts).
+   */
+  queryHint?: string;
+};
+
 export type CommercialIntent =
   | CommercialIntentSelectProducts
   | CommercialIntentGetShippingQuote
   | CommercialIntentSelectShippingOption
   | CommercialIntentCreateQuote
   | CommercialIntentRepeatPurchase
+  | CommercialIntentCustomerAwareRecommendation
   | CommercialIntentCancel
   | CommercialIntentUnsupported;
 
@@ -187,6 +209,10 @@ export const COMMERCIAL_INTENT_DEFINITIONS: Record<Exclude<CommercialIntentType,
   // resolves catalog/destination-shaped requirements. Always "ready" from
   // this resolver's own point of view (requirementResolver.ts).
   repeat_purchase: { type: "repeat_purchase", requirements: [] },
+  // SALES-AGENT-R2-ID-R2-A12. Same rationale as repeat_purchase above -
+  // LEVEL_3 is a CommercialWork-level gate (commercialIdentityGate.ts),
+  // never a semantic-planning-layer requirement.
+  customer_aware_recommendation: { type: "customer_aware_recommendation", requirements: [] },
   cancel: { type: "cancel", requirements: [] }
 };
 

@@ -14,7 +14,14 @@ export const COMMERCIAL_WORK_STEP_TYPES = [
   // it has a productReference - once history resolves one, the objective
   // falls through to the same SEARCH_PRODUCTS/SELECT_PRODUCTS steps any other
   // product request uses.
-  "LOAD_PURCHASE_HISTORY"
+  "LOAD_PURCHASE_HISTORY",
+  // SALES-AGENT-R2-ID-R2-A12. Read-only: loads a deterministic historical
+  // recommendation signal via the ID-R2-A10 Customer Profile boundary.
+  // Never mutates anything; a CUSTOMER_AWARE_RECOMMENDATION objective only
+  // ever derives this step before it has a query - once resolved (from this
+  // signal or from queryHint), the objective falls through to the same
+  // SEARCH_PRODUCTS step any other product request uses.
+  "LOAD_RECOMMENDATION_SIGNAL"
 ] as const;
 
 export type CommercialWorkStepType = (typeof COMMERCIAL_WORK_STEP_TYPES)[number];
@@ -28,7 +35,8 @@ export const COMMERCIAL_WORK_STEP_CAPABILITIES = [
   "calculate_shipping",
   "select_shipping_option",
   "create_quote",
-  "get_customer_purchase_history"
+  "get_customer_purchase_history",
+  "get_customer_recommendation_signal"
 ] as const;
 
 export type CommercialWorkStepCapability = (typeof COMMERCIAL_WORK_STEP_CAPABILITIES)[number];

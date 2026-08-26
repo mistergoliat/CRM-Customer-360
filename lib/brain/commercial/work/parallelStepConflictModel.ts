@@ -47,7 +47,10 @@ export const STEP_FACT_PROFILE: Record<CommercialWorkStepType, StepFactProfile> 
   HANDOFF: { reads: [], writes: [] },
   // SALES-AGENT-R2-ID-R2-A11. Read-only Customer Profile lookup, touches no
   // commercial fact anchor - same profile as SEARCH_PRODUCTS/GET_PRODUCT_DETAILS.
-  LOAD_PURCHASE_HISTORY: { reads: [], writes: [] }
+  LOAD_PURCHASE_HISTORY: { reads: [], writes: [] },
+  // SALES-AGENT-R2-ID-R2-A12. Same profile as LOAD_PURCHASE_HISTORY - a
+  // read-only Customer Profile lookup, touches no commercial fact anchor.
+  LOAD_RECOMMENDATION_SIGNAL: { reads: [], writes: [] }
 };
 
 export type StepSafetyClassification = "read_only" | "mutating" | "unknown_governance";

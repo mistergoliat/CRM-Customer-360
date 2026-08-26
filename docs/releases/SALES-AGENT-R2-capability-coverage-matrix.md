@@ -2,7 +2,7 @@
 doc_id: release-sales-agent-r2-capability-coverage-matrix
 title: SALES-AGENT-R2 - Capability Coverage Matrix
 status: active
-last_reviewed: 2026-08-20
+last_reviewed: 2026-08-26
 source_of_truth_for:
   - canonical Sales Agent capability inventory (Capability Gateway registrations, legacy tool
     pool membership, R2/CommercialWork reachability)
@@ -30,6 +30,9 @@ derivation) and `lib/brain/commercial/work/commercialWorkExecutor.ts`'s `EXECUTA
 (actual executor support). This is a capability-level matrix - see
 `SALES-AGENT-R2-commercial-semantic-capability-matrix.md` for the intent-family-level view.
 
+Updated 2026-08-26 (A12) to add `get_customer_recommendation_signal` - see
+`SALES-AGENT-R2-A12-customer-aware-recommendations.md` for full detail.
+
 | Capability | Legacy exposure | R2 exposure | Planner intent(s) | CommercialObjective | CommercialWork step | Gateway registered | Side effect | Fact reads | Fact writes | Idempotency | Retryable | Test level | Live validation | Production status | Gap/debt |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | `search_products` | Yes (`AGENT_LOOP_TOOL_POOL`) | **Full (A11.1)** - `SELECT_PRODUCTS`/`CHANGE_QUANTITY` objectives with a `productReference` and no resolved `items` now derive and execute a `SEARCH_PRODUCTS` prerequisite step | None (planner still never emits `DISCOVER_PRODUCTS`; `SELECT_PRODUCTS`'s own `productReference` input drives this, not a separate intent) | `DISCOVER_PRODUCTS` (still no producer - dead), `SELECT_PRODUCTS`/`CHANGE_QUANTITY` (new: read `latestSearchProductsExecution` from `recentCapabilityExecutions`, never a second catalog client) | `SEARCH_PRODUCTS` (now **in** `EXECUTABLE_STEP_TYPES`) | Yes | read_only | - | - | N/A (read-only) | maxRetries=1, gateway-level; **new SALES-AGENT-R2-A11.1 retry policy** (`retryPolicy.ts`, maxAttempts=3, catalog technical failures -> `WAITING_SYSTEM`, never `WAITING_CUSTOMER`) | T0-T4 (A11.1: pure-projection CW09b1-b5 branch coverage + real-pipeline Part 6/7, R2-07) | Legacy-live (prior sessions); R2 path not yet live-validated (WA01 redeploy pending) | Legacy production; R2 path implemented, `operational: not_verified` for R2 | `DISCOVER_PRODUCTS` objective type still has no producer (dead code, unrelated to this fix) |
@@ -47,13 +50,14 @@ derivation) and `lib/brain/commercial/work/commercialWorkExecutor.ts`'s `EXECUTA
 | `select_shipping_option` | Yes | Step type derivable, not executable | None (planner never emits `SELECT_SHIPPING_OPTION`) | `SELECT_SHIPPING_OPTION` | `SELECT_SHIPPING_OPTION` (not in `EXECUTABLE_STEP_TYPES`) | Yes | mutating | `commercial_line_items` | `selected_shipping_option` | N/A for R2 (unreachable); legacy governs by observed-`optionIndex` only | gateway-level | T0-T2 (legacy) | Legacy-live (prior sessions) | Legacy production | LEGACY_ONLY, future feature |
 | `create_quote` | Yes | **Full** (semantic layer) | `semanticIntentAdapter.ts` (`CREATE_QUOTE`) | `CREATE_QUOTE` | `CREATE_QUOTE` | Yes | mutating | `commercial_line_items`, `shipping_destination`, `selected_shipping_option` | `created_quote` | SAFE_BECAUSE - explicit `idempotencyKey` field, reuses existing quote when selection unchanged | maxRetries default | T2/T3/T4 | Live-validated (A08.6/A09/A10, semantic reachability 10/10 this session); **real Quote Service E2E NOT_AVAILABLE (no `QUOTE_SERVICE_BASE_URL`)** | R2 default-allowlisted path (semantic only) | Quote Service E2E is A11/A12 integration debt |
 | `HANDOFF` (step type, no capability) | N/A (conversation-control flags, not a tool) | Step type exists, no seed producer, `capabilityName: null` | None | `HANDOFF` | `HANDOFF` (not in `EXECUTABLE_STEP_TYPES`, never has a capability to call) | N/A | N/A | - | - | N/A | N/A | T0-T2 (unit, `commercialWorkProjection.test.ts`) | Structurally exercised via `humanOwnerActive`/`aiEnabled` gates, not this step type | Real handoff mechanism is the conversation-control flags (see A10 doc Part 28), not this step | Dead step type in practice - superseded by the flag-based mechanism |
+| `get_customer_recommendation_signal` (A12) | No | **Full (A12)** - `CUSTOMER_AWARE_RECOMMENDATION` objectives without a resolved query derive and execute this prerequisite step | `semanticIntentAdapter.ts` (`customer_aware_recommendation` -> `CUSTOMER_AWARE_RECOMMENDATION`) | `CUSTOMER_AWARE_RECOMMENDATION` | `LOAD_RECOMMENDATION_SIGNAL` (now **in** `EXECUTABLE_STEP_TYPES`; a "gathering" step type, see `GATHERING_STEP_TYPES` in `commercialWorkExecutor.ts`) | Yes | read_only | - | - | N/A (read-only) | maxRetries=1, gateway-level | T0-T4 (unit + capability + E2E, see A12 release doc) | Real dispatch proven E2E; degrades to a real, observable `NO_SIGNAL`/`completed` outcome when Customer Profile is unavailable - never `WAITING_SYSTEM` (deliberate divergence from `get_customer_purchase_history`) | Implemented, `operational: not_verified` (no live Customer Profile round trip in this environment) | None - see A12 release doc's own debts section for disclosed limitations (RFM inert, signal not blended when `queryHint` wins) |
 
 ## Reading this table
 
 - **R2 exposure "Full"** means: planner producer exists, `CommercialObjective` exists, step is in
   `EXECUTABLE_STEP_TYPES`, and the capability actually executes through `executeCommercialWork`.
-  Only `select_products`, `set_shipping_destination`, `calculate_shipping`, and `create_quote`
-  (semantic layer) qualify.
+  `select_products`, `set_shipping_destination`, `calculate_shipping`, `create_quote` (semantic
+  layer), and (A12) `get_customer_recommendation_signal` qualify.
 - **"Step type derivable, not executable"** means `deriveCommercialWorkSteps.ts` has a case that
   would produce this step type if the objective type ever existed, but (a) no seed producer ever
   creates that objective type today, and (b) even if one somehow did,

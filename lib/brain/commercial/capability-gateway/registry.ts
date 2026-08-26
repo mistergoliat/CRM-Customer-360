@@ -25,6 +25,7 @@ import { calculateShippingCapability } from "./calculateShippingCapability";
 import { selectShippingOptionCapability } from "./selectShippingOptionCapability";
 import { createQuoteCapability } from "./createQuoteCapability";
 import { getCustomerPurchaseHistoryCapability } from "./getCustomerPurchaseHistoryCapability";
+import { getCustomerRecommendationSignalCapability } from "./getCustomerRecommendationSignalCapability";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -539,7 +540,17 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   // deliberately NOT aliased in toolAliases.ts, same discipline as
   // batch_get_products/recommend_catalog_products: the Sales Agent LLM never
   // calls this directly, only CommercialWork's deterministic executor does.
-  getCustomerPurchaseHistoryCapability() as CapabilityGatewayDefinition
+  getCustomerPurchaseHistoryCapability() as CapabilityGatewayDefinition,
+  // SALES-AGENT-R2-ID-R2-A12: reads a deterministic historical
+  // recommendation signal via the same ID-R2-A10 Customer Profile boundary,
+  // gated on live LEVEL_3_PRESTASHOP_LINKED identity. Registered so a
+  // CUSTOMER_AWARE_RECOMMENDATION objective's LOAD_RECOMMENDATION_SIGNAL
+  // step can execute it through the governed gateway (auditable via
+  // crm_capability_executions) - deliberately NOT aliased in
+  // toolAliases.ts, same discipline as get_customer_purchase_history: the
+  // Sales Agent LLM never calls this directly, only CommercialWork's
+  // deterministic executor does.
+  getCustomerRecommendationSignalCapability() as CapabilityGatewayDefinition
 ];
 
 const CAPABILITIES_BY_NAME = new Map(CAPABILITY_GATEWAY_REGISTRY.map((definition) => [definition.capability, definition]));

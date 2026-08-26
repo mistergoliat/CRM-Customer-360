@@ -82,6 +82,10 @@ function parseKnownIntent(raw: Record<string, unknown>): CommercialIntent | null
     const productHint = asBoundedText(raw.productHint);
     return { type: "repeat_purchase", ...(productHint !== undefined ? { productHint } : {}) };
   }
+  if (raw.type === "customer_aware_recommendation") {
+    const queryHint = asBoundedText(raw.queryHint);
+    return { type: "customer_aware_recommendation", ...(queryHint !== undefined ? { queryHint } : {}) };
+  }
   if (raw.type === "select_shipping_option") {
     // SALES-AGENT-R2-A11.4. The model supplies only the customer's raw
     // reference words - never an index/number, structurally cannot (this

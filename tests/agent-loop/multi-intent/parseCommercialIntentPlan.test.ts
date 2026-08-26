@@ -177,3 +177,33 @@ test("[MI-Parse-21] repeat_purchase never carries a productId/customerId even if
   if (result.status !== "valid") return;
   assert.deepEqual(result.intents, [{ type: "repeat_purchase", productHint: "barra" }]);
 });
+
+// SALES-AGENT-R2-ID-R2-A12.
+
+test("[MI-Parse-22] customer_aware_recommendation with a queryHint parses cleanly", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "customer_aware_recommendation", queryHint: "economico para entrenar" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "customer_aware_recommendation", queryHint: "economico para entrenar" }]);
+});
+
+test("[MI-Parse-23] customer_aware_recommendation with no queryHint parses cleanly, field omitted (never invented)", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "customer_aware_recommendation" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "customer_aware_recommendation" }]);
+});
+
+test("[MI-Parse-24] customer_aware_recommendation never carries a productId/customerId even if the raw JSON tries to smuggle one in - only queryHint is ever read", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "customer_aware_recommendation", queryHint: "discos", productId: "999", customerId: "100" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "customer_aware_recommendation", queryHint: "discos" }]);
+});
+
+test("[MI-Parse-25] CAR15: a repeat_purchase-shaped plan still parses as repeat_purchase, never blurred with customer_aware_recommendation", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "repeat_purchase" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "repeat_purchase" }]);
+});
