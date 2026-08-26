@@ -332,12 +332,27 @@ export async function supersedeIdentityEvidence(evidenceId: string, supersededBy
 // never a second decision engine. safeQueryRows never throws.
 // ---------------------------------------------------------------------------
 
-export async function getCurrentEvidenceForConversation(conversationId: string): Promise<IdentityEvidenceRecord[]> {
+/**
+ * SALES-AGENT-R2-ID-R2-A04. Same query as getCurrentEvidenceForConversation,
+ * but surfaces a DB failure instead of swallowing it into an empty array -
+ * a caller that must fail closed on a technical failure (the verification
+ * policy, PARTE 19/IVP19) cannot tell "genuinely no evidence" apart from
+ * "the query failed" through the plain variant below.
+ */
+export async function getCurrentEvidenceForConversationOrFail(
+  conversationId: string
+): Promise<{ ok: true; records: IdentityEvidenceRecord[] } | { ok: false; error: string }> {
   const result = await safeQueryRows<Record<string, unknown>>(
     `SELECT * FROM \`${TABLE}\` WHERE conversation_id = ? AND status NOT IN ('SUPERSEDED', 'REVOKED') ORDER BY signal_type ASC, id DESC`,
     [conversationId]
   );
-  return result.ok ? result.rows.map(toRecord) : [];
+  if (!result.ok) return { ok: false, error: result.error };
+  return { ok: true, records: result.rows.map(toRecord) };
+}
+
+export async function getCurrentEvidenceForConversation(conversationId: string): Promise<IdentityEvidenceRecord[]> {
+  const result = await getCurrentEvidenceForConversationOrFail(conversationId);
+  return result.ok ? result.records : [];
 }
 
 export async function getCurrentEvidenceForMasterCustomer(masterCustomerId: string): Promise<IdentityEvidenceRecord[]> {
