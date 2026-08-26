@@ -62,7 +62,8 @@ export const CUSTOMER_ONBOARDING_POST_PLAN_ATTEMPTED_OPERATIONS = [
   "collect_fields",
   "resolve_customer",
   "create_customer",
-  "link_external_identity"
+  "link_external_identity",
+  "link_prestashop_identity"
 ] as const;
 export type CustomerOnboardingPostPlanAttemptedOperation = (typeof CUSTOMER_ONBOARDING_POST_PLAN_ATTEMPTED_OPERATIONS)[number];
 
@@ -317,6 +318,51 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
         conversationId: session.conversationId,
         opportunityId: input.opportunityId ?? session.opportunityId,
         customerId: session.identity.customerId,
+        decisionId: input.decisionId,
+        executionPublicId: outcome.executionPublicId,
+        warnings: finalWarnings
+      });
+      return { attemptedOperation, onboarding, capabilityOutcome: outcome, warnings: finalWarnings };
+    }
+  }
+
+  // 5. link_prestashop_identity path (SALES-AGENT-R2-ID-R2-A09, closes A08.1's
+  // GAP 1). Deliberately independent of step 4 above and of
+  // session.identity.source entirely - that field is the WhatsApp-channel
+  // axis (is the current wa_id already canonically linked), a completely
+  // different fact from whether a PrestaShop candidate is ready to bridge.
+  // The ONLY gate here is
+  // session.runtimeIdentity.status === "READY_TO_LINK" (A04/A05, unmodified)
+  // - reachable whether or not the WhatsApp channel is already linked (the
+  // common case A08.1 proved was silently unreachable through step 4: wa_id
+  // already linked to master A, a verified PrestaShop candidate B, no
+  // bridge yet). Always a separate, later execution from steps 3/4 - the
+  // early returns above already guarantee at most one identity-mutating
+  // capability per turn; this is the third and last such branch.
+  if (session.runtimeIdentity.status === "READY_TO_LINK") {
+    const consent = session.currentTurnConsent.linkPrestashopIdentity;
+    if (consent) {
+      attemptedOperation = "link_prestashop_identity";
+      const trustedCustomerSession: NativeCustomerSessionExecutionContext = { ...session, onboarding };
+      const outcome = await executeGovernedCapability("link_prestashop_identity", {}, { correlationId: input.correlationId, trustedCustomerSession });
+      await recordIdentityCapabilityOutcome({
+        capability: "link_prestashop_identity",
+        correlationId: input.correlationId,
+        conversationId: session.conversationId,
+        opportunityId: input.opportunityId ?? session.opportunityId,
+        customerId: session.runtimeIdentity.masterCustomerId,
+        decisionId: input.decisionId,
+        gatewayResult: outcome
+      });
+      warnings.push(...(outcome.warnings ?? []));
+      const finalWarnings = mergeWarnings(warnings);
+      await recordSessionWarnings({
+        phase: "post_plan",
+        messageId: session.trustedInbound.messageId,
+        correlationId: input.correlationId,
+        conversationId: session.conversationId,
+        opportunityId: input.opportunityId ?? session.opportunityId,
+        customerId: session.runtimeIdentity.masterCustomerId,
         decisionId: input.decisionId,
         executionPublicId: outcome.executionPublicId,
         warnings: finalWarnings

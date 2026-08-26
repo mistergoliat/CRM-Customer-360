@@ -414,8 +414,14 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       // when the stage actually attempted an identity-upgrading capability -
       // a mere activation or field capture never changes RuntimeIdentityContext
       // by itself, so re-checking would be a wasted read and an unnecessary
-      // extra settle pass.
-      if (postPlan.attemptedOperation === "create_customer" || postPlan.attemptedOperation === "link_external_identity") {
+      // extra settle pass. SALES-AGENT-R2-ID-R2-A09 (PARTE 14) adds
+      // link_prestashop_identity as the third such capability - same bounded
+      // mechanism, no new loop.
+      if (
+        postPlan.attemptedOperation === "create_customer" ||
+        postPlan.attemptedOperation === "link_external_identity" ||
+        postPlan.attemptedOperation === "link_prestashop_identity"
+      ) {
         try {
           const refreshedIdentity = await resolveRuntimeIdentityContext({
             conversationId: input.customerSessionExecution.conversationId,

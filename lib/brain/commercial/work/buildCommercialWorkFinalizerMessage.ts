@@ -144,6 +144,14 @@ function identityBlockedObjectives(objectives: readonly CommercialObjective[]): 
 function buildIdentityBlockedMessage(objectives: readonly CommercialObjective[]): string {
   const first = objectives[0];
   if (first.missingRequirements.includes("IDENTITY_LINK_PENDING")) {
+    // SALES-AGENT-R2-ID-R2-A09. Corrected wording: READY_TO_LINK (A04/A06)
+    // is about bridging a verified PrestaShop candidate to the resolved
+    // master, never about the WhatsApp channel itself (A08.1's root-cause
+    // finding - the two are different mutations, see
+    // link_prestashop_identity vs. link_external_identity). "vinculemos a
+    // tu perfil" deliberately echoes LINK_PRESTASHOP_IDENTITY_PATTERN's own
+    // vocabulary (consentEvidence.ts) so a natural affirmative reply is
+    // likely to parse as consent for the RIGHT scope.
     return "Encontré una cuenta que coincide con los datos que verificamos. ¿Confirmas que la vinculemos a tu perfil para continuar?";
   }
   if (first.missingRequirements.includes("IDENTITY_CONFLICT")) {

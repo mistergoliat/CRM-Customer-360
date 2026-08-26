@@ -8,7 +8,16 @@
  * Retry ownership belongs exclusively to the Capability Gateway.
  */
 import type { CustomerServicePort } from "@/lib/domains/customer-service/ports";
-import type { CreateCustomerInput, CreateCustomerResult, LinkExternalIdentityInput, LinkExternalIdentityResult, ResolveCustomerInput, ResolveCustomerResult } from "@/lib/domains/customer-service/types";
+import type {
+  CreateCustomerInput,
+  CreateCustomerResult,
+  LinkExternalIdentityInput,
+  LinkExternalIdentityResult,
+  LinkPrestashopIdentityInput,
+  LinkPrestashopIdentityResult,
+  ResolveCustomerInput,
+  ResolveCustomerResult
+} from "@/lib/domains/customer-service/types";
 
 export type HttpCustomerServiceAdapterConfig = {
   baseUrl: string;
@@ -256,6 +265,27 @@ export function createHttpCustomerServiceAdapter(config: HttpCustomerServiceAdap
         return parseLinkSuccess(outcome.body) ?? { status: "failed", code: "invalid_response", retryable: false };
       }
       return mapMutationHttpError(outcome.status, errorEnvelope(outcome.body));
+    },
+
+    // SALES-AGENT-R2-ID-R2-A09. Same generic transport (PARTE 10: "reusar
+    // transporte pero NO authority") - the endpoint already accepts an
+    // arbitrary externalIdentity.provider, only linkExternalIdentity's own
+    // TS type/authority ever hardcoded "whatsapp". parseLinkSuccess's body
+    // shape (status/customerMasterId/externalIdentityId) is identical for
+    // this operation by design (LinkPrestashopIdentityResult mirrors
+    // LinkExternalIdentityResult's vocabulary) - reused, not duplicated.
+    async linkPrestashopIdentity(input: LinkPrestashopIdentityInput): Promise<LinkPrestashopIdentityResult> {
+      const outcome = await postJson(
+        config,
+        `/v1/customers/${encodeURIComponent(input.customerId)}/external-identities`,
+        { externalIdentity: { provider: "prestashop", externalId: input.prestashopCustomerId }, consent: input.consent },
+        input.idempotencyKey
+      );
+      if ("networkError" in outcome) return { status: "temporarily_unavailable", retryable: true };
+      if (outcome.status >= 200 && outcome.status < 300) {
+        return parseLinkSuccess(outcome.body) ?? { status: "failed", code: "invalid_response", retryable: false };
+      }
+      return mapMutationHttpError(outcome.status, errorEnvelope(outcome.body));
     }
   };
 }
@@ -266,7 +296,8 @@ function createUnavailableCustomerServicePort(): CustomerServicePort {
   return {
     resolveCustomer: unavailable,
     createCustomer: unavailable,
-    linkExternalIdentity: unavailable
+    linkExternalIdentity: unavailable,
+    linkPrestashopIdentity: unavailable
   };
 }
 

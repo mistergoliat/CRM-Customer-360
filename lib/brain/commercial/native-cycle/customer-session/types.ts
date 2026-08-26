@@ -30,7 +30,12 @@ export type TrustedInboundIdentity = {
   receivedAt: string;
 };
 
-export type ConsentScope = "create_customer" | "link_external_identity";
+// SALES-AGENT-R2-ID-R2-A09, PARTE 9. link_prestashop_identity is
+// deliberately a separate scope from link_external_identity, never the same
+// boolean reused - "vincula mi WhatsApp" (channel control) and "vincula mi
+// cuenta [de PrestaShop]" (e-commerce account adjudication) authorize two
+// different mutations and must never be conflated (see consentEvidence.ts).
+export type ConsentScope = "create_customer" | "link_external_identity" | "link_prestashop_identity";
 
 export type ConsentEvidence = {
   scope: ConsentScope;
@@ -87,6 +92,7 @@ export type NativeCustomerSessionExecutionContext = {
   currentTurnConsent: {
     createCustomer: ConsentEvidence | null;
     linkExternalIdentity: ConsentEvidence | null;
+    linkPrestashopIdentity: ConsentEvidence | null;
   };
 
   // Fresh resolve_customer evidence from THIS turn only (never persisted,

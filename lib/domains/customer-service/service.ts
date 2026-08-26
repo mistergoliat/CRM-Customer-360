@@ -3,9 +3,9 @@
 // Not connected to the inbound runtime, the LLM, or the Capability Gateway -
 // see index.ts header note. Wiring is ACS-R1-04-T06.
 import { randomUUID } from "node:crypto";
-import { evaluateCreateCustomerAuthority, evaluateLinkExternalIdentityAuthority, type AuthorityDecisionNotAllowed } from "./authority-policy";
+import { evaluateCreateCustomerAuthority, evaluateLinkExternalIdentityAuthority, evaluateLinkPrestaShopIdentityAuthority, type AuthorityDecisionNotAllowed } from "./authority-policy";
 import type { CustomerServicePort } from "./ports";
-import type { CreateCustomerCommercialPurpose, CreateCustomerResult, CustomerResolutionEvidence, LinkExternalIdentityResult, ResolveCustomerInput } from "./types";
+import type { CreateCustomerCommercialPurpose, CreateCustomerResult, CustomerResolutionEvidence, LinkExternalIdentityResult, LinkPrestashopIdentityResult, ResolveCustomerInput } from "./types";
 
 function nowIso() {
   return new Date().toISOString();
@@ -21,7 +21,7 @@ function asNonEmptyString(value: string | null | undefined): string | null {
 // is an operational identity owned by the caller (the future Capability
 // Gateway execution row, ACS-R1-04-T06) - never a free-form key an agent
 // picks (contract section 6 / task section 6).
-export function buildCustomerServiceIdempotencyKey(operation: "create" | "link", capabilityExecutionId: string): string {
+export function buildCustomerServiceIdempotencyKey(operation: "create" | "link" | "link_prestashop", capabilityExecutionId: string): string {
   return `customer-service:${operation}:${capabilityExecutionId}`;
 }
 
@@ -59,10 +59,27 @@ export type LinkExternalIdentityOutcome =
   | { stage: "denied_by_policy"; decision: AuthorityDecisionNotAllowed }
   | { stage: "executed"; result: LinkExternalIdentityResult };
 
+// SALES-AGENT-R2-ID-R2-A09. Deliberately its own request/outcome shape, not
+// LinkExternalIdentityServiceRequest widened - see types.ts.
+export type LinkPrestashopIdentityServiceRequest = {
+  capabilityExecutionId: string;
+  /** master_customer.id - the caller's already-resolved master, never re-derived here. */
+  customerId: string;
+  /** A04's verified READY_TO_LINK candidate - never taken from message text or chosen by the LLM. */
+  prestashopCustomerId: string;
+  consent: { granted: boolean; messageId: string; capturedAt: string };
+  knownConflict?: { conflictCode: string } | null;
+};
+
+export type LinkPrestashopIdentityOutcome =
+  | { stage: "denied_by_policy"; decision: AuthorityDecisionNotAllowed }
+  | { stage: "executed"; result: LinkPrestashopIdentityResult };
+
 export type CustomerServiceClient = {
   resolveCustomer(input: ResolveCustomerInput): Promise<CustomerResolutionEvidence>;
   createCustomer(request: CreateCustomerServiceRequest): Promise<CreateCustomerOutcome>;
   linkExternalIdentity(request: LinkExternalIdentityServiceRequest): Promise<LinkExternalIdentityOutcome>;
+  linkPrestashopIdentity(request: LinkPrestashopIdentityServiceRequest): Promise<LinkPrestashopIdentityOutcome>;
 };
 
 export function createCustomerServiceClient(port: CustomerServicePort): CustomerServiceClient {
@@ -132,6 +149,31 @@ export function createCustomerServiceClient(port: CustomerServicePort): Customer
         externalIdentity: request.externalIdentity,
         consent: { granted: true, messageId: request.consent.messageId, capturedAt: request.consent.capturedAt },
         idempotencyKey: buildCustomerServiceIdempotencyKey("link", request.capabilityExecutionId)
+      });
+
+      return { stage: "executed", result };
+    },
+
+    async linkPrestashopIdentity(request) {
+      const customerId = asNonEmptyString(request.customerId);
+      const prestashopCustomerId = asNonEmptyString(request.prestashopCustomerId);
+
+      const decision = evaluateLinkPrestaShopIdentityAuthority({
+        masterCustomerId: customerId,
+        prestashopCustomerId,
+        consent: request.consent,
+        knownConflict: request.knownConflict ?? null
+      });
+
+      if (decision.status !== "allowed") {
+        return { stage: "denied_by_policy", decision };
+      }
+
+      const result = await port.linkPrestashopIdentity({
+        customerId: customerId as string,
+        prestashopCustomerId: prestashopCustomerId as string,
+        consent: { granted: true, messageId: request.consent.messageId, capturedAt: request.consent.capturedAt },
+        idempotencyKey: buildCustomerServiceIdempotencyKey("link_prestashop", request.capabilityExecutionId)
       });
 
       return { stage: "executed", result };

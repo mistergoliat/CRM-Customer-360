@@ -111,6 +111,61 @@ export function evaluateLinkExternalIdentityAuthority(input: LinkExternalIdentit
 }
 
 // -----------------------------------------------------------------------
+// link_prestashop_identity (SALES-AGENT-R2-ID-R2-A09). Deliberately a
+// separate function from evaluateLinkExternalIdentityAuthority above, never
+// that function generalized/relaxed - PRINCIPIO CENTRAL: WhatsApp link
+// authority proves channel control (waId === inboundWaId); PrestaShop link
+// authority proves e-commerce account adjudication, a different predicate
+// entirely (there is no "channel" to control here - both master and
+// prestashop ids are already-resolved facts this layer only checks are
+// PRESENT and CONSENTED, never re-derives). The higher-level preconditions
+// PARTE 3 lists (RuntimeIdentityContext.status === READY_TO_LINK, no
+// CONFLICT/AMBIGUOUS, evidence current) are already fully encoded in A04's
+// READY_TO_LINK decision itself (evaluate.ts: it is only ever reached past
+// the CONFLICT/AMBIGUOUS branches, with a current - non-STALE/SUPERSEDED -
+// verified candidate) - re-checking them here would duplicate A04's policy
+// in a lower, less-informed layer (this domain has no RuntimeIdentityContext
+// concept, by design). The caller
+// (linkPrestashopIdentityCapability, which DOES have RuntimeIdentityContext)
+// is responsible for only ever invoking this authority when
+// runtimeIdentity.status === "READY_TO_LINK".
+// -----------------------------------------------------------------------
+
+export type LinkPrestashopIdentityAuthorityInput = {
+  masterCustomerId: string | null;
+  prestashopCustomerId: string | null;
+  consent: { granted: boolean; messageId: string | null; capturedAt: string | null } | null;
+  knownConflict: { conflictCode: string } | null;
+};
+
+export function evaluateLinkPrestaShopIdentityAuthority(input: LinkPrestashopIdentityAuthorityInput): AuthorityDecision {
+  if (!input.masterCustomerId) {
+    return { status: "denied", reasonCode: "customer_id_required" };
+  }
+
+  if (!input.prestashopCustomerId) {
+    return { status: "denied", reasonCode: "prestashop_customer_id_required" };
+  }
+
+  if (!input.consent?.granted) {
+    return { status: "requires_consent", consentType: "link_prestashop_identity" };
+  }
+
+  const requiredFields: string[] = [];
+  if (!input.consent.messageId) requiredFields.push("messageId");
+  if (!input.consent.capturedAt) requiredFields.push("capturedAt");
+  if (requiredFields.length > 0) {
+    return { status: "missing_information", requiredFields };
+  }
+
+  if (input.knownConflict) {
+    return { status: "denied", reasonCode: "link_conflict" };
+  }
+
+  return { status: "allowed" };
+}
+
+// -----------------------------------------------------------------------
 // record_customer_interest (contract section 6)
 // -----------------------------------------------------------------------
 
