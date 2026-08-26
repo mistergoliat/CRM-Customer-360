@@ -1,6 +1,7 @@
 import type { CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
 import type { CustomerResolutionEvidence } from "@/lib/domains/customer-service";
 import type { MasterCustomerIdentityResolution } from "../../identity/master-customer/types";
+import type { RuntimeIdentityContext } from "./runtimeIdentityContext";
 
 // ACS-R1-04-T06. Canonical contracts:
 // docs/data/customer-onboarding-identity-contract.md
@@ -69,6 +70,16 @@ export type NativeCustomerSessionExecutionContext = {
    */
   masterCustomerIdentity: MasterCustomerIdentityResolution;
 
+  /**
+   * SALES-AGENT-R2-ID-R2-A05. A separate identity fact from both
+   * `identity` and `masterCustomerIdentity` above - never a rename, never a
+   * replacement. Computed once per turn from A04's verification policy over
+   * this turn's already-persisted evidence (see resolveNativeCustomerSession.ts).
+   * Describes what is known about identity right now - never a business
+   * requirement (PARTE PRINCIPIO CENTRAL of the task spec).
+   */
+  runtimeIdentity: RuntimeIdentityContext;
+
   onboarding: CustomerOnboardingState | null;
 
   contextAccess: CustomerSessionAccess;
@@ -114,6 +125,16 @@ export type CustomerSessionDecisionContext = {
     hasResolvedCustomer: boolean;
     source: CustomerIdentitySource;
   };
+
+  /**
+   * SALES-AGENT-R2-ID-R2-A05. Already minimized/privacy-safe by
+   * construction (RuntimeIdentityContext never carries email/phone/wa_id) -
+   * passed through as-is, never re-redacted. Every runtime that already
+   * receives this decision context (CommercialWork, multi-request, Agent
+   * Tool Loop, legacy) gets this passively - no runtime's planning/step
+   * derivation reads it yet (that is A06's job).
+   */
+  runtimeIdentity: RuntimeIdentityContext;
 
   onboarding: CustomerSessionOnboardingDecisionView | null;
 

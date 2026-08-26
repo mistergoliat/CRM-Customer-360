@@ -39,6 +39,12 @@ export type IdentityVerificationPolicyCode =
   | "AMBIGUOUS_PRESTASHOP_ACCOUNT"
   | "FRESH_RESOLUTION_SYSTEM_FAILURE"
   | "EVIDENCE_REPOSITORY_FAILURE"
+  // SALES-AGENT-R2-ID-R2-A05, PARTE 7. Durable evidence claimed a canonical
+  // PrestaShop bridge, but the live customer_external_identity(provider=
+  // "prestashop") read at decision time no longer confirms it (revoked,
+  // repointed to a different master, or the row is gone) - fails closed to
+  // LEVEL_2/NOT_LINKED rather than exposing a known-stale LEVEL_3.
+  | "PRESTASHOP_LIVE_LINK_STALE"
   | "ORDER_ENTITY_VERIFIED"
   | "ORDER_ENTITY_NOT_EVIDENCED"
   | "ORDER_ENTITY_ACCOUNT_MISMATCH"

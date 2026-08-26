@@ -65,6 +65,45 @@ async function loadVerificationInputs(context: IdentityVerificationContext, depe
 }
 
 /**
+ * SALES-AGENT-R2-ID-R2-A05, PARTE 7. A04 deliberately left LEVEL_3 freshness
+ * dependent on durable evidence alone (the bridge row A02 wrote at the
+ * moment it confirmed a link) - declared debt, not a silent omission (A04
+ * doc, section 11/"Deudas"). A05 closes it: whenever a decision resolves to
+ * VERIFIED/LEVEL_3, this does one more read-only lookup against the SAME
+ * table A02 itself checked when it wrote that evidence
+ * (customer_external_identity, provider="prestashop") to confirm the bridge
+ * is still live right now. A repository failure here fails closed to
+ * SYSTEM_FAILURE (never silently downgraded to a lower level); a bridge that
+ * no longer confirms fails closed to NOT_LINKED at LEVEL_2 - this domain
+ * never exposes a LEVEL_3 it cannot currently confirm live.
+ */
+async function decideWithLiveLevel3Check(
+  inputs: IdentityVerificationInputs,
+  dependencies?: IdentityVerificationDependencies
+): Promise<IdentityVerificationDecision> {
+  const decision = decideIdentityVerification(inputs);
+  if (decision.status !== "VERIFIED" || decision.identityLevel !== "LEVEL_3_PRESTASHOP_LINKED" || !decision.prestashopCustomerId) {
+    return decision;
+  }
+
+  const findExternalIdentity = dependencies?.findExternalIdentity ?? findExternalIdentityByProviderExternalId;
+  const liveBridge = await findExternalIdentity("prestashop", decision.prestashopCustomerId);
+  if (!liveBridge.ok) {
+    return { status: "SYSTEM_FAILURE", retryable: true, policyCode: "EVIDENCE_REPOSITORY_FAILURE" };
+  }
+  const confirmed = liveBridge.row !== null && liveBridge.row.customer_id !== null && String(liveBridge.row.customer_id) === decision.masterCustomerId;
+  if (confirmed) return decision;
+
+  return {
+    status: "NOT_LINKED",
+    currentLevel: "LEVEL_2_MASTER_RESOLVED",
+    masterCustomerId: decision.masterCustomerId,
+    evidenceIds: decision.evidenceIds,
+    policyCode: "PRESTASHOP_LIVE_LINK_STALE"
+  };
+}
+
+/**
  * Main entry point (PARTE 22: "evaluateIdentityVerification(context)").
  * `freshStatus` is optional - pass ID-R2-A02's `detail.status` from the SAME
  * turn's resolveIdentity() call, translated to "AMBIGUOUS"/"SYSTEM_FAILURE"
@@ -81,7 +120,7 @@ export async function evaluateIdentityVerification(
   if (!loaded.ok) {
     return { status: "SYSTEM_FAILURE", retryable: true, policyCode: loaded.policyCode };
   }
-  return decideIdentityVerification({ ...loaded.inputs, freshStatus: options?.freshStatus ?? null });
+  return decideWithLiveLevel3Check({ ...loaded.inputs, freshStatus: options?.freshStatus ?? null }, options?.dependencies);
 }
 
 export type IdentityEntityVerificationContext = IdentityVerificationContext & {
@@ -104,7 +143,7 @@ export async function evaluateEntityVerification(
     return { status: "SYSTEM_FAILURE", retryable: true, policyCode: loaded.policyCode };
   }
 
-  const baseDecision = decideIdentityVerification({ ...loaded.inputs, freshStatus: null });
+  const baseDecision = await decideWithLiveLevel3Check({ ...loaded.inputs, freshStatus: null }, options?.dependencies);
   const entityHash = hashSignalValue(context.entityRef);
   const matchingOrderEvidence =
     entityHash === null

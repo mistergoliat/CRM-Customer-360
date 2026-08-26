@@ -33,7 +33,12 @@ export type CommercialEventType =
   // SALES-AGENT-R2-A08.5. Controlled, allowlist-gated CommercialWork
   // production inbound path - one event per turn, descriptive only, same
   // discipline as agent_tool_loop_completed above.
-  | "commercial_work_inbound_cycle_completed";
+  | "commercial_work_inbound_cycle_completed"
+  // SALES-AGENT-R2-ID-R2-A05. One per turn, descriptive only - the durable
+  // state (evidence, verification) already lives in
+  // crm_customer_identity_evidence/customer_external_identity; this is
+  // audit trail on top, same discipline as customer_identity_resolution_recorded.
+  | "identity_verification_decision_recorded";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -101,6 +106,42 @@ export type CustomerSessionWarningRecordedPayload = {
   warningCode: string;
   phase: CustomerIdentityResolutionPhase;
   executionPublicId: string | null;
+};
+
+// SALES-AGENT-R2-ID-R2-A05. Local literal unions mirroring
+// lib/brain/commercial/native-cycle/customer-session/runtimeIdentityContext.ts#RuntimeIdentityStatus/RuntimeIdentityLevel -
+// same no-cross-module-import rationale as the rest of this file.
+export type IdentityVerificationDecisionRuntimeStatus =
+  | "ANONYMOUS"
+  | "CHANNEL_OBSERVED"
+  | "MASTER_RESOLVED"
+  | "PRESTASHOP_LINKED"
+  | "NEEDS_VERIFICATION"
+  | "READY_TO_LINK"
+  | "AMBIGUOUS"
+  | "CONFLICT"
+  | "SYSTEM_UNAVAILABLE";
+
+export type IdentityVerificationDecisionIdentityLevel =
+  | "LEVEL_0_ANONYMOUS"
+  | "LEVEL_1_CHANNEL_OBSERVED"
+  | "LEVEL_2_MASTER_RESOLVED"
+  | "LEVEL_3_PRESTASHOP_LINKED";
+
+/**
+ * No PII - status/level/policyCode are fixed vocabularies, masterCustomerId/
+ * prestashopCustomerId are internal ids (never email/phone/wa_id),
+ * evidenceIds are opaque row ids. Mirrors RuntimeIdentityContext exactly,
+ * minus evidenceRefs' readonly modifier (JSON payload, always a plain array).
+ */
+export type IdentityVerificationDecisionRecordedPayload = {
+  status: IdentityVerificationDecisionRuntimeStatus;
+  identityLevel: IdentityVerificationDecisionIdentityLevel;
+  policyCode: string;
+  masterCustomerId: string | null;
+  prestashopCustomerId: string | null;
+  evidenceIds: string[];
+  conflictCode: string | null;
 };
 
 // ACS-R1-05-T06.2. Canonical vocabulary for the terminal outcome of a sales

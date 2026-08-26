@@ -377,6 +377,10 @@ test("IVP06/IVP07 (integration): real customer_external_identity + evidence prod
   const conversationId = await makeConversationId("ivp0607");
   const waId = `wa-${uniqueSuffix("ivp0607")}`;
   await linkChannelIdentity("whatsapp", waId, masterA);
+  // SALES-AGENT-R2-ID-R2-A05: the live LEVEL_3 freshness check reads this
+  // same table (provider="prestashop") at decision time - a real bridge
+  // needs a real row here, not just an evidence row that claims one.
+  await linkChannelIdentity("prestashop", "PS-IVP06", masterA);
   await recordIdentityEvidence({
     conversationId,
     correlationId: randomUUID(),
@@ -493,6 +497,8 @@ test("IVP14/IVP15 (integration): entity verification is scoped to exactly one or
   const conversationId = await makeConversationId("ivp1415");
   const waId = `wa-${uniqueSuffix("ivp1415")}`;
   await linkChannelIdentity("whatsapp", waId, masterA);
+  // SALES-AGENT-R2-ID-R2-A05: see the identical note in the IVP06/IVP07 fixture above.
+  await linkChannelIdentity("prestashop", "PS-IVP1415", masterA);
   await recordIdentityEvidence({
     conversationId,
     correlationId: randomUUID(),
@@ -697,6 +703,134 @@ test("IVP24: restart produces the identical decision from durable evidence alone
 
   const after1 = await evaluateIdentityVerification({ conversationId, provider: "whatsapp", externalId: waId });
   assert.deepEqual(before, after1);
+});
+
+// ---------------------------------------------------------------------------
+// SALES-AGENT-R2-ID-R2-A05, PARTE 7: LEVEL_3 live freshness. Durable
+// evidence claiming a canonical PrestaShop bridge is never enough by
+// itself once a real caller exists (A05) - the bridge must still confirm
+// live at decision time.
+// ---------------------------------------------------------------------------
+
+test("IVP25 (integration): a canonical bridge evidenced durably but revoked live never surfaces as LEVEL_3 - fails closed to LEVEL_2/NOT_LINKED", async () => {
+  const masterA = await makeMasterCustomerId("ivp25");
+  const conversationId = await makeConversationId("ivp25");
+  const waId = `wa-${uniqueSuffix("ivp25")}`;
+  await linkChannelIdentity("whatsapp", waId, masterA);
+  // Deliberately no linkChannelIdentity("prestashop", ...) call - the
+  // durable evidence below claims a bridge that customer_external_identity
+  // itself never actually has (already revoked/never real).
+  await recordIdentityEvidence({
+    conversationId,
+    correlationId: randomUUID(),
+    channel: "whatsapp",
+    provider: "whatsapp",
+    signalType: "wa_id",
+    source: "customer_external_identity",
+    normalizedSignalValue: waId,
+    masterCustomerId: masterA,
+    strength: "verified",
+    verified: true,
+    observedAt: nowIso()
+  });
+  await recordIdentityEvidence({
+    conversationId,
+    correlationId: randomUUID(),
+    channel: "whatsapp",
+    provider: "prestashop",
+    signalType: "prestashop_customer_id",
+    source: "customer_external_identity",
+    masterCustomerId: masterA,
+    prestashopCustomerId: "PS-IVP25-REVOKED",
+    strength: "verified",
+    verified: true,
+    observedAt: nowIso()
+  });
+
+  const decision = await evaluateIdentityVerification({ conversationId, provider: "whatsapp", externalId: waId });
+  assert.equal(decision.status, "NOT_LINKED");
+  if (decision.status === "NOT_LINKED") {
+    assert.equal(decision.currentLevel, "LEVEL_2_MASTER_RESOLVED");
+    assert.equal(decision.masterCustomerId, masterA);
+    assert.equal(decision.policyCode, "PRESTASHOP_LIVE_LINK_STALE");
+  }
+
+  // Same discipline applies transitively to LEVEL_4 - a stale LEVEL_3 base
+  // decision can never verify any entity.
+  await recordIdentityEvidence({
+    conversationId,
+    correlationId: randomUUID(),
+    channel: "whatsapp",
+    provider: "prestashop",
+    signalType: "order_reference",
+    source: "order",
+    normalizedSignalValue: "REF-IVP25",
+    prestashopCustomerId: "PS-IVP25-REVOKED",
+    strength: "verified",
+    verified: true,
+    observedAt: nowIso()
+  });
+  const entityDecision = await evaluateEntityVerification({
+    conversationId,
+    provider: "whatsapp",
+    externalId: waId,
+    entityType: "order",
+    entityRef: "REF-IVP25"
+  });
+  assert.equal(entityDecision.status, "NOT_VERIFIED_FOR_ENTITY");
+  if (entityDecision.status === "NOT_VERIFIED_FOR_ENTITY") {
+    assert.equal(entityDecision.reason, "identity_not_prestashop_linked");
+  }
+});
+
+test("IVP26: a live-lookup repository failure at the LEVEL_3 confirmation step fails closed to SYSTEM_FAILURE, never a downgraded level", async () => {
+  // The whatsapp channel lookup succeeds (so the decision reaches the
+  // LEVEL_3 canonical-bridge branch); only the prestashop live-confirmation
+  // lookup fails - isolating this from IVP19 (a channel-lookup failure).
+  const dependencies: IdentityVerificationDependencies = {
+    findExternalIdentity: async (provider: string, externalId: string) => {
+      if (provider === "whatsapp") {
+        return {
+          ok: true as const,
+          error: null,
+          row: {
+            id: 1,
+            customer_id: 999,
+            provider: "whatsapp",
+            identity_type: "wa_id",
+            external_id: externalId,
+            normalized_value: externalId,
+            is_verified: 1,
+            created_at: "2026-01-01T00:00:00.000Z",
+            updated_at: "2026-01-01T00:00:00.000Z"
+          }
+        };
+      }
+      return { ok: false as const, error: "simulated_repository_failure", row: null };
+    },
+    getCurrentEvidence: async () => ({
+      ok: true,
+      records: [
+        fakeEvidence({ signalType: "wa_id", source: "customer_external_identity", masterCustomerId: "999", strength: "verified", status: "VERIFIED" }),
+        fakeEvidence({
+          signalType: "prestashop_customer_id",
+          provider: "prestashop",
+          source: "customer_external_identity",
+          masterCustomerId: "999",
+          prestashopCustomerId: "PS-IVP26",
+          strength: "verified",
+          status: "VERIFIED"
+        })
+      ]
+    })
+  };
+
+  const decision = await evaluateIdentityVerification({ conversationId: "irrelevant", provider: "whatsapp", externalId: "irrelevant" }, { dependencies });
+  assert.equal(decision.status, "SYSTEM_FAILURE");
+  if (decision.status === "SYSTEM_FAILURE") {
+    assert.equal(decision.retryable, true);
+    assert.equal(decision.policyCode, "EVIDENCE_REPOSITORY_FAILURE");
+  }
 });
 
 // ---------------------------------------------------------------------------

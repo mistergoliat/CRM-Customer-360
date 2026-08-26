@@ -16,7 +16,10 @@ import type {
   CustomerIdentityResolver,
   CustomerOnboardingTransitionOperation,
   CustomerOnboardingTransitionRecordedPayload,
-  CustomerSessionWarningRecordedPayload
+  CustomerSessionWarningRecordedPayload,
+  IdentityVerificationDecisionIdentityLevel,
+  IdentityVerificationDecisionRecordedPayload,
+  IdentityVerificationDecisionRuntimeStatus
 } from "./types";
 import {
   COMMERCIAL_EVENT_CONTRACT_NAME,
@@ -35,6 +38,7 @@ import {
   buildCustomerOnboardingTransitionDedupeKey,
   buildCustomerSessionWarningDedupeKey,
   buildFollowUpDueCommercialEventDedupeKey,
+  buildIdentityVerificationDecisionDedupeKey,
   buildInboundCommercialEventDedupeKey,
   buildInternalCommandCommercialEventDedupeKey
 } from "./dedupe";
@@ -489,6 +493,53 @@ export function normalizeCustomerSessionWarningCommercialEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: input.decisionId ? { eventKind: "customer_session_warning", decisionId: input.decisionId } : { eventKind: "customer_session_warning" }
+  });
+}
+
+// SALES-AGENT-R2-ID-R2-A05 (PARTE 14). One event per turn - dedupe key
+// includes status/policyCode (not just messageId) so a turn whose decision
+// genuinely changed mid-replay is never silently collapsed into the first
+// attempt's row.
+
+export function normalizeIdentityVerificationDecisionCommercialEvent(input: {
+  messageId: string;
+  status: IdentityVerificationDecisionRuntimeStatus;
+  identityLevel: IdentityVerificationDecisionIdentityLevel;
+  policyCode: string;
+  masterCustomerId: string | null;
+  prestashopCustomerId: string | null;
+  evidenceIds: string[];
+  conflictCode: string | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+  correlationId?: string | null;
+  conversationId?: string | number | null;
+}) {
+  const messageId = input.messageId.trim();
+  const payload: IdentityVerificationDecisionRecordedPayload = {
+    status: input.status,
+    identityLevel: input.identityLevel,
+    policyCode: input.policyCode,
+    masterCustomerId: input.masterCustomerId,
+    prestashopCustomerId: input.prestashopCustomerId,
+    evidenceIds: [...input.evidenceIds],
+    conflictCode: input.conflictCode
+  };
+  return buildBaseEvent({
+    eventType: "identity_verification_decision_recorded",
+    source: "internal_command",
+    sourceEventId: messageId,
+    dedupeKey: buildIdentityVerificationDecisionDedupeKey(messageId, input.status, input.policyCode),
+    correlationId: input.correlationId,
+    customerId: input.masterCustomerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "identity_verification_decision" }
   });
 }
 
