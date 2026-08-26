@@ -5,6 +5,7 @@ import { executeGovernedCapability } from "../../capability-gateway/executeCapab
 import type { CapabilityGatewayResult } from "../../capability-gateway/types";
 import { extractCustomerOnboardingFields } from "./extractCustomerOnboardingFields";
 import { recordExternalIdentityResolution, recordIdentityCapabilityOutcome, recordOnboardingTransitionIfChanged, recordSessionWarnings } from "./identityAuditEvents";
+import { recordOnboardingFieldEvidence } from "./identityEvidenceHooks";
 import {
   computePendingOnboardingFields,
   isAllowedCreateCustomerPurpose,
@@ -155,6 +156,36 @@ export async function runCustomerOnboardingPostPlanStage(input: CustomerOnboardi
       });
       if (result.ok) {
         await recordOnboardingTransitionIfChanged({ operation: "collect_fields", previous, result, correlationId: input.correlationId });
+        // SALES-AGENT-R2-ID-R2-A03 (PARTE 5, corrections). Only the fields
+        // that are identity signals in the durable evidence contract
+        // (email, orderReference) - firstName/lastName are onboarding
+        // profile data, never an identity signal type there. An unchanged
+        // value is a no-op inside recordOnboardingFieldEvidence; a changed
+        // value transactionally supersedes the prior evidence for this
+        // (conversation, field) - never a silent overwrite.
+        const now = new Date().toISOString();
+        if (patch.email) {
+          await recordOnboardingFieldEvidence({
+            conversationId: onboarding.conversationId,
+            messageId: session.trustedInbound.messageId,
+            correlationId: input.correlationId,
+            masterCustomerId: session.identity.customerId,
+            field: "email",
+            value: patch.email,
+            observedAt: now
+          });
+        }
+        if (patch.orderReference) {
+          await recordOnboardingFieldEvidence({
+            conversationId: onboarding.conversationId,
+            messageId: session.trustedInbound.messageId,
+            correlationId: input.correlationId,
+            masterCustomerId: session.identity.customerId,
+            field: "orderReference",
+            value: patch.orderReference,
+            observedAt: now
+          });
+        }
         onboarding = result.state;
         attemptedOperation = "collect_fields";
       } else if (result.status === "onboarding_state_version_conflict") {

@@ -7,6 +7,7 @@ import { executeGovernedCapability } from "../../capability-gateway/executeCapab
 import { resolveMasterCustomerIdentity } from "../../identity/master-customer/resolveMasterCustomerIdentity";
 import { parseAllConsentEvidence } from "./consentEvidence";
 import { recordExternalIdentityResolution, recordIdentityCapabilityOutcome, recordLocalIdentityResolution, recordSessionWarnings } from "./identityAuditEvents";
+import { recordTurnIdentityEvidence } from "./identityEvidenceHooks";
 import { completeOnboardingWithCustomer, completeOnboardingWithVerifiedCustomer, landOnboardingInTerminalState } from "./onboardingTransitions";
 import { mergeWarnings } from "./warnings";
 import type {
@@ -160,6 +161,18 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
     correlationId: input.correlationId,
     conversationId: input.conversationId,
     result: localResult
+  });
+
+  // SALES-AGENT-R2-ID-R2-A03: persist this turn's per-signal evidence
+  // durably, on top of (never instead of) the descriptive outcome event
+  // just recorded above - see identityEvidenceHooks.ts.
+  await recordTurnIdentityEvidence({
+    conversationId: input.conversationId,
+    messageId: input.trustedInbound.messageId,
+    correlationId: input.correlationId,
+    externalId: input.trustedInbound.externalId,
+    normalizedPhone: input.trustedInbound.normalizedPhone,
+    detail: localResult.detail
   });
 
   let identity = mapLocalResolution(localResult, onboarding !== null && onboarding.status !== "completed");
