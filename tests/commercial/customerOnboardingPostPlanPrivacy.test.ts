@@ -204,6 +204,7 @@ function session(overrides: Partial<NativeCustomerSessionExecutionContext> = {})
     trustedInbound: { channel: "whatsapp", externalId: "56911112222", normalizedPhone: "56911112222", messageId: "wamid.1", receivedAt: "2026-07-09T12:00:00.000Z" },
     identity: { status: "identification_required", customerId: null, source: "none", localResolutionOutcome: "identification_required", externalResolutionOutcome: null },
     masterCustomerIdentity: { status: "identity_unresolved", reason: "identity_not_verified" },
+    runtimeIdentity: { status: "ANONYMOUS", identityLevel: "LEVEL_0_ANONYMOUS", masterCustomerId: null, prestashopCustomerId: null, verificationRequired: false, requiredEvidence: [], readyToLink: false, conflictCode: null, policyCode: "NO_CHANNEL_EVIDENCE", evidenceRefs: [] },
     onboarding: null,
     contextAccess: "none",
     currentTurnConsent: {
