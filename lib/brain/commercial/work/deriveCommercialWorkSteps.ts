@@ -4,6 +4,35 @@ function blocker(code: CommercialWorkBlocker["code"], source: CommercialWorkBloc
   return { code, source, objectiveId, ...(stepId ? { stepId } : {}) };
 }
 
+/**
+ * SALES-AGENT-R2-ID-R2-A12. A "gathering" step (LOAD_PURCHASE_HISTORY/
+ * LOAD_RECOMMENDATION_SIGNAL) that already ran is done, permanently -
+ * buildCommercialWorkProjection.ts's applyRepeatPurchaseObjectiveState/
+ * applyCustomerAwareRecommendationObjectiveState both push a
+ * capability_execution evidence entry onto the objective the moment they
+ * find a completed execution, so its presence is the one signal this
+ * function (which never sees recentCapabilityExecutions directly) needs.
+ * Once true, this step must always derive as COMPLETED - never mirror the
+ * objective's own subsequent status (e.g. WAITING_CUSTOMER while the
+ * objective asks which of 2+ historical products, or a query hint). The
+ * finalizer only ever reads objective.missingRequirements/blockers, never a
+ * step's status, so nothing downstream needs this step to reflect the
+ * customer-facing wait - and transitions.ts's step state machine (correctly)
+ * refuses to move a step already persisted COMPLETED back to WAITING_CUSTOMER,
+ * which silently discarded the real objective state before this check
+ * existed (verified: a real "Invalid CommercialWorkStep transition COMPLETED
+ * -> WAITING_CUSTOMER" persistence error).
+ */
+function gatheringStepAlreadyExecuted(objective: CommercialObjective, capabilityName: string): boolean {
+  // status === "completed" only - a technical-failure execution also gets
+  // evidenced (capabilityEvidence carries the real executionStatus through),
+  // but that path already ends the objective at WAITING_SYSTEM/FAILED
+  // itself, never a later WAITING_CUSTOMER this function would otherwise
+  // need to protect against - forcing COMPLETED there would misrepresent a
+  // real failure as a successful gather.
+  return objective.evidence.some((item) => item.kind === "capability_execution" && item.capabilityName === capabilityName && item.status === "completed");
+}
+
 function makeStep(
   input: Omit<
     CommercialWorkStep,
@@ -195,18 +224,86 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             type: "LOAD_PURCHASE_HISTORY",
             status: terminalOr(
               objective,
-              objective.status === "COMPLETED"
+              gatheringStepAlreadyExecuted(objective, "get_customer_purchase_history")
                 ? "COMPLETED"
-                : objective.status === "WAITING_CUSTOMER"
-                  ? "WAITING_CUSTOMER"
-                  : objective.status === "BLOCKED"
-                    ? "BLOCKED"
-                    : objective.status === "WAITING_SYSTEM"
-                      ? "WAITING_SYSTEM"
-                      : "READY"
+                : objective.status === "COMPLETED"
+                  ? "COMPLETED"
+                  : objective.status === "WAITING_CUSTOMER"
+                    ? "WAITING_CUSTOMER"
+                    : objective.status === "BLOCKED"
+                      ? "BLOCKED"
+                      : objective.status === "WAITING_SYSTEM"
+                        ? "WAITING_SYSTEM"
+                        : "READY"
             ),
             dependencies: [],
             capabilityName: "get_customer_purchase_history",
+            input: objective.inputs,
+            evidence: [...objective.evidence],
+            blockers: [...objective.blockers]
+          })
+        );
+        break;
+      }
+      case "CUSTOMER_AWARE_RECOMMENDATION": {
+        // SALES-AGENT-R2-ID-R2-A12. Once a query is resolved (from queryHint
+        // or from a loaded historical signal), this derives a plain
+        // SEARCH_PRODUCTS step - never a parallel candidate-fetching
+        // mechanism. No product is ever selected within this objective
+        // itself (Decision 7: always present-and-wait, even for a single
+        // candidate) - deriveProductSelectionSteps is deliberately not used
+        // here, unlike REPEAT_PURCHASE, since a recommendation is never
+        // auto-advanced to checkout.
+        if (objective.inputs.query) {
+          steps.push(
+            makeStep({
+              stepId: `${stepPrefix}:SEARCH_PRODUCTS`,
+              objectiveIds: [objective.objectiveId],
+              type: "SEARCH_PRODUCTS",
+              status: terminalOr(
+                objective,
+                gatheringStepAlreadyExecuted(objective, "search_products")
+                  ? "COMPLETED"
+                  : objective.status === "COMPLETED"
+                    ? "COMPLETED"
+                    : objective.status === "WAITING_CUSTOMER"
+                      ? "WAITING_CUSTOMER"
+                      : objective.status === "BLOCKED"
+                        ? "BLOCKED"
+                        : objective.status === "WAITING_SYSTEM"
+                          ? "WAITING_SYSTEM"
+                          : "READY"
+              ),
+              dependencies: [],
+              capabilityName: "search_products",
+              input: objective.inputs,
+              evidence: [...objective.evidence],
+              blockers: [...objective.blockers]
+            })
+          );
+          break;
+        }
+        steps.push(
+          makeStep({
+            stepId: `${stepPrefix}:LOAD_RECOMMENDATION_SIGNAL`,
+            objectiveIds: [objective.objectiveId],
+            type: "LOAD_RECOMMENDATION_SIGNAL",
+            status: terminalOr(
+              objective,
+              gatheringStepAlreadyExecuted(objective, "get_customer_recommendation_signal")
+                ? "COMPLETED"
+                : objective.status === "COMPLETED"
+                  ? "COMPLETED"
+                  : objective.status === "WAITING_CUSTOMER"
+                    ? "WAITING_CUSTOMER"
+                    : objective.status === "BLOCKED"
+                      ? "BLOCKED"
+                      : objective.status === "WAITING_SYSTEM"
+                        ? "WAITING_SYSTEM"
+                        : "READY"
+            ),
+            dependencies: [],
+            capabilityName: "get_customer_recommendation_signal",
             input: objective.inputs,
             evidence: [...objective.evidence],
             blockers: [...objective.blockers]

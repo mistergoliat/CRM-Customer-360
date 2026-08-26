@@ -328,7 +328,12 @@ test("CIR24: same operation + same RuntimeIdentityContext -> deterministic ident
 // customer_profile_history operation (REPEAT_PURCHASE -> customer_profile_history,
 // see commercialIdentityGate.ts) - never a second, redundant operation.
 const CAPABILITY_NAME_TO_OPERATION_OVERRIDE: Partial<Record<string, string>> = {
-  get_customer_purchase_history: "customer_profile_history"
+  get_customer_purchase_history: "customer_profile_history",
+  // SALES-AGENT-R2-ID-R2-A12. Same rationale as get_customer_purchase_history
+  // above - governed by A06's existing customer_profile_history operation
+  // (CUSTOMER_AWARE_RECOMMENDATION -> customer_profile_history, see
+  // commercialIdentityGate.ts), never a second, redundant operation.
+  get_customer_recommendation_signal: "customer_profile_history"
 };
 
 test("catalog integrity: every capability-shaped CommercialOperation matches a real registered capability or a real non-capability module (never invented)", () => {

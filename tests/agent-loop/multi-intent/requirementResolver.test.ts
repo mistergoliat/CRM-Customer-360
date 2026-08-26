@@ -203,3 +203,15 @@ test("[MI-Resolve-15] repeat_purchase is always ready with no requirements, with
   assert.equal(withoutHint.status, "ready");
   assert.deepEqual(withoutHint.requirements, []);
 });
+
+// SALES-AGENT-R2-ID-R2-A12.
+
+test("[MI-Resolve-16] customer_aware_recommendation is always ready with no requirements, with or without a queryHint", () => {
+  const [withHint] = resolveCommercialIntentPlan([{ type: "customer_aware_recommendation", queryHint: "discos" }], baseContext());
+  assert.equal(withHint.status, "ready");
+  assert.deepEqual(withHint.requirements, []);
+
+  const [withoutHint] = resolveCommercialIntentPlan([{ type: "customer_aware_recommendation" }], baseContext());
+  assert.equal(withoutHint.status, "ready");
+  assert.deepEqual(withoutHint.requirements, []);
+});

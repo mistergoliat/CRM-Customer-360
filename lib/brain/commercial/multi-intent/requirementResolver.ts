@@ -285,6 +285,13 @@ export function resolveCommercialIntentPlan(intents: CommercialIntent[], context
       // REPEAT_PURCHASE objective seed; the seed itself resolves history and
       // then catalog, turn by turn, at the projection layer.
       results[intentIndex] = { intentIndex, intent, requirements: [], status: "ready" };
+    } else if (intent.type === "customer_aware_recommendation") {
+      // SALES-AGENT-R2-ID-R2-A12. Same rationale as repeat_purchase above -
+      // identity (LEVEL_3) is gated entirely at the CommercialWork objective
+      // layer, never by this pre-execution resolver. Always ready to become
+      // a CUSTOMER_AWARE_RECOMMENDATION objective seed; history/query
+      // resolution happens turn by turn at the projection layer.
+      results[intentIndex] = { intentIndex, intent, requirements: [], status: "ready" };
     }
   });
 

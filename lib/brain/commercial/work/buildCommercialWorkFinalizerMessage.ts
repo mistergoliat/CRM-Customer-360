@@ -115,6 +115,13 @@ function completedClause(objective: CommercialObjective): string | null {
       const description = describeSelectionObjective(objective);
       return description ? `Encontré tu compra anterior y dejé registrada ${description}` : "No encontré compras anteriores registradas para repetir";
     }
+    // SALES-AGENT-R2-ID-R2-A12. Only the zero-candidates terminal outcome
+    // reaches this clause - a picked candidate resolves into an ordinary
+    // SELECT_PRODUCTS objective (via supersession), already handled above.
+    // Worded to reflect what actually happened - one T12 search from one
+    // derived query - never implying a global catalog review.
+    case "CUSTOMER_AWARE_RECOMMENDATION":
+      return "No encontré opciones actuales que pueda recomendarte con ese criterio";
     case "SET_DESTINATION": {
       const destination = describeDestinationObjective(objective);
       return destination ? `tu destino queda registrado como ${destination}` : null;
@@ -206,6 +213,8 @@ function pendingClause(objective: CommercialObjective, hasDurableContinuation: b
       return "estoy terminando de generar tu cotización";
     case "REPEAT_PURCHASE":
       return "estoy revisando tu compra anterior";
+    case "CUSTOMER_AWARE_RECOMMENDATION":
+      return "estoy buscando una recomendación para ti";
     default:
       return null;
   }
@@ -337,6 +346,24 @@ function buildMissingInfoQuestion(waitingCustomerObjectives: readonly Commercial
     return options
       ? `Encontré varias compras anteriores que podrían ser esa: ${options}. ¿Cuál de estas quieres repetir?`
       : "Encontré varias compras anteriores. ¿Puedes decirme cuál de esos productos quieres repetir?";
+  }
+  // SALES-AGENT-R2-ID-R2-A12. Real, CURRENT catalog candidates only
+  // (objective.inputs.recommendationCandidates, a search_products/T12
+  // execution) - never invented, never the historical signal directly.
+  // Intro varies only by whether personalization actually drove this
+  // search (recommendationSignalSource) - never keyed off rfmSegmentLabel,
+  // which stays unread (Decision 6).
+  if (missing.includes("RECOMMENDATION_CANDIDATES")) {
+    const objective = waitingCustomerObjectives.find((item) => item.missingRequirements.includes("RECOMMENDATION_CANDIDATES"));
+    const options = productCandidatesList(objective?.inputs.recommendationCandidates);
+    const intro = objective?.inputs.recommendationSignalSource === "purchase_history" ? "Basado en lo que sueles comprar, estas son algunas opciones" : "Estas son algunas opciones que podrían interesarte";
+    return options ? `${intro}: ${options}. ¿Cuál te interesa?` : "Tengo algunas recomendaciones para ti. ¿Puedes darme más detalle de lo que buscas?";
+  }
+  // SALES-AGENT-R2-ID-R2-A12. No queryHint this turn and no usable
+  // historical signal - a normal, identity-free clarifying question, never
+  // a reason to reopen onboarding or invent a preference.
+  if (missing.includes("RECOMMENDATION_QUERY_HINT")) {
+    return "¿Qué tipo de producto buscas o para qué lo necesitas? Así puedo recomendarte algo.";
   }
   if (missing.includes("PRODUCT") || missing.includes("PRODUCT_EVIDENCE")) return "¿Qué producto te interesa?";
   if (missing.includes("QUANTITY")) return "¿Cuántas unidades necesitas?";

@@ -135,6 +135,42 @@ export type CommercialObjectiveInputs = {
    * against the live catalog at all.
    */
   historicalPurchaseCandidates?: { historicalName: string; historicalProductId?: string; quantity?: number; lastPurchasedAt?: string }[];
+  /**
+   * SALES-AGENT-R2-ID-R2-A12. Customer's own words narrowing what they want
+   * THIS turn ("economico", "para entrenar en casa", "discos") - optional,
+   * never invented for a bare "que me recomiendas" with nothing to narrow
+   * by. Always wins over any historical signal as the search query
+   * (buildCommercialWorkProjection.ts) once loaded - never blended.
+   */
+  queryHint?: string;
+  /**
+   * SALES-AGENT-R2-ID-R2-A12. Present only when `query` above actually came
+   * from the loaded historical signal - absent whenever it came from
+   * `queryHint` or no personalization was possible (never a fake "generic"
+   * value standing in for absence). Read only by the finalizer's wording,
+   * never by any ranking/filtering logic.
+   */
+  recommendationSignalSource?: "purchase_history";
+  /**
+   * SALES-AGENT-R2-ID-R2-A12. Coarse RFM segment code
+   * (customerRfm.segment.code), captured because it comes along for free
+   * with the same loadCommercialCustomerContext call - never raw
+   * recency/frequency/monetary numbers. Inert in v1: not read by the search
+   * query, the finalizer, or any ranking/filtering - a hook for a future
+   * task, not active behavior.
+   */
+  rfmSegmentLabel?: string;
+  /**
+   * SALES-AGENT-R2-ID-R2-A12. Real, CURRENT catalog candidates from a
+   * search_products/T12 execution - never historical products, never
+   * invented. Distinct from productCandidates above (PRODUCT_AMBIGUOUS
+   * clarification for a product the customer named directly) and from
+   * historicalPurchaseCandidates (2+ past purchases to disambiguate) -
+   * these are ranked/suggested candidates the customer did not ask for by
+   * name, always presented and waited on even when there is only one
+   * (never auto-selected, unlike REPEAT_PURCHASE).
+   */
+  recommendationCandidates?: { productId: string; combinationId?: string; name: string; price?: { amount: number; currency: string } | null }[];
 };
 
 export type CommercialObjectiveResolvedInputs = {
@@ -176,7 +212,17 @@ export type CommercialMissingRequirement =
   // catalog-space PRODUCT_AMBIGUOUS above (that one means "2+ CURRENT catalog
   // matches for a name", this one means "2+ HISTORICAL purchases" - resolved
   // one stage earlier, before any catalog search ever runs).
-  | "REPEAT_PURCHASE_AMBIGUOUS";
+  | "REPEAT_PURCHASE_AMBIGUOUS"
+  // SALES-AGENT-R2-ID-R2-A12. Bounded, Catalog-current recommendation
+  // candidates are ready and the customer needs to pick one - distinct from
+  // both PRODUCT_AMBIGUOUS (a product they DID name) and
+  // REPEAT_PURCHASE_AMBIGUOUS (historical, not yet Catalog-validated).
+  | "RECOMMENDATION_CANDIDATES"
+  // SALES-AGENT-R2-ID-R2-A12. No queryHint this turn and no usable
+  // historical signal (no history, Customer Profile unavailable, or profile
+  // not found) - a normal, identity-free clarifying question, never a
+  // reason to reopen onboarding or invent a query.
+  | "RECOMMENDATION_QUERY_HINT";
 
 export type CommercialEvidenceRef = {
   kind: "request_fact" | "capability_execution" | "commercial_event" | "agent_action" | "conversation_state";
@@ -212,6 +258,10 @@ export type CommercialWorkBlockerCode =
   // SALES-AGENT-R2-ID-R2-A11. See the matching CommercialMissingRequirement
   // comment above - never conflated with the catalog-space "PRODUCT_AMBIGUOUS".
   | "REPEAT_PURCHASE_AMBIGUOUS"
+  // SALES-AGENT-R2-ID-R2-A12. See the matching CommercialMissingRequirement
+  // comments above - same distinctions apply to blockers.
+  | "RECOMMENDATION_CANDIDATES"
+  | "RECOMMENDATION_QUERY_HINT"
   // SALES-AGENT-R2-ID-R2-A07. A single code for every non-SUFFICIENT
   // CommercialIdentityRequirementDecision (A06) - the decision's own `status`
   // (carried in `identityDecision` below) already distinguishes falta nivel /

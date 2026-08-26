@@ -30,8 +30,34 @@ const EXECUTABLE_STEP_TYPES = new Set([
   // SALES-AGENT-R2-ID-R2-A11. Read-only Customer Profile lookup - no
   // buildGatewayInput case needed (falls to the `default: return {}` branch,
   // the capability reads identity from context.trustedCustomerSession).
-  "LOAD_PURCHASE_HISTORY"
+  "LOAD_PURCHASE_HISTORY",
+  // SALES-AGENT-R2-ID-R2-A12. Same reasoning as LOAD_PURCHASE_HISTORY above -
+  // read-only, no buildGatewayInput case needed.
+  "LOAD_RECOMMENDATION_SIGNAL"
 ]);
+
+/**
+ * SALES-AGENT-R2-ID-R2-A12. A "gathering" step never means its objective is
+ * done just because the step itself completed - completion here only means
+ * "the read succeeded," and the OBJECTIVE's own buildCommercialWorkProjection.ts
+ * state function still has to interpret the result (e.g. REPEAT_PURCHASE's
+ * LOAD_PURCHASE_HISTORY completing might mean COMPLETED/READY-to-search/
+ * WAITING_CUSTOMER depending on how many products came back; CUSTOMER_AWARE_
+ * RECOMMENDATION's LOAD_RECOMMENDATION_SIGNAL completing always needs a
+ * follow-up reprojection to resolve the query and derive the next step).
+ * Excluded from refreshObjectiveState's generic "every owned step completed
+ * -> objective COMPLETED" shortcut below - marking the objective/work
+ * COMPLETED here, before that reprojection ever runs, is a terminal status
+ * the transitions.ts state machine then refuses to move off of (validated:
+ * a real "Invalid CommercialWork transition COMPLETED -> WAITING_CUSTOMER"
+ * persistence error), silently discarding the correct follow-up state.
+ * REPEAT_PURCHASE never surfaced this because a Customer Profile failure is
+ * itself a real terminal FAILED/WAITING_SYSTEM for that objective (no
+ * generic substitute for "repeat this specific purchase") - A12 is the
+ * first objective whose gathering step is designed to complete cleanly even
+ * when Customer Profile is unavailable, which is what exposed this gap.
+ */
+const GATHERING_STEP_TYPES = new Set(["LOAD_PURCHASE_HISTORY", "LOAD_RECOMMENDATION_SIGNAL"]);
 const TERMINAL_WORK_STATUSES = new Set<CommercialWorkStatus>(["COMPLETED", "CANCELLED", "SUPERSEDED", "HANDOFF", "FAILED"]);
 
 type CurrentFacts = {
@@ -416,8 +442,13 @@ function refreshObjectiveState(objective: CommercialObjective, steps: readonly C
   if (facts.selectedShippingOption) resolvedInputs.selectedShippingOptionFactId = facts.selectedShippingOption.factId;
   if (facts.createdQuote) resolvedInputs.createdQuoteFactId = facts.createdQuote.factId;
 
+  // A gathering step (LOAD_PURCHASE_HISTORY/LOAD_RECOMMENDATION_SIGNAL)
+  // completing successfully is never itself objective-completion - see
+  // GATHERING_STEP_TYPES. Only a non-gathering step's completion can drive
+  // this shortcut.
+  const nonGatheringOwned = owned.filter((step) => !GATHERING_STEP_TYPES.has(step.type));
   let status = objective.status;
-  if (owned.length > 0 && owned.every((step) => step.status === "COMPLETED")) status = "COMPLETED";
+  if (nonGatheringOwned.length > 0 && nonGatheringOwned.every((step) => step.status === "COMPLETED")) status = "COMPLETED";
   else if (owned.some((step) => step.status === "FAILED")) status = "FAILED";
   else if (owned.some((step) => step.status === "WAITING_SYSTEM" || step.status === "RETRY_SCHEDULED")) status = "WAITING_SYSTEM";
   else if (owned.some((step) => step.status === "WAITING_CUSTOMER")) status = "WAITING_CUSTOMER";

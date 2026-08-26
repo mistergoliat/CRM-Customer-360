@@ -54,7 +54,13 @@ export function commercialObjectiveSupersessionFamily(type: CommercialObjectiveT
   // select_products intent, whose resulting SELECT_PRODUCTS objective must
   // supersede the WAITING_CUSTOMER REPEAT_PURCHASE that asked the question,
   // never leaving two competing "selection" objectives alive at once.
-  if (type === "SELECT_PRODUCTS" || type === "CHANGE_QUANTITY" || type === "REPEAT_PURCHASE") return "selection";
+  //
+  // SALES-AGENT-R2-ID-R2-A12. CUSTOMER_AWARE_RECOMMENDATION joins the same
+  // family for the same reason: once its bounded candidates are presented,
+  // the customer naming one is itself an ordinary select_products intent,
+  // whose SELECT_PRODUCTS objective must supersede the WAITING_CUSTOMER
+  // recommendation that presented them - never a bespoke reply parser.
+  if (type === "SELECT_PRODUCTS" || type === "CHANGE_QUANTITY" || type === "REPEAT_PURCHASE" || type === "CUSTOMER_AWARE_RECOMMENDATION") return "selection";
   if (type === "SET_DESTINATION") return "destination";
   if (type === "GET_SHIPPING_QUOTE" || type === "SELECT_SHIPPING_OPTION") return "shipping";
   if (type === "CREATE_QUOTE" || type === "WAIT_FOR_QUOTE_APPROVAL") return "quote";

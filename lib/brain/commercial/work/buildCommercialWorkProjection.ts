@@ -480,6 +480,154 @@ function applyRepeatPurchaseObjectiveState(objective: CommercialObjective, input
   objective.blockers.push(blocker("REPEAT_PURCHASE_AMBIGUOUS", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
 }
 
+type RecommendationSignalResult = { status: "AVAILABLE"; queryText: string; rfmSegmentLabel?: string } | { status: "NO_SIGNAL" };
+
+/**
+ * SALES-AGENT-R2-ID-R2-A12. Defensive parse of get_customer_recommendation_signal's
+ * own minimized response (getCustomerRecommendationSignalCapability.ts's
+ * RecommendationSignalResult) - mirrors parsePurchaseHistoryResult's
+ * discipline: an unrecognizable payload is a real contract violation
+ * (system-owned FAILED), never guessed into a customer question.
+ */
+function parseRecommendationSignalResult(raw: unknown): RecommendationSignalResult | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const status = record.status;
+  if (status === "NO_SIGNAL") return { status: "NO_SIGNAL" };
+  if (status !== "AVAILABLE") return null;
+  const queryText = typeof record.queryText === "string" ? record.queryText : null;
+  if (!queryText) return null;
+  const rfmSegmentLabel = typeof record.rfmSegmentLabel === "string" ? record.rfmSegmentLabel : undefined;
+  return { status: "AVAILABLE", queryText, ...(rfmSegmentLabel ? { rfmSegmentLabel } : {}) };
+}
+
+/**
+ * SALES-AGENT-R2-ID-R2-A12. Only ever consulted for get_customer_recommendation_signal
+ * - same rationale as latestPurchaseHistoryExecution: takes no variable
+ * input, so the single most recent execution is always the right one.
+ */
+function latestRecommendationSignalExecution(executions: readonly CommercialCapabilityExecutionProjection[] | undefined): CommercialCapabilityExecutionProjection | null {
+  const candidates = (executions ?? []).filter((execution) => execution.capabilityName === "get_customer_recommendation_signal");
+  return candidates.sort((a, b) => {
+    const left = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+    const right = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+    return right - left;
+  })[0] ?? null;
+}
+
+/**
+ * SALES-AGENT-R2-ID-R2-A12. Once a query is resolved (from queryHint or from
+ * a loaded historical signal), generates bounded CURRENT Catalog candidates
+ * via the same search_products/T12 chain SELECT_PRODUCTS/REPEAT_PURCHASE
+ * already use - never a parallel candidate-fetching mechanism. Unlike
+ * resolveProductSelectionState, a recommendation never auto-selects: even a
+ * single candidate is presented and waited on, since these are suggestions
+ * the customer did not name, not something already committed to.
+ */
+function applyRecommendationSearchState(objective: CommercialObjective, input: CommercialWorkProjectionInput) {
+  const searchExecution = latestSearchProductsExecution(input.recentCapabilityExecutions, objective.inputs.query);
+  if (!searchExecution) {
+    objective.status = "READY";
+    return;
+  }
+  if (searchExecution.executionStatus === "completed") {
+    const parsed = parseProductIntentResolution(searchExecution.responseSummaryJson?.productIntent);
+    objective.evidence.push(capabilityEvidence(searchExecution));
+    if (!parsed) {
+      objective.status = "FAILED";
+      return;
+    }
+    const candidates = parsed.candidates.slice(0, 5);
+    if (candidates.length === 0) {
+      // Terminal, honest "nothing current to recommend for this query" -
+      // never falls back to a historical product as if it were current
+      // (Part 14).
+      objective.status = "COMPLETED";
+      return;
+    }
+    objective.status = "WAITING_CUSTOMER";
+    objective.missingRequirements.push("RECOMMENDATION_CANDIDATES");
+    objective.inputs = { ...objective.inputs, recommendationCandidates: candidates };
+    objective.blockers.push(blocker("RECOMMENDATION_CANDIDATES", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+    return;
+  }
+  // Technical failure (catalog unavailable, invalid_arguments, etc.) -
+  // system-owned, never WAITING_CUSTOMER. This path never touches history
+  // data, so a Catalog failure can never surface a historical product as
+  // current (Part 14).
+  objective.evidence.push(capabilityEvidence(searchExecution, false, searchExecution.errorCode ?? undefined));
+  if (searchExecution.retryable) {
+    objective.status = "WAITING_SYSTEM";
+    objective.blockers.push(blocker("WAITING_SYSTEM", "objective", objective.objectiveId));
+    return;
+  }
+  objective.status = "FAILED";
+}
+
+/**
+ * SALES-AGENT-R2-ID-R2-A12. The historical signal is always loaded first -
+ * a deliberate consistency/auditability choice, not a free optimization
+ * (this step has real Customer Profile/network/DB/latency cost): every
+ * CUSTOMER_AWARE_RECOMMENDATION objective produces the same audited shape
+ * regardless of what ultimately wins the query. queryHint (this turn's own
+ * words) always wins the actual search query once the signal execution
+ * completes - the loaded signal is still attached (rfmSegmentLabel) but
+ * never blended into the query text in v1 (disclosed limitation, see
+ * release doc). No history/Customer Profile failure/no queryHint degrades
+ * to a plain clarifying question - never re-opens onboarding, never fails
+ * identity (Part 12/13).
+ */
+function applyCustomerAwareRecommendationObjectiveState(objective: CommercialObjective, input: CommercialWorkProjectionInput) {
+  if (objective.inputs.query) {
+    applyRecommendationSearchState(objective, input);
+    return;
+  }
+
+  const signalExecution = latestRecommendationSignalExecution(input.recentCapabilityExecutions);
+  if (!signalExecution) {
+    objective.status = "READY";
+    return;
+  }
+
+  if (signalExecution.executionStatus !== "completed") {
+    // Genuine capability-gateway failure - the capability itself already
+    // collapses every Customer Profile outcome (unavailable/not
+    // found/no history) into a completed NO_SIGNAL result, so this branch
+    // is expected to be rare (a real contract violation/gateway error).
+    objective.evidence.push(capabilityEvidence(signalExecution, false, signalExecution.errorCode ?? undefined));
+    if (signalExecution.retryable) {
+      objective.status = "WAITING_SYSTEM";
+      objective.blockers.push(blocker("WAITING_SYSTEM", "objective", objective.objectiveId));
+      return;
+    }
+    objective.status = "FAILED";
+    return;
+  }
+
+  objective.evidence.push(capabilityEvidence(signalExecution));
+  const parsed = parseRecommendationSignalResult(signalExecution.responseSummaryJson);
+  if (!parsed) {
+    objective.status = "FAILED";
+    return;
+  }
+
+  const resolvedQuery = objective.inputs.queryHint ?? (parsed.status === "AVAILABLE" ? parsed.queryText : null);
+  if (!resolvedQuery) {
+    objective.status = "WAITING_CUSTOMER";
+    objective.missingRequirements.push("RECOMMENDATION_QUERY_HINT");
+    objective.blockers.push(blocker("RECOMMENDATION_QUERY_HINT", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+    return;
+  }
+
+  objective.inputs = {
+    ...objective.inputs,
+    query: resolvedQuery,
+    recommendationSignalSource: !objective.inputs.queryHint && parsed.status === "AVAILABLE" ? "purchase_history" : undefined,
+    rfmSegmentLabel: parsed.status === "AVAILABLE" ? parsed.rfmSegmentLabel : undefined
+  };
+  applyRecommendationSearchState(objective, input);
+}
+
 function applyObjectiveState(objective: CommercialObjective, input: CommercialWorkProjectionInput, carriedStatus?: CommercialObjectiveStatus) {
   if (objective.status === "CANCELLED" || objective.status === "SUPERSEDED") return;
 
@@ -495,6 +643,9 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
       break;
     case "REPEAT_PURCHASE":
       applyRepeatPurchaseObjectiveState(objective, input, carriedStatus);
+      break;
+    case "CUSTOMER_AWARE_RECOMMENDATION":
+      applyCustomerAwareRecommendationObjectiveState(objective, input);
       break;
     case "SET_DESTINATION":
       if (destinationMatches(input, objective)) {
