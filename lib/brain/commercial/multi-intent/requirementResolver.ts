@@ -277,6 +277,14 @@ export function resolveCommercialIntentPlan(intents: CommercialIntent[], context
       // there is nothing of that scope to cancel, which reconciliation.ts's
       // own cancel handling already treats as a safe no-op).
       results[intentIndex] = { intentIndex, intent, requirements: [], status: "ready" };
+    } else if (intent.type === "repeat_purchase") {
+      // SALES-AGENT-R2-ID-R2-A11. No catalog/destination requirement to
+      // resolve here - identity (LEVEL_3) is gated entirely at the
+      // CommercialWork objective layer (commercialIdentityGate.ts), never by
+      // this pre-execution resolver. Always ready to become a
+      // REPEAT_PURCHASE objective seed; the seed itself resolves history and
+      // then catalog, turn by turn, at the projection layer.
+      results[intentIndex] = { intentIndex, intent, requirements: [], status: "ready" };
     }
   });
 

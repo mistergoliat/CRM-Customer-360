@@ -22,7 +22,7 @@ export const MAX_INTENTS_PER_PLAN = 6;
 export const MAX_INTENT_TEXT_FIELD_LENGTH = 200;
 export const MAX_QUANTITY = 9999;
 
-export const COMMERCIAL_INTENT_TYPES = ["select_products", "get_shipping_quote", "select_shipping_option", "create_quote", "cancel", "unsupported"] as const;
+export const COMMERCIAL_INTENT_TYPES = ["select_products", "get_shipping_quote", "select_shipping_option", "create_quote", "repeat_purchase", "cancel", "unsupported"] as const;
 export type CommercialIntentType = (typeof COMMERCIAL_INTENT_TYPES)[number];
 
 export type CommercialIntentSelectProducts = {
@@ -77,6 +77,26 @@ export type CommercialIntentCreateQuote = {
 };
 
 /**
+ * SALES-AGENT-R2-ID-R2-A11. "Repeat something bought before" - distinct from
+ * select_products, which is always a product described directly in THIS
+ * turn's own words. No identity/customerId/productId field exists here
+ * (this planner never sees catalog or Customer Profile identity) -
+ * identity/history resolution happen entirely downstream (CommercialWork's
+ * REPEAT_PURCHASE objective, gated by A06/A07, then A10's Customer Profile
+ * boundary).
+ */
+export type CommercialIntentRepeatPurchase = {
+  type: "repeat_purchase";
+  /**
+   * Free text narrowing WHICH previous purchase the customer means (e.g.
+   * "los discos" out of "quiero comprar los discos que compre antes") -
+   * omitted (never invented) for a generic reference ("lo mismo de
+   * siempre", "mi pedido anterior") with nothing to narrow by.
+   */
+  productHint?: string;
+};
+
+/**
  * SALES-AGENT-R2-A08.6, Part 3. A closed, backend-owned scope vocabulary -
  * the model classifies into one of these five, never free text - matching
  * reconciliation.ts's own cancelTargetFamily accepted values exactly
@@ -116,6 +136,7 @@ export type CommercialIntent =
   | CommercialIntentGetShippingQuote
   | CommercialIntentSelectShippingOption
   | CommercialIntentCreateQuote
+  | CommercialIntentRepeatPurchase
   | CommercialIntentCancel
   | CommercialIntentUnsupported;
 
@@ -160,6 +181,12 @@ export const COMMERCIAL_INTENT_DEFINITIONS: Record<Exclude<CommercialIntentType,
   get_shipping_quote: { type: "get_shipping_quote", requirements: ["PRODUCT_SELECTION", "DESTINATION"] },
   select_shipping_option: { type: "select_shipping_option", requirements: ["SHIPPING_OPTION"] },
   create_quote: { type: "create_quote", requirements: ["PRODUCT_SELECTION"] },
+  // SALES-AGENT-R2-ID-R2-A11. No requirement declared here - identity
+  // (LEVEL_3) is a CommercialWork-level gate (commercialIdentityGate.ts),
+  // never a semantic-planning-layer requirement type; this layer only
+  // resolves catalog/destination-shaped requirements. Always "ready" from
+  // this resolver's own point of view (requirementResolver.ts).
+  repeat_purchase: { type: "repeat_purchase", requirements: [] },
   cancel: { type: "cancel", requirements: [] }
 };
 

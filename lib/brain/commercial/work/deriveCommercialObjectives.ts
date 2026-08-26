@@ -46,7 +46,15 @@ function normalizeTargetType(targetType: CommercialObjectiveSeed & { kind: "canc
 }
 
 export function commercialObjectiveSupersessionFamily(type: CommercialObjectiveType): "selection" | "destination" | "shipping" | "quote" | "other" {
-  if (type === "SELECT_PRODUCTS" || type === "CHANGE_QUANTITY") return "selection";
+  // SALES-AGENT-R2-ID-R2-A11. REPEAT_PURCHASE shares the "selection" family
+  // deliberately: an ordinary SELECT_PRODUCTS/CHANGE_QUANTITY request
+  // supersedes a still-pending REPEAT_PURCHASE (the customer named a
+  // different product), and - critically - the disambiguating reply once a
+  // REPEAT_PURCHASE finds 2+ historical products is itself an ordinary
+  // select_products intent, whose resulting SELECT_PRODUCTS objective must
+  // supersede the WAITING_CUSTOMER REPEAT_PURCHASE that asked the question,
+  // never leaving two competing "selection" objectives alive at once.
+  if (type === "SELECT_PRODUCTS" || type === "CHANGE_QUANTITY" || type === "REPEAT_PURCHASE") return "selection";
   if (type === "SET_DESTINATION") return "destination";
   if (type === "GET_SHIPPING_QUOTE" || type === "SELECT_SHIPPING_OPTION") return "shipping";
   if (type === "CREATE_QUOTE" || type === "WAIT_FOR_QUOTE_APPROVAL") return "quote";

@@ -197,3 +197,33 @@ test("R2SEM12 select_shipping_option with no optionReference still emits a seed,
   if (result.kind !== "planned") return;
   assert.deepEqual(result.seeds, [{ type: "SELECT_SHIPPING_OPTION", origin: "customer_requested", inputs: { optionReference: undefined } }]);
 });
+
+// SALES-AGENT-R2-ID-R2-A11. RPH01 (deterministic half only - live phrase
+// recognition accuracy needs a real LLM smoke, not asserted here, same
+// limitation every other planner feature in this codebase documents).
+test("R2SEM13 repeat_purchase with a productHint maps to a REPEAT_PURCHASE seed carrying only productHint - never a productId/customerId", async () => {
+  const provider = createOfflinePlannerProvider([{ kind: "plan", plan: { intents: [{ type: "repeat_purchase", productHint: "discos" }] } }]);
+  const result = await planCommercialObjectiveSeeds(baseInput({ provider, customerMessage: "quiero los discos que compre antes" }));
+  assert.equal(result.kind, "planned");
+  if (result.kind !== "planned") return;
+  assert.deepEqual(result.seeds, [{ type: "REPEAT_PURCHASE", origin: "customer_requested", inputs: { productHint: "discos" } }]);
+});
+
+test("R2SEM14 repeat_purchase with no productHint maps to a REPEAT_PURCHASE seed with empty inputs, never invented", async () => {
+  const provider = createOfflinePlannerProvider([{ kind: "plan", plan: { intents: [{ type: "repeat_purchase" }] } }]);
+  const result = await planCommercialObjectiveSeeds(baseInput({ provider, customerMessage: "quiero lo mismo de la ultima vez" }));
+  assert.equal(result.kind, "planned");
+  if (result.kind !== "planned") return;
+  assert.deepEqual(result.seeds, [{ type: "REPEAT_PURCHASE", origin: "customer_requested", inputs: {} }]);
+});
+
+// RPH02: an ordinary product request never produces a REPEAT_PURCHASE seed
+// (and therefore never calls get_customer_purchase_history at all) - a plain
+// regression guard that the two intent types stay structurally distinct.
+test("R2SEM15 an ordinary select_products message never emits a REPEAT_PURCHASE seed", async () => {
+  const provider = createOfflinePlannerProvider([{ kind: "plan", plan: { intents: [{ type: "select_products", productReference: "la classic", quantity: 2 }] } }]);
+  const result = await planCommercialObjectiveSeeds(baseInput({ provider, recentCatalogContext: CLASSIC_CATALOG_CONTEXT, customerMessage: "quiero 2 de la classic" }));
+  assert.equal(result.kind, "planned");
+  if (result.kind !== "planned") return;
+  assert.equal(result.seeds.some((seed) => seedType(seed) === "REPEAT_PURCHASE"), false);
+});

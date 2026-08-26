@@ -36,9 +36,29 @@ const INTENT_SHAPES = [
   '{"type":"get_shipping_quote","destination":"..."}',
   '{"type":"select_shipping_option","optionReference":"..."}',
   '{"type":"create_quote"}',
+  '{"type":"repeat_purchase","productHint":"..."}',
   '{"type":"cancel","scope":"selection"|"destination"|"shipping"|"quote"|"all","additionalScopes":["shipping"|"quote"|"selection"|"destination", ...]}',
   '{"type":"unsupported","description":"..."}'
 ].join(" | ");
+
+/**
+ * SALES-AGENT-R2-ID-R2-A11, PARTE 18. One line per literal phrase-to-intent
+ * mapping, same table format A08.7's CANCEL_SCOPE_EXAMPLES already proved
+ * fixes prompt-salience gaps for a narrow, easily-confused distinction - here
+ * the distinction is repeat_purchase (something bought BEFORE, in a PAST
+ * purchase) vs. select_products (a product described directly, in THIS
+ * turn's own words, never referencing a past purchase).
+ */
+const REPEAT_PURCHASE_EXAMPLES = [
+  '"quiero lo mismo de la ultima vez" -> {"type":"repeat_purchase"}',
+  '"quiero comprar lo mismo de siempre" -> {"type":"repeat_purchase"}',
+  '"necesito otra vez los discos que compre" -> {"type":"repeat_purchase","productHint":"discos"}',
+  '"quiero volver a comprar los discos que compre antes" -> {"type":"repeat_purchase","productHint":"discos"}',
+  '"que barra compre la ultima vez" -> {"type":"repeat_purchase","productHint":"barra"}',
+  '"repiteme mi pedido anterior" -> {"type":"repeat_purchase"}',
+  '"quiero otro igual al que compre antes" -> {"type":"repeat_purchase"}',
+  '"mandame de nuevo lo que pedi la vez pasada" -> {"type":"repeat_purchase"}'
+].join("\n");
 
 /**
  * SALES-AGENT-R2-A08.7, Part 14. The A08.6 cancel-scope rule was a single
@@ -99,6 +119,8 @@ function buildSystemInstructions(priorAttemptFailure: IntentPlannerPriorAttemptF
     'select_products is for a product the customer wants to buy/add/change the quantity of. productReference should name the product as specifically as the customer did.',
     'If the customer used a pronoun or vague reference ("esa", "ese", "la anterior", "la misma") instead of a name, and recentCatalogContext below names exactly one product that is clearly what they mean, use that product\'s exact name as productReference instead of the pronoun. If more than one product in recentCatalogContext could match, keep the customer\'s own ambiguous words - the backend will ask which one, never guess yourself.',
     "quantity must be a positive whole number the customer actually stated - never invent or default one.",
+    'repeat_purchase is DIFFERENT from select_products: use it only when the customer refers to something they bought in a PAST, PREVIOUS purchase/order - never a product they are naming fresh right now. Cue words: "antes", "la ultima vez", "la vez pasada", "de siempre", "mi pedido anterior", "lo que compre", "otra vez", "de nuevo", "igual al que compre". If the customer\'s words also narrow WHICH previous purchase they mean (a product type, brand, or description - e.g. "los discos", "la barra"), set productHint to those words exactly; if they only say something generic ("lo mismo de siempre", "mi pedido anterior") with nothing to narrow by, omit productHint entirely - never invent one. Never resolve this yourself into a specific product, id, price, or quantity - a deterministic backend loads the real purchase history and the real current catalog, you only report that the customer is asking to repeat a past purchase. The exact mapping below is authoritative:',
+    REPEAT_PURCHASE_EXAMPLES,
     'A message that only corrects the quantity of a product already selected ("mejor 3", "que sean 3", "cambialo a 3", "deja 3", "solo 3", "mejor dame 4", "ponme 2") - without naming a different product - is still select_products: set quantity to the new total the customer wants, and OMIT productReference entirely (never restate or guess the product name; the backend already knows which product this refers to from the active selection). durableState.selectionQuantity below tells you the customer\'s current total quantity, if any - use it to compute a NEW ABSOLUTE total for a relative phrase (e.g. "quita una" with a current quantity of 2 means quantity:1; "una mas" with 2 means quantity:3). If there is no current selection to correct, or the relative phrase cannot be resolved into a safe whole number from the given quantity alone, do not guess - use {"type":"unsupported"} instead.',
     'get_shipping_quote is for a shipping cost/delivery question. destination should be the customer\'s own words for the commune/city they want delivery to - never invent, correct, or resolve it yourself; the backend resolves the real commune.',
     'If the customer only asks how much shipping/delivery costs without naming a specific commune or city, omit destination entirely - never use a generic shipping word itself (e.g. "despacho", "envio", "delivery") as if it were a place name.',
@@ -108,8 +130,8 @@ function buildSystemInstructions(priorAttemptFailure: IntentPlannerPriorAttemptF
     'cancel is for the customer explicitly withdrawing, dropping, or rejecting something already in progress. Choose the NARROWEST scope the customer\'s own words actually name - "shipping" only for despacho/envio/delivery, "quote"/"cotizacion" only for the quote, "selection" only for the product(s) chosen, "destination" only for the delivery address/commune itself, "all" ONLY for a general, untargeted cancellation with no specific target named. Never pick "all" when a specific target was named - this is the single most common mistake, avoid it. If the message names more than one specific target, put the first in scope and the rest in additionalScopes (never omit a second named target, never use additionalScopes to add "all"). The exact mapping below is authoritative - match the customer\'s message against these examples first:',
     CANCEL_SCOPE_EXAMPLES,
     "If pendingIntents below lists an intent still missing a field, and the customer's current message plausibly answers exactly that missing field (e.g. a bare commune name while get_shipping_quote is missing destination, or a bare product name/quantity while select_products is missing one), emit that same intent type again with the field now filled in from this message - a short, on-topic reply is never \"unsupported\".",
-    'Only use select_products, get_shipping_quote, select_shipping_option, create_quote, or cancel when the message actually matches one of those - as described above. Anything else this system does not implement (holding an item for someone else, custom requests, complaints, unrelated questions, anything you are not sure maps to one of the five types above) must be {"type":"unsupported"} with a short description - never invent a sixth type, never force-fit it into one of the five.',
-    "You never invent that a product was selected, added, that shipping was calculated, that a quote was created, that a shipping option was picked, or that something was cancelled - you only report what the customer is asking for."
+    'Only use select_products, get_shipping_quote, select_shipping_option, create_quote, repeat_purchase, or cancel when the message actually matches one of those - as described above. Anything else this system does not implement (holding an item for someone else, custom requests, complaints, unrelated questions, anything you are not sure maps to one of the six types above) must be {"type":"unsupported"} with a short description - never invent a seventh type, never force-fit it into one of the six.',
+    "You never invent that a product was selected, added, that shipping was calculated, that a quote was created, that a shipping option was picked, that something was cancelled, or what a past purchase contained - you only report what the customer is asking for."
   ].join("\n");
 }
 

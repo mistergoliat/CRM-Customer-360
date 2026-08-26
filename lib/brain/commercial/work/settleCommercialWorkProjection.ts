@@ -6,6 +6,7 @@ import { loadRecentCommercialCapabilityExecutions } from "./capabilityExecutionR
 import { updateCommercialWorkAggregate } from "./repository";
 import type { PersistedCommercialWork, CommercialWorkDatabaseAdapter } from "./persistenceTypes";
 import type { RuntimeIdentityContext } from "../native-cycle/customer-session/runtimeIdentityContext";
+import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 
 export type SettleCommercialWorkProjectionInput = {
   work: PersistedCommercialWork;
@@ -29,6 +30,17 @@ export type SettleCommercialWorkProjectionInput = {
    * omitted, this reprojects exactly as it did before A07.
    */
   runtimeIdentity?: RuntimeIdentityContext;
+  /**
+   * SALES-AGENT-R2-ID-R2-A11. Forwarded unchanged into every executeCommercialWork
+   * call this loop makes - only get_customer_purchase_history reads it (via
+   * context.trustedCustomerSession.runtimeIdentity), every other capability
+   * ignores it. Distinct from runtimeIdentity above: that one feeds the
+   * projection's identity GATE only, this one is what a capability's own
+   * execute() can read at dispatch time. Optional - omitted, a
+   * REPEAT_PURCHASE step's LOAD_PURCHASE_HISTORY capability call would see no
+   * trusted session and fail closed (denied), never a silent identity guess.
+   */
+  trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
   /** SALES-AGENT-R2-A09. Forwarded unchanged into the executeCommercialWork call this settle loop makes each round - default OFF, same as the executor's own default. */
   parallelExecutionEnabled?: boolean;
   maxParallelSteps?: number;
@@ -110,7 +122,7 @@ export async function settleCommercialWorkProjection(input: SettleCommercialWork
     const executed = await executeCommercialWork({
       workPublicId: work.publicId,
       expectedVersion: work.version,
-      context: { correlationId: input.correlationId, conversationId: input.conversationId, opportunityId: input.opportunityId },
+      context: { correlationId: input.correlationId, conversationId: input.conversationId, opportunityId: input.opportunityId, trustedCustomerSession: input.trustedCustomerSession },
       executeCapability: input.executeCapability,
       scheduleRetries: input.scheduleRetries ?? true,
       now,

@@ -115,6 +115,26 @@ export type CommercialObjectiveInputs = {
    * wording in real calculate_shipping options, never invented ones.
    */
   shippingOptionCandidates?: { index: number; carrierName: string; serviceType: string; totalCost: number; estimatedDelivery: string }[];
+  /**
+   * SALES-AGENT-R2-ID-R2-A11. Customer's own words narrowing which previous
+   * purchase they mean (e.g. "los discos" out of "quiero comprar los discos
+   * que compré antes") - optional, never invented when the customer only
+   * said something generic ("lo mismo de siempre"). Used to filter
+   * historicalPurchaseCandidates when purchase history returns more than one
+   * product; never sent to Catalog directly (only the resolved
+   * productReference below is).
+   */
+  productHint?: string;
+  /**
+   * SALES-AGENT-R2-ID-R2-A11. Real previously-purchased products (ID-R2-A10's
+   * Customer Profile boundary, never Catalog) when 2+ remain after
+   * productHint filtering - grounds the disambiguation question in real
+   * purchase history, never invented options. Distinct from
+   * productCandidates above (those are CURRENT catalog matches from a
+   * search_products execution) - these are HISTORICAL, not yet resolved
+   * against the live catalog at all.
+   */
+  historicalPurchaseCandidates?: { historicalName: string; historicalProductId?: string; quantity?: number; lastPurchasedAt?: string }[];
 };
 
 export type CommercialObjectiveResolvedInputs = {
@@ -149,7 +169,14 @@ export type CommercialMissingRequirement =
   | "IDENTITY_AMBIGUOUS"
   | "IDENTITY_LINK_PENDING"
   | "IDENTITY_CONFLICT"
-  | "IDENTITY_VERIFICATION";
+  | "IDENTITY_VERIFICATION"
+  // SALES-AGENT-R2-ID-R2-A11. 2+ distinct previously-purchased products
+  // remain after productHint filtering - a real, distinct customer question
+  // ("which of these purchases do you mean"), never collapsed into the
+  // catalog-space PRODUCT_AMBIGUOUS above (that one means "2+ CURRENT catalog
+  // matches for a name", this one means "2+ HISTORICAL purchases" - resolved
+  // one stage earlier, before any catalog search ever runs).
+  | "REPEAT_PURCHASE_AMBIGUOUS";
 
 export type CommercialEvidenceRef = {
   kind: "request_fact" | "capability_execution" | "commercial_event" | "agent_action" | "conversation_state";
@@ -182,6 +209,9 @@ export type CommercialWorkBlockerCode =
   | "UNSUPPORTED"
   | "CANCELLED"
   | "STALE_EVIDENCE"
+  // SALES-AGENT-R2-ID-R2-A11. See the matching CommercialMissingRequirement
+  // comment above - never conflated with the catalog-space "PRODUCT_AMBIGUOUS".
+  | "REPEAT_PURCHASE_AMBIGUOUS"
   // SALES-AGENT-R2-ID-R2-A07. A single code for every non-SUFFICIENT
   // CommercialIdentityRequirementDecision (A06) - the decision's own `status`
   // (carried in `identityDecision` below) already distinguishes falta nivel /

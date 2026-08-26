@@ -103,6 +103,18 @@ function completedClause(objective: CommercialObjective): string | null {
       const description = describeSelectionObjective(objective);
       return description ? `Dejé registrada ${description}` : null;
     }
+    // SALES-AGENT-R2-ID-R2-A11, PARTE 13. Two distinct completed outcomes for
+    // the same objective type, distinguished by whether items ended up
+    // resolved: a real historical purchase resolved through Catalog (reuses
+    // describeSelectionObjective, same as SELECT_PRODUCTS, but names it as a
+    // repeat purchase so the customer knows where it came from) vs. a
+    // genuinely empty purchase history (never WAITING_CUSTOMER, never
+    // re-triggers onboarding - just tells the truth and lets the
+    // conversation move to ordinary discovery next turn).
+    case "REPEAT_PURCHASE": {
+      const description = describeSelectionObjective(objective);
+      return description ? `Encontré tu compra anterior y dejé registrada ${description}` : "No encontré compras anteriores registradas para repetir";
+    }
     case "SET_DESTINATION": {
       const destination = describeDestinationObjective(objective);
       return destination ? `tu destino queda registrado como ${destination}` : null;
@@ -192,6 +204,8 @@ function pendingClause(objective: CommercialObjective, hasDurableContinuation: b
       return "estoy confirmando tu opción de despacho";
     case "CREATE_QUOTE":
       return "estoy terminando de generar tu cotización";
+    case "REPEAT_PURCHASE":
+      return "estoy revisando tu compra anterior";
     default:
       return null;
   }
@@ -313,6 +327,17 @@ function buildMissingInfoQuestion(waitingCustomerObjectives: readonly Commercial
       ? `No encontré "${reference}" en el catálogo. ¿Puedes confirmarme el nombre exacto del producto?`
       : "No encontré ese producto en el catálogo. ¿Puedes confirmarme el nombre exacto?";
   }
+  // SALES-AGENT-R2-ID-R2-A11, PARTE 8/9. Real previously-purchased products
+  // only (objective.inputs.historicalPurchaseCandidates, A10's Customer
+  // Profile boundary) - never invented, never the current-catalog
+  // productCandidates list above (a different, later stage in the chain).
+  if (missing.includes("REPEAT_PURCHASE_AMBIGUOUS")) {
+    const objective = waitingCustomerObjectives.find((item) => item.missingRequirements.includes("REPEAT_PURCHASE_AMBIGUOUS"));
+    const options = historicalPurchaseCandidatesList(objective?.inputs.historicalPurchaseCandidates);
+    return options
+      ? `Encontré varias compras anteriores que podrían ser esa: ${options}. ¿Cuál de estas quieres repetir?`
+      : "Encontré varias compras anteriores. ¿Puedes decirme cuál de esos productos quieres repetir?";
+  }
   if (missing.includes("PRODUCT") || missing.includes("PRODUCT_EVIDENCE")) return "¿Qué producto te interesa?";
   if (missing.includes("QUANTITY")) return "¿Cuántas unidades necesitas?";
 
@@ -389,4 +414,9 @@ function productCandidatesList(candidates: { name: string; price?: { amount: num
   return (candidates ?? [])
     .map((candidate, index) => `${index + 1}) ${candidate.name}${candidate.price ? ` - $${candidate.price.amount}` : ""}`)
     .join(", ");
+}
+
+/** SALES-AGENT-R2-ID-R2-A11. Real historical purchases only (A10's Customer Profile boundary) - never a price/current-catalog claim, that stage has not run yet. */
+function historicalPurchaseCandidatesList(candidates: { historicalName: string }[] | undefined): string {
+  return (candidates ?? []).map((candidate, index) => `${index + 1}) ${candidate.historicalName}`).join(", ");
 }

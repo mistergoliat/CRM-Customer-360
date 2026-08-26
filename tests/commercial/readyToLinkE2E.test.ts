@@ -211,19 +211,27 @@ async function currentRuntimeIdentity(env: R2BenchmarkEnvironment): Promise<Runt
 }
 
 // ---------------------------------------------------------------------------
-// PARTE 1: at the time this suite was written, no live CommercialObjectiveType
-// reaches a LEVEL_3 requirement - the guardrail below confirms that premise,
-// so this file's own harness (below) documents itself honestly as a probe,
-// not organic coverage.
+// PARTE 1 (historical, A08.1/A09): at the time this suite was written, no
+// live CommercialObjectiveType reached a LEVEL_3 requirement - the guardrail
+// below confirmed that premise so this file's harness (below) documented
+// itself honestly as a probe, not organic coverage. SALES-AGENT-R2-ID-R2-A11
+// closed that exact gap on purpose (REPEAT_PURCHASE -> customer_profile_history,
+// see commercialIdentityGate.ts) - the guardrail is inverted to match, and
+// A11's own tests (repeatPurchaseObjective.test.ts, repeatPurchaseE2E.test.ts)
+// are the organic, non-harness proof this file's own comments anticipated.
+// The harnessObjectiveFromRealDecision probe below remains valid, independent
+// coverage of A06's real decision at this lower level of abstraction - never
+// removed, since it does not depend on REPEAT_PURCHASE's own machinery.
 // ---------------------------------------------------------------------------
 
-test("PARTE 1: no live CommercialObjectiveType reaches a LEVEL_3 requirement today - customer_profile_history has no real caller yet", async () => {
+test("PARTE 1 (A11 update): customer_profile_history is now reachable from a real CommercialObjectiveType (REPEAT_PURCHASE) - the historical harness-bounded gap is closed", async () => {
   const gate = await import("@/lib/brain/commercial/work/commercialIdentityGate");
   const mappedOperations = new Set(Object.values(gate.COMMERCIAL_OBJECTIVE_TYPE_TO_OPERATION));
-  assert.equal(mappedOperations.has("customer_profile_history"), false);
+  assert.equal(mappedOperations.has("customer_profile_history"), true);
+  assert.equal(gate.COMMERCIAL_OBJECTIVE_TYPE_TO_OPERATION.REPEAT_PURCHASE, "customer_profile_history");
 });
 
-/** An independent, lower-level probe: a real A06 decision, computed for the real "customer_profile_history" (LEVEL_3) operation, carried by a CREATE_QUOTE-labeled probe objective, through A07's real, unmodified status/missingRequirement mapping tables (imported, never re-derived). */
+/** Mirrors A07's real status/missingRequirement mapping tables (imported, never re-derived) - an independent, lower-level probe: a real A06 decision, computed for the real "customer_profile_history" (LEVEL_3) operation, carried by a CREATE_QUOTE-labeled probe objective. Kept after A11 as additional coverage at the decision layer alone, separate from REPEAT_PURCHASE's own organic projection/step machinery (see repeatPurchaseObjective.test.ts). */
 function harnessObjectiveFromRealDecision(decision: CommercialIdentityRequirementDecision): CommercialObjective {
   const status = decision.status === "SUFFICIENT" ? "READY" : IDENTITY_DECISION_STATUS_TO_OBJECTIVE_STATUS[decision.status];
   const missingRequirement = decision.status === "SUFFICIENT" ? undefined : IDENTITY_DECISION_STATUS_TO_MISSING_REQUIREMENT[decision.status];

@@ -318,6 +318,19 @@ test("CIR24: same operation + same RuntimeIdentityContext -> deterministic ident
 // the production module itself, see CIR22).
 // ---------------------------------------------------------------------------
 
+// SALES-AGENT-R2-ID-R2-A11. Every other CommercialWork-executable capability
+// happens to share its exact name with the CommercialOperation that governs
+// it (search_products/select_products/etc.) - a naming coincidence, never an
+// architectural rule (the real link is COMMERCIAL_OBJECTIVE_TYPE_TO_OPERATION
+// in commercialIdentityGate.ts, keyed by objective type, never by capability
+// name). get_customer_purchase_history is the first capability where the
+// names genuinely differ: it is governed by A06's existing, broader
+// customer_profile_history operation (REPEAT_PURCHASE -> customer_profile_history,
+// see commercialIdentityGate.ts) - never a second, redundant operation.
+const CAPABILITY_NAME_TO_OPERATION_OVERRIDE: Partial<Record<string, string>> = {
+  get_customer_purchase_history: "customer_profile_history"
+};
+
 test("catalog integrity: every capability-shaped CommercialOperation matches a real registered capability or a real non-capability module (never invented)", () => {
   const registeredCapabilities = new Set(CAPABILITY_GATEWAY_REGISTRY.map((definition) => definition.capability));
   const nonCapabilityOperations = new Set(["assisted_sale_handoff", "customer_profile_history", "order_status_entity_verification"]);
@@ -328,7 +341,8 @@ test("catalog integrity: every capability-shaped CommercialOperation matches a r
   // Every CommercialWork-executable capability (the ones actually driving a
   // step) must also be represented in this catalog - never a silent gap.
   for (const capability of COMMERCIAL_WORK_STEP_CAPABILITIES) {
-    assert.ok((COMMERCIAL_OPERATIONS as readonly string[]).includes(capability), `CommercialWork capability "${capability}" is missing from the identity requirement catalog`);
+    const operationName = CAPABILITY_NAME_TO_OPERATION_OVERRIDE[capability] ?? capability;
+    assert.ok((COMMERCIAL_OPERATIONS as readonly string[]).includes(operationName), `CommercialWork capability "${capability}" is missing from the identity requirement catalog`);
   }
 });
 

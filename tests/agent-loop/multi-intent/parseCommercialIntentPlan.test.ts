@@ -155,3 +155,25 @@ test("[MI-Parse-18] select_shipping_option with no optionReference at all still 
   if (result.status !== "valid") return;
   assert.deepEqual(result.intents, [{ type: "select_shipping_option" }]);
 });
+
+// SALES-AGENT-R2-ID-R2-A11.
+test("[MI-Parse-19] repeat_purchase with a productHint parses cleanly", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "repeat_purchase", productHint: "discos" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "repeat_purchase", productHint: "discos" }]);
+});
+
+test("[MI-Parse-20] repeat_purchase with no productHint parses cleanly, field omitted (never invented)", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "repeat_purchase" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "repeat_purchase" }]);
+});
+
+test("[MI-Parse-21] repeat_purchase never carries a productId/customerId even if the raw JSON tries to smuggle one in - only productHint is ever read", () => {
+  const result = parseCommercialIntentPlan({ intents: [{ type: "repeat_purchase", productHint: "barra", productId: "999", customerId: "100" }] });
+  assert.equal(result.status, "valid");
+  if (result.status !== "valid") return;
+  assert.deepEqual(result.intents, [{ type: "repeat_purchase", productHint: "barra" }]);
+});

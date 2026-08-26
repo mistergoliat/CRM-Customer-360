@@ -36,6 +36,13 @@ export const COMMERCIAL_OBJECTIVE_TYPE_TO_OPERATION: Partial<Record<CommercialOb
   GET_SHIPPING_QUOTE: "calculate_shipping",
   SELECT_SHIPPING_OPTION: "select_shipping_option",
   CREATE_QUOTE: "create_quote",
+  // SALES-AGENT-R2-ID-R2-A11. The first real CommercialWork objective to
+  // reach A06's LEVEL_3 (customer_profile_history) requirement - see
+  // ID-R2-A09/A10's own release docs, which named this exact gap. Below
+  // LEVEL_3, a READY REPEAT_PURCHASE objective is gated exactly like any
+  // other objective here: never a second, hand-rolled identity check inside
+  // applyObjectiveState's REPEAT_PURCHASE case.
+  REPEAT_PURCHASE: "customer_profile_history",
   // PARTE 7: mapped for completeness/testability, but structurally never
   // gated in practice - applyObjectiveState's own HANDOFF case sets
   // objective.status = "COMPLETED" unconditionally, so this gate (which only

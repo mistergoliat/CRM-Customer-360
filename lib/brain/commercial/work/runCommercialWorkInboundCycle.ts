@@ -355,7 +355,10 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
     const executed = await executeCommercialWork({
       workPublicId: work.publicId,
       expectedVersion: work.version,
-      context: { correlationId: input.correlationId, conversationId: input.conversationId, opportunityId },
+      // SALES-AGENT-R2-ID-R2-A11. Only get_customer_purchase_history reads
+      // trustedCustomerSession (via context.trustedCustomerSession.runtimeIdentity)
+      // - every other capability ignores it, unchanged.
+      context: { correlationId: input.correlationId, conversationId: input.conversationId, opportunityId, trustedCustomerSession: input.customerSessionExecution },
       scheduleRetries: true,
       now: input.currentTime,
       parallelExecutionEnabled: parallelExecutionFlags.parallelExecutionEnabled,
@@ -371,7 +374,8 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       now: new Date(input.currentTime),
       parallelExecutionEnabled: parallelExecutionFlags.parallelExecutionEnabled,
       maxParallelSteps: parallelExecutionFlags.maxParallelSteps,
-      runtimeIdentity
+      runtimeIdentity,
+      trustedCustomerSession: input.customerSessionExecution
     });
 
     // SALES-AGENT-R2-ID-R2-A07 (PARTE 8-15). CommercialWork's own "post-plan"
@@ -438,7 +442,15 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
             maxRounds: 1,
             parallelExecutionEnabled: parallelExecutionFlags.parallelExecutionEnabled,
             maxParallelSteps: parallelExecutionFlags.maxParallelSteps,
-            runtimeIdentity: refreshedIdentity
+            runtimeIdentity: refreshedIdentity,
+            // SALES-AGENT-R2-ID-R2-A11. get_customer_purchase_history reads
+            // identity from trustedCustomerSession.runtimeIdentity, not from
+            // the separate runtimeIdentity parameter above (that one only
+            // feeds the projection's identity GATE) - without this override,
+            // a REPEAT_PURCHASE step that becomes READY in this exact
+            // same-turn resettle round would execute against the stale,
+            // pre-onboarding identity still on customerSessionExecution.
+            trustedCustomerSession: { ...input.customerSessionExecution, runtimeIdentity: refreshedIdentity }
           });
         } catch (error) {
           warnings.push(`commercial_work_identity_recheck_failed:${error instanceof Error ? error.message : "unknown"}`);

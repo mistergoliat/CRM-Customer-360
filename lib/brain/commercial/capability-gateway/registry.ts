@@ -24,6 +24,7 @@ import { selectProductsCapability } from "./selectProductsCapability";
 import { calculateShippingCapability } from "./calculateShippingCapability";
 import { selectShippingOptionCapability } from "./selectShippingOptionCapability";
 import { createQuoteCapability } from "./createQuoteCapability";
+import { getCustomerPurchaseHistoryCapability } from "./getCustomerPurchaseHistoryCapability";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -529,7 +530,16 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   // docs/audits/SALES-AGENT-R1-T3-create-quote-wiring-audit.md). Reuses an
   // existing quote instead of duplicating one when the selection has not
   // changed since it was created. See createQuoteCapability.ts.
-  createQuoteCapability() as CapabilityGatewayDefinition
+  createQuoteCapability() as CapabilityGatewayDefinition,
+  // SALES-AGENT-R2-ID-R2-A11: reads this customer's previously purchased
+  // products via the ID-R2-A10 Customer Profile boundary, gated on live
+  // LEVEL_3_PRESTASHOP_LINKED identity. Registered so a REPEAT_PURCHASE
+  // objective's LOAD_PURCHASE_HISTORY step can execute it through the
+  // governed gateway (auditable via crm_capability_executions) -
+  // deliberately NOT aliased in toolAliases.ts, same discipline as
+  // batch_get_products/recommend_catalog_products: the Sales Agent LLM never
+  // calls this directly, only CommercialWork's deterministic executor does.
+  getCustomerPurchaseHistoryCapability() as CapabilityGatewayDefinition
 ];
 
 const CAPABILITIES_BY_NAME = new Map(CAPABILITY_GATEWAY_REGISTRY.map((definition) => [definition.capability, definition]));

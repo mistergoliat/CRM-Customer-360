@@ -227,18 +227,17 @@ function stillWaitingOnCustomer(carriedStatus: CommercialObjectiveStatus | undef
   return carriedStatus === "WAITING_CUSTOMER";
 }
 
-function applyObjectiveState(objective: CommercialObjective, input: CommercialWorkProjectionInput, carriedStatus?: CommercialObjectiveStatus) {
-  if (objective.status === "CANCELLED" || objective.status === "SUPERSEDED") return;
-
-  switch (objective.type) {
-    case "DISCOVER_PRODUCTS":
-    case "COMPARE_PRODUCTS":
-    case "RECOMMEND_PRODUCTS":
-      objective.status = "READY";
-      break;
-    case "SELECT_PRODUCTS":
-    case "CHANGE_QUANTITY": {
-      const requestedItems = objective.inputs.items;
+/**
+ * SALES-AGENT-R2-ID-R2-A11. Extracted, unchanged in behavior, from the
+ * SELECT_PRODUCTS/CHANGE_QUANTITY case below (Part 2/3 of A11.1's own
+ * needsSearch/resolution logic) so REPEAT_PURCHASE can reuse the exact same
+ * catalog-resolution/ambiguity/not-found/technical-failure state machine
+ * once purchase history resolves a productReference - never a second,
+ * parallel implementation of "resolve a free-text product reference against
+ * the real catalog".
+ */
+function resolveProductSelectionState(objective: CommercialObjective, input: CommercialWorkProjectionInput, carriedStatus: CommercialObjectiveStatus | undefined) {
+  const requestedItems = objective.inputs.items;
       if (requestedItems && input.commercialLineItems && sameItems(requestedItems, input.commercialLineItems.items)) {
         objective.status = "COMPLETED";
         objective.resolvedInputs.commercialLineItemsFactId = input.commercialLineItems.factId;
@@ -286,7 +285,7 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
         const searchExecution = latestSearchProductsExecution(input.recentCapabilityExecutions, objective.inputs.productReference);
         if (!searchExecution) {
           objective.status = "READY";
-          break;
+          return;
         }
         if (searchExecution.executionStatus === "completed") {
           const parsed = parseProductIntentResolution(searchExecution.responseSummaryJson?.productIntent);
@@ -304,7 +303,7 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
             const match = parsed.resolution.sourceProduct;
             objective.inputs = { ...objective.inputs, items: [{ productId: match.productId, combinationId: match.combinationId ?? null, quantity: objective.inputs.quantity }] };
             objective.status = "READY";
-            break;
+            return;
           }
           if (parsed.resolution.status === "clarification_required") {
             objective.status = "WAITING_CUSTOMER";
@@ -342,8 +341,161 @@ function applyObjectiveState(objective: CommercialObjective, input: CommercialWo
         return;
       }
       objective.status = "READY";
-      break;
+}
+
+type PurchaseHistoryProduct = { historicalName: string; historicalProductId?: string; quantity?: number; lastPurchasedAt?: string };
+
+/**
+ * SALES-AGENT-R2-ID-R2-A11. Defensive parse of get_customer_purchase_history's
+ * own minimized response (getCustomerPurchaseHistoryCapability.ts's
+ * RepeatPurchaseHistoryResult) - mirrors parseProductIntentResolution's
+ * discipline: an unrecognizable payload is a real contract violation
+ * (system-owned FAILED), never guessed into a customer question.
+ */
+function parsePurchaseHistoryResult(raw: unknown): { status: "AVAILABLE" | "NO_PURCHASE_HISTORY"; previousProducts: PurchaseHistoryProduct[] } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const status = record.status;
+  if (status !== "AVAILABLE" && status !== "NO_PURCHASE_HISTORY") return null;
+  const rawProducts = Array.isArray(record.previousProducts) ? record.previousProducts : [];
+  const previousProducts: PurchaseHistoryProduct[] = [];
+  for (const entry of rawProducts) {
+    if (!entry || typeof entry !== "object") continue;
+    const item = entry as Record<string, unknown>;
+    const historicalName = typeof item.historicalName === "string" ? item.historicalName : null;
+    if (!historicalName) continue;
+    const historicalProductId = typeof item.historicalProductId === "string" ? item.historicalProductId : undefined;
+    const quantity = typeof item.quantity === "number" && Number.isSafeInteger(item.quantity) && item.quantity > 0 ? item.quantity : undefined;
+    const lastPurchasedAt = typeof item.lastPurchasedAt === "string" ? item.lastPurchasedAt : undefined;
+    previousProducts.push({ historicalName, ...(historicalProductId ? { historicalProductId } : {}), ...(quantity !== undefined ? { quantity } : {}), ...(lastPurchasedAt ? { lastPurchasedAt } : {}) });
+  }
+  return { status, previousProducts };
+}
+
+/**
+ * SALES-AGENT-R2-ID-R2-A11. Only ever consulted for get_customer_purchase_history
+ * - unlike search_products (matched by query text, since the same customer
+ * turn can search different queries) or calculate_shipping (matched by
+ * freshness against selection/destination facts), a purchase-history lookup
+ * takes no variable input at all: "this customer's history" never changes
+ * within one objective's lifecycle, so the single most recent execution of
+ * this capability is always the right one - same simple pattern
+ * latestCalculateShippingExecution already uses.
+ */
+function latestPurchaseHistoryExecution(executions: readonly CommercialCapabilityExecutionProjection[] | undefined): CommercialCapabilityExecutionProjection | null {
+  const candidates = (executions ?? []).filter((execution) => execution.capabilityName === "get_customer_purchase_history");
+  return candidates.sort((a, b) => {
+    const left = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+    const right = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+    return right - left;
+  })[0] ?? null;
+}
+
+/** Simple normalized substring match, same discipline as requirementResolver.ts's matchProductReference - never a fuzzy/semantic match this codebase does not already rely on elsewhere. */
+function filterPurchaseHistoryByHint(products: readonly PurchaseHistoryProduct[], hint: string): PurchaseHistoryProduct[] {
+  const normalizedHint = normalizeText(hint);
+  if (!normalizedHint) return [...products];
+  const matches = products.filter((product) => normalizeText(product.historicalName).includes(normalizedHint));
+  return matches.length > 0 ? matches : [...products];
+}
+
+/**
+ * SALES-AGENT-R2-ID-R2-A11. PARTE PRINCIPIO CENTRAL: this function only ever
+ * turns purchase history into a productReference (a HISTORICAL FACT) - it
+ * never assumes that reference is still sellable. Once resolved, control
+ * passes to resolveProductSelectionState, the exact same catalog-resolution
+ * chain a fresh product request already uses, so a discontinued/renamed
+ * historical product is re-validated against the live catalog exactly like
+ * any other product reference, never trusted on its own (PARTE 9/10).
+ */
+function applyRepeatPurchaseObjectiveState(objective: CommercialObjective, input: CommercialWorkProjectionInput, carriedStatus: CommercialObjectiveStatus | undefined) {
+  // A prior round already resolved history into a productReference (or the
+  // shared resolver already resolved catalog items) - defer entirely to the
+  // shared chain, never re-run history resolution once a reference exists.
+  if (objective.inputs.productReference || objective.inputs.items?.length) {
+    resolveProductSelectionState(objective, input, carriedStatus);
+    return;
+  }
+
+  const historyExecution = latestPurchaseHistoryExecution(input.recentCapabilityExecutions);
+  if (!historyExecution) {
+    // Never searched yet this objective - READY so deriveCommercialWorkSteps.ts
+    // derives a LOAD_PURCHASE_HISTORY step, same discipline as the
+    // SELECT_PRODUCTS needsSearch branch above for search_products.
+    objective.status = "READY";
+    return;
+  }
+
+  if (historyExecution.executionStatus !== "completed") {
+    // Technical failure (Customer Profile unavailable, etc.) - system-owned,
+    // never WAITING_CUSTOMER (PARTE 14: identity stays LEVEL_3, this is a
+    // profile-service failure, not an identity failure).
+    objective.evidence.push(capabilityEvidence(historyExecution, false, historyExecution.errorCode ?? undefined));
+    if (historyExecution.retryable) {
+      objective.status = "WAITING_SYSTEM";
+      objective.blockers.push(blocker("WAITING_SYSTEM", "objective", objective.objectiveId));
+      return;
     }
+    objective.status = "FAILED";
+    return;
+  }
+
+  objective.evidence.push(capabilityEvidence(historyExecution));
+  const parsed = parsePurchaseHistoryResult(historyExecution.responseSummaryJson);
+  if (!parsed) {
+    // A completed execution with an unrecognizable payload is a real
+    // contract violation, not a customer question (same discipline as
+    // parseProductIntentResolution's own unrecognizable-payload branch).
+    objective.status = "FAILED";
+    return;
+  }
+
+  // PARTE 13: LEVEL_3 valid + Customer Profile AVAILABLE + no history is a
+  // terminal, successful "nothing to repeat" outcome - COMPLETED, never
+  // WAITING_CUSTOMER, never re-triggered onboarding. The finalizer
+  // distinguishes this from a real completed selection by items being empty.
+  if (parsed.previousProducts.length === 0) {
+    objective.status = "COMPLETED";
+    return;
+  }
+
+  const candidates = objective.inputs.productHint ? filterPurchaseHistoryByHint(parsed.previousProducts, objective.inputs.productHint) : parsed.previousProducts;
+
+  if (candidates.length === 1) {
+    const match = candidates[0];
+    objective.inputs = { ...objective.inputs, productReference: match.historicalName, quantity: objective.inputs.quantity ?? match.quantity };
+    resolveProductSelectionState(objective, input, carriedStatus);
+    return;
+  }
+
+  // PARTE 8/9: 2+ distinct previous purchases remain - never choose
+  // arbitrarily. Asks a grounded question; resolution relies on supersession
+  // (the customer naming one product becomes an ordinary select_products
+  // intent/objective, which supersedes this one via the shared "selection"
+  // family - see deriveCommercialObjectives.ts), never a bespoke
+  // disambiguation-reply parser.
+  objective.status = "WAITING_CUSTOMER";
+  objective.missingRequirements.push("REPEAT_PURCHASE_AMBIGUOUS");
+  objective.inputs = { ...objective.inputs, historicalPurchaseCandidates: candidates.slice(0, 5) };
+  objective.blockers.push(blocker("REPEAT_PURCHASE_AMBIGUOUS", "objective", objective.objectiveId), blocker("WAITING_CUSTOMER", "objective", objective.objectiveId));
+}
+
+function applyObjectiveState(objective: CommercialObjective, input: CommercialWorkProjectionInput, carriedStatus?: CommercialObjectiveStatus) {
+  if (objective.status === "CANCELLED" || objective.status === "SUPERSEDED") return;
+
+  switch (objective.type) {
+    case "DISCOVER_PRODUCTS":
+    case "COMPARE_PRODUCTS":
+    case "RECOMMEND_PRODUCTS":
+      objective.status = "READY";
+      break;
+    case "SELECT_PRODUCTS":
+    case "CHANGE_QUANTITY":
+      resolveProductSelectionState(objective, input, carriedStatus);
+      break;
+    case "REPEAT_PURCHASE":
+      applyRepeatPurchaseObjectiveState(objective, input, carriedStatus);
+      break;
     case "SET_DESTINATION":
       if (destinationMatches(input, objective)) {
         objective.status = "COMPLETED";
