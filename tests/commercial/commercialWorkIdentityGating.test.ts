@@ -369,14 +369,24 @@ test("PARTE 20: an ONBOARDING_REQUIRED(email) block produces a specific question
   assert.ok(!result.message.includes("Necesito un momento más"), "must not fall through to the generic catch-all when requiredEvidence is known");
 });
 
-test("PARTE 20: an ONBOARDING_REQUIRED(order_reference) block asks specifically for the order number", () => {
+// SALES-AGENT-R2-ID-R2-A08. Superseded (release doc PARTE 1): A06's
+// requiredEvidence is never the source this finalizer asks from anymore -
+// create_quote's onboarding purpose ("quote") only ever requires
+// firstName+email (onboardingPurposeMapping.ts), so a fabricated
+// requiredEvidence: ["order_reference"] must NOT surface an order-number
+// question for this objective - the purpose's own required fields win
+// (identityCollectionRequest.ts). See the new
+// commercialWorkIdentityConversation.test.ts for order_reference wording
+// exercised against a purpose that actually requires it.
+test("PARTE 20 (A08): CREATE_QUOTE's ONBOARDING_REQUIRED block asks for the quote purpose's real fields (name+email), never order_reference, even if requiredEvidence suggests it", () => {
   const work = project({
     objectiveSeeds: [objectiveSeed("CREATE_QUOTE")],
     commercialLineItems: READY_TO_QUOTE_LINE_ITEMS,
     runtimeIdentity: atLevel("LEVEL_1_CHANNEL_OBSERVED", "CHANNEL_OBSERVED", { requiredEvidence: ["order_reference"] })
   });
   const result = buildCommercialWorkFinalizerMessage(persisted(work));
-  assert.match(result.message, /número de tu pedido/);
+  assert.match(result.message, /correo electrónico/);
+  assert.doesNotMatch(result.message, /número de tu pedido/);
 });
 
 test("PARTE 20: ambiguity produces a disambiguation question distinct from the plain evidence question", () => {
