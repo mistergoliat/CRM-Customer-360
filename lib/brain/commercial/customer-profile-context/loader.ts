@@ -60,10 +60,6 @@ function isValidCustomerId(value: number | null): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-function isValidMasterCustomerId(value: string | null): value is string {
-  return typeof value === "string" && /^\d{1,20}$/.test(value) && !/^0+$/.test(value);
-}
-
 function resolveConfig(config?: CustomerProfileContextConfig): CustomerProfileContextConfig {
   return config ?? readCustomerProfileContextConfig();
 }
@@ -85,20 +81,20 @@ function mapContractReason(reason: string): CustomerProfileContextObservation["r
 }
 
 function mapRfmContext(input: {
-  masterCustomerId: string;
+  customerId: string;
   result: Awaited<ReturnType<LoadCustomerCommercialHistoryContextInput["customerProfileCapabilities"]["getRfm"]>>;
 }): {
   customerRfm: CustomerRfmContext | null;
   observation: CustomerProfileContextObservation;
   shouldMarkPartial: boolean;
 } {
-  const { masterCustomerId, result } = input;
+  const { customerId, result } = input;
 
   if (result.status === "AVAILABLE") {
     return {
       customerRfm: {
         status: "AVAILABLE",
-        masterCustomerId,
+        customerId,
         snapshot: {
           referenceTime: result.data.snapshot.referenceTime,
           publishedAt: result.data.snapshot.publishedAt,
@@ -128,13 +124,13 @@ function mapRfmContext(input: {
   if (result.status === "NOT_FOUND") {
     if (result.reason === "CUSTOMER_NOT_FOUND") {
       return {
-        customerRfm: { status: "NO_CUSTOMER", masterCustomerId, reasonCode: "RFM_CUSTOMER_NOT_FOUND" },
+        customerRfm: { status: "NO_CUSTOMER", customerId, reasonCode: "RFM_CUSTOMER_NOT_FOUND" },
         observation: contextObservation("rfm", "NOT_FOUND", "RFM_CUSTOMER_NOT_FOUND"),
         shouldMarkPartial: false
       };
     }
     return {
-      customerRfm: { status: "NO_RFM", masterCustomerId, reasonCode: "RFM_NOT_AVAILABLE" },
+      customerRfm: { status: "NO_RFM", customerId, reasonCode: "RFM_NOT_AVAILABLE" },
       observation: contextObservation("rfm", "AVAILABLE", "RFM_NOT_AVAILABLE"),
       shouldMarkPartial: false
     };
@@ -143,13 +139,13 @@ function mapRfmContext(input: {
   if (result.status === "UNAVAILABLE") {
     if (result.reason === "RFM_DEGRADED") {
       return {
-        customerRfm: { status: "RFM_DEGRADED", masterCustomerId, reasonCode: "RFM_DEGRADED" },
+        customerRfm: { status: "RFM_DEGRADED", customerId, reasonCode: "RFM_DEGRADED" },
         observation: contextObservation("rfm", "PARTIAL", "RFM_DEGRADED"),
         shouldMarkPartial: true
       };
     }
     return {
-      customerRfm: { status: "PROVIDER_ERROR", masterCustomerId, reasonCode: "RFM_PROVIDER_ERROR" },
+      customerRfm: { status: "PROVIDER_ERROR", customerId, reasonCode: "RFM_PROVIDER_ERROR" },
       observation: contextObservation("rfm", "PARTIAL", "RFM_PROVIDER_ERROR"),
       shouldMarkPartial: true
     };
@@ -157,14 +153,14 @@ function mapRfmContext(input: {
 
   if (result.status === "CONTRACT_ERROR" || result.status === "INVALID_REQUEST") {
     return {
-      customerRfm: { status: "PROVIDER_ERROR", masterCustomerId, reasonCode: "RFM_CONTRACT_ERROR" },
+      customerRfm: { status: "PROVIDER_ERROR", customerId, reasonCode: "RFM_CONTRACT_ERROR" },
       observation: contextObservation("rfm", "PARTIAL", "RFM_CONTRACT_ERROR"),
       shouldMarkPartial: true
     };
   }
 
   return {
-    customerRfm: { status: "PROVIDER_ERROR", masterCustomerId, reasonCode: "RFM_PROVIDER_ERROR" },
+    customerRfm: { status: "PROVIDER_ERROR", customerId, reasonCode: "RFM_PROVIDER_ERROR" },
     observation: contextObservation("rfm", "PARTIAL", "RFM_PROVIDER_ERROR"),
     shouldMarkPartial: true
   };
@@ -230,12 +226,13 @@ export async function loadCustomerCommercialHistoryContext(input: LoadCustomerCo
       customerId: input.customerId,
       requestId: input.requestId
     }),
-    isValidMasterCustomerId(input.masterCustomerId)
-      ? input.customerProfileCapabilities.getRfm({
-          masterCustomerId: input.masterCustomerId,
-          requestId: input.requestId
-        })
-      : Promise.resolve(null)
+    // Same id, same ps_customer.id_customer space as every other call in
+    // this function - already validated above (isValidCustomerId), never a
+    // separate master-customer id.
+    input.customerProfileCapabilities.getRfm({
+      customerId: input.customerId,
+      requestId: input.requestId
+    })
   ]);
 
   if (summaryResult.status === "NOT_FOUND") {
@@ -271,11 +268,9 @@ export async function loadCustomerCommercialHistoryContext(input: LoadCustomerCo
   let requestedSecondaryCount = 0;
   let failedSecondaryCount = 0;
 
-  if (rfmResult === null) {
-    observations.push(contextObservation("rfm", "AVAILABLE", "RFM_IDENTITY_UNAVAILABLE"));
-  } else {
+  {
     const mappedRfm = mapRfmContext({
-      masterCustomerId: input.masterCustomerId as string,
+      customerId: String(input.customerId),
       result: rfmResult
     });
     customerRfm = mappedRfm.customerRfm;

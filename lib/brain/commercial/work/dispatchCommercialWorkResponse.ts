@@ -10,6 +10,7 @@ import { buildContinuityFallbackMessage } from "../continuity/buildContinuityFal
 import { takeHumanControlForAiHandoff } from "@/lib/domains/conversations/control";
 import type { PersistedCommercialWork } from "./persistenceTypes";
 import { buildCommercialWorkFinalizerMessage, type CommercialWorkDisposition } from "./buildCommercialWorkFinalizerMessage";
+import type { OnboardingCollectionSnapshot } from "./identityCollectionRequest";
 
 function parseEnvCsv(name: string, fallback: string[] = []): string[] {
   const value = process.env[name]?.trim();
@@ -31,6 +32,13 @@ export type DispatchCommercialWorkResponseInput = {
   work: PersistedCommercialWork | null;
   /** Set only for a controlled fallback/handoff that never reached (or does not trust) `work`'s own finalizer message - see runCommercialWorkInboundCycle.ts's provider-failure and internal-exception paths. */
   forcedFallback?: "model_unavailable" | "handoff_acknowledgement" | null;
+  /**
+   * SALES-AGENT-R2-ID-R2-A08. This turn's freshest onboarding snapshot
+   * (privacy-safe projection only - see identityCollectionRequest.ts),
+   * passed straight through to buildCommercialWorkFinalizerMessage. Optional:
+   * omitted by every existing caller/test keeps current behavior unchanged.
+   */
+  identityOnboarding?: OnboardingCollectionSnapshot | null;
 };
 
 export type DispatchCommercialWorkResponseResult = {
@@ -144,7 +152,7 @@ export async function dispatchCommercialWorkResponse(input: DispatchCommercialWo
     disposition = "fallback";
     message = buildContinuityFallbackMessage("model_unavailable", neutralContext);
   } else {
-    const finalized = buildCommercialWorkFinalizerMessage(input.work);
+    const finalized = buildCommercialWorkFinalizerMessage(input.work, input.identityOnboarding ?? null);
     disposition = finalized.disposition;
     message = finalized.message;
     isHandoff = input.work.status === "HANDOFF";

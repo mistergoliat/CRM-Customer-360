@@ -64,6 +64,15 @@ export function buildCustomerSessionWarningDedupeKey(
   return `identity-warning:${messageId.trim()}:${phase.trim()}:${warningCode.trim()}`;
 }
 
+// SALES-AGENT-R2-ID-R2-A05.
+export function buildIdentityVerificationDecisionDedupeKey(
+  messageId: string,
+  status: string,
+  policyCode: string
+) {
+  return `identity-verification:${messageId.trim()}:${status.trim()}:${policyCode.trim()}`;
+}
+
 // ACS-R1-05-T06.2 dedupe keys. One canonical disposition event per inbound
 // message; a technical failure to establish continuity gets a distinct key
 // (never overwrites/collides with a successful disposition for the same message).

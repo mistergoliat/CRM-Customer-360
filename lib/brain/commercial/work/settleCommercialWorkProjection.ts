@@ -5,6 +5,8 @@ import { executeCommercialWork, defaultLoadFacts, defaultLoadConversationControl
 import { loadRecentCommercialCapabilityExecutions } from "./capabilityExecutionReader";
 import { updateCommercialWorkAggregate } from "./repository";
 import type { PersistedCommercialWork, CommercialWorkDatabaseAdapter } from "./persistenceTypes";
+import type { RuntimeIdentityContext } from "../native-cycle/customer-session/runtimeIdentityContext";
+import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 
 export type SettleCommercialWorkProjectionInput = {
   work: PersistedCommercialWork;
@@ -16,6 +18,29 @@ export type SettleCommercialWorkProjectionInput = {
   executeCapability?: typeof executeGovernedCapability;
   scheduleRetries?: boolean;
   maxRounds?: number;
+  /**
+   * SALES-AGENT-R2-ID-R2-A07. Forwarded unchanged into every reprojection
+   * round this loop runs. Threading this through is what lets an identity
+   * upgrade that happened earlier in THIS SAME turn (e.g.
+   * runCommercialWorkInboundCycle just ran the onboarding post-plan stage and
+   * it completed create_customer/link_external_identity) unblock a step
+   * within this loop's existing round mechanism - no separate "same-turn
+   * resume" code path, just this loop's normal re-projection with fresher
+   * input. Optional, same as CommercialWorkProjectionInput.runtimeIdentity -
+   * omitted, this reprojects exactly as it did before A07.
+   */
+  runtimeIdentity?: RuntimeIdentityContext;
+  /**
+   * SALES-AGENT-R2-ID-R2-A11. Forwarded unchanged into every executeCommercialWork
+   * call this loop makes - only get_customer_purchase_history reads it (via
+   * context.trustedCustomerSession.runtimeIdentity), every other capability
+   * ignores it. Distinct from runtimeIdentity above: that one feeds the
+   * projection's identity GATE only, this one is what a capability's own
+   * execute() can read at dispatch time. Optional - omitted, a
+   * REPEAT_PURCHASE step's LOAD_PURCHASE_HISTORY capability call would see no
+   * trusted session and fail closed (denied), never a silent identity guess.
+   */
+  trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
   /** SALES-AGENT-R2-A09. Forwarded unchanged into the executeCommercialWork call this settle loop makes each round - default OFF, same as the executor's own default. */
   parallelExecutionEnabled?: boolean;
   maxParallelSteps?: number;
@@ -69,7 +94,8 @@ export async function settleCommercialWorkProjection(input: SettleCommercialWork
         selectedShippingOption: facts.selectedShippingOption,
         createdQuote: facts.createdQuote,
         recentCapabilityExecutions,
-        now
+        now,
+        runtimeIdentity: input.runtimeIdentity
       }),
       sourceSequence: work.sourceSequence,
       lastReconciledSequence: work.lastReconciledSequence,
@@ -96,7 +122,7 @@ export async function settleCommercialWorkProjection(input: SettleCommercialWork
     const executed = await executeCommercialWork({
       workPublicId: work.publicId,
       expectedVersion: work.version,
-      context: { correlationId: input.correlationId, conversationId: input.conversationId, opportunityId: input.opportunityId },
+      context: { correlationId: input.correlationId, conversationId: input.conversationId, opportunityId: input.opportunityId, trustedCustomerSession: input.trustedCustomerSession },
       executeCapability: input.executeCapability,
       scheduleRetries: input.scheduleRetries ?? true,
       now,

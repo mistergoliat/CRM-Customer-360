@@ -131,6 +131,43 @@ export type LinkExternalIdentityResult =
   | { status: "failed"; code: string; retryable: boolean };
 
 // -----------------------------------------------------------------------
+// link_prestashop_identity (SALES-AGENT-R2-ID-R2-A09). A deliberately
+// separate operation from link_external_identity above - never the same
+// type widened with an extra provider literal (task PRINCIPIO CENTRAL: the
+// two bridges prove different things - channel control vs. e-commerce
+// account adjudication - so they get different request shapes and a
+// different authority, never a relaxed shared one). The wire transport
+// (POST /v1/customers/:id/external-identities) is reused; only the payload
+// shape and the server-side authority differ - see http-adapter.ts.
+// -----------------------------------------------------------------------
+
+export type LinkPrestashopIdentityInput = {
+  /** master_customer.id - the ALREADY-resolved master (LEVEL_2+), never LLM/tool-request-controlled. */
+  customerId: string;
+  /** The verified PrestaShop candidate id (A04's READY_TO_LINK.prestashopCustomerId) - never LLM-controlled, never a raw email/order value. */
+  prestashopCustomerId: string;
+  consent: {
+    granted: true;
+    messageId: string;
+    capturedAt: string;
+  };
+  idempotencyKey: string;
+};
+
+// Same status vocabulary as LinkExternalIdentityResult by design (PARTE 12:
+// "no convertir estos nombres necesariamente en tipos exactos si existe
+// vocabulario compatible") - lets audit/outcome-mapping code reuse the
+// existing classifier instead of duplicating it.
+export type LinkPrestashopIdentityResult =
+  | { status: "completed"; customerMasterId: string; externalIdentityId: string }
+  | { status: "already_linked"; customerMasterId: string; externalIdentityId: string }
+  | { status: "conflict"; conflictCode: string }
+  | { status: "denied"; reason: string }
+  | { status: "invalid_input"; fields: string[] }
+  | { status: "temporarily_unavailable"; retryable: boolean }
+  | { status: "failed"; code: string; retryable: boolean };
+
+// -----------------------------------------------------------------------
 // record_customer_interest (contract section 6). Policy and types only in
 // T04.1 - no persistence, no scheduling. See authority-policy.ts.
 // -----------------------------------------------------------------------

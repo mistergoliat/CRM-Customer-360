@@ -188,3 +188,18 @@ test("[MI-Resolve-14] SHIP16: select_shipping_option with no optionReference lea
   assert.equal(resolved.status, "waiting_for_information");
   assert.deepEqual(resolved.requirements, [{ type: "SHIPPING_OPTION", status: "missing" }]);
 });
+
+// SALES-AGENT-R2-ID-R2-A11. repeat_purchase declares no requirement at this
+// layer at all - identity (LEVEL_3) is a CommercialWork-level gate
+// (commercialIdentityGate.ts), never a semantic-planning-layer requirement;
+// this layer only resolves catalog/destination-shaped requirements. Always
+// "ready", regardless of whether productHint is present.
+test("[MI-Resolve-15] repeat_purchase is always ready with no requirements, with or without a productHint", () => {
+  const [withHint] = resolveCommercialIntentPlan([{ type: "repeat_purchase", productHint: "discos" }], baseContext());
+  assert.equal(withHint.status, "ready");
+  assert.deepEqual(withHint.requirements, []);
+
+  const [withoutHint] = resolveCommercialIntentPlan([{ type: "repeat_purchase" }], baseContext());
+  assert.equal(withoutHint.status, "ready");
+  assert.deepEqual(withoutHint.requirements, []);
+});

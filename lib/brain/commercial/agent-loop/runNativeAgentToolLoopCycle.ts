@@ -12,7 +12,8 @@ import type { NativeCustomerSessionExecutionContext } from "../native-cycle/cust
 import type { CommercialContextSnapshot } from "../context/buildNativeCommercialContext";
 import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
 import type { RecentCatalogContext } from "./recentCatalogContext";
-import { createProductionCustomerProfileCapabilities } from "../capabilities/customer-profile";
+import { loadCommercialCustomerContext } from "../commercial-customer-context";
+import type { RuntimeIdentityContext } from "../native-cycle/customer-session";
 import {
   buildCatalogHistoryComparisons,
   buildCustomerHistoryCommercialGuidance,
@@ -22,9 +23,7 @@ import {
   deriveCustomerHistoryCommercialSignals,
   deriveCustomerHistoryNeeds,
   filterRelevantCustomerHistorySignals,
-  loadCustomerCommercialHistoryContext,
   readCustomerHistoryCommercialPolicyConfig,
-  readCustomerProfileContextConfig,
   type CustomerCommercialHistoryContext,
   type CustomerHistoryCommercialPolicyConfig,
   type CustomerHistoryCommercialSignal
@@ -50,17 +49,15 @@ export type RunNativeAgentToolLoopCycleInput = {
    * resolveSalesAgentConfiguration() itself, and never touches the database.
    */
   resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
-  /** Test-only injection point for T12C; production callers use the shared Customer Profile capability wrapper. */
+  /** Test-only injection point for T12C/A10; production callers use the shared Customer Profile capability wrapper via loadCommercialCustomerContext. */
   loadCustomerProfileContext?: ((input: {
-    customerId: number | null;
-    masterCustomerId: string | null;
-    commercialIntent: boolean;
+    runtimeIdentity: RuntimeIdentityContext | null;
     customerMessage: string;
     snapshot: CommercialContextSnapshot;
     recentCatalogContext?: RecentCatalogContext | null;
     pendingCatalogAction?: PendingCatalogActionStep | null;
     requestId?: string;
-  }) => Promise<CustomerCommercialHistoryContext>) | null;
+  }) => Promise<CustomerCommercialHistoryContext | null>) | null;
   /** Test-only injection point for T12D; production callers rely on readCustomerHistoryCommercialPolicyConfig() reading the real environment. */
   customerHistoryCommercialPolicyConfig?: CustomerHistoryCommercialPolicyConfig | null;
 };
@@ -215,19 +212,15 @@ function buildCommercialNeed(snapshot: CommercialContextSnapshot): ContinuityFal
   };
 }
 
-function parseTrustedCustomerId(session: NativeCustomerSessionExecutionContext | null | undefined): number | null {
-  const raw = session?.identity.customerId?.trim();
-  if (!raw) return null;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function parseTrustedMasterCustomerId(session: NativeCustomerSessionExecutionContext | null | undefined): string | null {
-  const resolution = session?.masterCustomerIdentity;
-  if (!resolution || resolution.status !== "resolved") return null;
-  return /^\d{1,20}$/.test(resolution.masterCustomerId) && !/^0+$/.test(resolution.masterCustomerId)
-    ? resolution.masterCustomerId
-    : null;
+// SALES-AGENT-R2-ID-R2-A10. The only identity input Customer Profile
+// consumption reads from the trusted session - RuntimeIdentityContext
+// (ID-R2-A05), never `identity.customerId`/`masterCustomerIdentity`
+// (both master_customer.id space). loadCommercialCustomerContext gates on
+// this itself (reusing A06's evaluateCommercialIdentityRequirement); this
+// accessor exists only so a null trustedCustomerSession degrades to "no
+// identity" the same way every other field on this session already does.
+function trustedRuntimeIdentity(session: NativeCustomerSessionExecutionContext | null | undefined): RuntimeIdentityContext | null {
+  return session?.runtimeIdentity ?? null;
 }
 
 function buildCustomerProfileComparisonCandidates(input: {
@@ -268,18 +261,13 @@ function buildCustomerProfileComparisonCandidates(input: {
 }
 
 async function defaultLoadCustomerProfileContext(input: {
-  customerId: number | null;
-  masterCustomerId: string | null;
-  commercialIntent: boolean;
+  runtimeIdentity: RuntimeIdentityContext | null;
   customerMessage: string;
   snapshot: CommercialContextSnapshot;
   recentCatalogContext?: RecentCatalogContext | null;
   pendingCatalogAction?: PendingCatalogActionStep | null;
   requestId?: string;
 }): Promise<CustomerCommercialHistoryContext | null> {
-  const config = readCustomerProfileContextConfig();
-  if (!config.contextEnabled) return null;
-
   const historyNeeds = deriveCustomerHistoryNeeds({
     snapshot: input.snapshot,
     customerMessage: input.customerMessage,
@@ -287,15 +275,27 @@ async function defaultLoadCustomerProfileContext(input: {
     pendingCatalogAction: input.pendingCatalogAction ?? null
   });
 
-  const context = await loadCustomerCommercialHistoryContext({
-    customerId: input.customerId,
-    masterCustomerId: input.masterCustomerId,
-    commercialIntent: input.commercialIntent,
+  const result = await loadCommercialCustomerContext({
+    runtimeIdentity: input.runtimeIdentity,
     historyNeeds,
-    requestId: input.requestId,
-    config,
-    customerProfileCapabilities: createProductionCustomerProfileCapabilities()
+    requestId: input.requestId
   });
+
+  console.info({
+    event: "commercial_customer_context_gate_evaluated",
+    status: result.status,
+    prestashopCustomerIdPresent: result.status !== "IDENTITY_INSUFFICIENT" && result.prestashopCustomerId !== null,
+    requestId: input.requestId
+  });
+
+  if (result.status !== "AVAILABLE") {
+    // IDENTITY_INSUFFICIENT / PROFILE_NOT_FOUND / SYSTEM_UNAVAILABLE all mean
+    // "no commercial enrichment this turn" - never a fallback id, never a
+    // retry with a different identity space, never a customer-facing error.
+    return null;
+  }
+
+  const context = result.commercialHistory;
 
   const comparisonCandidates = buildCustomerProfileComparisonCandidates({
     recentCatalogContext: input.recentCatalogContext ?? null,
@@ -446,9 +446,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
 
   try {
     customerProfileContext = await loadCustomerProfileContext({
-      customerId: parseTrustedCustomerId(input.trustedCustomerSession),
-      masterCustomerId: parseTrustedMasterCustomerId(input.trustedCustomerSession),
-      commercialIntent: true,
+      runtimeIdentity: trustedRuntimeIdentity(input.trustedCustomerSession),
       customerMessage: input.customerMessage,
       snapshot: input.snapshot,
       recentCatalogContext: input.recentCatalogContext ?? null,
@@ -458,7 +456,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
   } catch {
     customerProfileContext = {
       status: "UNAVAILABLE",
-      customerId: parseTrustedCustomerId(input.trustedCustomerSession),
+      customerId: null,
       summary: null,
       recentOrders: [],
       purchasedProducts: [],

@@ -28,7 +28,7 @@ test("customer profile capabilities are a thin internal application wrapper over
     reason: "CUSTOMER_PROFILE_DISABLED",
     retryable: false
   });
-  assert.deepEqual(await capabilities.getRfm({ masterCustomerId: "9001" }), {
+  assert.deepEqual(await capabilities.getRfm({ customerId: 9001 }), {
     status: "UNAVAILABLE",
     reason: "CUSTOMER_PROFILE_UNAVAILABLE",
     retryable: false

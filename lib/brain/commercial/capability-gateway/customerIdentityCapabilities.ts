@@ -1,9 +1,11 @@
 import { createCustomerServicePort } from "@/lib/integrations/customer-service";
+import { upsertExternalIdentity } from "@/lib/integrations/customer-external-identity";
 import { createCustomerServiceClient } from "@/lib/domains/customer-service";
 import type { CustomerServicePort } from "@/lib/domains/customer-service";
 import { createCustomerOnboardingService } from "@/lib/domains/customer-onboarding";
 import type { CustomerOnboardingPendingField, CustomerOnboardingService } from "@/lib/domains/customer-onboarding";
 import { recordOnboardingTransitionIfChanged } from "../native-cycle/customer-session/identityAuditEvents";
+import { recordPrestashopBridgeEvidence } from "../native-cycle/customer-session/identityEvidenceHooks";
 import { mapOnboardingPurposeToCommercialPurpose } from "../native-cycle/customer-session/onboardingPurposeMapping";
 import { completeOnboardingWithVerifiedCustomer, landOnboardingInTerminalState, verifyCustomerMasterProjection } from "../native-cycle/customer-session/onboardingTransitions";
 import { deriveIdentityCapabilityBusinessOutcome } from "./identityCapabilityOutcome";
@@ -49,7 +51,7 @@ function evidenceOf(source: string, summary: string): CapabilityExecutionOutcome
 // raw-input/raw-output behavior in executeCapability.ts unchanged.
 
 function identityResponseSummary(
-  capability: "resolve_customer" | "create_customer" | "link_external_identity",
+  capability: "resolve_customer" | "create_customer" | "link_external_identity" | "link_prestashop_identity",
   outcome: CapabilityExecutionOutcome,
   hasResolvedCustomer: boolean
 ): Record<string, unknown> {
@@ -383,8 +385,205 @@ function linkExternalIdentityCapability(): CapabilityGatewayDefinition {
   };
 }
 
+/**
+ * link_prestashop_identity (SALES-AGENT-R2-ID-R2-A09). Closes the A08.1 gap:
+ * a deliberately SEPARATE capability from link_external_identity above, not
+ * that one generalized (task PRINCIPIO CENTRAL - WhatsApp link authority
+ * proves channel control, this proves e-commerce account adjudication, a
+ * different predicate). System-owned: never given a tool alias
+ * (toolAliases.ts, unchanged) - triggered only by the identity workflow
+ * (runCustomerOnboardingPostPlanStage's new step, gated on
+ * RuntimeIdentityContext.status === "READY_TO_LINK", PARTE 7/GAP 1 - never
+ * on session.identity.source, which is the WhatsApp-channel axis).
+ * masterCustomerId/prestashopCustomerId are read exclusively from
+ * session.runtimeIdentity (A05's server-computed READY_TO_LINK fact) - the
+ * LLM-facing tool-request input is ignored entirely, same discipline as
+ * create_customer/link_external_identity above.
+ */
+function linkPrestashopIdentityCapability(): CapabilityGatewayDefinition {
+  return {
+    capability: "link_prestashop_identity",
+    version: CAPABILITY_GATEWAY_VERSION,
+    description: "Links a verified PrestaShop candidate to the resolved master customer via Customer Service, gated by A04's READY_TO_LINK decision and explicit current-turn consent.",
+    // Same reasoning as link_external_identity: conceptual authority is
+    // "requires_consent" (checked inside execute() via
+    // evaluateLinkPrestaShopIdentityAuthority), no operator pre-approval
+    // step exists, so the Gateway's binary field is "autonomous".
+    governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "medium" },
+    maxRetries: 0,
+    buildRequestSummary(_input, context) {
+      const session = context.trustedCustomerSession;
+      return {
+        channel: "whatsapp",
+        readyToLink: session?.runtimeIdentity.status === "READY_TO_LINK",
+        consentPresent: session?.currentTurnConsent.linkPrestashopIdentity !== null && session?.currentTurnConsent.linkPrestashopIdentity !== undefined,
+        hasResolvedCustomer: Boolean(session?.runtimeIdentity.masterCustomerId),
+        hasExternalIdentity: Boolean(session?.runtimeIdentity.prestashopCustomerId)
+      };
+    },
+    buildResponseSummary(outcome, context) {
+      return identityResponseSummary("link_prestashop_identity", outcome, Boolean(context.trustedCustomerSession?.runtimeIdentity.masterCustomerId));
+    },
+    async checkAvailability() {
+      return { status: "available", reason: null };
+    },
+    async execute(_input, context: CapabilityGatewayContext) {
+      const session = context.trustedCustomerSession;
+      if (!session) {
+        return { status: "denied", data: null, errorCode: "missing_trusted_session", retryable: false, evidence: [] };
+      }
+
+      // PARTE 3: the higher-level precondition this capability owns. A04's
+      // READY_TO_LINK decision already encodes "LEVEL_2 + a current
+      // (non-stale/superseded/revoked), verified PrestaShop candidate + no
+      // CONFLICT/AMBIGUOUS this turn" (evaluate.ts) - re-deriving those
+      // checks in the domain-level authority (authority-policy.ts) would
+      // duplicate A04's policy in a layer that has no RuntimeIdentityContext
+      // concept by design. Never re-evaluated here beyond this single status
+      // check - A04/A05 remain the sole source of this fact.
+      if (session.runtimeIdentity.status !== "READY_TO_LINK") {
+        return { status: "denied", data: null, errorCode: "not_ready_to_link", retryable: false, evidence: [] };
+      }
+
+      const masterCustomerId = session.runtimeIdentity.masterCustomerId;
+      const prestashopCustomerId = session.runtimeIdentity.prestashopCustomerId;
+      if (!masterCustomerId || !prestashopCustomerId) {
+        // Structurally unreachable given READY_TO_LINK's own guarantee
+        // (runtimeIdentityContext.ts always sets both alongside that
+        // status) - defensive fail-closed, never trusted implicitly.
+        return { status: "denied", data: null, errorCode: "identity_incomplete", retryable: false, evidence: [] };
+      }
+
+      const consent = session.currentTurnConsent.linkPrestashopIdentity;
+      const client = createCustomerServiceClient(getSharedCustomerServicePort());
+      const capabilityExecutionId = `${context.correlationId}:link_prestashop_identity`;
+
+      const outcome = await client.linkPrestashopIdentity({
+        capabilityExecutionId,
+        customerId: masterCustomerId,
+        prestashopCustomerId,
+        // granted must reflect whether THIS turn actually carries parsed
+        // consent evidence - never hardcoded true (same fix already applied
+        // to create_customer/link_external_identity).
+        consent: { granted: consent !== null, messageId: consent?.messageId ?? "", capturedAt: consent?.capturedAt ?? "" }
+      });
+
+      if (outcome.stage === "denied_by_policy") {
+        const decision = outcome.decision;
+        if (decision.status === "missing_information") {
+          return { status: "missing_information", data: { requiredFields: decision.requiredFields }, errorCode: null, retryable: false, evidence: [] };
+        }
+        if (decision.status === "requires_consent") {
+          return { status: "denied", data: null, errorCode: `consent_required:${decision.consentType}`, retryable: false, evidence: [] };
+        }
+        if (decision.status === "requires_human") {
+          return { status: "requires_approval", data: null, errorCode: decision.reasonCode, retryable: false, evidence: [] };
+        }
+        return { status: "denied", data: null, errorCode: decision.reasonCode, retryable: false, evidence: [] };
+      }
+
+      // PARTE 4/17: no local idempotency/conflict pre-check - Customer
+      // Service is the sole authority over the canonical link's uniqueness
+      // (PARTE 6). completed/already_linked are both success; conflict is
+      // reported as-is, never auto-relinked/overwritten (PARTE 17: an
+      // incorrect bridge requires an explicit correction workflow this task
+      // does not build). No CustomerOnboardingState transition here - unlike
+      // create_customer/link_external_identity, this operation never touches
+      // onboarding (READY_TO_LINK only ever occurs once a master is already
+      // resolved at LEVEL_2, well past any active onboarding row).
+      const result = outcome.result;
+      if (result.status === "completed" || result.status === "already_linked") {
+        // PARTE 5/13. Customer Service is an external system with no access
+        // to main_management - it authorizes and records the link on its
+        // own side, but the LOCAL projection (customer_external_identity,
+        // the table A05's live LEVEL_3 check actually reads) has no other
+        // writer for provider="prestashop" anywhere in this codebase (the
+        // A08.1 root-cause finding). CRM writes it here, the same way
+        // lib/brain/native-whatsapp/service.ts already writes the
+        // provider="whatsapp" case - trusting Customer Service's own
+        // echoed-back customerMasterId (already validated numeric by the
+        // HTTP adapter), never this turn's unvalidated local master id
+        // directly. A write failure never fabricates success: the Gateway
+        // status/business outcome stay "completed" (the external operation
+        // really did succeed), but a warning is attached so the caller can
+        // observe the projection gap - resolveRuntimeIdentityContext's own
+        // live check (unmodified) already fails closed to NOT LEVEL_3 on
+        // its own next read regardless (PARTE 13: no fabricated LEVEL_3
+        // possible from this capability's return value alone).
+        const upserted = await upsertExternalIdentity({
+          customerId: Number(result.customerMasterId),
+          provider: "prestashop",
+          identityType: "prestashop_customer_id",
+          externalId: prestashopCustomerId,
+          normalizedValue: prestashopCustomerId,
+          isVerified: true
+        });
+
+        // PARTE 14 (same-turn resume). A04's canonicalPsLink/LEVEL_3 branch
+        // (evaluate.ts) reads DURABLE EVIDENCE first (source =
+        // "customer_external_identity"), not the live table directly - A02's
+        // resolver already writes exactly this shape every turn once it
+        // discovers a live bridge (applyIdentityEvidence.ts's "Case A"), but
+        // only on ITS OWN next pre-plan pass. recordPrestashopBridgeEvidence
+        // (identityEvidenceHooks.ts, the SAME trusted-runtime-only boundary
+        // recordOnboardingFieldEvidence already uses - never a second
+        // evidence engine, and never imported directly here: IDE17 asserts
+        // this file never imports the evidence domain at all, so no LLM-
+        // reachable path can ever mark evidence VERIFIED) writes the
+        // identical row, making the fact available THIS turn so
+        // runCommercialWorkInboundCycle.ts's existing bounded re-settle
+        // (PARTE 15 of A07, extended above) can observe LEVEL_3 immediately
+        // instead of only on the turn after. Fail-safe by construction (see
+        // that hook's own module comment) - a write failure there degrades
+        // to cross-turn-only resume, never a blocking failure here.
+        await recordPrestashopBridgeEvidence({
+          conversationId: session.conversationId,
+          messageId: session.trustedInbound.messageId,
+          correlationId: context.correlationId,
+          masterCustomerId: result.customerMasterId,
+          prestashopCustomerId,
+          sourceRecordRef: result.externalIdentityId,
+          observedAt: new Date().toISOString()
+        });
+
+        const warnings: string[] = [];
+        if (!upserted.ok) warnings.push("prestashop_bridge_local_write_failed");
+
+        return {
+          status: "completed",
+          data: result as unknown as Record<string, unknown>,
+          errorCode: null,
+          retryable: false,
+          evidence: evidenceOf("customer_service", `link_prestashop_identity ${result.status}.`),
+          warnings
+        };
+      }
+      if (result.status === "conflict") {
+        return {
+          status: "completed",
+          data: result as unknown as Record<string, unknown>,
+          errorCode: "prestashop_link_conflict",
+          retryable: false,
+          evidence: evidenceOf("customer_service", "link_prestashop_identity conflict.")
+        };
+      }
+      if (result.status === "denied") {
+        return { status: "denied", data: null, errorCode: result.reason, retryable: false, evidence: [] };
+      }
+      if (result.status === "invalid_input") {
+        return { status: "invalid_arguments", data: null, errorCode: result.fields.join(","), retryable: false, evidence: [] };
+      }
+      if (result.status === "temporarily_unavailable") {
+        return { status: "temporarily_blocked", data: null, errorCode: "temporarily_unavailable", retryable: result.retryable, evidence: [] };
+      }
+      return { status: "failed", data: null, errorCode: result.code, retryable: result.retryable, evidence: [] };
+    }
+  };
+}
+
 export const CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS: readonly CapabilityGatewayDefinition[] = [
   resolveCustomerCapability(),
   createCustomerCapability(),
-  linkExternalIdentityCapability()
+  linkExternalIdentityCapability(),
+  linkPrestashopIdentityCapability()
 ];

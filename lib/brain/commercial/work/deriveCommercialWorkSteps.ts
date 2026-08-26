@@ -47,6 +47,97 @@ function terminalOr(objective: CommercialObjective, computed: CommercialWorkStep
   return objective.status === "CANCELLED" || objective.status === "SUPERSEDED" ? objective.status : computed;
 }
 
+/**
+ * SALES-AGENT-R2-ID-R2-A11. Extracted, unchanged in behavior, from the old
+ * inline SELECT_PRODUCTS/CHANGE_QUANTITY case body (SALES-AGENT-R2-A11.1,
+ * Part 2's needsSearch chain) so REPEAT_PURCHASE can derive the exact same
+ * SEARCH_PRODUCTS/SELECT_PRODUCTS steps once purchase history resolves a
+ * productReference - never a second, parallel step-deriving path.
+ */
+function deriveProductSelectionSteps(objective: CommercialObjective, stepPrefix: string): CommercialWorkStep[] {
+  const steps: CommercialWorkStep[] = [];
+  // SALES-AGENT-R2-A11.1, Part 2. A READY objective with a productReference
+  // but no resolved items yet needs a real catalog search before
+  // SELECT_PRODUCTS can run - applyObjectiveState only reaches
+  // READY-with-no-items when latestSearchProductsExecution found nothing
+  // matching this exact reference yet (never READY on a bare unresolved
+  // reference otherwise). SELECT_PRODUCTS then depends on that step
+  // COMPLETING, reusing the same generic STEP_COMPLETED/activateUnblockedSteps
+  // reactivation mechanism CALCULATE_SHIPPING already relies on for
+  // FACT_CONFIRMED deps - no new engine behavior, just a new dependency edge.
+  const needsSearch = objective.status === "READY" && !objective.inputs.items?.length && Boolean(objective.inputs.productReference);
+  if (needsSearch) {
+    const searchStepId = `${stepPrefix}:SEARCH_PRODUCTS`;
+    steps.push(
+      makeStep({
+        stepId: searchStepId,
+        objectiveIds: [objective.objectiveId],
+        type: "SEARCH_PRODUCTS",
+        status: "READY",
+        dependencies: [],
+        capabilityName: "search_products",
+        input: objective.inputs,
+        evidence: [...objective.evidence],
+        blockers: []
+      })
+    );
+    steps.push(
+      makeStep({
+        stepId: `${stepPrefix}:SELECT_PRODUCTS`,
+        objectiveIds: [objective.objectiveId],
+        type: "SELECT_PRODUCTS",
+        status: "BLOCKED",
+        dependencies: [{ type: "STEP_COMPLETED", stepId: searchStepId }],
+        capabilityName: "select_products",
+        input: objective.inputs,
+        evidence: [...objective.evidence],
+        // SALES-AGENT-R2-A11.1, Part 2. commercialWorkExecutor.ts's
+        // activateUnblockedSteps auto-flips ANY BLOCKED step with empty
+        // blockers straight to READY the instant its STEP_COMPLETED
+        // dependency is satisfied - within the SAME executor pass that just
+        // ran SEARCH_PRODUCTS, before a fresh projection round ever gets to
+        // interpret the search result into objective.inputs.items. Left at
+        // blockers: [], this step would run select_products with empty
+        // items one full round early (reproduced live: search completes,
+        // this step reactivates immediately, calls select_products with
+        // items: [], capability fails, objective reads FAILED).
+        // MISSING_PRODUCT_EVIDENCE is not in canAutoActivateStep's
+        // allow-list, so this step only ever becomes READY/WAITING_CUSTOMER
+        // through the NEXT fresh buildCommercialWorkProjection round, by
+        // which point applyObjectiveState has already turned the search
+        // result into real items (or a real WAITING_CUSTOMER/WAITING_SYSTEM
+        // objective status) and re-derives this step's status from that,
+        // correctly, via the plain (non-needsSearch) branch below.
+        blockers: [blocker("MISSING_PRODUCT_EVIDENCE", "step", objective.objectiveId, `${stepPrefix}:SELECT_PRODUCTS`)]
+      })
+    );
+    return steps;
+  }
+  steps.push(
+    makeStep({
+      stepId: `${stepPrefix}:SELECT_PRODUCTS`,
+      objectiveIds: [objective.objectiveId],
+      type: "SELECT_PRODUCTS",
+      status: terminalOr(
+        objective,
+        objective.status === "COMPLETED"
+          ? "COMPLETED"
+          : objective.status === "WAITING_CUSTOMER"
+            ? "WAITING_CUSTOMER"
+            : objective.status === "BLOCKED"
+              ? "BLOCKED"
+              : "READY"
+      ),
+      dependencies: [{ type: "CUSTOMER_INPUT", requirement: "PRODUCT" }],
+      capabilityName: "select_products",
+      input: objective.inputs,
+      evidence: [...objective.evidence],
+      blockers: [...objective.blockers]
+    })
+  );
+  return steps;
+}
+
 export function deriveCommercialWorkSteps(objectives: readonly CommercialObjective[]): CommercialWorkStep[] {
   const steps: CommercialWorkStep[] = [];
 
@@ -85,71 +176,23 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
         );
         break;
       case "SELECT_PRODUCTS":
-      case "CHANGE_QUANTITY": {
-        // SALES-AGENT-R2-A11.1, Part 2. A READY objective with a
-        // productReference but no resolved items yet needs a real catalog
-        // search before SELECT_PRODUCTS can run - applyObjectiveState only
-        // reaches READY-with-no-items when latestSearchProductsExecution
-        // found nothing matching this exact reference yet (never READY on a
-        // bare unresolved reference otherwise). SELECT_PRODUCTS then depends
-        // on that step COMPLETING, reusing the same generic
-        // STEP_COMPLETED/activateUnblockedSteps reactivation mechanism
-        // CALCULATE_SHIPPING already relies on for FACT_CONFIRMED deps -
-        // no new engine behavior, just a new dependency edge.
-        const needsSearch = objective.status === "READY" && !objective.inputs.items?.length && Boolean(objective.inputs.productReference);
-        if (needsSearch) {
-          const searchStepId = `${stepPrefix}:SEARCH_PRODUCTS`;
-          steps.push(
-            makeStep({
-              stepId: searchStepId,
-              objectiveIds: [objective.objectiveId],
-              type: "SEARCH_PRODUCTS",
-              status: "READY",
-              dependencies: [],
-              capabilityName: "search_products",
-              input: objective.inputs,
-              evidence: [...objective.evidence],
-              blockers: []
-            })
-          );
-          steps.push(
-            makeStep({
-              stepId: `${stepPrefix}:SELECT_PRODUCTS`,
-              objectiveIds: [objective.objectiveId],
-              type: "SELECT_PRODUCTS",
-              status: "BLOCKED",
-              dependencies: [{ type: "STEP_COMPLETED", stepId: searchStepId }],
-              capabilityName: "select_products",
-              input: objective.inputs,
-              evidence: [...objective.evidence],
-              // SALES-AGENT-R2-A11.1, Part 2. commercialWorkExecutor.ts's
-              // activateUnblockedSteps auto-flips ANY BLOCKED step with empty
-              // blockers straight to READY the instant its STEP_COMPLETED
-              // dependency is satisfied - within the SAME executor pass that
-              // just ran SEARCH_PRODUCTS, before a fresh projection round
-              // ever gets to interpret the search result into
-              // objective.inputs.items. Left at blockers: [], this step would
-              // run select_products with empty items one full round early
-              // (reproduced live: search completes, this step reactivates
-              // immediately, calls select_products with items: [], capability
-              // fails, objective reads FAILED). MISSING_PRODUCT_EVIDENCE is
-              // not in canAutoActivateStep's allow-list, so this step only
-              // ever becomes READY/WAITING_CUSTOMER through the NEXT fresh
-              // buildCommercialWorkProjection round, by which point
-              // applyObjectiveState has already turned the search result into
-              // real items (or a real WAITING_CUSTOMER/WAITING_SYSTEM
-              // objective status) and re-derives this step's status from
-              // that, correctly, via the plain (non-needsSearch) branch below.
-              blockers: [blocker("MISSING_PRODUCT_EVIDENCE", "step", objective.objectiveId, `${stepPrefix}:SELECT_PRODUCTS`)]
-            })
-          );
+      case "CHANGE_QUANTITY":
+        steps.push(...deriveProductSelectionSteps(objective, stepPrefix));
+        break;
+      case "REPEAT_PURCHASE": {
+        // SALES-AGENT-R2-ID-R2-A11. Once purchase history resolved a
+        // productReference (or the shared resolver already resolved items),
+        // this objective derives the exact same steps SELECT_PRODUCTS/
+        // CHANGE_QUANTITY would - never a parallel step-deriving path.
+        if (objective.inputs.productReference || objective.inputs.items?.length) {
+          steps.push(...deriveProductSelectionSteps(objective, stepPrefix));
           break;
         }
         steps.push(
           makeStep({
-            stepId: `${stepPrefix}:SELECT_PRODUCTS`,
+            stepId: `${stepPrefix}:LOAD_PURCHASE_HISTORY`,
             objectiveIds: [objective.objectiveId],
-            type: "SELECT_PRODUCTS",
+            type: "LOAD_PURCHASE_HISTORY",
             status: terminalOr(
               objective,
               objective.status === "COMPLETED"
@@ -158,10 +201,12 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
                   ? "WAITING_CUSTOMER"
                   : objective.status === "BLOCKED"
                     ? "BLOCKED"
-                    : "READY"
+                    : objective.status === "WAITING_SYSTEM"
+                      ? "WAITING_SYSTEM"
+                      : "READY"
             ),
-            dependencies: [{ type: "CUSTOMER_INPUT", requirement: "PRODUCT" }],
-            capabilityName: "select_products",
+            dependencies: [],
+            capabilityName: "get_customer_purchase_history",
             input: objective.inputs,
             evidence: [...objective.evidence],
             blockers: [...objective.blockers]
@@ -315,11 +360,39 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId: `${stepPrefix}:CREATE_QUOTE`,
             objectiveIds: [objective.objectiveId],
             type: "CREATE_QUOTE",
-            status: terminalOr(objective, objective.status === "COMPLETED" ? "COMPLETED" : objective.status === "BLOCKED" ? "BLOCKED" : "READY"),
+            // SALES-AGENT-R2-ID-R2-A07. WAITING_CUSTOMER/WAITING_SYSTEM added:
+            // commercialIdentityGate.ts can now leave a CREATE_QUOTE objective
+            // in either status (never just BLOCKED) - without these two
+            // branches this step would silently fall through to "READY",
+            // reaching the executor's capability call despite the objective
+            // being identity-blocked.
+            status: terminalOr(
+              objective,
+              objective.status === "COMPLETED"
+                ? "COMPLETED"
+                : objective.status === "WAITING_CUSTOMER"
+                  ? "WAITING_CUSTOMER"
+                  : objective.status === "WAITING_SYSTEM"
+                    ? "WAITING_SYSTEM"
+                    : objective.status === "BLOCKED"
+                      ? "BLOCKED"
+                      : "READY"
+            ),
             dependencies: [{ type: "FACT_CONFIRMED", factType: "commercial_line_items" }],
             capabilityName: "create_quote",
             input: objective.inputs,
             evidence: [...objective.evidence],
+            // SALES-AGENT-R2-ID-R2-A07 (PARTE 16). Deliberately NOT marked
+            // retryable/retryCandidate even when WAITING_SYSTEM comes from an
+            // identity SYSTEM_WAIT decision: unlike GET_SHIPPING_QUOTE's own
+            // WAITING_SYSTEM (a real capability execution already failed,
+            // with a real attemptCount/nextAttemptAt to back off from), this
+            // step never executed at all - there is nothing for the capability
+            // -failure retry worker (retryPolicy.ts) to schedule. Recovery
+            // here is next-turn re-derivation (a fresh customer message
+            // re-evaluates RuntimeIdentityContext fresh), the same
+            // self-healing every other blocked objective in this file already
+            // relies on - never a second, capability-shaped retry mechanism.
             blockers: [...objective.blockers]
           })
         );

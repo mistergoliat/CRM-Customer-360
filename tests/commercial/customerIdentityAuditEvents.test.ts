@@ -603,9 +603,10 @@ test("integration: runCustomerOnboardingPostPlanStage end-to-end persists a real
     trustedInbound: { channel: "whatsapp" as const, externalId: "56900000002", normalizedPhone: "56900000002", messageId: uniqueId("msg"), receivedAt: "2026-07-13T12:00:00.000Z" },
     identity: { status: "anonymous" as const, customerId: null, source: "none" as const, localResolutionOutcome: "anonymous", externalResolutionOutcome: null },
     masterCustomerIdentity: { status: "identity_unresolved" as const, reason: "identity_absent" as const },
+    runtimeIdentity: { status: "ANONYMOUS" as const, identityLevel: "LEVEL_0_ANONYMOUS" as const, masterCustomerId: null, prestashopCustomerId: null, verificationRequired: false, requiredEvidence: [], readyToLink: false, conflictCode: null, policyCode: "NO_CHANNEL_EVIDENCE", evidenceRefs: [] },
     onboarding: null,
     contextAccess: "none" as const,
-    currentTurnConsent: { createCustomer: null, linkExternalIdentity: null },
+    currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null },
     freshExternalResolutionEvidence: null
   };
   await runCustomerOnboardingPostPlanStage({

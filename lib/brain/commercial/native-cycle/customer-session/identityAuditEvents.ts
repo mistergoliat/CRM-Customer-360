@@ -2,7 +2,8 @@ import {
   recordCustomerIdentityCapabilityOutcomeCommercialEvent,
   recordCustomerIdentityResolutionCommercialEvent,
   recordCustomerOnboardingTransitionCommercialEvent,
-  recordCustomerSessionWarningCommercialEvent
+  recordCustomerSessionWarningCommercialEvent,
+  recordIdentityVerificationDecisionCommercialEvent
 } from "../../events/service";
 import type {
   CustomerIdentityResolutionMatchedBy,
@@ -15,6 +16,7 @@ import type { CapabilityGatewayResult } from "../../capability-gateway/types";
 import type { CustomerIdentityMatchedBy, CustomerIdentityResolutionStatus, ResolveCustomerIdentityResult } from "@/lib/domains/customer-identity";
 import type { CustomerOnboardingMutationResult, CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
 import type { CustomerResolutionEvidence } from "@/lib/domains/customer-service";
+import type { RuntimeIdentityContext } from "./runtimeIdentityContext";
 import { isNativeSessionWarning } from "./warnings";
 
 // ACS-R1-04-T07. Descriptive identity/onboarding audit trail on top of
@@ -124,7 +126,7 @@ export async function recordExternalIdentityResolution(params: {
 }
 
 export async function recordIdentityCapabilityOutcome(params: {
-  capability: "resolve_customer" | "create_customer" | "link_external_identity";
+  capability: "resolve_customer" | "create_customer" | "link_external_identity" | "link_prestashop_identity";
   correlationId?: string | null;
   conversationId?: string | null;
   opportunityId?: string | null;
@@ -194,6 +196,40 @@ export async function recordOnboardingTransitionIfChanged(params: {
   } catch {
     // Fail-safe - see recordLocalIdentityResolution. The onboarding
     // transition itself already committed; this only records evidence of it.
+  }
+}
+
+/**
+ * SALES-AGENT-R2-ID-R2-A05 (PARTE 14). Descriptive audit trail for this
+ * turn's RuntimeIdentityContext - never authoritative (the durable state
+ * lives in crm_customer_identity_evidence/customer_external_identity).
+ * Never carries PII: RuntimeIdentityContext itself already excludes
+ * email/phone/wa_id (see runtimeIdentityContext.ts). Fail-safe - same
+ * discipline as recordLocalIdentityResolution: a recording failure here can
+ * never surface as a raw error, change the turn's identity result, or block
+ * a sale.
+ */
+export async function recordIdentityVerificationDecision(params: {
+  messageId: string;
+  correlationId?: string | null;
+  conversationId: string;
+  runtimeIdentity: RuntimeIdentityContext;
+}): Promise<void> {
+  try {
+    await recordIdentityVerificationDecisionCommercialEvent({
+      messageId: params.messageId,
+      status: params.runtimeIdentity.status,
+      identityLevel: params.runtimeIdentity.identityLevel,
+      policyCode: params.runtimeIdentity.policyCode,
+      masterCustomerId: params.runtimeIdentity.masterCustomerId,
+      prestashopCustomerId: params.runtimeIdentity.prestashopCustomerId,
+      evidenceIds: [...params.runtimeIdentity.evidenceRefs],
+      conflictCode: params.runtimeIdentity.conflictCode,
+      correlationId: params.correlationId ?? null,
+      conversationId: params.conversationId
+    });
+  } catch {
+    // Fail-safe - see recordLocalIdentityResolution.
   }
 }
 

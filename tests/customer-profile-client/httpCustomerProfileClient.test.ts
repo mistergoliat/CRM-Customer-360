@@ -399,9 +399,9 @@ test("commercial summary and readiness parse available responses", async () => {
   }
 });
 
-test("rfm request uses masterCustomerId, preserves monetary precision, and allows historical null segment", async () => {
+test("rfm request uses the ps_customer.id_customer-space customerId, preserves monetary precision, and allows historical null segment", async () => {
   handler = (_req, res) => sendJson(res, 200, rfmPayload("9001"));
-  const available = await makeClient().getRfm({ masterCustomerId: "9001", requestId: "rfm-1" });
+  const available = await makeClient().getRfm({ customerId: 9001, requestId: "rfm-1" });
   assert.equal(available.status, "AVAILABLE");
   assert.equal(lastUrl, "/v1/customers/9001/rfm");
   if (available.status === "AVAILABLE") {
@@ -410,7 +410,7 @@ test("rfm request uses masterCustomerId, preserves monetary precision, and allow
   }
 
   handler = (_req, res) => sendJson(res, 200, { ...rfmPayload("9001"), segment: { code: null, version: null } });
-  const historical = await makeClient().getRfm({ masterCustomerId: "9001" });
+  const historical = await makeClient().getRfm({ customerId: 9001 });
   assert.equal(historical.status, "AVAILABLE");
   if (historical.status === "AVAILABLE") {
     assert.equal(historical.data.segment.code, null);
@@ -464,7 +464,7 @@ test("order status encodes the reference and never sends it in logs", async () =
 test("invalid local input is rejected before any network call", async () => {
   const client = makeClient();
   assert.deepEqual(await client.getProfile({ customerId: 0 }), { status: "INVALID_REQUEST", reason: "INVALID_CUSTOMER_ID" });
-  assert.deepEqual(await client.getRfm({ masterCustomerId: "0" }), { status: "INVALID_REQUEST", reason: "INVALID_MASTER_CUSTOMER_ID" });
+  assert.deepEqual(await client.getRfm({ customerId: 0 }), { status: "INVALID_REQUEST", reason: "INVALID_CUSTOMER_ID" });
   assert.deepEqual(await client.getPurchasedProducts({ customerId: 1, limit: 101 }), { status: "INVALID_REQUEST", reason: "INVALID_LIMIT" });
   assert.deepEqual(await client.getPurchaseBehavior({ customerId: 1, topVariants: 11 }), { status: "INVALID_REQUEST", reason: "INVALID_TOP_VARIANTS" });
   assert.deepEqual(await client.getOrderStatus({ customerId: 1, orderReference: "bad ref" }), { status: "INVALID_REQUEST", reason: "INVALID_ORDER_REFERENCE" });
@@ -480,10 +480,10 @@ test("404 maps to CUSTOMER_NOT_FOUND and ORDER_NOT_FOUND using the response body
   assert.deepEqual(await client.getOrderStatus({ customerId: 1, orderReference: "NOPE1234" }), { status: "NOT_FOUND", reason: "ORDER_NOT_FOUND" });
 
   handler = (_req, res) => sendJson(res, 404, { status: "customer_not_found", masterCustomerId: "9001" });
-  assert.deepEqual(await client.getRfm({ masterCustomerId: "9001" }), { status: "NOT_FOUND", reason: "CUSTOMER_NOT_FOUND" });
+  assert.deepEqual(await client.getRfm({ customerId: 9001 }), { status: "NOT_FOUND", reason: "CUSTOMER_NOT_FOUND" });
 
   handler = (_req, res) => sendJson(res, 404, { status: "rfm_not_available", masterCustomerId: "9001" });
-  assert.deepEqual(await client.getRfm({ masterCustomerId: "9001" }), { status: "NOT_FOUND", reason: "RFM_NOT_AVAILABLE" });
+  assert.deepEqual(await client.getRfm({ customerId: 9001 }), { status: "NOT_FOUND", reason: "RFM_NOT_AVAILABLE" });
 });
 
 test("400, 429, 500 and 503 reasons map to the canonical result taxonomy", async () => {
@@ -508,7 +508,7 @@ test("400, 429, 500 and 503 reasons map to the canonical result taxonomy", async
   assert.deepEqual(await client.getProfile({ customerId: 1 }), { status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_UNAVAILABLE", retryable: true });
 
   handler = (_req, res) => sendJson(res, 503, { status: "degraded", reason: "no_published_rfm_snapshot" });
-  assert.deepEqual(await client.getRfm({ masterCustomerId: "9001" }), { status: "UNAVAILABLE", reason: "RFM_DEGRADED", retryable: true });
+  assert.deepEqual(await client.getRfm({ customerId: 9001 }), { status: "UNAVAILABLE", reason: "RFM_DEGRADED", retryable: true });
 });
 
 test("invalid JSON and invalid schema are separated into unavailable vs contract error", async () => {
@@ -524,7 +524,7 @@ test("invalid JSON and invalid schema are separated into unavailable vs contract
   assert.deepEqual(await client.getProfile({ customerId: 1 }), { status: "CONTRACT_ERROR", reason: "INVALID_RESPONSE" });
 
   handler = (_req, res) => sendJson(res, 200, { ...rfmPayload("9001"), masterCustomerId: "9002" });
-  assert.deepEqual(await client.getRfm({ masterCustomerId: "9001" }), { status: "CONTRACT_ERROR", reason: "MASTER_CUSTOMER_ID_MISMATCH" });
+  assert.deepEqual(await client.getRfm({ customerId: 9001 }), { status: "CONTRACT_ERROR", reason: "PROVENANCE_MISMATCH" });
 });
 
 test("provenance mismatches become CONTRACT_ERROR and the payload is rejected", async () => {
@@ -560,7 +560,7 @@ test("timeout and network failures are sanitized and retryable", async () => {
   const networkResult = await createHttpCustomerProfileClient(config({ baseUrl: "http://127.0.0.1:1", timeoutMs: 100 })).getProfile({ customerId: 1 });
   assert.deepEqual(networkResult, { status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_UNAVAILABLE", retryable: true });
 
-  const rfmNetworkResult = await createHttpCustomerProfileClient(config({ baseUrl: "http://127.0.0.1:1", timeoutMs: 100 })).getRfm({ masterCustomerId: "9001" });
+  const rfmNetworkResult = await createHttpCustomerProfileClient(config({ baseUrl: "http://127.0.0.1:1", timeoutMs: 100 })).getRfm({ customerId: 9001 });
   assert.deepEqual(rfmNetworkResult, { status: "UNAVAILABLE", reason: "CUSTOMER_PROFILE_UNAVAILABLE", retryable: true });
 });
 
@@ -592,7 +592,7 @@ test("rfm adapter logs normalized lookup observability without leaking raw provi
   };
   try {
     handler = (_req, res) => sendJson(res, 200, rfmPayload("9001"));
-    await makeClient().getRfm({ masterCustomerId: "9001", requestId: "rfm-safe" });
+    await makeClient().getRfm({ customerId: 9001, requestId: "rfm-safe" });
     const serialized = JSON.stringify(seen);
     assert.equal(serialized.includes("\"event\":\"customer_rfm_lookup\""), true);
     assert.equal(serialized.includes("\"rfm_lookup_status\":\"AVAILABLE\""), true);

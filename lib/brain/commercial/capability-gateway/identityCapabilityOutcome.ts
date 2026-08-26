@@ -1,4 +1,4 @@
-import type { CreateCustomerResult, LinkExternalIdentityResult, ResolveCustomerResult } from "@/lib/domains/customer-service";
+import type { CreateCustomerResult, LinkExternalIdentityResult, LinkPrestashopIdentityResult, ResolveCustomerResult } from "@/lib/domains/customer-service";
 import type { CapabilityGatewayExecutionStatus } from "./types";
 
 // ACS-R1-04-T07. Separates the Gateway's technical execution status from the
@@ -11,7 +11,7 @@ import type { CapabilityGatewayExecutionStatus } from "./types";
 // CreateCustomerResult/LinkExternalIdentityResult/CapabilityGatewayExecutionStatus
 // fails to compile here until classified.
 
-export type IdentityCapabilityName = "resolve_customer" | "create_customer" | "link_external_identity";
+export type IdentityCapabilityName = "resolve_customer" | "create_customer" | "link_external_identity" | "link_prestashop_identity";
 
 function assertNever(value: never): never {
   throw new Error(`identity_capability_outcome_unclassified:${JSON.stringify(value)}`);
@@ -58,6 +58,32 @@ function mapCreateCustomerOutcome(result: CreateCustomerResult): string {
 }
 
 function mapLinkExternalIdentityOutcome(result: LinkExternalIdentityResult): string {
+  switch (result.status) {
+    case "completed":
+      return "completed";
+    case "already_linked":
+      return "already_linked";
+    case "conflict":
+      return "conflict";
+    case "denied":
+      return "denied";
+    case "invalid_input":
+      return "invalid_input";
+    case "temporarily_unavailable":
+      return "temporarily_unavailable";
+    case "failed":
+      return "failed";
+    default:
+      return assertNever(result);
+  }
+}
+
+// SALES-AGENT-R2-ID-R2-A09. LinkPrestashopIdentityResult mirrors
+// LinkExternalIdentityResult's status vocabulary exactly (types.ts) - a
+// distinct switch is kept (rather than an unchecked cast) so a future
+// divergence between the two result unions fails to compile here instead of
+// silently misclassifying.
+function mapLinkPrestashopIdentityOutcome(result: LinkPrestashopIdentityResult): string {
   switch (result.status) {
     case "completed":
       return "completed";
@@ -126,9 +152,9 @@ export function deriveIdentityCapabilityBusinessOutcome(
       } else {
         const status = (data as { status?: unknown }).status;
         if (typeof status === "string") {
-          return capability === "create_customer"
-            ? mapCreateCustomerOutcome(data as unknown as CreateCustomerResult)
-            : mapLinkExternalIdentityOutcome(data as unknown as LinkExternalIdentityResult);
+          if (capability === "create_customer") return mapCreateCustomerOutcome(data as unknown as CreateCustomerResult);
+          if (capability === "link_prestashop_identity") return mapLinkPrestashopIdentityOutcome(data as unknown as LinkPrestashopIdentityResult);
+          return mapLinkExternalIdentityOutcome(data as unknown as LinkExternalIdentityResult);
         }
       }
     }

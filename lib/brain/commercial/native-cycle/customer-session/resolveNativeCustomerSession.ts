@@ -6,8 +6,11 @@ import type { CustomerMasterProjectionReader, CustomerResolutionEvidence, Resolv
 import { executeGovernedCapability } from "../../capability-gateway/executeCapability";
 import { resolveMasterCustomerIdentity } from "../../identity/master-customer/resolveMasterCustomerIdentity";
 import { parseAllConsentEvidence } from "./consentEvidence";
-import { recordExternalIdentityResolution, recordIdentityCapabilityOutcome, recordLocalIdentityResolution, recordSessionWarnings } from "./identityAuditEvents";
+import { recordExternalIdentityResolution, recordIdentityCapabilityOutcome, recordIdentityVerificationDecision, recordLocalIdentityResolution, recordSessionWarnings } from "./identityAuditEvents";
+import { recordTurnIdentityEvidence } from "./identityEvidenceHooks";
 import { completeOnboardingWithCustomer, completeOnboardingWithVerifiedCustomer, landOnboardingInTerminalState } from "./onboardingTransitions";
+import { resolveRuntimeIdentityContext } from "./runtimeIdentityContext";
+import type { EvaluateIdentityVerificationFn } from "./runtimeIdentityContext";
 import { mergeWarnings } from "./warnings";
 import type {
   CustomerIdentitySource,
@@ -31,6 +34,8 @@ export type ResolveNativeCustomerSessionDependencies = {
   resolveCustomerExternal?: ResolveCustomerExternalFn;
   /** ACS-R1-04-T08.1. Test-only injection seam for the customer_master projection gate - defaults to the real, DB-backed reader (see completeOnboardingWithVerifiedCustomer). */
   projectionReader?: CustomerMasterProjectionReader;
+  /** SALES-AGENT-R2-ID-R2-A05. Test-only injection seam for A04's verification policy - defaults to the real, DB-backed lib/domains/customer-identity-verification service. */
+  evaluateIdentityVerification?: EvaluateIdentityVerificationFn;
   now?: () => Date;
 };
 
@@ -102,6 +107,7 @@ function buildDecisionContext(execution: NativeCustomerSessionExecutionContext):
       hasResolvedCustomer: execution.identity.customerId !== null,
       source: execution.identity.source
     },
+    runtimeIdentity: execution.runtimeIdentity,
     onboarding: onboarding
       ? {
           status: onboarding.status,
@@ -160,6 +166,37 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
     correlationId: input.correlationId,
     conversationId: input.conversationId,
     result: localResult
+  });
+
+  // SALES-AGENT-R2-ID-R2-A03: persist this turn's per-signal evidence
+  // durably, on top of (never instead of) the descriptive outcome event
+  // just recorded above - see identityEvidenceHooks.ts.
+  await recordTurnIdentityEvidence({
+    conversationId: input.conversationId,
+    messageId: input.trustedInbound.messageId,
+    correlationId: input.correlationId,
+    externalId: input.trustedInbound.externalId,
+    normalizedPhone: input.trustedInbound.normalizedPhone,
+    detail: localResult.detail
+  });
+
+  // SALES-AGENT-R2-ID-R2-A05: identity FACT only, computed exactly once per
+  // turn, immediately after this turn's evidence was persisted above (PARTE
+  // 5 - never before, or verification would see turn N-1's evidence).
+  // Never a business decision (onboarding/checkout/quote never read here).
+  const runtimeIdentity = await resolveRuntimeIdentityContext({
+    conversationId: input.conversationId,
+    externalId: input.trustedInbound.externalId,
+    detail: localResult.detail,
+    dependencies: input.dependencies?.evaluateIdentityVerification
+      ? { evaluateIdentityVerification: input.dependencies.evaluateIdentityVerification }
+      : undefined
+  });
+  await recordIdentityVerificationDecision({
+    messageId: input.trustedInbound.messageId,
+    correlationId: input.correlationId,
+    conversationId: input.conversationId,
+    runtimeIdentity
   });
 
   let identity = mapLocalResolution(localResult, onboarding !== null && onboarding.status !== "completed");
@@ -292,6 +329,7 @@ export async function resolveNativeCustomerSession(input: ResolveNativeCustomerS
     trustedInbound: input.trustedInbound,
     identity: sessionIdentity,
     masterCustomerIdentity,
+    runtimeIdentity,
     onboarding,
     contextAccess,
     currentTurnConsent,

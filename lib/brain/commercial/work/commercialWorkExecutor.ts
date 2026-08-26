@@ -20,7 +20,18 @@ import { calculateCommercialWorkNextAttemptAt, getCommercialWorkRetryPolicy } fr
 import { canTransitionCommercialWorkStatus } from "./transitions";
 import type { CommercialEvidenceRef, CommercialObjective, CommercialWork, CommercialWorkBlocker, CommercialWorkStep } from "./types";
 
-const EXECUTABLE_STEP_TYPES = new Set(["SEARCH_PRODUCTS", "SELECT_PRODUCTS", "SET_SHIPPING_DESTINATION", "CALCULATE_SHIPPING", "SELECT_SHIPPING_OPTION", "CREATE_QUOTE"]);
+const EXECUTABLE_STEP_TYPES = new Set([
+  "SEARCH_PRODUCTS",
+  "SELECT_PRODUCTS",
+  "SET_SHIPPING_DESTINATION",
+  "CALCULATE_SHIPPING",
+  "SELECT_SHIPPING_OPTION",
+  "CREATE_QUOTE",
+  // SALES-AGENT-R2-ID-R2-A11. Read-only Customer Profile lookup - no
+  // buildGatewayInput case needed (falls to the `default: return {}` branch,
+  // the capability reads identity from context.trustedCustomerSession).
+  "LOAD_PURCHASE_HISTORY"
+]);
 const TERMINAL_WORK_STATUSES = new Set<CommercialWorkStatus>(["COMPLETED", "CANCELLED", "SUPERSEDED", "HANDOFF", "FAILED"]);
 
 type CurrentFacts = {

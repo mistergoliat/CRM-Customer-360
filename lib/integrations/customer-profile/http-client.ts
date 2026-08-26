@@ -8,7 +8,6 @@ import {
   parseCustomerPurchaseBehaviorResponse,
   parseCustomerRfmResponse,
   validateCustomerId,
-  validateMasterCustomerId,
   validateOrderReference,
   validatePurchaseBehaviorTopProducts,
   validatePurchaseBehaviorTopVariants,
@@ -71,7 +70,6 @@ type Observation = {
   operation: CustomerProfileOperation;
   requestId: string | null;
   customerId: number | null;
-  masterCustomerId: string | null;
   referencePresent: boolean;
   status: string;
   reason: string | null;
@@ -180,7 +178,7 @@ function logObservation(observation: Observation): void {
       event: "customer_rfm_lookup",
       service: "customer-profile",
       requestId: observation.requestId,
-      masterCustomerId: observation.masterCustomerId,
+      customerId: observation.customerId,
       rfm_lookup_status: observation.status,
       reason: observation.reason,
       httpStatus: observation.httpStatus,
@@ -196,7 +194,6 @@ function logObservation(observation: Observation): void {
     operation: observation.operation,
     requestId: observation.requestId,
     customerId: observation.customerId,
-    masterCustomerId: observation.masterCustomerId,
     referencePresent: observation.referencePresent,
     status: observation.status,
     reason: observation.reason,
@@ -292,7 +289,7 @@ function rfmNotFound(reason: CustomerRfmNotFoundReason): CustomerRfmResult {
 }
 
 function rfmInvalidRequest(): CustomerRfmResult {
-  return { status: "INVALID_REQUEST", reason: "INVALID_MASTER_CUSTOMER_ID" };
+  return { status: "INVALID_REQUEST", reason: "INVALID_CUSTOMER_ID" };
 }
 
 function createDisabledCustomerProfileClient(): CustomerProfileClient {
@@ -328,7 +325,6 @@ async function requestCustomerEndpoint<TAvailable extends { provenance: { contra
     operation: input.operation,
     requestId: input.requestId ?? null,
     customerId: input.customerId,
-    masterCustomerId: null,
     referencePresent: Boolean(input.referencePresent),
     httpStatus: "status" in response ? response.status : null,
     durationMs: Date.now() - startedAt,
@@ -389,15 +385,15 @@ async function requestCustomerEndpoint<TAvailable extends { provenance: { contra
   return finalizeWithObservation(observationBase, unavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", response.status >= 500));
 }
 
-async function requestMasterCustomerEndpoint(
+async function requestCustomerRfmEndpoint(
   config: CustomerProfileClientConfig,
   input: {
     operation: "rfm";
-    masterCustomerId: string;
+    customerId: number;
     requestId?: string;
     path: string;
   },
-  parseAvailable: (body: unknown, requestedMasterCustomerId: string) => { ok: true; value: CustomerRfmResponse } | { ok: false; reason: CustomerRfmContractErrorReason },
+  parseAvailable: (body: unknown, requestedCustomerId: number) => { ok: true; value: CustomerRfmResponse } | { ok: false; reason: CustomerRfmContractErrorReason },
   parseNotFoundReason: (body: unknown) => CustomerRfmNotFoundReason | null
 ): Promise<CustomerRfmResult> {
   const startedAt = Date.now();
@@ -405,8 +401,7 @@ async function requestMasterCustomerEndpoint(
   const observationBase = {
     operation: "rfm" as const,
     requestId: input.requestId ?? null,
-    customerId: null,
-    masterCustomerId: input.masterCustomerId,
+    customerId: input.customerId,
     referencePresent: false,
     httpStatus: "status" in response ? response.status : null,
     durationMs: Date.now() - startedAt,
@@ -424,7 +419,7 @@ async function requestMasterCustomerEndpoint(
     if (response.body.kind !== "json") {
       return finalizeWithObservation(observationBase, rfmUnavailableResult("CUSTOMER_PROFILE_UNAVAILABLE", true));
     }
-    const parsed = parseAvailable(response.body.body, input.masterCustomerId);
+    const parsed = parseAvailable(response.body.body, input.customerId);
     if (!parsed.ok) {
       return finalizeWithObservation(observationBase, rfmContractError(parsed.reason));
     }
@@ -437,7 +432,7 @@ async function requestMasterCustomerEndpoint(
         status: "AVAILABLE" as const,
         data: parsed.value,
         metadata: {
-          requestedMasterCustomerId: input.masterCustomerId,
+          requestedCustomerId: input.customerId,
           contractVersion: parsed.value.contractVersion,
           segmentVersion: parsed.value.segment.version,
           referenceTime: parsed.value.snapshot.referenceTime,
@@ -578,16 +573,16 @@ export function createHttpCustomerProfileClient(config: CustomerProfileClientCon
     },
 
     async getRfm(input: GetCustomerRfmInput): Promise<CustomerRfmResult> {
-      if (!validateMasterCustomerId(input.masterCustomerId)) {
+      if (!validateCustomerId(input.customerId)) {
         return rfmInvalidRequest();
       }
-      return requestMasterCustomerEndpoint(
+      return requestCustomerRfmEndpoint(
         config,
         {
           operation: "rfm",
-          masterCustomerId: input.masterCustomerId,
+          customerId: input.customerId,
           requestId: input.requestId,
-          path: `v1/customers/${encodeURIComponent(input.masterCustomerId)}/rfm`
+          path: `v1/customers/${encodeURIComponent(String(input.customerId))}/rfm`
         },
         parseCustomerRfmResponse,
         parseRfmNotFound
@@ -601,7 +596,6 @@ export function createHttpCustomerProfileClient(config: CustomerProfileClientCon
         operation: "readiness" as const,
         requestId: input.requestId ?? null,
         customerId: null,
-        masterCustomerId: null,
         referencePresent: false,
         httpStatus: "status" in response ? response.status : null,
         durationMs: Date.now() - startedAt,

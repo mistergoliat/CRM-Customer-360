@@ -10,6 +10,7 @@ import {
   normalizeCustomerOnboardingTransitionCommercialEvent,
   normalizeCustomerSessionWarningCommercialEvent,
   normalizeFollowUpDueCommercialEvent,
+  normalizeIdentityVerificationDecisionCommercialEvent,
   normalizeInternalCommandCommercialEvent,
   normalizeMetaWhatsAppInboundCommercialEvent,
   normalizeMetaWhatsAppStatusCommercialEvent
@@ -79,6 +80,15 @@ export async function recordCustomerSessionWarningCommercialEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeCustomerSessionWarningCommercialEvent(input), connection);
+}
+
+// SALES-AGENT-R2-ID-R2-A05.
+
+export async function recordIdentityVerificationDecisionCommercialEvent(
+  input: Parameters<typeof normalizeIdentityVerificationDecisionCommercialEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeIdentityVerificationDecisionCommercialEvent(input), connection);
 }
 
 // ACS-R1-05-T06.2.

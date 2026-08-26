@@ -21,12 +21,18 @@ function stripDiacritics(value: string): string {
 // Email (section 9)
 // -----------------------------------------------------------------------
 
-const EMAIL_TOKEN_PATTERN = /[^\s@]+@[^\s@]+\.[^\s@]+/;
+const EMAIL_TOKEN_PATTERN = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
 
+/**
+ * SALES-AGENT-R2-ID-R2-A08 (PARTE 16). The LAST email-shaped token wins when
+ * a message contains more than one - the natural shape of a same-message
+ * correction ("mi correo no era A, era B"). A single-email message keeps its
+ * existing behavior unchanged.
+ */
 function extractEmail(messageText: string): string | undefined {
-  const match = messageText.match(EMAIL_TOKEN_PATTERN);
-  if (!match) return undefined;
-  const normalized = normalizeEmail(match[0]);
+  const matches = messageText.match(EMAIL_TOKEN_PATTERN);
+  if (!matches || matches.length === 0) return undefined;
+  const normalized = normalizeEmail(matches[matches.length - 1]);
   if (!normalized || !isValidEmail(normalized)) return undefined;
   return normalized;
 }
@@ -126,19 +132,25 @@ function extractName(messageText: string): { firstName?: string; lastName?: stri
 // cue word glued directly onto other text (e.g. inside a URL path like
 // ".../pedido-123") must never match.
 const ORDER_REFERENCE_CUE_PATTERN =
-  /\b(?:numero de pedido|numero de orden|n[uo]?mero de pedido|n[uo]?mero de orden|pedido|orden|compra|referencia)\b(?:\s+(?:es|de compra))?(?:\s+|\s*[:#]\s*)([A-Za-z0-9-]{3,20})\b/i;
+  /\b(?:numero de pedido|numero de orden|n[uo]?mero de pedido|n[uo]?mero de orden|pedido|orden|compra|referencia)\b(?:\s+(?:es|de compra))?(?:\s+|\s*[:#]\s*)([A-Za-z0-9-]{3,20})\b/gi;
 
 function looksLikeReferenceToken(token: string): boolean {
   return /\d/.test(token) && /^[A-Za-z0-9-]{3,20}$/.test(token);
 }
 
+/**
+ * SALES-AGENT-R2-ID-R2-A08 (PARTE 16). The LAST cue-matched reference wins
+ * when a message contains more than one - same-message correction shape as
+ * extractEmail above ("ese pedido no, era el 1234").
+ */
 function extractOrderReference(messageText: string): string | undefined {
   const normalized = stripDiacritics(messageText);
-  const match = normalized.match(ORDER_REFERENCE_CUE_PATTERN);
-  if (!match) return undefined;
-  const candidate = match[1];
-  if (!looksLikeReferenceToken(candidate)) return undefined;
-  return candidate;
+  const matches = [...normalized.matchAll(ORDER_REFERENCE_CUE_PATTERN)];
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const candidate = matches[i][1];
+    if (looksLikeReferenceToken(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 /**

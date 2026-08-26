@@ -17,6 +17,27 @@ import { planCommercialObjectiveSeeds } from "./semanticIntentAdapter";
 import { dispatchCommercialWorkResponse, type DispatchCommercialWorkResponseResult } from "./dispatchCommercialWorkResponse";
 import { scheduleObjectiveAwareFollowUp } from "./followup";
 import type { PersistedCommercialWork } from "./persistenceTypes";
+import { COMMERCIAL_OBJECTIVE_TYPE_TO_OPERATION } from "./commercialIdentityGate";
+import type { CommercialObjective } from "./types";
+import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
+import { resolveRuntimeIdentityContext, type RuntimeIdentityContext } from "../native-cycle/customer-session/runtimeIdentityContext";
+import { runCustomerOnboardingPostPlanStage } from "../native-cycle/customer-session/runCustomerOnboardingPostPlanStage";
+import type { OnboardingCollectionSnapshot } from "./identityCollectionRequest";
+import type { CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
+
+/**
+ * SALES-AGENT-R2-ID-R2-A08, PARTE 2/20. The only reduction of
+ * CustomerOnboardingState this cycle ever hands to the finalizer - status/
+ * purpose/pendingFields only, never `collected` (raw email/name/order
+ * values). Same privacy discipline as resolveNativeCustomerSession.ts's own
+ * CustomerSessionOnboardingDecisionView projection, kept as a separate,
+ * smaller type here since this one feeds internal message-building, not the
+ * planner/LLM context.
+ */
+function toIdentityOnboardingSnapshot(onboarding: CustomerOnboardingState | null): OnboardingCollectionSnapshot | null {
+  if (!onboarding) return null;
+  return { status: onboarding.status, purpose: onboarding.purpose, pendingFields: [...onboarding.pendingFields] };
+}
 
 export type RunCommercialWorkInboundCycleInput = {
   conversationId: number;
@@ -30,6 +51,18 @@ export type RunCommercialWorkInboundCycleInput = {
   provider?: AgentLoopProvider | null;
   resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
   abortSignal?: AbortSignal | null;
+  /**
+   * SALES-AGENT-R2-ID-R2-A07. The same server-side trusted session
+   * runNativeAutonomousCycle.ts already built once this turn
+   * (resolveNativeCustomerSession, Step 3) - never re-resolved here. Only
+   * used to activate/advance the EXISTING onboarding subsystem (via
+   * runCustomerOnboardingPostPlanStage, unchanged) when this turn's
+   * projection finds a step blocked on identity. Optional: an existing
+   * caller/test that omits it keeps its exact current behavior (identity
+   * gating still applies via snapshot.customerSession.runtimeIdentity, but
+   * onboarding is never activated without a trusted session to act through).
+   */
+  customerSessionExecution?: NativeCustomerSessionExecutionContext | null;
 };
 
 export type CommercialWorkInboundCycleResult = {
@@ -48,6 +81,31 @@ function skipped(reason: string, humanOwnerActive: boolean, aiBlocked: boolean):
 
 function parseSourceMessageId(inboundMessageId: string): number | null {
   return /^\d+$/.test(inboundMessageId) ? Number(inboundMessageId) : null;
+}
+
+/**
+ * SALES-AGENT-R2-ID-R2-A07 (PARTE 8/11/15). Finds at most one objective this
+ * turn's projection left blocked on identity in a way CommercialWork should
+ * actively advance (ONBOARDING_REQUIRED: activate/advance the existing
+ * onboarding subsystem; READY_TO_LINK: attempt the existing link authority,
+ * a safe no-op without this-turn consent). AMBIGUITY_RESOLUTION_REQUIRED/
+ * IDENTITY_CONFLICT/ENTITY_VERIFICATION_REQUIRED/SYSTEM_WAIT are deliberately
+ * excluded - none of them is something runCustomerOnboardingPostPlanStage's
+ * field-capture/create/link paths can advance (PARTE 17: never auto-resolve
+ * a conflict; PARTE 18: ambiguity needs a differentiated answer, not a bare
+ * field capture; entity verification has no consumer yet). Bounded to the
+ * FIRST match only - at most one onboarding-stage call per turn.
+ */
+export function findIdentityOnboardingTrigger(objectives: readonly CommercialObjective[]): { objective: CommercialObjective; operation: string } | null {
+  for (const objective of objectives) {
+    const identityBlocker = objective.blockers.find((item) => item.code === "IDENTITY_REQUIREMENT");
+    const decision = identityBlocker?.identityDecision;
+    if (!decision || (decision.status !== "ONBOARDING_REQUIRED" && decision.status !== "READY_TO_LINK")) continue;
+    const operation = COMMERCIAL_OBJECTIVE_TYPE_TO_OPERATION[objective.type];
+    if (!operation) continue;
+    return { objective, operation };
+  }
+  return null;
 }
 
 async function safeRecordCompletedEvent(input: {
@@ -246,6 +304,12 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       return { ran: true, reason, work: null, dispatch, humanOwnerActive, aiBlocked, warnings: [...warnings, ...dispatch.warnings] };
     }
 
+    // SALES-AGENT-R2-ID-R2-A07. This turn's identity fact (A05) - already
+    // passively carried on snapshot.customerSession since A05, never read by
+    // this pipeline before A07. May be reassigned below (PARTE 15) if the
+    // onboarding post-plan stage advances identity within this same turn.
+    let runtimeIdentity: RuntimeIdentityContext | undefined = input.snapshot.customerSession?.runtimeIdentity;
+
     const reconciled = await reconcileCommercialTrigger({
       trigger: {
         type: "CUSTOMER_MESSAGE",
@@ -262,7 +326,8 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       createdQuote,
       recentCapabilityExecutions,
       now: input.currentTime,
-      semanticObjectives: planned.seeds
+      semanticObjectives: planned.seeds,
+      runtimeIdentity
     });
 
     // Part 22: a genuinely out-of-order trigger is reconciled with zero
@@ -290,7 +355,10 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
     const executed = await executeCommercialWork({
       workPublicId: work.publicId,
       expectedVersion: work.version,
-      context: { correlationId: input.correlationId, conversationId: input.conversationId, opportunityId },
+      // SALES-AGENT-R2-ID-R2-A11. Only get_customer_purchase_history reads
+      // trustedCustomerSession (via context.trustedCustomerSession.runtimeIdentity)
+      // - every other capability ignores it, unchanged.
+      context: { correlationId: input.correlationId, conversationId: input.conversationId, opportunityId, trustedCustomerSession: input.customerSessionExecution },
       scheduleRetries: true,
       now: input.currentTime,
       parallelExecutionEnabled: parallelExecutionFlags.parallelExecutionEnabled,
@@ -305,8 +373,90 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       correlationId: input.correlationId,
       now: new Date(input.currentTime),
       parallelExecutionEnabled: parallelExecutionFlags.parallelExecutionEnabled,
-      maxParallelSteps: parallelExecutionFlags.maxParallelSteps
+      maxParallelSteps: parallelExecutionFlags.maxParallelSteps,
+      runtimeIdentity,
+      trustedCustomerSession: input.customerSessionExecution
     });
+
+    // SALES-AGENT-R2-ID-R2-A07 (PARTE 8-15). CommercialWork's own "post-plan"
+    // stage, placed exactly where the legacy runtime places it: after this
+    // turn's plan/execution/settle already reached its final state for the
+    // ORIGINAL runtimeIdentity - a block that only becomes visible partway
+    // through settle's own cascade (e.g. a same-turn "select this AND quote
+    // it" message, where the selection resolves in round 1 and CREATE_QUOTE
+    // only becomes READY - and therefore identity-gated - in round 2) is
+    // caught here exactly like a block that was already visible before settle
+    // ever ran. Reuses the existing onboarding subsystem unchanged - never a
+    // second onboarding state machine, never a reimplementation of
+    // create_customer/link_external_identity authority. Bounded to at most
+    // one onboarding-stage call and one extra settle pass per turn
+    // (findIdentityOnboardingTrigger returns the first match only, and this
+    // block never re-runs itself).
+    const onboardingTrigger = findIdentityOnboardingTrigger(work.objectives);
+    // SALES-AGENT-R2-ID-R2-A08, PARTE 2/3/21. This turn's freshest onboarding
+    // state for the finalizer's wording (never for gating - the identity
+    // gate above already ran against runtimeIdentity, unmodified). Defaults
+    // to the pre-plan session's own onboarding snapshot (customer-session.
+    // ts's resolveNativeCustomerSession, unchanged) so a turn where the
+    // trigger did not fire this turn (e.g. still WAITING_CUSTOMER on a
+    // different, non-identity gap) still asks about real pending fields
+    // instead of falling back to the purpose default; overwritten below only
+    // when the post-plan stage actually ran and returned a newer state.
+    let identityOnboarding = toIdentityOnboardingSnapshot(input.customerSessionExecution?.onboarding ?? null);
+    if (onboardingTrigger && input.customerSessionExecution) {
+      const postPlan = await runCustomerOnboardingPostPlanStage({
+        plannedOperation: { operation: onboardingTrigger.operation },
+        messageText: input.customerMessage,
+        correlationId: input.correlationId,
+        customerSessionExecution: input.customerSessionExecution,
+        opportunityId: String(opportunityId)
+      });
+      warnings.push(...postPlan.warnings);
+      identityOnboarding = toIdentityOnboardingSnapshot(postPlan.onboarding);
+
+      // PARTE 15 (same-turn unblock, bounded to one extra settle pass): only
+      // when the stage actually attempted an identity-upgrading capability -
+      // a mere activation or field capture never changes RuntimeIdentityContext
+      // by itself, so re-checking would be a wasted read and an unnecessary
+      // extra settle pass. SALES-AGENT-R2-ID-R2-A09 (PARTE 14) adds
+      // link_prestashop_identity as the third such capability - same bounded
+      // mechanism, no new loop.
+      if (
+        postPlan.attemptedOperation === "create_customer" ||
+        postPlan.attemptedOperation === "link_external_identity" ||
+        postPlan.attemptedOperation === "link_prestashop_identity"
+      ) {
+        try {
+          const refreshedIdentity = await resolveRuntimeIdentityContext({
+            conversationId: input.customerSessionExecution.conversationId,
+            externalId: input.customerSessionExecution.trustedInbound.externalId,
+            detail: undefined
+          });
+          runtimeIdentity = refreshedIdentity;
+          work = await settleCommercialWorkProjection({
+            work,
+            conversationId: input.conversationId,
+            opportunityId,
+            correlationId: input.correlationId,
+            now: new Date(input.currentTime),
+            maxRounds: 1,
+            parallelExecutionEnabled: parallelExecutionFlags.parallelExecutionEnabled,
+            maxParallelSteps: parallelExecutionFlags.maxParallelSteps,
+            runtimeIdentity: refreshedIdentity,
+            // SALES-AGENT-R2-ID-R2-A11. get_customer_purchase_history reads
+            // identity from trustedCustomerSession.runtimeIdentity, not from
+            // the separate runtimeIdentity parameter above (that one only
+            // feeds the projection's identity GATE) - without this override,
+            // a REPEAT_PURCHASE step that becomes READY in this exact
+            // same-turn resettle round would execute against the stale,
+            // pre-onboarding identity still on customerSessionExecution.
+            trustedCustomerSession: { ...input.customerSessionExecution, runtimeIdentity: refreshedIdentity }
+          });
+        } catch (error) {
+          warnings.push(`commercial_work_identity_recheck_failed:${error instanceof Error ? error.message : "unknown"}`);
+        }
+      }
+    }
 
     const dispatch = await dispatchCommercialWorkResponse({
       conversationId: input.conversationId,
@@ -318,7 +468,8 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       humanOwnerActive,
       aiBlocked,
       caseStatus,
-      work
+      work,
+      identityOnboarding
     });
     warnings.push(...dispatch.warnings);
 

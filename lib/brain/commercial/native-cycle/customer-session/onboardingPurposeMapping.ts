@@ -43,7 +43,15 @@ const OPERATION_TO_ONBOARDING_PURPOSE: Record<string, CustomerOnboardingPurpose>
 
   // explicit identity capability proposals
   create_customer: "account_update",
-  link_external_identity: "account_update"
+  link_external_identity: "account_update",
+
+  // SALES-AGENT-R2-ID-R2-A07. CommercialWork's own operation vocabulary
+  // (lib/brain/commercial/identity/commercial-identity-requirement/operations.ts,
+  // the same string commercialIdentityGate.ts maps CREATE_QUOTE objectives
+  // to) - distinct from the legacy runtime's "prepare_quote" next-action key
+  // above, never reused across the two vocabularies to avoid coupling
+  // CommercialWork's activation to a legacy-only identifier.
+  create_quote: "quote"
 };
 
 export function mapOperationToOnboardingPurpose(operation: string): CustomerOnboardingPurpose | null {

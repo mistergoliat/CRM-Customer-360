@@ -63,6 +63,18 @@ test("14: the extractor never reads Customer 360 - no import of that domain in i
   assert.doesNotMatch(SOURCE, /Customer360/);
 });
 
+// SALES-AGENT-R2-ID-R2-A08 (PARTE 16). Same-message correction shape: "mi
+// correo no era A, era B" - the LAST email/order-reference token wins.
+test("16: a same-message email correction ('no era A, era B') extracts the LAST email, not the first", () => {
+  assert.deepEqual(extractCustomerOnboardingFields("mi correo no era pedro@old.com, era pedro@new.com"), { email: "pedro@new.com" });
+  assert.deepEqual(extractCustomerOnboardingFields("puedes usar pedro@example.com"), { email: "pedro@example.com" });
+});
+
+test("17: a same-message order reference correction ('ese pedido no, era el 1234') extracts the LAST reference, not the first", () => {
+  assert.equal(extractCustomerOnboardingFields("mi pedido no era 187125, era el pedido 99999").orderReference, "99999");
+  assert.equal(extractCustomerOnboardingFields("mi pedido es 187125").orderReference, "187125");
+});
+
 test("15: the extractor is a pure, read-only function - no db/repository import, deterministic on repeated calls", () => {
   assert.doesNotMatch(SOURCE, /from ["']@\/lib\/db["']/);
   assert.doesNotMatch(SOURCE, /repository/i);

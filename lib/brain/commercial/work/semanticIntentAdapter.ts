@@ -102,6 +102,19 @@ export function commercialObjectiveSeedsFromResolvedIntent(resolved: ResolvedInt
     return seeds;
   }
 
+  // SALES-AGENT-R2-ID-R2-A11. productHint carried forward verbatim (never
+  // invented when absent) - buildCommercialWorkProjection.ts's
+  // applyRepeatPurchaseObjectiveState uses it only to filter 2+ historical
+  // purchase-history matches, never sent to Catalog/Customer Profile itself.
+  if (resolved.intent.type === "repeat_purchase") {
+    seeds.push({
+      type: "REPEAT_PURCHASE",
+      origin: "customer_requested",
+      inputs: resolved.intent.productHint ? { productHint: resolved.intent.productHint } : {}
+    });
+    return seeds;
+  }
+
   // SALES-AGENT-R2-A08.6, Part 3/9. targetType omitted means "all" to
   // reconciliation.ts's cancelTargetFamily/deriveCommercialObjectives.ts's
   // cancel handling - matches this intent's own "all" scope exactly.

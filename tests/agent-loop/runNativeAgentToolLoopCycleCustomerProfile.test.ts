@@ -187,9 +187,10 @@ test("agent loop receives compact customer purchase history context before model
         externalResolutionOutcome: null
       },
       masterCustomerIdentity: { status: "identity_unresolved", reason: "identity_absent" },
+      runtimeIdentity: { status: "MASTER_RESOLVED", identityLevel: "LEVEL_2_MASTER_RESOLVED", masterCustomerId: "123", prestashopCustomerId: null, verificationRequired: false, requiredEvidence: [], readyToLink: false, conflictCode: null, policyCode: "EXISTING_CHANNEL_LINK", evidenceRefs: [] },
       onboarding: null,
       contextAccess: "commercial_history",
-      currentTurnConsent: { createCustomer: null, linkExternalIdentity: null },
+      currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null },
       freshExternalResolutionEvidence: null
     },
     loadCustomerProfileContext: async () => availableHistoryContext(),
@@ -215,20 +216,21 @@ test("agent loop receives compact customer purchase history context before model
   assert.doesNotMatch(JSON.stringify(history), /VIP|lifetimeValue/i);
 });
 
-test("agent loop forwards a resolved masterCustomerId to the customer profile loader", async () => {
+test("agent loop forwards RuntimeIdentityContext (never identity.customerId/masterCustomerIdentity) to the customer profile loader", async () => {
   const provider: AgentLoopProvider = {
     name: "capturing-provider",
     async invoke() {
       return { rawOutput: { type: "respond", message: "hola" } };
     }
   };
-  let loaderInput:
-    | {
-        customerId: number | null;
-        masterCustomerId: string | null;
-      }
-    | undefined;
+  let loaderRuntimeIdentity: unknown;
 
+  // SALES-AGENT-R2-ID-R2-A10 numeric collision fixture: master_customer.id
+  // (123, via identity.customerId/masterCustomerIdentity) and
+  // prestashopCustomerId (7421, via runtimeIdentity) are deliberately
+  // distinct - if the cycle ever again reached into identity.customerId or
+  // masterCustomerIdentity for this, this test's loaderRuntimeIdentity
+  // capture would show 123, not the runtimeIdentity object carrying 7421.
   await runNativeAgentToolLoopCycle({
     ...baseInput,
     snapshot: buildSnapshot(),
@@ -250,71 +252,67 @@ test("agent loop forwards a resolved masterCustomerId to the customer profile lo
         localResolutionOutcome: "identified",
         externalResolutionOutcome: null
       },
-      masterCustomerIdentity: { status: "resolved", masterCustomerId: "9001", source: "native_session_verified_projection" },
+      masterCustomerIdentity: { status: "resolved", masterCustomerId: "123", source: "native_session_verified_projection" },
+      runtimeIdentity: {
+        status: "PRESTASHOP_LINKED",
+        identityLevel: "LEVEL_3_PRESTASHOP_LINKED",
+        masterCustomerId: "123",
+        prestashopCustomerId: "7421",
+        verificationRequired: false,
+        requiredEvidence: [],
+        readyToLink: false,
+        conflictCode: null,
+        policyCode: "PRESTASHOP_IDENTITY_SUFFICIENT",
+        evidenceRefs: []
+      },
       onboarding: null,
       contextAccess: "commercial_history",
-      currentTurnConsent: { createCustomer: null, linkExternalIdentity: null },
+      currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null },
       freshExternalResolutionEvidence: null
     },
     loadCustomerProfileContext: async (input) => {
-      loaderInput = { customerId: input.customerId, masterCustomerId: input.masterCustomerId };
+      loaderRuntimeIdentity = input.runtimeIdentity;
       return availableHistoryContext();
     },
     resolvedSalesAgentConfiguration: buildResolvedConfig()
   });
 
-  assert.deepEqual(loaderInput, { customerId: 123, masterCustomerId: "9001" });
+  assert.deepEqual(loaderRuntimeIdentity, {
+    status: "PRESTASHOP_LINKED",
+    identityLevel: "LEVEL_3_PRESTASHOP_LINKED",
+    masterCustomerId: "123",
+    prestashopCustomerId: "7421",
+    verificationRequired: false,
+    requiredEvidence: [],
+    readyToLink: false,
+    conflictCode: null,
+    policyCode: "PRESTASHOP_IDENTITY_SUFFICIENT",
+    evidenceRefs: []
+  });
 });
 
-test("agent loop never falls back from customerId to masterCustomerId when canonical identity is unresolved", async () => {
+test("agent loop passes a null runtimeIdentity through (never invents one) when there is no trusted session", async () => {
   const provider: AgentLoopProvider = {
     name: "capturing-provider",
     async invoke() {
       return { rawOutput: { type: "respond", message: "hola" } };
     }
   };
-  let loaderInput:
-    | {
-        customerId: number | null;
-        masterCustomerId: string | null;
-      }
-    | undefined;
+  let loaderRuntimeIdentity: unknown = "not-called";
 
   await runNativeAgentToolLoopCycle({
     ...baseInput,
     snapshot: buildSnapshot(),
     provider,
-    trustedCustomerSession: {
-      conversationId: "1",
-      opportunityId: null,
-      trustedInbound: {
-        channel: "whatsapp",
-        externalId: baseInput.waId,
-        normalizedPhone: baseInput.waId,
-        messageId: baseInput.inboundMessageId,
-        receivedAt: baseInput.currentTime
-      },
-      identity: {
-        status: "identified",
-        customerId: "123",
-        source: "external_identity",
-        localResolutionOutcome: "identified",
-        externalResolutionOutcome: null
-      },
-      masterCustomerIdentity: { status: "identity_unresolved", reason: "identity_not_verified" },
-      onboarding: null,
-      contextAccess: "commercial_history",
-      currentTurnConsent: { createCustomer: null, linkExternalIdentity: null },
-      freshExternalResolutionEvidence: null
-    },
+    trustedCustomerSession: null,
     loadCustomerProfileContext: async (input) => {
-      loaderInput = { customerId: input.customerId, masterCustomerId: input.masterCustomerId };
+      loaderRuntimeIdentity = input.runtimeIdentity;
       return availableHistoryContext();
     },
     resolvedSalesAgentConfiguration: buildResolvedConfig()
   });
 
-  assert.deepEqual(loaderInput, { customerId: 123, masterCustomerId: null });
+  assert.equal(loaderRuntimeIdentity, null);
 });
 
 test("agent loop does not call the customer profile loader when a human already owns the conversation", async () => {
