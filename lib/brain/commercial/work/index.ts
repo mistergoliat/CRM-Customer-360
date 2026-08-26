@@ -9,6 +9,7 @@ export * from "./deriveCommercialWorkSteps";
 export * from "./matchShippingOptionReference";
 export * from "./evaluateCommercialWork";
 export * from "./buildCommercialWorkProjection";
+export * from "./commercialIdentityGate";
 export * from "./formatCommercialWorkProjection";
 export * from "./repository";
 export * from "./commercialWorkExecutor";
