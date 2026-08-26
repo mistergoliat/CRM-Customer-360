@@ -1,6 +1,8 @@
+import type { CustomerOnboardingPendingField } from "@/lib/domains/customer-onboarding";
 import type { PersistedCommercialWork } from "./persistenceTypes";
 import type { CommercialMissingRequirement, CommercialObjective } from "./types";
 import { commercialObjectiveSupersessionFamily } from "./deriveCommercialObjectives";
+import { deriveIdentityCollectionRequest, type OnboardingCollectionSnapshot } from "./identityCollectionRequest";
 
 export const COMMERCIAL_WORK_DISPOSITIONS = ["FINAL", "PARTIAL", "BLOCKED"] as const;
 export type CommercialWorkDisposition = (typeof COMMERCIAL_WORK_DISPOSITIONS)[number];
@@ -111,18 +113,28 @@ function completedClause(objective: CommercialObjective): string | null {
       return "tu opción de despacho quedó confirmada";
     case "CREATE_QUOTE":
       return "tu cotización quedó creada";
+    // SALES-AGENT-R2-ID-R2-A08, PARTE 12. HANDOFF's applyObjectiveState case
+    // completes unconditionally (A07 doc section 7) but had no clause of its
+    // own here before - a completed assisted-sale handoff produced no
+    // customer-visible acknowledgement at all. Optional email enrichment
+    // (see shouldOfferAssistedSaleEmailEnrichment below) is appended
+    // separately, never inside this clause - PARTE 12/13 requires it to
+    // never look like a requirement.
+    case "HANDOFF":
+      return "voy a conectar tu conversación con alguien del equipo para ayudarte directamente con esto";
     default:
       return null;
   }
 }
 
-// SALES-AGENT-R2-ID-R2-A07. The three non-SUFFICIENT A06 decision statuses
-// that land an objective on BLOCKED (not WAITING_CUSTOMER -
-// commercialIdentityGate.ts) yet still deserve a customer-facing message:
-// READY_TO_LINK (consent ask), IDENTITY_CONFLICT (safe, generic),
-// ENTITY_VERIFICATION_REQUIRED (no real consumer yet, kept exhaustive).
-// Distinct from waitingCustomerObjectives below, which only ever holds
-// WAITING_CUSTOMER objectives.
+// SALES-AGENT-R2-ID-R2-A08, PARTE 10/12. The three non-SUFFICIENT A06
+// decision statuses that land an objective on BLOCKED (not WAITING_CUSTOMER
+// - commercialIdentityGate.ts, ID-R2-A07, unmodified) yet still deserve a
+// customer-facing message: READY_TO_LINK (consent ask), IDENTITY_CONFLICT
+// (safe, generic - see release doc PARTE 9 on why no finer classification is
+// possible here), ENTITY_VERIFICATION_REQUIRED (no real consumer yet, kept
+// exhaustive). Distinct from waitingCustomerObjectives below, which only
+// ever holds WAITING_CUSTOMER objectives.
 const IDENTITY_BLOCKED_REQUIREMENTS = new Set<CommercialMissingRequirement>(["IDENTITY_LINK_PENDING", "IDENTITY_CONFLICT", "IDENTITY_VERIFICATION"]);
 
 function identityBlockedObjectives(objectives: readonly CommercialObjective[]): CommercialObjective[] {
@@ -138,6 +150,25 @@ function buildIdentityBlockedMessage(objectives: readonly CommercialObjective[])
     return "No pude confirmar tu identidad de forma automática porque encontré una inconsistencia en tus datos. Voy a derivar tu conversación con alguien del equipo para revisarlo.";
   }
   return "Necesito verificar algunos datos adicionales antes de continuar con esto.";
+}
+
+/**
+ * SALES-AGENT-R2-ID-R2-A08, PARTE 12/13. Optional, never a blocker (the
+ * handoff itself already completed by the time this runs - PARTE 12 is
+ * explicit that a decline or a missing email must never hold it up). The
+ * signal is the HANDOFF objective's mere existence in this turn's plan
+ * (PARTE 13: "no inventar un nuevo intent classifier si CommercialWork ya
+ * ofrece una señal suficiente") - never a new classifier. Fires only when
+ * this conversation has no confirmed email evidence via the onboarding
+ * pipeline yet; a customer already identified through a different path
+ * (e.g. phone match, no onboarding row at all) may occasionally see this
+ * redundantly - harmless, and cheaper than plumbing runtimeIdentity level
+ * into this purely-message-building function for a secondary enrichment.
+ * ponytail: coarse signal, tighten if a real duplicate-ask complaint shows up.
+ */
+function shouldOfferAssistedSaleEmailEnrichment(onboarding: OnboardingCollectionSnapshot | null): boolean {
+  if (!onboarding) return true;
+  return onboarding.pendingFields.includes("email");
 }
 
 function pendingClause(objective: CommercialObjective, hasDurableContinuation: boolean): string | null {
@@ -158,7 +189,17 @@ function pendingClause(objective: CommercialObjective, hasDurableContinuation: b
   }
 }
 
-export function buildCommercialWorkFinalizerMessage(work: PersistedCommercialWork): CommercialWorkFinalizerResult {
+/**
+ * SALES-AGENT-R2-ID-R2-A08, PARTE 2/19. `onboarding` is this turn's freshest
+ * CustomerOnboardingState, already reduced to its privacy-safe projection by
+ * the caller (runCommercialWorkInboundCycle.ts, from
+ * runCustomerOnboardingPostPlanStage's result or, when the trigger did not
+ * run this turn, the pre-plan session's own onboarding snapshot) - optional
+ * so every existing caller/test that omits it keeps its exact current
+ * behavior (falls back to the purpose's own required fields - see
+ * identityCollectionRequest.ts).
+ */
+export function buildCommercialWorkFinalizerMessage(work: PersistedCommercialWork, onboarding: OnboardingCollectionSnapshot | null = null): CommercialWorkFinalizerResult {
   // SALES-AGENT-R2-A08.6, Part 3/11. Checked first and exclusively: a whole-
   // work cancellation (evaluateCommercialWork.ts's deriveCommercialWorkStatus
   // sets this only when every objective is CANCELLED) is never described as
@@ -186,7 +227,12 @@ export function buildCommercialWorkFinalizerMessage(work: PersistedCommercialWor
   // filtered out of `objectives` above (activeObjectives excludes CANCELLED).
   const isCancelOnlyFinal = cancelClauses.length > 0 && pendingClauses.length === 0 && waitingCustomerObjectives.length === 0;
   if (isFullyComplete || work.status === "COMPLETED" || isCancelOnlyFinal) {
-    const message = completedClauses.length > 0 ? `Listo. ${capitalize(completedClauses.join("; "))}.` : "Listo, tu solicitud quedó completada.";
+    let message = completedClauses.length > 0 ? `Listo. ${capitalize(completedClauses.join("; "))}.` : "Listo, tu solicitud quedó completada.";
+    // PARTE 12/13: optional, appended only after the handoff itself already
+    // completed - never a condition for completion.
+    if (completedObjectives.some((objective) => objective.type === "HANDOFF") && shouldOfferAssistedSaleEmailEnrichment(onboarding)) {
+      message += " Si quieres, para que el equipo te pueda contactar con más contexto, compárteme tu correo electrónico (es opcional).";
+    }
     return { disposition: "FINAL", message };
   }
 
@@ -197,15 +243,17 @@ export function buildCommercialWorkFinalizerMessage(work: PersistedCommercialWor
   if (waitingCustomerObjectives.length > 0) {
     const message =
       completedClauses.length > 0
-        ? `${capitalize(completedClauses.join("; "))}. ${buildMissingInfoQuestion(waitingCustomerObjectives)}`
-        : buildMissingInfoQuestion(waitingCustomerObjectives);
+        ? `${capitalize(completedClauses.join("; "))}. ${buildMissingInfoQuestion(waitingCustomerObjectives, onboarding)}`
+        : buildMissingInfoQuestion(waitingCustomerObjectives, onboarding);
     return { disposition: "BLOCKED", message };
   }
 
-  // SALES-AGENT-R2-ID-R2-A07. READY_TO_LINK/IDENTITY_CONFLICT/
+  // SALES-AGENT-R2-ID-R2-A08, PARTE 10/12. READY_TO_LINK/IDENTITY_CONFLICT/
   // ENTITY_VERIFICATION_REQUIRED land their objective on BLOCKED, not
-  // WAITING_CUSTOMER (commercialIdentityGate.ts) - so they never reach the
-  // branch above.
+  // WAITING_CUSTOMER (commercialIdentityGate.ts, ID-R2-A07, unmodified) - so
+  // they never reach the branch above. Before A08 they fell all the way to
+  // the generic "necesito un momento más" fallback at the end of this
+  // function (see release doc PARTE 1) - this is the fix.
   const identityBlocked = identityBlockedObjectives(objectives);
   if (identityBlocked.length > 0) {
     const message = completedClauses.length > 0 ? `${capitalize(completedClauses.join("; "))}. ${buildIdentityBlockedMessage(identityBlocked)}` : buildIdentityBlockedMessage(identityBlocked);
@@ -239,7 +287,7 @@ function capitalize(value: string): string {
  * them out of waitingCustomerObjectives), matching Part 12/13's requirement
  * that a catalog failure is never surfaced as a customer question.
  */
-function buildMissingInfoQuestion(waitingCustomerObjectives: readonly CommercialObjective[]): string {
+function buildMissingInfoQuestion(waitingCustomerObjectives: readonly CommercialObjective[], onboarding: OnboardingCollectionSnapshot | null): string {
   const missing = waitingCustomerObjectives.flatMap((objective) => objective.missingRequirements);
   if (missing.includes("DESTINATION")) return "¿A qué comuna necesitas el despacho?";
 
@@ -259,6 +307,25 @@ function buildMissingInfoQuestion(waitingCustomerObjectives: readonly Commercial
   }
   if (missing.includes("PRODUCT") || missing.includes("PRODUCT_EVIDENCE")) return "¿Qué producto te interesa?";
   if (missing.includes("QUANTITY")) return "¿Cuántas unidades necesitas?";
+
+  // SALES-AGENT-R2-ID-R2-A08 (PARTE 3/4/11/21, supersedes A07's minimal
+  // version). Grounded in deriveIdentityCollectionRequest - onboarding's own
+  // pendingFields when an onboarding row already exists this turn (excludes
+  // whatever the customer already gave, and reflects the real purpose-driven
+  // minimum), the purpose's required fields when it does not yet, or a
+  // create-account consent ask once every field is in hand - never A06's
+  // requiredEvidence directly (see release doc PARTE 1: it can be empty on a
+  // brand-new conversation).
+  if (missing.includes("IDENTITY_EVIDENCE")) {
+    const objective = waitingCustomerObjectives.find((item) => item.missingRequirements.includes("IDENTITY_EVIDENCE"));
+    const request = objective ? deriveIdentityCollectionRequest(objective, onboarding) : { kind: "NONE" as const };
+    if (request.kind === "ASK_FIELDS") return buildAskFieldsMessage(request.fields);
+    if (request.kind === "ASK_CREATE_CONSENT") return "Con esos datos puedo crear tu cuenta para continuar. ¿Confirmas que autorizas que creemos tu cuenta?";
+    return "Para continuar necesito confirmar algunos datos tuyos. ¿Puedes ayudarme con eso?";
+  }
+  if (missing.includes("IDENTITY_AMBIGUOUS")) {
+    return "Encontré más de una coincidencia con tus datos. ¿Puedes confirmarme tu correo electrónico o el número de tu pedido para identificarte con seguridad?";
+  }
 
   // SALES-AGENT-R2-A11.4. Real candidates only, from
   // buildCommercialWorkProjection.ts's applyObjectiveState (matchShippingOptionReference's
@@ -282,6 +349,23 @@ function buildMissingInfoQuestion(waitingCustomerObjectives: readonly Commercial
   }
 
   return "¿Puedes darme un poco más de detalle para continuar?";
+}
+
+// SALES-AGENT-R2-ID-R2-A08 (PARTE 3/23). One clause per pending field,
+// joined naturally - PARTE 23: multiple missing fields are asked together in
+// one turn, never one-by-one artificially.
+const PENDING_FIELD_CLAUSE: Record<CustomerOnboardingPendingField, string> = {
+  email: "tu correo electrónico",
+  orderReference: "el número de tu pedido",
+  firstName: "tu nombre",
+  lastName: "tu apellido"
+};
+
+function buildAskFieldsMessage(fields: readonly CustomerOnboardingPendingField[]): string {
+  if (fields.length === 0) return "Para continuar necesito confirmar algunos datos tuyos. ¿Puedes ayudarme con eso?";
+  const clauses = fields.map((field) => PENDING_FIELD_CLAUSE[field]);
+  const joined = clauses.length === 1 ? clauses[0] : `${clauses.slice(0, -1).join(", ")} y ${clauses[clauses.length - 1]}`;
+  return `Para continuar necesito que me confirmes ${joined}.`;
 }
 
 function shippingOptionsList(candidates: { carrierName: string; serviceType: string; totalCost: number }[] | undefined): string {

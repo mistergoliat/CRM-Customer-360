@@ -22,6 +22,22 @@ import type { CommercialObjective } from "./types";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 import { resolveRuntimeIdentityContext, type RuntimeIdentityContext } from "../native-cycle/customer-session/runtimeIdentityContext";
 import { runCustomerOnboardingPostPlanStage } from "../native-cycle/customer-session/runCustomerOnboardingPostPlanStage";
+import type { OnboardingCollectionSnapshot } from "./identityCollectionRequest";
+import type { CustomerOnboardingState } from "@/lib/domains/customer-onboarding";
+
+/**
+ * SALES-AGENT-R2-ID-R2-A08, PARTE 2/20. The only reduction of
+ * CustomerOnboardingState this cycle ever hands to the finalizer - status/
+ * purpose/pendingFields only, never `collected` (raw email/name/order
+ * values). Same privacy discipline as resolveNativeCustomerSession.ts's own
+ * CustomerSessionOnboardingDecisionView projection, kept as a separate,
+ * smaller type here since this one feeds internal message-building, not the
+ * planner/LLM context.
+ */
+function toIdentityOnboardingSnapshot(onboarding: CustomerOnboardingState | null): OnboardingCollectionSnapshot | null {
+  if (!onboarding) return null;
+  return { status: onboarding.status, purpose: onboarding.purpose, pendingFields: [...onboarding.pendingFields] };
+}
 
 export type RunCommercialWorkInboundCycleInput = {
   conversationId: number;
@@ -373,6 +389,16 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
     // (findIdentityOnboardingTrigger returns the first match only, and this
     // block never re-runs itself).
     const onboardingTrigger = findIdentityOnboardingTrigger(work.objectives);
+    // SALES-AGENT-R2-ID-R2-A08, PARTE 2/3/21. This turn's freshest onboarding
+    // state for the finalizer's wording (never for gating - the identity
+    // gate above already ran against runtimeIdentity, unmodified). Defaults
+    // to the pre-plan session's own onboarding snapshot (customer-session.
+    // ts's resolveNativeCustomerSession, unchanged) so a turn where the
+    // trigger did not fire this turn (e.g. still WAITING_CUSTOMER on a
+    // different, non-identity gap) still asks about real pending fields
+    // instead of falling back to the purpose default; overwritten below only
+    // when the post-plan stage actually ran and returned a newer state.
+    let identityOnboarding = toIdentityOnboardingSnapshot(input.customerSessionExecution?.onboarding ?? null);
     if (onboardingTrigger && input.customerSessionExecution) {
       const postPlan = await runCustomerOnboardingPostPlanStage({
         plannedOperation: { operation: onboardingTrigger.operation },
@@ -382,6 +408,7 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
         opportunityId: String(opportunityId)
       });
       warnings.push(...postPlan.warnings);
+      identityOnboarding = toIdentityOnboardingSnapshot(postPlan.onboarding);
 
       // PARTE 15 (same-turn unblock, bounded to one extra settle pass): only
       // when the stage actually attempted an identity-upgrading capability -
@@ -423,7 +450,8 @@ export async function runCommercialWorkInboundCycle(input: RunCommercialWorkInbo
       humanOwnerActive,
       aiBlocked,
       caseStatus,
-      work
+      work,
+      identityOnboarding
     });
     warnings.push(...dispatch.warnings);
 
