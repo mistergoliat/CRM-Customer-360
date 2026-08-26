@@ -35,7 +35,7 @@ function session(overrides: Partial<NativeCustomerSessionExecutionContext> = {})
     runtimeIdentity: { status: "ANONYMOUS", identityLevel: "LEVEL_0_ANONYMOUS", masterCustomerId: null, prestashopCustomerId: null, verificationRequired: false, requiredEvidence: [], readyToLink: false, conflictCode: null, policyCode: "NO_CHANNEL_EVIDENCE", evidenceRefs: [] },
     onboarding: null,
     contextAccess: "none",
-    currentTurnConsent: { createCustomer: null, linkExternalIdentity: null },
+    currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null },
     freshExternalResolutionEvidence: null,
     ...overrides
   };

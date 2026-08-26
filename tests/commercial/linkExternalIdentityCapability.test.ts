@@ -146,7 +146,8 @@ function session(overrides: Partial<NativeCustomerSessionExecutionContext> = {})
     contextAccess: "commercial_history",
     currentTurnConsent: {
       createCustomer: null,
-      linkExternalIdentity: { scope: "link_external_identity", messageId: "wamid.1", capturedAt: "2026-07-09T12:00:00.000Z", source: "current_inbound" }
+      linkExternalIdentity: { scope: "link_external_identity", messageId: "wamid.1", capturedAt: "2026-07-09T12:00:00.000Z", source: "current_inbound" },
+      linkPrestashopIdentity: null
     },
     freshExternalResolutionEvidence: null,
     ...overrides
@@ -175,7 +176,7 @@ test("71: no resolved customerId in the session denies immediately, Customer Ser
 });
 
 test("72: missing explicit link consent denies with a structured errorCode, Customer Service never called", async () => {
-  const outcome = await definition().execute({}, context(session({ currentTurnConsent: { createCustomer: null, linkExternalIdentity: null } })));
+  const outcome = await definition().execute({}, context(session({ currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null } })));
   assert.equal(outcome.status, "denied");
   assert.equal(outcome.errorCode, "consent_required:link_external_identity");
   assert.equal(requestCount, 0);

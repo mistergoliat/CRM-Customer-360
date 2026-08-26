@@ -210,7 +210,7 @@ function session(overrides: Partial<NativeCustomerSessionExecutionContext> = {})
     runtimeIdentity: { status: "ANONYMOUS", identityLevel: "LEVEL_0_ANONYMOUS", masterCustomerId: null, prestashopCustomerId: null, verificationRequired: false, requiredEvidence: [], readyToLink: false, conflictCode: null, policyCode: "NO_CHANNEL_EVIDENCE", evidenceRefs: [] },
     onboarding: null,
     contextAccess: "none",
-    currentTurnConsent: { createCustomer: null, linkExternalIdentity: null },
+    currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null },
     freshExternalResolutionEvidence: null,
     ...overrides
   };
@@ -336,7 +336,7 @@ test("18: consent text is never persisted into onboarding", async () => {
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null }, freshExternalResolutionEvidence: noMatchEvidence() }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null }, freshExternalResolutionEvidence: noMatchEvidence() }),
     dependencies: deps(onboarding.service)
   });
   const serialized = JSON.stringify(result.onboarding);
@@ -351,7 +351,7 @@ test("19: a transient no_match is never persisted anywhere in onboarding", async
     plannedOperation: { operation: "prepare_quote" },
     messageText: "hola",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: null, linkExternalIdentity: null } }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null } }),
     dependencies: deps(onboarding.service)
   });
   const serialized = JSON.stringify(result.onboarding);
@@ -438,7 +438,7 @@ test("25: turn 3 requires create consent from THIS turn - missing consent still 
     plannedOperation: { operation: "prepare_quote" },
     messageText: "gracias",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: null, linkExternalIdentity: null } }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null } }),
     dependencies: deps(onboarding.service)
   });
   assert.equal(result.capabilityOutcome, null);
@@ -453,7 +453,7 @@ test("26: turn 3 executes exactly one resolve_customer call before create", asyn
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null } }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null } }),
     dependencies: deps(onboarding.service, async () => {
       resolveCalls += 1;
       return noMatchEvidence();
@@ -469,7 +469,7 @@ test("27: a fresh no_match allows create to proceed", async () => {
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null }, freshExternalResolutionEvidence: noMatchEvidence() }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null }, freshExternalResolutionEvidence: noMatchEvidence() }),
     dependencies: deps(onboarding.service)
   });
   assert.equal(result.attemptedOperation, "create_customer");
@@ -484,7 +484,7 @@ test("28: with no evidence carried over from pre-plan, post-plan resolves fresh 
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null }, freshExternalResolutionEvidence: null }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null }, freshExternalResolutionEvidence: null }),
     dependencies: deps(onboarding.service, async () => {
       resolveCalls += 1;
       return noMatchEvidence();
@@ -500,7 +500,7 @@ test("29: a resolved evidence completes onboarding with the resolved customerId 
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null } }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null } }),
     dependencies: deps(onboarding.service, async () => resolvedEvidence("999"))
   });
   assert.equal(result.onboarding?.status, "completed");
@@ -514,7 +514,7 @@ test("30: a conflict evidence blocks create and lands onboarding in conflict", a
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null } }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null } }),
     dependencies: deps(onboarding.service, async () => conflictEvidence())
   });
   assert.equal(result.onboarding?.status, "conflict");
@@ -527,7 +527,7 @@ test("31: a temporarily_unavailable evidence blocks create without changing onbo
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null } }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null } }),
     dependencies: deps(onboarding.service, async () => unavailableEvidence())
   });
   assert.equal(result.onboarding?.status, "collecting");
@@ -542,7 +542,7 @@ test("32: create completes onboarding with the new customerId", async () => {
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null }, freshExternalResolutionEvidence: noMatchEvidence() }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null }, freshExternalResolutionEvidence: noMatchEvidence() }),
     dependencies: deps(onboarding.service)
   });
   assert.equal(result.onboarding?.status, "completed");
@@ -556,7 +556,7 @@ test("33: a successful create never also triggers link_external_identity in the 
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: LINK_CONSENT }, freshExternalResolutionEvidence: noMatchEvidence() }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: LINK_CONSENT, linkPrestashopIdentity: null }, freshExternalResolutionEvidence: noMatchEvidence() }),
     dependencies: deps(onboarding.service)
   });
   assert.equal(result.attemptedOperation, "create_customer");
@@ -573,7 +573,7 @@ test("34: link requires a consistent customerId - never attempted without one", 
     plannedOperation: { operation: null },
     messageText: "autorizo vincular este whatsapp a mi cuenta",
     correlationId: "corr-1",
-    customerSessionExecution: session({ identity: { status: "identification_required", customerId: null, source: "none", localResolutionOutcome: "identification_required", externalResolutionOutcome: null }, currentTurnConsent: { createCustomer: null, linkExternalIdentity: LINK_CONSENT } }),
+    customerSessionExecution: session({ identity: { status: "identification_required", customerId: null, source: "none", localResolutionOutcome: "identification_required", externalResolutionOutcome: null }, currentTurnConsent: { createCustomer: null, linkExternalIdentity: LINK_CONSENT, linkPrestashopIdentity: null } }),
     dependencies: deps(onboarding.service)
   });
   assert.equal(result.attemptedOperation, "none");
@@ -601,7 +601,7 @@ test("36: create consent never authorizes link - the scopes are never interchang
     correlationId: "corr-1",
     customerSessionExecution: session({
       identity: { status: "identified", customerId: "700", source: "normalized_phone", localResolutionOutcome: "identified", externalResolutionOutcome: null },
-      currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null }
+      currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null }
     }),
     dependencies: deps(onboarding.service)
   });
@@ -618,7 +618,7 @@ test("37: link sends the trusted inbound externalId, never a model-supplied one"
     correlationId: "corr-1",
     customerSessionExecution: session({
       identity: { status: "identified", customerId: "700", source: "normalized_phone", localResolutionOutcome: "identified", externalResolutionOutcome: null },
-      currentTurnConsent: { createCustomer: null, linkExternalIdentity: LINK_CONSENT }
+      currentTurnConsent: { createCustomer: null, linkExternalIdentity: LINK_CONSENT, linkPrestashopIdentity: null }
     }),
     dependencies: deps(onboarding.service)
   });
@@ -636,7 +636,7 @@ test("38: link only fires when identity was already identified BEFORE this turn'
     customerSessionExecution: session({
       identity: { status: "identification_required", customerId: null, source: "none", localResolutionOutcome: "identification_required", externalResolutionOutcome: null },
       onboarding: onboarding.getState(),
-      currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: LINK_CONSENT },
+      currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: LINK_CONSENT, linkPrestashopIdentity: null },
       freshExternalResolutionEvidence: noMatchEvidence()
     }),
     dependencies: deps(onboarding.service)
@@ -652,7 +652,7 @@ test("39: a successful create result never causes link to also execute", async (
     plannedOperation: { operation: "prepare_quote" },
     messageText: "autorizo crear mi ficha de cliente",
     correlationId: "corr-1",
-    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null }, freshExternalResolutionEvidence: noMatchEvidence() }),
+    customerSessionExecution: session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: CREATE_CONSENT, linkExternalIdentity: null, linkPrestashopIdentity: null }, freshExternalResolutionEvidence: noMatchEvidence() }),
     dependencies: deps(onboarding.service)
   });
   assert.notEqual(result.attemptedOperation, "link_external_identity");
@@ -667,7 +667,7 @@ test("40: already_linked is treated as an idempotent success, never an error", a
     correlationId: "corr-1",
     customerSessionExecution: session({
       identity: { status: "identified", customerId: "700", source: "normalized_phone", localResolutionOutcome: "identified", externalResolutionOutcome: null },
-      currentTurnConsent: { createCustomer: null, linkExternalIdentity: LINK_CONSENT }
+      currentTurnConsent: { createCustomer: null, linkExternalIdentity: LINK_CONSENT, linkPrestashopIdentity: null }
     }),
     dependencies: deps(onboarding.service)
   });

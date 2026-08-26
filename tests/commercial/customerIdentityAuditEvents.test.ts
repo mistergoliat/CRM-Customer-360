@@ -606,7 +606,7 @@ test("integration: runCustomerOnboardingPostPlanStage end-to-end persists a real
     runtimeIdentity: { status: "ANONYMOUS" as const, identityLevel: "LEVEL_0_ANONYMOUS" as const, masterCustomerId: null, prestashopCustomerId: null, verificationRequired: false, requiredEvidence: [], readyToLink: false, conflictCode: null, policyCode: "NO_CHANNEL_EVIDENCE", evidenceRefs: [] },
     onboarding: null,
     contextAccess: "none" as const,
-    currentTurnConsent: { createCustomer: null, linkExternalIdentity: null },
+    currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null },
     freshExternalResolutionEvidence: null
   };
   await runCustomerOnboardingPostPlanStage({

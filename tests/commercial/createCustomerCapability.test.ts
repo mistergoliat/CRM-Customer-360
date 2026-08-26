@@ -163,7 +163,8 @@ function session(overrides: Partial<NativeCustomerSessionExecutionContext> = {})
     contextAccess: "none",
     currentTurnConsent: {
       createCustomer: { scope: "create_customer", messageId: "wamid.1", capturedAt: "2026-07-09T12:00:00.000Z", source: "current_inbound" },
-      linkExternalIdentity: null
+      linkExternalIdentity: null,
+      linkPrestashopIdentity: null
     },
     freshExternalResolutionEvidence: FRESH_NO_MATCH,
     ...overrides
@@ -234,7 +235,7 @@ test("61: missing required fields yields missing_information and updates onboard
 test("62: missing explicit consent denies with a structured consent_required errorCode, Customer Service never called", async () => {
   const onboarding = makeOnboardingFake(onboardingRow());
   setOnboardingServiceForTests(onboarding.service);
-  const outcome = await definition().execute({}, context(session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: null, linkExternalIdentity: null } })));
+  const outcome = await definition().execute({}, context(session({ onboarding: onboarding.getState(), currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null } })));
   assert.equal(outcome.status, "denied");
   assert.equal(outcome.errorCode, "consent_required:create_customer");
   assert.equal(requestCount, 0);

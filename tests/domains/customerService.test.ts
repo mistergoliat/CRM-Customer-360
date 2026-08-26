@@ -10,7 +10,16 @@ import {
 } from "@/lib/domains/customer-service/authority-policy";
 import { createCustomerServiceClient, type CreateCustomerServiceRequest, type LinkExternalIdentityServiceRequest } from "@/lib/domains/customer-service/service";
 import type { CustomerServicePort } from "@/lib/domains/customer-service/ports";
-import type { CreateCustomerInput, CreateCustomerResult, CustomerResolutionEvidence, LinkExternalIdentityInput, LinkExternalIdentityResult, ResolveCustomerResult } from "@/lib/domains/customer-service/types";
+import type {
+  CreateCustomerInput,
+  CreateCustomerResult,
+  CustomerResolutionEvidence,
+  LinkExternalIdentityInput,
+  LinkExternalIdentityResult,
+  LinkPrestashopIdentityInput,
+  LinkPrestashopIdentityResult,
+  ResolveCustomerResult
+} from "@/lib/domains/customer-service/types";
 
 // ---------------------------------------------------------------------------
 // create_customer policy (tests 1-12)
@@ -206,13 +215,15 @@ type FakePortConfig = {
   resolveCustomer?: CustomerServicePort["resolveCustomer"];
   createCustomer?: CustomerServicePort["createCustomer"];
   linkExternalIdentity?: CustomerServicePort["linkExternalIdentity"];
+  linkPrestashopIdentity?: CustomerServicePort["linkPrestashopIdentity"];
 };
 
 function makeFakePort(config: FakePortConfig = {}) {
   const calls = {
     resolve: [] as unknown[],
     create: [] as CreateCustomerInput[],
-    link: [] as LinkExternalIdentityInput[]
+    link: [] as LinkExternalIdentityInput[],
+    linkPrestashop: [] as LinkPrestashopIdentityInput[]
   };
   const port: CustomerServicePort = {
     async resolveCustomer(input) {
@@ -226,6 +237,10 @@ function makeFakePort(config: FakePortConfig = {}) {
     async linkExternalIdentity(input) {
       calls.link.push(input);
       return config.linkExternalIdentity ? config.linkExternalIdentity(input) : ({ status: "completed", customerMasterId: "cust-1", externalIdentityId: "ext-1" } as LinkExternalIdentityResult);
+    },
+    async linkPrestashopIdentity(input) {
+      calls.linkPrestashop.push(input);
+      return config.linkPrestashopIdentity ? config.linkPrestashopIdentity(input) : ({ status: "completed", customerMasterId: "cust-1", externalIdentityId: "ext-1" } as LinkPrestashopIdentityResult);
     }
   };
   return { port, calls };

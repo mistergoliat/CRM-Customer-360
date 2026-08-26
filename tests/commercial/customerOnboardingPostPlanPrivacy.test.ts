@@ -209,7 +209,8 @@ function session(overrides: Partial<NativeCustomerSessionExecutionContext> = {})
     contextAccess: "none",
     currentTurnConsent: {
       createCustomer: { scope: "create_customer", messageId: "wamid.1", capturedAt: "2026-07-09T12:00:00.000Z", source: "current_inbound" },
-      linkExternalIdentity: { scope: "link_external_identity", messageId: "wamid.1", capturedAt: "2026-07-09T12:00:00.000Z", source: "current_inbound" }
+      linkExternalIdentity: { scope: "link_external_identity", messageId: "wamid.1", capturedAt: "2026-07-09T12:00:00.000Z", source: "current_inbound" },
+      linkPrestashopIdentity: null
     },
     freshExternalResolutionEvidence: { source: "customer_service", requestId: "r", checkedAt: "2026-07-09T12:00:00.000Z", result: { status: "no_match" } },
     ...overrides
