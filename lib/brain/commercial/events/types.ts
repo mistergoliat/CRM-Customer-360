@@ -91,7 +91,7 @@ export type CustomerOnboardingTransitionRecordedPayload = {
   hasResolvedCustomer: boolean;
 };
 
-export type CustomerIdentityCapabilityName = "resolve_customer" | "create_customer" | "link_external_identity";
+export type CustomerIdentityCapabilityName = "resolve_customer" | "create_customer" | "link_external_identity" | "link_prestashop_identity";
 
 export type CustomerIdentityCapabilityOutcomeRecordedPayload = {
   capability: CustomerIdentityCapabilityName;

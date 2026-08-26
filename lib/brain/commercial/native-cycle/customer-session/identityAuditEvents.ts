@@ -126,7 +126,7 @@ export async function recordExternalIdentityResolution(params: {
 }
 
 export async function recordIdentityCapabilityOutcome(params: {
-  capability: "resolve_customer" | "create_customer" | "link_external_identity";
+  capability: "resolve_customer" | "create_customer" | "link_external_identity" | "link_prestashop_identity";
   correlationId?: string | null;
   conversationId?: string | null;
   opportunityId?: string | null;
