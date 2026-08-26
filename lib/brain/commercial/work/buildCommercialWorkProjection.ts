@@ -3,6 +3,7 @@ import type { CommercialObjective, CommercialWork, CommercialWorkBlocker, Commer
 import type { CommercialObjectiveStatus } from "./statuses";
 import { deriveCommercialObjectives, carriedObjectiveStatusById } from "./deriveCommercialObjectives";
 import { deriveCommercialWorkSteps } from "./deriveCommercialWorkSteps";
+import { applyCommercialIdentityGate } from "./commercialIdentityGate";
 import { matchShippingOptionReference } from "./matchShippingOptionReference";
 import type { ShippingOptionCandidate } from "./matchShippingOptionReference";
 import { collectCommercialWorkBlockers, deriveCommercialWorkMetrics, deriveCommercialWorkStatus } from "./evaluateCommercialWork";
@@ -589,6 +590,12 @@ export function buildCommercialWorkProjection(input: CommercialWorkProjectionInp
 
   const carriedStatuses = carriedObjectiveStatusById(input.objectiveSeeds ?? []);
   for (const objective of objectives) applyObjectiveState(objective, input, carriedStatuses.get(objective.objectiveId));
+  // SALES-AGENT-R2-ID-R2-A07. Runs after every objective's structural
+  // readiness is decided, before conversation-autonomy's own override pass -
+  // an identity-insufficient operation never reaches READY, but a human
+  // owner/AI-disabled block still takes precedence over it below, same as it
+  // already does over every other blocker in this file.
+  applyCommercialIdentityGate(objectives, input.runtimeIdentity);
   applyPendingMutationInvalidations(objectives);
   const conversationBlockers = applyConversationAutonomy(input, objectives);
   const steps = deriveCommercialWorkSteps(objectives);

@@ -3,6 +3,8 @@ import type { CreatedQuote } from "@/lib/domains/created-quote";
 import type { SelectedShippingOption } from "@/lib/domains/selected-shipping-option";
 import type { ShippingDestination } from "@/lib/domains/shipping-destination";
 import type { PendingCommercialIntentRecord } from "../multi-intent/types";
+import type { CommercialIdentityRequirementDecision } from "../identity/commercial-identity-requirement";
+import type { RuntimeIdentityContext } from "../native-cycle/customer-session/runtimeIdentityContext";
 import type { CommercialObjectiveStatus, CommercialWorkStatus, CommercialWorkStepStatus } from "./statuses";
 import type { CommercialObjectiveType } from "./objectiveTypes";
 import type { CommercialWorkStepCapability, CommercialWorkStepType } from "./stepTypes";
@@ -135,7 +137,19 @@ export type CommercialMissingRequirement =
   | "SHIPPING_OPTION_AMBIGUOUS"
   | "SHIPPING_OPTION_NOT_FOUND"
   | "SHIPPING_OPTION_RECALCULATED"
-  | "QUOTE";
+  | "QUOTE"
+  // SALES-AGENT-R2-ID-R2-A07. One value per non-SUFFICIENT
+  // CommercialIdentityRequirementDecision status this codebase actually
+  // produces (see commercialIdentityGate.ts) - never collapsed into a single
+  // generic value (task PARTE 3/18: "falta email != conflict != system
+  // failure != ready to link"). SYSTEM_WAIT has no entry here - it never
+  // reaches WAITING_CUSTOMER (see commercialIdentityGate.ts), so it is never
+  // a "missing requirement" from the customer's point of view.
+  | "IDENTITY_EVIDENCE"
+  | "IDENTITY_AMBIGUOUS"
+  | "IDENTITY_LINK_PENDING"
+  | "IDENTITY_CONFLICT"
+  | "IDENTITY_VERIFICATION";
 
 export type CommercialEvidenceRef = {
   kind: "request_fact" | "capability_execution" | "commercial_event" | "agent_action" | "conversation_state";
@@ -167,7 +181,14 @@ export type CommercialWorkBlockerCode =
   | "SUPERSEDED"
   | "UNSUPPORTED"
   | "CANCELLED"
-  | "STALE_EVIDENCE";
+  | "STALE_EVIDENCE"
+  // SALES-AGENT-R2-ID-R2-A07. A single code for every non-SUFFICIENT
+  // CommercialIdentityRequirementDecision (A06) - the decision's own `status`
+  // (carried in `identityDecision` below) already distinguishes falta nivel /
+  // ready to link / ambiguity / conflict / system wait / entity verification,
+  // so this code never needs a per-status variant of its own (PARTE 3: the
+  // structure is preserved via identityDecision, not via a wider code union).
+  | "IDENTITY_REQUIREMENT";
 
 export type CommercialWorkBlockerSource = "work" | "objective" | "step" | "conversation";
 
@@ -177,6 +198,15 @@ export type CommercialWorkBlocker = {
   objectiveId?: string;
   stepId?: string;
   evidence?: CommercialEvidenceRef[];
+  /**
+   * SALES-AGENT-R2-ID-R2-A07. Present only on an "IDENTITY_REQUIREMENT"
+   * blocker - the full A06 decision this blocker was derived from, verbatim
+   * (never re-summarized, never re-interpreted). No PII: `evaluate.ts`
+   * (A06) documents that this decision type only ever carries level/status/
+   * entityType/requiredEvidence/policyCode enums, inherited from
+   * RuntimeIdentityContext's own privacy guarantee (A05).
+   */
+  identityDecision?: CommercialIdentityRequirementDecision;
 };
 
 export type CommercialWorkDependency =
@@ -258,6 +288,14 @@ export type CommercialWorkProjectionInput = {
   recentCapabilityExecutions?: CommercialCapabilityExecutionProjection[];
   recentCommercialEvents?: CommercialEvidenceRef[];
   now?: string | Date;
+  /**
+   * SALES-AGENT-R2-ID-R2-A07. This turn's identity fact (A05), already
+   * privacy-safe by construction. Optional so every existing caller/test
+   * that never threads it (benchmark harness, older tests) keeps its exact
+   * current behavior unchanged (commercialIdentityGate.ts is a no-op without
+   * it) - never defaulted to a synthetic value here.
+   */
+  runtimeIdentity?: RuntimeIdentityContext;
 };
 
 export type CommercialWork = {

@@ -1,5 +1,5 @@
 import type { PersistedCommercialWork } from "./persistenceTypes";
-import type { CommercialObjective } from "./types";
+import type { CommercialMissingRequirement, CommercialObjective } from "./types";
 import { commercialObjectiveSupersessionFamily } from "./deriveCommercialObjectives";
 
 export const COMMERCIAL_WORK_DISPOSITIONS = ["FINAL", "PARTIAL", "BLOCKED"] as const;
@@ -116,6 +116,30 @@ function completedClause(objective: CommercialObjective): string | null {
   }
 }
 
+// SALES-AGENT-R2-ID-R2-A07. The three non-SUFFICIENT A06 decision statuses
+// that land an objective on BLOCKED (not WAITING_CUSTOMER -
+// commercialIdentityGate.ts) yet still deserve a customer-facing message:
+// READY_TO_LINK (consent ask), IDENTITY_CONFLICT (safe, generic),
+// ENTITY_VERIFICATION_REQUIRED (no real consumer yet, kept exhaustive).
+// Distinct from waitingCustomerObjectives below, which only ever holds
+// WAITING_CUSTOMER objectives.
+const IDENTITY_BLOCKED_REQUIREMENTS = new Set<CommercialMissingRequirement>(["IDENTITY_LINK_PENDING", "IDENTITY_CONFLICT", "IDENTITY_VERIFICATION"]);
+
+function identityBlockedObjectives(objectives: readonly CommercialObjective[]): CommercialObjective[] {
+  return objectives.filter((objective) => objective.status === "BLOCKED" && objective.missingRequirements.some((requirement) => IDENTITY_BLOCKED_REQUIREMENTS.has(requirement)));
+}
+
+function buildIdentityBlockedMessage(objectives: readonly CommercialObjective[]): string {
+  const first = objectives[0];
+  if (first.missingRequirements.includes("IDENTITY_LINK_PENDING")) {
+    return "Encontré una cuenta que coincide con los datos que verificamos. ¿Confirmas que la vinculemos a tu perfil para continuar?";
+  }
+  if (first.missingRequirements.includes("IDENTITY_CONFLICT")) {
+    return "No pude confirmar tu identidad de forma automática porque encontré una inconsistencia en tus datos. Voy a derivar tu conversación con alguien del equipo para revisarlo.";
+  }
+  return "Necesito verificar algunos datos adicionales antes de continuar con esto.";
+}
+
 function pendingClause(objective: CommercialObjective, hasDurableContinuation: boolean): string | null {
   if (!hasDurableContinuation) return null;
   switch (objective.type) {
@@ -175,6 +199,16 @@ export function buildCommercialWorkFinalizerMessage(work: PersistedCommercialWor
       completedClauses.length > 0
         ? `${capitalize(completedClauses.join("; "))}. ${buildMissingInfoQuestion(waitingCustomerObjectives)}`
         : buildMissingInfoQuestion(waitingCustomerObjectives);
+    return { disposition: "BLOCKED", message };
+  }
+
+  // SALES-AGENT-R2-ID-R2-A07. READY_TO_LINK/IDENTITY_CONFLICT/
+  // ENTITY_VERIFICATION_REQUIRED land their objective on BLOCKED, not
+  // WAITING_CUSTOMER (commercialIdentityGate.ts) - so they never reach the
+  // branch above.
+  const identityBlocked = identityBlockedObjectives(objectives);
+  if (identityBlocked.length > 0) {
+    const message = completedClauses.length > 0 ? `${capitalize(completedClauses.join("; "))}. ${buildIdentityBlockedMessage(identityBlocked)}` : buildIdentityBlockedMessage(identityBlocked);
     return { disposition: "BLOCKED", message };
   }
 

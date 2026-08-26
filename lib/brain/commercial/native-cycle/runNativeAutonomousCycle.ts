@@ -390,7 +390,11 @@ export async function runNativeAutonomousCycle(
       snapshot,
       provider: input.agentLoopProvider ?? null,
       resolvedSalesAgentConfiguration,
-      abortSignal: input.abortSignal ?? null
+      abortSignal: input.abortSignal ?? null,
+      // SALES-AGENT-R2-ID-R2-A07. The same trusted session already built at
+      // Step 3 above - never re-resolved. Lets CommercialWork activate/advance
+      // the existing onboarding subsystem when a step is identity-blocked.
+      customerSessionExecution: session.execution
     });
 
     return {

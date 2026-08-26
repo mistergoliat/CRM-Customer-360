@@ -315,11 +315,39 @@ export function deriveCommercialWorkSteps(objectives: readonly CommercialObjecti
             stepId: `${stepPrefix}:CREATE_QUOTE`,
             objectiveIds: [objective.objectiveId],
             type: "CREATE_QUOTE",
-            status: terminalOr(objective, objective.status === "COMPLETED" ? "COMPLETED" : objective.status === "BLOCKED" ? "BLOCKED" : "READY"),
+            // SALES-AGENT-R2-ID-R2-A07. WAITING_CUSTOMER/WAITING_SYSTEM added:
+            // commercialIdentityGate.ts can now leave a CREATE_QUOTE objective
+            // in either status (never just BLOCKED) - without these two
+            // branches this step would silently fall through to "READY",
+            // reaching the executor's capability call despite the objective
+            // being identity-blocked.
+            status: terminalOr(
+              objective,
+              objective.status === "COMPLETED"
+                ? "COMPLETED"
+                : objective.status === "WAITING_CUSTOMER"
+                  ? "WAITING_CUSTOMER"
+                  : objective.status === "WAITING_SYSTEM"
+                    ? "WAITING_SYSTEM"
+                    : objective.status === "BLOCKED"
+                      ? "BLOCKED"
+                      : "READY"
+            ),
             dependencies: [{ type: "FACT_CONFIRMED", factType: "commercial_line_items" }],
             capabilityName: "create_quote",
             input: objective.inputs,
             evidence: [...objective.evidence],
+            // SALES-AGENT-R2-ID-R2-A07 (PARTE 16). Deliberately NOT marked
+            // retryable/retryCandidate even when WAITING_SYSTEM comes from an
+            // identity SYSTEM_WAIT decision: unlike GET_SHIPPING_QUOTE's own
+            // WAITING_SYSTEM (a real capability execution already failed,
+            // with a real attemptCount/nextAttemptAt to back off from), this
+            // step never executed at all - there is nothing for the capability
+            // -failure retry worker (retryPolicy.ts) to schedule. Recovery
+            // here is next-turn re-derivation (a fresh customer message
+            // re-evaluates RuntimeIdentityContext fresh), the same
+            // self-healing every other blocked objective in this file already
+            // relies on - never a second, capability-shaped retry mechanism.
             blockers: [...objective.blockers]
           })
         );
