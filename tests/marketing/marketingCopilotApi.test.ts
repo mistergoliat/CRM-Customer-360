@@ -6,6 +6,11 @@ import { DELETE as deleteSessionDelete } from "@/app/api/marketing/copilot/sessi
 import { POST as exportPost } from "@/app/api/marketing/copilot/sessions/[sessionId]/export/route";
 import { POST as messagePost } from "@/app/api/marketing/copilot/sessions/[sessionId]/messages/route";
 import { POST as refreshPost } from "@/app/api/marketing/copilot/sessions/[sessionId]/refresh/route";
+import { GET as dashboardClustersGet } from "@/app/api/marketing/customer-intelligence/dashboard/clusters/route";
+import { GET as dashboardContextGet } from "@/app/api/marketing/customer-intelligence/dashboard/context/route";
+import { POST as dashboardIntersectionsPost } from "@/app/api/marketing/customer-intelligence/dashboard/intersections/route";
+import { GET as dashboardOverviewGet } from "@/app/api/marketing/customer-intelligence/dashboard/overview/route";
+import { GET as dashboardRfmGet } from "@/app/api/marketing/customer-intelligence/dashboard/rfm/route";
 
 const originalEnv = { ...process.env };
 const originalFetch = globalThis.fetch;
@@ -100,6 +105,113 @@ test("multi-turn messages reuse the provided sessionId", async () => {
     ]
   );
   assert.deepEqual(calls.map((call) => call.body), [{ question: "Cuantos clientes hay?" }, { question: "Cual tiene mayor ticket promedio?" }]);
+});
+
+test("session message proxy forwards optional uiContext unchanged", async () => {
+  configureProxyEnv();
+  const uiContext = {
+    intersection: {
+      contractVersion: "customer-intelligence-copilot-ui-context-v1",
+      filters: { and: [{ field: "rfm.segmentCode", operator: "eq", value: "CHAMPION" }] }
+    }
+  };
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(input, `http://127.0.0.1:3101/v1/customer-intelligence/copilot/sessions/${SESSION_ID}/messages`);
+    assert.deepEqual(JSON.parse(String(init?.body)), { question: "Que ves interesante?", uiContext });
+    return Response.json(answeredSessionTurn(), { status: 200 });
+  }) as typeof fetch;
+
+  const response = await messagePost(jsonRequest(`/api/marketing/copilot/sessions/${SESSION_ID}/messages`, { question: "Que ves interesante?", uiContext }), context());
+
+  assert.equal(response.status, 200);
+});
+
+test("session message proxy preserves invalid_ui_context as a deterministic 400", async () => {
+  configureProxyEnv();
+  globalThis.fetch = (async () =>
+    Response.json(
+      {
+        sessionId: SESSION_ID,
+        turnId: "00000000-0000-4000-8000-000000000003",
+        queryIds: [],
+        sourceQueryIds: [],
+        status: "invalid_ui_context",
+        finalResponseState: "failure",
+        errors: ["unknown field: bogus.field"],
+        contractVersion: "customer-intelligence-copilot-v1"
+      },
+      { status: 400 }
+    )) as typeof fetch;
+
+  const response = await messagePost(
+    jsonRequest(`/api/marketing/copilot/sessions/${SESSION_ID}/messages`, {
+      question: "Cuantos son?",
+      uiContext: { intersection: { filters: { field: "bogus.field", operator: "eq", value: 1 } } }
+    }),
+    context()
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.status, "invalid_ui_context");
+  assert.deepEqual(body.errors, ["unknown field: bogus.field"]);
+});
+
+test("dashboard proxy calls Customer Profile dashboard endpoints with the server-side token", async () => {
+  configureProxyEnv();
+  const calls: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    calls.push(String(input));
+    assert.equal(new Headers(init?.headers).get("x-internal-copilot-token"), "internal-token-1234");
+    assert.equal(init?.method, "GET");
+    return Response.json({ status: "available", contractVersion: "customer-intelligence-dashboard-context-v1", context: dashboardContext(), population: dashboardPopulation() }, { status: 200 });
+  }) as typeof fetch;
+
+  await dashboardContextGet(new Request("http://localhost/api/marketing/customer-intelligence/dashboard/context?featureSnapshotId=17"));
+  await dashboardOverviewGet(new Request("http://localhost/api/marketing/customer-intelligence/dashboard/overview"));
+  await dashboardRfmGet(new Request("http://localhost/api/marketing/customer-intelligence/dashboard/rfm"));
+  await dashboardClustersGet(new Request("http://localhost/api/marketing/customer-intelligence/dashboard/clusters"));
+
+  assert.deepEqual(calls, [
+    "http://127.0.0.1:3101/v1/customer-intelligence/dashboard/context?featureSnapshotId=17",
+    "http://127.0.0.1:3101/v1/customer-intelligence/dashboard/overview",
+    "http://127.0.0.1:3101/v1/customer-intelligence/dashboard/rfm",
+    "http://127.0.0.1:3101/v1/customer-intelligence/dashboard/clusters"
+  ]);
+});
+
+test("dashboard intersections proxy forwards the canonical filter tree without client-side interpretation", async () => {
+  configureProxyEnv();
+  const filters = { and: [{ field: "cluster.clusterId", operator: "eq", value: 3 }] };
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(input, "http://127.0.0.1:3101/v1/customer-intelligence/dashboard/intersections");
+    assert.equal(init?.method, "POST");
+    assert.equal(new Headers(init?.headers).get("x-internal-copilot-token"), "internal-token-1234");
+    assert.deepEqual(JSON.parse(String(init?.body)), { filters });
+    return Response.json({ status: "available", contractVersion: "customer-intelligence-dashboard-intersection-response-v1", context: dashboardContext(), intersection: { matchingPopulation: 8, featurePopulation: 20, rfmMatchedPopulation: 10, clusterMatchedPopulation: 12, bothMatchedPopulation: 7, rfmCoveragePct: 50, clusterCoveragePct: 60, requiredDimensions: ["cluster"] }, metrics: intersectionMetrics(), analyticalDefinition: { queryPlanHash: "a".repeat(64), filters }, execution: { queryCount: 1, filterLeafCount: 1, filterDepth: 1 } }, { status: 200 });
+  }) as typeof fetch;
+
+  const response = await dashboardIntersectionsPost(jsonRequest("/api/marketing/customer-intelligence/dashboard/intersections", { filters }));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.intersection.matchingPopulation, 8);
+});
+
+test("dashboard intersections proxy surfaces invalid_intersection distinctly", async () => {
+  configureProxyEnv();
+  globalThis.fetch = (async () =>
+    Response.json(
+      { status: "invalid_intersection", errors: ["unknown field: rfm.nope"], contractVersion: "customer-intelligence-dashboard-intersection-response-v1" },
+      { status: 400 }
+    )) as typeof fetch;
+
+  const response = await dashboardIntersectionsPost(jsonRequest("/api/marketing/customer-intelligence/dashboard/intersections", { filters: { field: "rfm.nope", operator: "eq", value: "X" } }));
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.status, "invalid_intersection");
+  assert.deepEqual(body.errors, ["unknown field: rfm.nope"]);
 });
 
 test("new chat can delete the backend session best-effort through the proxy", async () => {
@@ -264,5 +376,48 @@ function provenance() {
       clusterCoveragePct: 65
     },
     contractVersion: "customer-intelligence-read-model-v1"
+  };
+}
+
+function dashboardContext() {
+  return {
+    featureSnapshotId: "17",
+    featureReferenceTime: "2026-08-19T00:00:00.000Z",
+    featureVersion: "customer-analytics-features-v1",
+    populationPolicyVersion: "customer-analytics-population-b-v1",
+    rfmSnapshotId: "9",
+    rfmReferenceTime: "2026-08-18T00:00:00.000Z",
+    rfmCalculationVersion: "rfm-v1",
+    clusterSnapshotId: "5",
+    clusterReferenceTime: "2026-08-17T00:00:00.000Z",
+    clusterModelVersion: "behavioral-kmeans-k4-v1",
+    clusterInterpretationVersion: "v1"
+  };
+}
+
+function dashboardPopulation() {
+  return {
+    featurePopulation: 20,
+    rfmMatched: 10,
+    clusterMatched: 12,
+    bothMatched: 7,
+    neitherMatched: 5,
+    rfmCoveragePct: 50,
+    clusterCoveragePct: 60
+  };
+}
+
+function intersectionMetrics() {
+  return {
+    totalSpentTaxIncl: "1000.000000",
+    averageOrderValueTaxIncl: "100.000000",
+    averageTotalSpentTaxIncl: "125.000000",
+    averageValidOrders: "2.000000",
+    averageOrders365d: "1.000000",
+    averageDaysSinceLastOrder: "20.000000",
+    averagePurchaseFrequencyDays: null,
+    purchaseFrequencyDaysSampleSize: 0,
+    averageEffectiveDiversity: "0.500000",
+    averageRepeatProductRate: "0.200000"
   };
 }

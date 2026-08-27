@@ -5,6 +5,7 @@ export type CustomerIntelligenceCopilotResponse =
   | CustomerIntelligenceCopilotAnsweredFromContextResponse
   | CustomerIntelligenceCopilotRespondedDirectlyResponse
   | CustomerIntelligenceCopilotTerminalResponse
+  | CustomerIntelligenceCopilotInvalidUiContextResponse
   | CustomerIntelligenceCopilotPlannerInvalidResponse
   | CustomerIntelligenceCopilotFailureResponse;
 
@@ -73,6 +74,13 @@ export type CustomerIntelligenceCopilotPlannerInvalidResponse = {
   readonly contractVersion?: string;
 };
 
+export type CustomerIntelligenceCopilotInvalidUiContextResponse = {
+  readonly status: "invalid_ui_context";
+  readonly finalResponseState?: "failure";
+  readonly errors: readonly string[];
+  readonly contractVersion?: string;
+};
+
 export type CustomerIntelligenceCopilotFailureResponse = {
   readonly status:
     | "analytics_unavailable"
@@ -128,6 +136,7 @@ function extractCopilotText(response: CustomerIntelligenceCopilotResponse): { te
       return { text: response.message, interactionType: "unsupported" };
     case "planner_invalid":
     case "orchestrator_invalid":
+    case "invalid_ui_context":
       return { text: response.errors.join(" - "), interactionType: "error" };
     default:
       return { text: response.message, interactionType: "error" };
@@ -173,6 +182,26 @@ export type CustomerIntelligenceCopilotProvenance = {
     readonly clusterCoveragePct: number;
   };
   readonly contractVersion?: string;
+};
+
+export type AnalyticalFilterValue = string | number | boolean | null | readonly (string | number)[];
+export type AnalyticalFilterOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "between" | "in" | "not_in" | "is_null" | "is_not_null";
+export type AnalyticalFilterCondition = {
+  readonly field: string;
+  readonly operator: AnalyticalFilterOperator;
+  readonly value?: AnalyticalFilterValue;
+};
+export type AnalyticalFilterGroup = { readonly and: readonly AnalyticalFilterNode[] } | { readonly or: readonly AnalyticalFilterNode[] };
+export type AnalyticalFilterNode = AnalyticalFilterCondition | AnalyticalFilterGroup;
+export type AnalyticalFilterInput = readonly AnalyticalFilterNode[] | AnalyticalFilterNode;
+
+export const CUSTOMER_INTELLIGENCE_COPILOT_UI_CONTEXT_VERSION = "customer-intelligence-copilot-ui-context-v1";
+
+export type CustomerIntelligenceCopilotUiContext = {
+  readonly intersection: {
+    readonly contractVersion: typeof CUSTOMER_INTELLIGENCE_COPILOT_UI_CONTEXT_VERSION;
+    readonly filters: AnalyticalFilterInput;
+  };
 };
 
 export type CustomerIntelligenceCopilotSessionSummary = {

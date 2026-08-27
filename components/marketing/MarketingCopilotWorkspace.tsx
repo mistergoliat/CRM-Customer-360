@@ -8,6 +8,7 @@ import { StatusChip } from "@/components/ui/StatusChip";
 import {
   CUSTOMER_INTELLIGENCE_COPILOT_QUESTIONS,
   normalizeCopilotTurn,
+  type AnalyticalFilterInput,
   type CreateCustomerIntelligenceCopilotSessionResult,
   type CustomerIntelligenceCopilotProvenance,
   type CustomerIntelligenceCopilotResponse,
@@ -17,6 +18,7 @@ import {
   type NormalizedCopilotTurn,
   type RefreshCustomerIntelligenceCopilotSessionResult
 } from "@/lib/marketing/customerIntelligenceCopilot";
+import { buildCustomerIntelligenceCopilotUiContext } from "@/lib/marketing/customerIntelligenceDashboard";
 
 void React;
 
@@ -27,6 +29,8 @@ type MarketingCopilotWorkspaceProps = {
   data: {
     quickReplies?: string[];
   };
+  uiContextFilters?: AnalyticalFilterInput | null;
+  scopeLabel?: string;
 };
 
 type ChatMessage =
@@ -54,7 +58,7 @@ type ExportReference = {
   readonly queryId: string;
 };
 
-export function MarketingCopilotWorkspace({ data: _data }: MarketingCopilotWorkspaceProps) {
+export function MarketingCopilotWorkspace({ data: _data, uiContextFilters = null, scopeLabel }: MarketingCopilotWorkspaceProps) {
   void _data;
   const suggestions = CUSTOMER_INTELLIGENCE_COPILOT_QUESTIONS;
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -115,7 +119,10 @@ export function MarketingCopilotWorkspace({ data: _data }: MarketingCopilotWorks
       }
 
       setStatus("sending");
-      const response = await postJson<CustomerIntelligenceCopilotSessionTurnResponse>(`/api/marketing/copilot/sessions/${activeSessionId}/messages`, { question: trimmed });
+      const response = await postJson<CustomerIntelligenceCopilotSessionTurnResponse>(
+        `/api/marketing/copilot/sessions/${activeSessionId}/messages`,
+        buildCopilotMessagePayload(trimmed, uiContextFilters)
+      );
       const exportableQueryId = firstExportableQueryId(response);
       const assistant: ChatMessage = {
         id: response.turnId,
@@ -212,6 +219,7 @@ export function MarketingCopilotWorkspace({ data: _data }: MarketingCopilotWorks
             <p className="text-label-bold uppercase text-primary">Marketing Copilot</p>
             <h2 className="text-headline-md text-on-surface">Workspace conversacional</h2>
             <p className="mt-1 text-body-md text-slate-500">Sesion efimera con contexto analitico pinned y ejecucion read-only en Customer Profile.</p>
+            {uiContextFilters ? <p className="mt-2 text-label-bold uppercase text-sky-700">{scopeLabel ?? "Selected population activa"}</p> : null}
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="hub-button-secondary" onClick={() => void startNewChat()} disabled={isBusy && messages.length === 0}>
@@ -466,9 +474,21 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   });
   const payload = (await response.json().catch(() => null)) as T | MarketingCopilotProxyError | null;
   if (!response.ok) {
+    if (isInvalidUiContextPayload(payload)) {
+      throw new Error("La seleccion activa no pudo aplicarse al Copilot. Revisa los filtros o limpia la seleccion antes de continuar.");
+    }
     throw new Error(payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string" ? payload.message : "Copilot no disponible.");
   }
   return payload as T;
+}
+
+export function buildCopilotMessagePayload(question: string, filters: AnalyticalFilterInput | null) {
+  const uiContext = buildCustomerIntelligenceCopilotUiContext(filters);
+  return uiContext ? { question, uiContext } : { question };
+}
+
+function isInvalidUiContextPayload(payload: unknown): boolean {
+  return typeof payload === "object" && payload !== null && "status" in payload && payload.status === "invalid_ui_context";
 }
 
 function firstExportableQueryId(response: CustomerIntelligenceCopilotSessionTurnResponse): string | undefined {
@@ -508,6 +528,8 @@ function stateTitle(status: CustomerIntelligenceCopilotResponse["status"] | "pro
     case "planner_invalid":
     case "orchestrator_invalid":
       return "Plan invalido";
+    case "invalid_ui_context":
+      return "Seleccion no valida";
     case "analytics_timeout":
       return "Timeout analitico";
     case "analytics_unavailable":

@@ -1,5 +1,6 @@
 import { errorResponse } from "@/lib/api-response";
 import { isMarketingCopilotClientError, isValidQuestion, sendCopilotMessage } from "@/lib/customer-intelligence/copilotClient";
+import type { CustomerIntelligenceCopilotUiContext } from "@/lib/marketing/customerIntelligenceCopilot";
 
 type Context = {
   params: Promise<{ sessionId: string }>;
@@ -16,14 +17,14 @@ export async function POST(request: Request, context: Context) {
     return errorResponse("invalid_json", "Request body must be JSON.", 400);
   }
   if (!isRecord(body)) return errorResponse("invalid_request", "Request body must be an object.", 400);
-  const allowed = new Set(["question"]);
+  const allowed = new Set(["question", "uiContext"]);
   for (const key of Object.keys(body)) {
     if (!allowed.has(key)) return errorResponse("unsupported_field", "Unsupported request field.", 400);
   }
   if (!isValidQuestion(body.question)) return errorResponse("invalid_question", "Question is required and must be at most 4000 characters.", 400);
 
   try {
-    const upstream = await sendCopilotMessage(sessionId, body.question.trim());
+    const upstream = await sendCopilotMessage(sessionId, body.question.trim(), body.uiContext === undefined ? undefined : (body.uiContext as CustomerIntelligenceCopilotUiContext));
     return Response.json(upstream.body, { status: upstream.status });
   } catch (error) {
     return proxyError(error);

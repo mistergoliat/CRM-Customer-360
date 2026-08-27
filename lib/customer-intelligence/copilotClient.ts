@@ -2,6 +2,7 @@ import type {
   CreateCustomerIntelligenceCopilotSessionResult,
   CustomerIntelligenceCopilotResponse,
   CustomerIntelligenceCopilotSessionTurnResponse,
+  CustomerIntelligenceCopilotUiContext,
   DeleteCustomerIntelligenceCopilotSessionResult,
   RefreshCustomerIntelligenceCopilotSessionResult,
   ResetCustomerIntelligenceCopilotSessionResult
@@ -73,10 +74,10 @@ export async function createCopilotSession(input: { readonly featureSnapshotId?:
   });
 }
 
-export async function sendCopilotMessage(sessionId: string, question: string): Promise<JsonUpstreamResult<CustomerIntelligenceCopilotSessionTurnResponse>> {
+export async function sendCopilotMessage(sessionId: string, question: string, uiContext?: CustomerIntelligenceCopilotUiContext): Promise<JsonUpstreamResult<CustomerIntelligenceCopilotSessionTurnResponse>> {
   return callCustomerProfileJson<CustomerIntelligenceCopilotSessionTurnResponse>(`/v1/customer-intelligence/copilot/sessions/${encodeURIComponent(sessionId)}/messages`, {
     method: "POST",
-    body: { question }
+    body: uiContext ? { question, uiContext } : { question }
   });
 }
 
@@ -125,7 +126,7 @@ export async function askCopilotQuestion(input: { readonly question: string; rea
   });
 }
 
-async function callCustomerProfileJson<T>(path: string, input: { readonly method: "POST" | "DELETE"; readonly body?: unknown }): Promise<JsonUpstreamResult<T>> {
+export async function callCustomerProfileJson<T>(path: string, input: { readonly method: "GET" | "POST" | "DELETE"; readonly body?: unknown }): Promise<JsonUpstreamResult<T>> {
   const response = await callCustomerProfile(path, input);
   return {
     status: response.status,
@@ -133,7 +134,7 @@ async function callCustomerProfileJson<T>(path: string, input: { readonly method
   };
 }
 
-async function callCustomerProfile(path: string, input: { readonly method: "POST" | "DELETE"; readonly body?: unknown }): Promise<Response> {
+export async function callCustomerProfile(path: string, input: { readonly method: "GET" | "POST" | "DELETE"; readonly body?: unknown }): Promise<Response> {
   const config = readMarketingCopilotClientConfig();
   assertConfig(config);
 

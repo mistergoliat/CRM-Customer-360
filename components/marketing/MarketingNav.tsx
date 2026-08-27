@@ -6,6 +6,7 @@ import clsx from "clsx";
 
 const items = [
   { label: "Resumen", href: "/marketing" },
+  { label: "Inteligencia", href: "/marketing/customer-intelligence" },
   { label: "Copilot", href: "/marketing/copilot" },
   { label: "Segmentos", href: "/marketing/segments" },
   { label: "Campañas", href: "/marketing/campaigns" },
