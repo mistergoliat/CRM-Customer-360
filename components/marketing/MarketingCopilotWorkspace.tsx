@@ -7,12 +7,14 @@ import { SectionCard } from "@/components/p1m/SectionCard";
 import { StatusChip } from "@/components/ui/StatusChip";
 import {
   CUSTOMER_INTELLIGENCE_COPILOT_QUESTIONS,
+  normalizeCopilotTurn,
   type CreateCustomerIntelligenceCopilotSessionResult,
   type CustomerIntelligenceCopilotProvenance,
   type CustomerIntelligenceCopilotResponse,
   type CustomerIntelligenceCopilotSessionSummary,
   type CustomerIntelligenceCopilotSessionTurnResponse,
   type MarketingCopilotProxyError,
+  type NormalizedCopilotTurn,
   type RefreshCustomerIntelligenceCopilotSessionResult
 } from "@/lib/marketing/customerIntelligenceCopilot";
 
@@ -348,11 +350,12 @@ function ChatBubble({ message }: { message: ChatMessage }) {
     );
   }
 
+  const normalized = normalizeCopilotTurn(message.response);
   return (
     <article className="max-w-[92%] rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-label-bold uppercase text-primary">Copilot</p>
-        <StatusChip label={statusLabel(message.response.status)} tone={toneForCopilotStatus(message.response.status)} />
+        <StatusChip label={statusLabel(message.response.status)} tone={toneForCopilotTurn(normalized)} />
         {message.exportableQueryId ? <StatusChip label="Exportable" tone="green" /> : null}
       </div>
       <ResponseBody response={message.response} />
@@ -361,24 +364,33 @@ function ChatBubble({ message }: { message: ChatMessage }) {
 }
 
 export function ResponseBody({ response }: { response: CustomerIntelligenceCopilotSessionTurnResponse }) {
-  if (response.status === "answered" || response.status === "answered_from_context") {
+  const normalized = normalizeCopilotTurn(response);
+
+  if (normalized.contractError) {
+    console.error("Marketing Copilot: non-fatal status with no displayable text", { status: response.status, turnId: response.turnId });
+  }
+
+  if (normalized.interactionType === "answer") {
+    const hasQueryMetadata = response.status === "answered" || response.status === "answered_from_context";
     return (
       <div className="mt-3 space-y-3">
-        <p className="whitespace-pre-wrap text-body-lg text-on-surface">{response.answer}</p>
-        <InfoGrid
-          items={[
-            { label: "Filas", value: response.analysis.resultRowCount.toLocaleString("es-CL") },
-            { label: "Query ids", value: response.queryIds.length > 0 ? response.queryIds.join(", ") : response.sourceQueryIds.join(", ") || "Sin query nueva" },
-            { label: "Planner", value: response.analysis.plannerModel ?? "No reportado" },
-            { label: "Answerer", value: response.analysis.answerModel ?? "No reportado" }
-          ]}
-          columns={4}
-        />
+        <p className="whitespace-pre-wrap text-body-lg text-on-surface">{normalized.text}</p>
+        {hasQueryMetadata ? (
+          <InfoGrid
+            items={[
+              { label: "Filas", value: response.analysis.resultRowCount.toLocaleString("es-CL") },
+              { label: "Query ids", value: response.queryIds.length > 0 ? response.queryIds.join(", ") : response.sourceQueryIds.join(", ") || "Sin query nueva" },
+              { label: "Planner", value: response.analysis.plannerModel ?? "No reportado" },
+              { label: "Answerer", value: response.analysis.answerModel ?? "No reportado" }
+            ]}
+            columns={4}
+          />
+        ) : null}
       </div>
     );
   }
-  if (response.status === "planner_invalid") return <StateMessage tone="red" title={stateTitle(response.status)} body={response.errors.join(" - ")} className="mt-3" />;
-  return <StateMessage tone={toneForCopilotStatus(response.status) === "red" ? "red" : "amber"} title={stateTitle(response.status)} body={response.message} className="mt-3" />;
+
+  return <StateMessage tone={toneForCopilotTurn(normalized) === "red" ? "red" : "amber"} title={stateTitle(response.status, normalized)} body={normalized.text} className="mt-3" />;
 }
 
 function AssistantLoading({ status }: { status: WorkspaceStatus }) {
@@ -442,7 +454,7 @@ function buildProvenanceItems(provenance: CustomerIntelligenceCopilotProvenance 
     { label: "Cobertura RFM", value: `${provenance.population.rfmCoveragePct}%` },
     { label: "Cobertura cluster", value: `${provenance.population.clusterCoveragePct}%` },
     { label: "Queries", value: response?.queryIds.length ? response.queryIds.join(", ") : "Sin query nueva" },
-    { label: "Truncation", value: response && "analysis" in response && response.analysis.resultRowCount > 0 ? "Ver export para resultado completo" : "No reportado" }
+    { label: "Truncation", value: response && "analysis" in response && "resultRowCount" in response.analysis && response.analysis.resultRowCount > 0 ? "Ver export para resultado completo" : "No reportado" }
   ];
 }
 
@@ -466,9 +478,7 @@ function firstExportableQueryId(response: CustomerIntelligenceCopilotSessionTurn
 }
 
 function assistantContent(response: CustomerIntelligenceCopilotSessionTurnResponse): string {
-  if (response.status === "answered" || response.status === "answered_from_context") return response.answer;
-  if (response.status === "planner_invalid") return response.errors.join(" - ");
-  return response.message;
+  return normalizeCopilotTurn(response).text;
 }
 
 function statusLabel(status: CustomerIntelligenceCopilotResponse["status"]): string {
@@ -476,13 +486,18 @@ function statusLabel(status: CustomerIntelligenceCopilotResponse["status"]): str
   return status.replace(/_/g, " ");
 }
 
-function toneForCopilotStatus(status: CustomerIntelligenceCopilotResponse["status"]): "blue" | "green" | "amber" | "red" | "gray" | "slate" {
-  if (status === "answered" || status === "answered_from_context") return "green";
-  if (status === "clarification_required" || status === "unsupported_data" || status === "unsupported_operation") return "amber";
-  return "red";
+// Tone follows the backend's own finalResponseState/interactionType, not an enumeration of every
+// known status string - a status this component has never seen still renders sensibly as long as
+// the backend keeps reporting finalResponseState (success/degraded_success/failure).
+function toneForCopilotTurn(normalized: NormalizedCopilotTurn): "blue" | "green" | "amber" | "red" | "gray" | "slate" {
+  if (normalized.finalResponseState === "failure") return "red";
+  if (normalized.finalResponseState === "degraded_success") return "amber";
+  if (normalized.interactionType === "clarification" || normalized.interactionType === "unsupported") return "amber";
+  return "green";
 }
 
-function stateTitle(status: CustomerIntelligenceCopilotResponse["status"] | "provider_error"): string {
+function stateTitle(status: CustomerIntelligenceCopilotResponse["status"] | "provider_error", normalized?: NormalizedCopilotTurn): string {
+  if (normalized?.contractError) return "Respuesta sin contenido";
   switch (status) {
     case "clarification_required":
       return "Necesito una precision";
@@ -491,16 +506,16 @@ function stateTitle(status: CustomerIntelligenceCopilotResponse["status"] | "pro
     case "unsupported_operation":
       return "Operacion no soportada";
     case "planner_invalid":
+    case "orchestrator_invalid":
       return "Plan invalido";
     case "analytics_timeout":
       return "Timeout analitico";
     case "analytics_unavailable":
       return "Analitica no disponible";
-    case "answer_generation_failed":
     case "provider_error":
       return "Error temporal del modelo";
     default:
-      return "Respondido";
+      return normalized?.finalResponseState === "failure" ? "Error temporal del modelo" : "Respondido";
   }
 }
 
