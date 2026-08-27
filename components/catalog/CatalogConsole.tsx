@@ -41,7 +41,9 @@ function ProductResultRow({ product, selected, onSelect }: { product: CatalogCon
   );
 }
 
-function ProductDetail({ product }: { product: CatalogConsoleProduct }) {
+export function ProductDetail({ product }: { product: CatalogConsoleProduct }) {
+  const description = product.description?.trim();
+
   return (
     <section className="hub-card p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -68,10 +70,12 @@ function ProductDetail({ product }: { product: CatalogConsoleProduct }) {
         </div>
       </div>
 
-      <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4">
-        <p className="text-label-bold uppercase text-slate-500">Descripcion</p>
-        <p className="mt-2 whitespace-pre-line text-body-md text-slate-700">{product.description || "Descripcion no disponible en el contrato actual."}</p>
-      </div>
+      {description ? (
+        <details className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-label-bold uppercase text-slate-500">Descripcion del producto</summary>
+          <p className="mt-3 whitespace-pre-line text-body-md text-slate-700">{description}</p>
+        </details>
+      ) : null}
 
       {product.publicLink ? (
         <a className="mt-4 inline-flex items-center gap-2 text-label-bold uppercase text-primary hover:underline" href={product.publicLink} target="_blank" rel="noreferrer">

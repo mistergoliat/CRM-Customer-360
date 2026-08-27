@@ -3,6 +3,7 @@
 import { StatusChip } from "@/components/ui/StatusChip";
 import type { CatalogConsoleRecommendation, CatalogProductContextResult } from "@/lib/catalog/consoleService";
 import { formatMoney, formatPercent, formatStock } from "./catalogDisplay";
+import { CommercialScoreDonut } from "./CommercialScoreDonut";
 import { ProductIdentity } from "./ProductIdentity";
 import { RecommendationEvidence } from "./RecommendationEvidence";
 import { RelatedRecommendations } from "./RelatedRecommendations";
@@ -29,11 +30,21 @@ export function RecommendationCard({ recommendation, parentProductId, loadRelate
           <p className="mt-3 text-body-md text-slate-700">{recommendation.commercialReason}</p>
           {recommendation.warnings.length > 0 ? <p className="mt-2 text-label-sm text-amber-700">Warnings producto: {recommendation.warnings.join(", ")}</p> : null}
         </div>
-        <div className="grid min-w-[220px] gap-2 text-label-sm text-slate-600">
-          <span>{formatMoney(recommendation.price)}</span>
-          <span>{formatStock(recommendation)}</span>
-          <span>Final {formatPercent(recommendation.score)}</span>
-          <span>Comercial {formatPercent(recommendation.commercialScore)}</span>
+        <div className="grid min-w-[240px] gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-label-sm text-slate-600 sm:grid-cols-2">
+          <div>
+            <p className="text-label-bold uppercase text-slate-500">Precio</p>
+            <p className="mt-1 text-body-md font-bold text-on-surface">{formatMoney(recommendation.price)}</p>
+          </div>
+          <div>
+            <p className="text-label-bold uppercase text-slate-500">Stock</p>
+            <p className="mt-1 text-body-md font-bold text-on-surface">{formatStock(recommendation)}</p>
+          </div>
+          <CommercialScoreDonut value={recommendation.commercialScore} />
+          <div>
+            <p className="text-label-bold uppercase text-slate-500">Final</p>
+            <p className="mt-1 text-body-md font-bold text-on-surface">{formatPercent(recommendation.score)}</p>
+            <p className="mt-1 text-label-sm text-slate-500">Puntaje final de ranking.</p>
+          </div>
         </div>
       </div>
       <RecommendationEvidence recommendation={recommendation} />
