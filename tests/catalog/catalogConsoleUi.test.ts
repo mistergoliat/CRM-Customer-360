@@ -7,6 +7,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ProductDetail } from "../../components/catalog/CatalogConsole";
 import { CommercialScoreDonut, normalizeCommercialScore } from "../../components/catalog/CommercialScoreDonut";
 import { RecommendationCard } from "../../components/catalog/RecommendationCard";
+import { RecommendationCommercialSummary } from "../../components/catalog/RecommendationCommercialSummary";
+import { RelatedRecommendationItem } from "../../components/catalog/RelatedRecommendations";
 import type { CatalogConsoleProduct, CatalogConsoleRecommendation, CatalogProductContextResult } from "../../lib/catalog/consoleService";
 
 (globalThis as { React?: typeof React }).React = React;
@@ -124,10 +126,54 @@ test("recommendation card keeps Commercial and Final as separate scores", () => 
   assert.match(html, /91\.0%/);
 });
 
+test("shared commercial summary maps recommendation scores without replacing Final", () => {
+  const html = renderToStaticMarkup(createElement(RecommendationCommercialSummary, { recommendation: recommendation() }));
+
+  assert.match(html, /Precio/);
+  assert.match(html, /Stock/);
+  assert.match(html, /Commercial/);
+  assert.match(html, /38\.1%/);
+  assert.match(html, /Final/);
+  assert.match(html, /91\.0%/);
+});
+
+test("secondary related recommendation item renders Commercial donut and keeps Final", () => {
+  const html = renderToStaticMarkup(
+    createElement(RelatedRecommendationItem, {
+      item: recommendation({ productId: "11", commercialScore: 0.444, score: 0.777 }),
+      parentProductId: "10",
+      sourceRecommendationName: "Banda de Resistencia Light"
+    })
+  );
+
+  assert.match(html, /Relacion con Banda de Resistencia Light/);
+  assert.match(html, /Commercial/);
+  assert.match(html, /44\.4%/);
+  assert.match(html, /Final/);
+  assert.match(html, /77\.7%/);
+});
+
+test("secondary related recommendation item shows N\/D for an invalid Commercial score without hiding Final", () => {
+  const html = renderToStaticMarkup(
+    createElement(RelatedRecommendationItem, {
+      item: recommendation({ commercialScore: Number.NaN, score: 0.612 }),
+      parentProductId: "10",
+      sourceRecommendationName: "Banda de Resistencia Light"
+    })
+  );
+
+  assert.match(html, /Commercial/);
+  assert.match(html, /N\/D/);
+  assert.match(html, /Final/);
+  assert.match(html, /61\.2%/);
+});
+
 test("catalog score UI copy does not describe commercial score as probability", () => {
   const files = [
     "components/catalog/CommercialScoreDonut.tsx",
+    "components/catalog/RecommendationCommercialSummary.tsx",
     "components/catalog/RecommendationCard.tsx",
+    "components/catalog/RelatedRecommendations.tsx",
     "components/catalog/RecommendationEvidence.tsx",
     "components/catalog/CatalogConsole.tsx"
   ];

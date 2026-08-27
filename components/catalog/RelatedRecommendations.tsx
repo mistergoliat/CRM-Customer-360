@@ -7,8 +7,9 @@ import { Icon } from "@/components/ui/Icon";
 import { StatusChip } from "@/components/ui/StatusChip";
 import type { CatalogConsoleRecommendation, CatalogProductContextResult } from "@/lib/catalog/consoleService";
 import { SECONDARY_RECOMMENDATION_LIMIT } from "@/lib/catalog/consoleLimits";
-import { formatMoney, formatStock, formatPercent, errorMessage } from "./catalogDisplay";
+import { errorMessage } from "./catalogDisplay";
 import { ProductIdentity } from "./ProductIdentity";
+import { RecommendationCommercialSummary } from "./RecommendationCommercialSummary";
 import { RecommendationEvidence } from "./RecommendationEvidence";
 
 type RelatedRecommendationsProps = {
@@ -16,6 +17,32 @@ type RelatedRecommendationsProps = {
   parentProductId: string;
   loadRelated: (productId: string, limit: number) => Promise<CatalogProductContextResult>;
 };
+
+type RelatedRecommendationItemProps = {
+  item: CatalogConsoleRecommendation;
+  parentProductId: string;
+  sourceRecommendationName: string;
+};
+
+export function RelatedRecommendationItem({ item, parentProductId, sourceRecommendationName }: RelatedRecommendationItemProps) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-white p-3">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-md bg-slate-100 px-2 py-1 text-label-bold text-slate-700">#{item.rank}</span>
+            <p className="line-clamp-2 text-body-md font-bold text-on-surface">{item.name}</p>
+            {item.productId === parentProductId ? <StatusChip label="Producto padre" tone="amber" /> : null}
+          </div>
+          <ProductIdentity product={item} />
+          <p className="mt-2 text-body-sm text-slate-700">Relacion con {sourceRecommendationName}: {item.commercialReason}</p>
+        </div>
+        <RecommendationCommercialSummary recommendation={item} compact />
+      </div>
+      <RecommendationEvidence recommendation={item} />
+    </article>
+  );
+}
 
 export function RelatedRecommendations({ recommendation, parentProductId, loadRelated }: RelatedRecommendationsProps) {
   const [open, setOpen] = useState(false);
@@ -87,25 +114,12 @@ export function RelatedRecommendations({ recommendation, parentProductId, loadRe
                 {block.truncatedByLimitCount > 0 ? <StatusChip label={`${block.truncatedByLimitCount} truncadas por limite`} tone="amber" /> : null}
               </div>
               {block.items.map((item) => (
-                <article key={`${recommendation.productId}-${item.productId}-${item.combinationId ?? item.rank}`} className="rounded-lg border border-slate-200 bg-white p-3">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-slate-100 px-2 py-1 text-label-bold text-slate-700">#{item.rank}</span>
-                        <p className="line-clamp-2 text-body-md font-bold text-on-surface">{item.name}</p>
-                        {item.productId === parentProductId ? <StatusChip label="Producto padre" tone="amber" /> : null}
-                      </div>
-                      <ProductIdentity product={item} />
-                      <p className="mt-2 text-body-sm text-slate-700">Relacion con {recommendation.name}: {item.commercialReason}</p>
-                    </div>
-                    <div className="grid min-w-[190px] gap-1 text-label-sm text-slate-600">
-                      <span>{formatMoney(item.price)}</span>
-                      <span>{formatStock(item)}</span>
-                      <span>Final {formatPercent(item.score)}</span>
-                    </div>
-                  </div>
-                  <RecommendationEvidence recommendation={item} />
-                </article>
+                <RelatedRecommendationItem
+                  key={`${recommendation.productId}-${item.productId}-${item.combinationId ?? item.rank}`}
+                  item={item}
+                  parentProductId={parentProductId}
+                  sourceRecommendationName={recommendation.name}
+                />
               ))}
             </div>
           ) : null}
