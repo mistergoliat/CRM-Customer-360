@@ -7,6 +7,7 @@ import type { CommercialIdentityRequirementDecision } from "./types";
 export * from "./types";
 export * from "./operations";
 export { decideCommercialIdentityRequirement, isIdentityLevelAtLeast, IDENTITY_LEVELS_IN_COMPARISON_ORDER } from "./evaluate";
+export { getCommercialOperationForCapability, isIdentitySelfGovernedCapability } from "./capabilityOperations";
 
 /**
  * Convenience wrapper matching the task's sketch signature

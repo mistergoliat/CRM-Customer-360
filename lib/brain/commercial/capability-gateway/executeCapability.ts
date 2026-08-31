@@ -1,5 +1,6 @@
 import { insertCapabilityExecution } from "./repository";
 import { resolveCapabilityGatewayDefinition } from "./registry";
+import { evaluateCapabilityIdentityGate } from "./identityGate";
 import type { CapabilityGatewayContext, CapabilityGatewayResult } from "./types";
 
 const UNREGISTERED_VERSION = "unregistered" as const;
@@ -53,6 +54,52 @@ export async function executeGovernedCapability(
       data: null,
       errorCode: "capability_not_registered",
       retryable: false,
+      evidence: [],
+      warnings: [],
+      retryCount: 0,
+      startedAt,
+      completedAt,
+      executionPublicId: persisted.publicId
+    };
+  }
+
+  // SALES-AGENT-R3-A02. Shared identity-requirement boundary, checked before
+  // availability/execution for every caller (R2, the native Agent Tool Loop,
+  // the multi-intent action plan executor, and any future caller) - no
+  // mutating capability requiring identity can reach checkAvailability/
+  // execute unless this returns allowed:true. See identityGate.ts.
+  const identityGate = evaluateCapabilityIdentityGate(definition.capability, definition.governance, context);
+  if (!identityGate.allowed) {
+    const completedAt = nowIso();
+    const persisted = await insertCapabilityExecution({
+      correlationId: context.correlationId,
+      capabilityName: definition.capability,
+      capabilityVersion: definition.version,
+      availabilityStatus: identityGate.availability,
+      executionStatus: identityGate.status,
+      retryCount: 0,
+      retryable: identityGate.retryable,
+      errorCode: identityGate.errorCode,
+      requestSummary: input,
+      responseSummary: identityGate.responseSummary,
+      evidence: [],
+      opportunityId: context.opportunityId ?? null,
+      conversationId: context.conversationId ?? null,
+      decisionId: context.decisionId ?? null,
+      actionId: context.actionId ?? null,
+      requestId: context.requestId ?? null,
+      startedAt,
+      completedAt
+    });
+
+    return {
+      capability: definition.capability,
+      version: definition.version,
+      availability: identityGate.availability,
+      status: identityGate.status,
+      data: null,
+      errorCode: identityGate.errorCode,
+      retryable: identityGate.retryable,
       evidence: [],
       warnings: [],
       retryCount: 0,

@@ -85,9 +85,13 @@ export type CapabilityGatewayContext = {
   /**
    * ACS-R1-04-T06. Server-side trusted session (identity, onboarding,
    * trusted inbound, this-turn consent, fresh resolve_customer evidence).
-   * Only create_customer/link_external_identity/resolve_customer read this -
-   * every other capability ignores it. Never derived from LLM/tool-request
-   * input; always assembled by resolveNativeCustomerSession.
+   * Only create_customer/link_external_identity/resolve_customer read this
+   * directly inside their own execute() - every other capability's execute()
+   * still ignores it. SALES-AGENT-R3-A02: `.runtimeIdentity` is additionally
+   * read generically by executeGovernedCapability itself (identityGate.ts)
+   * for every registered mutating capability, before execute() ever runs.
+   * Never derived from LLM/tool-request input; always assembled by
+   * resolveNativeCustomerSession.
    */
   trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
 };
