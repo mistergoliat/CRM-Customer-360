@@ -1,0 +1,456 @@
+[
+  {
+    "scenarioId": "H0-01",
+    "category": "simple_product_search",
+    "turnCount": 1,
+    "totalElapsedMs": 4083,
+    "toolCalls": 2,
+    "toolNames": [
+      "search_products",
+      "get_customer_context"
+    ],
+    "modelSteps": 2,
+    "inputTokens": 461,
+    "outputTokens": 323,
+    "reasoningTokens": 123,
+    "cacheReadTokens": 1408,
+    "finalResponses": [
+      "¡Hola! Sí, tenemos barras olímpicas disponibles. Te muestro las opciones:\n\n1. **Barra Olímpica 15kg** — cromada, 220 cm\n   - Precio: **$89.990 CLP**\n   - Stock disponible ✅\n\n2. **Barra Olímpica 20kg** — cromada, 220 cm, uso competencia\n   - Precio: **$129.990 CLP**\n   - Stock disponible ✅\n\n¿Cuál te interesa? También puedo ayudarte con el despacho si me dices tu comuna. 😊"
+    ]
+  },
+  {
+    "scenarioId": "H0-02",
+    "category": "ambiguous_product",
+    "turnCount": 1,
+    "totalElapsedMs": 3871,
+    "toolCalls": 2,
+    "toolNames": [
+      "search_products",
+      "get_customer_context"
+    ],
+    "modelSteps": 2,
+    "inputTokens": 442,
+    "outputTokens": 313,
+    "reasoningTokens": 105,
+    "cacheReadTokens": 1408,
+    "finalResponses": [
+      "¡Hola! Con gusto te ayudo con tu barra olímpica. 😊\n\nEn PesasChile tenemos dos opciones disponibles en stock:\n\n**1. Barra Olímpica 15kg** — Cromada, 220 cm\n💰 $89.990\n\n**2. Barra Olímpica 20kg** — Cromada, 220 cm, uso competencia\n💰 $129.990\n\n¿Cuál de las dos te interesa? ¿Vas por la de 15 kg para entrenamiento general o la de 20 kg para competencia?\n\nDime cuál eliges y te ayudo con el despacho. 💪"
+    ]
+  },
+  {
+    "scenarioId": "H0-03",
+    "category": "product_comparison",
+    "turnCount": 2,
+    "totalElapsedMs": 14467,
+    "toolCalls": 4,
+    "toolNames": [
+      "search_products",
+      "search_products",
+      "get_customer_context",
+      "get_purchase_history"
+    ],
+    "modelSteps": 4,
+    "inputTokens": 750,
+    "outputTokens": 1279,
+    "reasoningTokens": 548,
+    "cacheReadTokens": 4736,
+    "finalResponses": [
+      "¡Hola! Te cuento las diferencias entre ambas barras, según nuestro catálogo:\n\n**Barra Olímpica 15kg** – $89.990\n- Peso: 15 kg\n- Largo: 220 cm\n- Cromada\n- Disponible: sí (stock 12)\n\n**Barra Olímpica 20kg** – $129.990\n- Peso: 20 kg\n- Largo: 220 cm\n- Cromada\n- **Uso competencia**\n- Disponible: sí (stock 6)\n\nEn resumen, las dos son cromadas y miden 220 cm. La diferencia principal es el peso (5 kg más) y que la de 20 kg está pensada para **uso competencia** (mejor construcción y tolerancias más exigentes), por eso también tiene un precio mayor ($40.000 más).\n\n¿Te puedo ayudar a cotizar el despacho de alguna de las dos, o quieres ver discos o accesorios para complementar? 💪",
+      "Buena pregunta. Tomando en cuenta la info del catálogo y que entrenas fuerza 4 veces por semana, mi recomendación sería la **Barra Olímpica de 20kg ($129.990)**, por estas razones:\n\n1. **Uso competencia**: viene especificada como barra de competencia, lo que apunta a una construcción más exigente (mejores tolerancias y durabilidad). Si entrenas fuerza de forma constante 4x/semana, la barra va a recibir mucho uso y esa robustez extra se nota a largo plazo.\n\n2. **Peso estándar**: los 20 kg son el estándar para levantamientos olímpicos y powerlifting, así que si en el futuro quieres competir o medir tus marcas contra referencias estándar, ya vas con la barra correcta.\n\n3. **Carga de trabajo**: al entrenar fuerza, normalmente vas a ir subiendo el peso progresivamente. La de 20kg es la mejor opción para cargas altas sostenidas en el tiempo.\n\n**¿Cuándo conviene la de 15kg?** Principalmente si estás partiendo, si tienes poco espacio para peso inicial o prefieres una barra más liviana para empezar a dominar la técnica (por ejemplo, para mujeres o quienes parten desde cero, ya que al ser más liviana puedes sumar discos más livianos de a poco).\n\nDado tu ritmo de entrenamiento, yo iría por la de **20kg** como inversión a largo plazo. \n\n¿Quieres que te cotice el despacho de la de 20kg? Solo necesito saber tu comuna para calcular el envío. 😊"
+    ]
+  },
+  {
+    "scenarioId": "H0-04",
+    "category": "customer_correction",
+    "turnCount": 2,
+    "totalElapsedMs": 20234,
+    "toolCalls": 7,
+    "toolNames": [
+      "search_products",
+      "get_customer_context",
+      "get_shipping_options",
+      "get_shipping_options",
+      "get_shipping_options",
+      "get_shipping_options",
+      "get_shipping_options"
+    ],
+    "modelSteps": 8,
+    "inputTokens": 725,
+    "outputTokens": 1526,
+    "reasoningTokens": 673,
+    "cacheReadTokens": 12160,
+    "finalResponses": [
+      "¡Hola! Te ayudo con eso 👍\n\nEncontré la **Barra Olímpica 15kg** que buscas:\n\n- **Producto:** Barra Olímpica cromada de 15kg, 220cm\n- **Precio:** $89.990 CLP\n- **Stock:** Disponible (12 unidades)\n\nEn cuanto al despacho a **Providencia**, intenté obtener la cotización de envío, pero el sistema de despacho está fallando en este momento y no pude generar el valor exacto del envío (y no quiero darte un número inventado).\n\n¿Quieres que reintente la cotización de despacho en unos minutos, o prefieres que te deje la boleta con la barra y coordinamos el envío por otra vía? 😊",
+      "¡Sin problema! Anoto el despacho a **Ñuñoa** en lugar de Providencia 👌\n\nEl detalle de tu pedido queda así:\n\n- **Barra Olímpica cromada 15kg (220cm):** $89.990 CLP\n- **Destino:** Ñuñoa\n- **Stock:** Disponible ✅\n\nLamentablemente, el sistema de cotización de despacho sigue presentando fallas y aún no puedo entregarte el valor exacto del envío (no quiero arriesgarme a darte un dato incorrecto).\n\n¿Quieres que reintente la cotización del despacho a Ñuñoa en un rato, o prefieres que avancemos con la boleta y te confirmo el envío apenas el sistema esté operativo? 😊"
+    ]
+  },
+  {
+    "scenarioId": "H0-05",
+    "category": "quantity_correction",
+    "turnCount": 2,
+    "totalElapsedMs": 11029,
+    "toolCalls": 1,
+    "toolNames": [
+      "search_products"
+    ],
+    "modelSteps": 3,
+    "inputTokens": 411,
+    "outputTokens": 1011,
+    "reasoningTokens": 718,
+    "cacheReadTokens": 2560,
+    "finalResponses": [
+      "Encontré el producto en nuestro catálogo:\n\n🏋️ **Disco Olímpico 10kg**\n- Disco de goma para barra olímpica\n- Precio: **$34.990 CLP**\n- Disponible: Sí (tenemos stock)\n\n⚠️ **Ojo:** este disco se vende **por par** (2 unidades), no por unidad. Entonces el precio de $34.990 corresponde al par de discos de 10kg.\n\n¿Te sirve el par, o buscas algo distinto? Si quieres, también te puedo cotizar el despacho. 😊",
+      "Perfecto 👍 Te confirmo el pedido:\n\n**Disco Olímpico 10kg (par)** × **4** = 8 discos en total\n- Subtotal: 4 × $34.990 = **$139.960 CLP**\n\nSolo para asegurarme: ¿son **4 pares** (8 discos)? \n\nY dime, ¿en qué **comuna** estás? Así te cotizo el despacho con el peso real del pedido. 😊"
+    ]
+  },
+  {
+    "scenarioId": "H0-06",
+    "category": "product_replacement_after_selection",
+    "turnCount": 2,
+    "totalElapsedMs": 9374,
+    "toolCalls": 4,
+    "toolNames": [
+      "search_products",
+      "get_customer_context",
+      "get_purchase_history",
+      "search_products"
+    ],
+    "modelSteps": 4,
+    "inputTokens": 831,
+    "outputTokens": 725,
+    "reasoningTokens": 319,
+    "cacheReadTokens": 4096,
+    "finalResponses": [
+      "¡Hola! En PesasChile encontré justo lo que buscas:\n\n🏋️ **Barra Olímpica 20kg**\n- Cromada, 220 cm, uso competencia\n- Precio: **$129.990 CLP**\n- Disponible: **sí, hay 6 unidades en stock**\n\n¿Quieres que te cotice el despacho? Solo necesito saber a qué **comuna** te lo enviaríamos para calcular el flete exacto. Si además me dices si llevas algo más en el carrito, te doy el total con despacho incluido. 💪",
+      "¡Perfecto! Tengo una alternativa más económica:\n\n🏋️ **Barra Olímpica 15kg**\n- Cromada, 220 cm\n- Precio: **$89.990 CLP**\n- Disponible: **sí, hay 12 unidades en stock**\n\nEs la misma calidad de barras olímpicas, solo que de 15 kg en vez de 20 kg. Con eso te ahorras **$40.000** vs. la de 20 kg.\n\n¿Te sirve esta? Si quieres, te cotizo el despacho — solo dime tu **comuna** y si llevas algo más. 😊"
+    ]
+  },
+  {
+    "scenarioId": "H0-07",
+    "category": "multi_product_request",
+    "turnCount": 1,
+    "totalElapsedMs": 6236,
+    "toolCalls": 3,
+    "toolNames": [
+      "search_products",
+      "search_products",
+      "get_customer_context"
+    ],
+    "modelSteps": 2,
+    "inputTokens": 713,
+    "outputTokens": 582,
+    "reasoningTokens": 272,
+    "cacheReadTokens": 1408,
+    "finalResponses": [
+      "¡Hola! Te ayudo con eso 💪 Encontré lo que buscas en nuestro catálogo:\n\n**🏋️ Barras Olímpicas:**\n1. **Barra Olímpica 15kg** – Cromada, 220cm → **$89.990** (disponible)\n2. **Barra Olímpica 20kg** – Cromada, 220cm, uso competencia → **$129.990** (disponible)\n\n**🟤 Discos:**\n- **Disco Olímpico 10kg** (goma para barra olímpica) – Se vende como **par** (2×10kg = 20kg) → **$34.990** (disponible)\n\n¿Cuál barra te interesa, la de 15kg o la de 20kg? Con eso te armo la cotización completa y te calculo el despacho a tu comuna. 😊"
+    ]
+  },
+  {
+    "scenarioId": "H0-08",
+    "category": "customer_aware_recommendation",
+    "turnCount": 1,
+    "totalElapsedMs": 4362,
+    "toolCalls": 2,
+    "toolNames": [
+      "get_customer_context",
+      "get_purchase_history"
+    ],
+    "modelSteps": 2,
+    "inputTokens": 253,
+    "outputTokens": 303,
+    "reasoningTokens": 102,
+    "cacheReadTokens": 1280,
+    "finalResponses": [
+      "Hola! 🙌 Te cuento que por el momento no tengo acceso a tu historial de compras (el sistema está con una falla temporal), así que no puedo revisar qué has comprado antes para recomendarte en base a eso. 😅\n\nPero no te preocupes, igual te puedo ayudar súper bien si me cuentas:\n\n- ¿Qué tipo de entrenamiento haces? (fuerza, hipertrofia, CrossFit, etc.)\n- ¿Tienes algún equipamiento en mente o estás empezando en casa?\n- ¿Cuál es tu presupuesto aproximado?\n\nCon eso te busco en el catálogo opciones que te sirvan. ¿Qué te parece? 💪"
+    ]
+  },
+  {
+    "scenarioId": "H0-09",
+    "category": "repeat_purchase_like_request",
+    "turnCount": 1,
+    "totalElapsedMs": 4260,
+    "toolCalls": 2,
+    "toolNames": [
+      "get_customer_context",
+      "get_purchase_history"
+    ],
+    "modelSteps": 2,
+    "inputTokens": 141,
+    "outputTokens": 312,
+    "reasoningTokens": 126,
+    "cacheReadTokens": 1408,
+    "finalResponses": [
+      "¡Hola! 😊 Gracias por escribirnos.\n\nLamentablemente en este momento no tengo acceso a tu historial de compras ni a tu ficha de cliente (el sistema está temporalmente no disponible), así que no puedo ver exactamente qué pediste la última vez. No quisiera adivinar y arriesgarme a mandarte algo incorrecto.\n\n¿Me podrías recordar qué producto(s) pediste? Por ejemplo, si fueron mancuernas, barras, discos, banco, etc. Con eso te ayudo de inmediato a armar el mismo pedido y cotizarte el despacho. 💪"
+    ]
+  },
+  {
+    "scenarioId": "H0-10",
+    "category": "long_conversation",
+    "turnCount": 7,
+    "totalElapsedMs": 67773,
+    "toolCalls": 17,
+    "toolNames": [
+      "get_customer_context",
+      "get_purchase_history",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "get_shipping_options",
+      "get_shipping_options",
+      "get_shipping_options",
+      "search_products",
+      "search_products",
+      "get_shipping_options",
+      "get_shipping_options",
+      "get_shipping_options"
+    ],
+    "modelSteps": 12,
+    "inputTokens": 3248,
+    "outputTokens": 6433,
+    "reasoningTokens": 3737,
+    "cacheReadTokens": 61056,
+    "finalResponses": [
+      "¡Listo! Ya revisé el catálogo y armé una propuesta para tus **700 lucas**. Aquí va el plan completo:\n\n## 🏋️ Home Gym \"Completo\" — $699.900\n\n| Producto | Precio |\n|---|---|\n| Rack de Sentadillas Básico | $199.990 |\n| Barra Olímpica 15kg (220cm) | $89.990 |\n| Banco de Musculación Plegable | $79.990 |\n| Mancuerna Ajustable 20kg (par) | $119.990 |\n| Disco Olímpico 10kg — 6 pares (120kg) | $209.940 |\n| **Total** | **$699.900** |\n\nCon esto te queda un gym redondo: sentadilla y press en rack, banco para press banca, y mancuernas para trabajo auxiliar. Y con 6 pares de discos tienes de sobra para ir progresando.\n\n## 💪 Home Gym \"Esencial\" — $559.940\n\nMismo equipo pero con 2 pares de discos (40kg), dejando **$140.060 libres** por si quieres sumar algo después o cubrir el despacho.\n\nTodo lo que te mostré está **disponible en stock** ✅\n\nAhora, para cotizarte el **despacho a domicilio** necesito saber:\n1. ¿En qué **comuna** estás?\n2. ¿Te tinca más el plan Completo o el Esencial? (o si quieres ajustar algo, dime)\n\nCon eso te paso el costo de envío y cerramos el pedido 🚚",
+      "¡Buena elección! Tenemos **dos barras olímpicas** disponibles en stock:\n\n## 🏋️ Opciones de Barra Olímpica\n\n| Modelo | Precio | Detalle |\n|---|---|---|\n| **Barra Olímpica 15kg** | $89.990 | Cromada, 220cm — ideal para empezar |\n| **Barra Olímpica 20kg** | $129.990 | Cromada, 220cm, **uso competencia** |\n\n¿Cuál te tinca más? \n\nLa de **20kg** es la que usan en competencias y te da un poco más de carga desde el inicio; la de **15kg** es perfecta si recién estás partiendo o para técnica.\n\nDos cosas para ayudarte mejor:\n1. ¿Vas por la barra **sola** o quieres seguir con el home gym completo (rack, banco, discos, mancuernas)?\n2. ¿En qué **comuna** estás para cotizarte el despacho?\n\nCuéntame y te armo el total con envío 🚚",
+      "¡Perfecto! La **Barra Olímpica 15kg** está a **$89.990** y la tenemos en stock ✅\n\nAhora, para armarte el pedido final necesito confirmar una cosa:\n\n**¿Vas solo por la barra** ($89.990) **o sigues con el home gym completo?**\n\nSi sigues con el gym, el plan quedaría así (ya incluye la barra de 15kg):\n\n- **Plan Completo:** Rack + Barra 15kg + Banco + Mancuernas + 6 pares de discos = **$699.900**\n- **Plan Esencial:** Rack + Barra 15kg + Banco + Mancuernas + 2 pares de discos = **$559.940**\n\nY dime tu **comuna** para cotizarte el despacho 🚚 ¿Cómo lo hacemos?",
+      "¡Dale! Los **Discos Olímpicos de 10kg** van en **$34.990 el par** (2 discos = 20kg). Te armo las opciones con la barra de 15kg:\n\n## 🏋️ Barra 15kg + Discos\n\n| Combo | Contenido | Total |\n|---|---|---|\n| **2 pares** | Barra 15kg + 40kg en discos | $159.970 |\n| **4 pares** | Barra 15kg + 80kg en discos | $229.950 |\n| **6 pares** | Barra 15kg + 120kg en discos | $299.930 |\n\nCon 6 pares (120kg) tienes carga de sobra para años de progreso; con 2 pares (40kg) partes más tranquilo y vas sumando después.\n\nTambién te puedo sumar el **banco** ($79.990) y/o el **rack** ($199.990) si quieres seguir completando el gym.\n\n¿Cuántos pares de discos quieres? Y dime tu **comuna** para cotizar el despacho 🚚",
+      "Uy, justo el sistema de despacho está fallando en este momento (no responde el carrier) 😕. No quiero darte un precio inventado, así que no te puedo cotizar el envío a Concepción ahora mismo.\n\nTe propongo esto:\n\n1. **Confírmame qué combo quieres** (por ejemplo, barra 15kg + 4 pares de discos = $229.950) y yo **reintento la cotización** en unos minutos.\n2. Cuando el sistema vuelva, te paso el costo exacto de despacho a Concepción y el total final con envío.\n\n¿Con qué combo te quedamos? 🙌",
+      "Te soy honesto: revisé el catálogo y las únicas barras que manejamos son:\n\n- **Barra Olímpica 15kg — $89.990** ← esta es la **más económica**\n- Barra Olímpica 20kg — $129.990\n\nAsí que la de 15kg ya es nuestra opción más barata; no hay una más económica en stock 😕\n\nPara bajar el total de todos modos, te dejo estas alternativas:\n\n1. **Menos discos**: por ejemplo barra 15kg + 2 pares de discos = **$159.970**\n2. **Solo discos y mancuernas**: sin barra, Mancuerna Ajustable 20kg (par) + 4 pares de discos = **$259.950**\n3. **Ajustar otra cosa del combo** — dime qué tienes en mente y lo armamos\n\n¿Cuál prefieres, o quieres que busquemos otra forma de ajustar el presupuesto?",
+      "Te tengo que ser transparente: el sistema de despacho **sigue caído** (el carrier no está respondiendo), así que **no puedo darte el costo de envío real** a Concepción en este momento 😕 No te voy a inventar un precio.\n\nLo que sí te confirmo es el **subtotal del producto** según el combo:\n\n- **Barra 15kg + 2 pares (40kg)** = **$159.970**\n- **Barra 15kg + 4 pares (80kg)** = **$229.950**\n- **Barra 15kg + 6 pares (120kg)** = **$299.930**\n\nPara cerrar el total con despacho necesito dos cosas:\n\n1. **¿Cuál combo elegiste?** (dime el número de pares y te dejo el pedido armado)\n2. El envío lo **reintento en unos minutos** o te lo confirmo por este mismo chat apenas el sistema se recupere.\n\n¿Te parece que dejemos el pedido reservado con el subtotal y te aviso cuando pueda cotizar el despacho? 🙌"
+    ]
+  },
+  {
+    "scenarioId": "H0-11",
+    "category": "budget_constrained_recommendation",
+    "turnCount": 1,
+    "totalElapsedMs": 21655,
+    "toolCalls": 13,
+    "toolNames": [
+      "get_customer_context",
+      "get_purchase_history",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products"
+    ],
+    "modelSteps": 4,
+    "inputTokens": 2693,
+    "outputTokens": 2562,
+    "reasoningTokens": 1688,
+    "cacheReadTokens": 7040,
+    "finalResponses": [
+      "¡Buena! Con 700 lucas se arma un home gym muy sólido 💪. Te revisé el catálogo y te armé dos combos dentro del presupuesto:\n\n**Combo 1 — \"Completo para fuerza\" (todo lo esencial) ≈ $689.890**\n- 🏋️ Rack de Sentadillas Básico — $199.990\n- Barra Olímpica 20 kg (competencia) — $129.990\n- Banco de Musculación Plegable — $79.990\n- 8 pares de Disco Olímpico 10 kg (80 kg de discos) — $279.920\n\n→ Total en barra: **100 kg aprox**. Perfecto para sentadilla, press banca, peso muerto y press militar. El rack te cubre para entrenar solo con seguridad.\n\n**Combo 2 — \"Compacto con mancuernas\" ≈ $699.900**\n- Mancuernas Ajustables 20 kg (par) — $119.990\n- Rack de Sentadillas Básico — $199.990\n- Barra Olímpica 15 kg — $89.990\n- Banco de Musculación Plegable — $79.990\n- 6 pares de Disco Olímpico 10 kg (60 kg de discos) — $209.940\n\n→ Más versátil si quieres trabajar también con mancuernas, aunque con un poco menos de peso en barra (75 kg en total).\n\nAmbos quedan calzados con el presupuesto, sin contar despacho. \n\n¿Cuál te tinca más? Y dime tu **comuna** para cotizarte el despacho real y te doy el total final 🚚"
+    ]
+  },
+  {
+    "scenarioId": "H0-12",
+    "category": "shipping_after_selection",
+    "turnCount": 2,
+    "totalElapsedMs": 12183,
+    "toolCalls": 4,
+    "toolNames": [
+      "search_products",
+      "get_customer_context",
+      "get_purchase_history",
+      "get_shipping_options"
+    ],
+    "modelSteps": 5,
+    "inputTokens": 560,
+    "outputTokens": 777,
+    "reasoningTokens": 318,
+    "cacheReadTokens": 5248,
+    "finalResponses": [
+      "¡Hola! Encontré justo lo que buscas en nuestro catálogo. 💪\n\n**Barra Olímpica 15kg**\n- 🏋️ Barra olímpica cromada de 15kg\n- 📏 Largo: 220cm\n- 💰 Precio: **$89.990 CLP**\n- ✅ Disponible (12 unidades en stock)\n\n¿Te interesa llevártela? Si quieres, puedo cotizarte el despacho a tu comuna. ¿Me confirmas a qué comuna de Chile sería el envío?",
+      "Hola, intenté cotizar el despacho a Concepción, pero el sistema de despacho no está respondiendo en este momento. 😕\n\nNo quiero darte un valor inventado, así que te propongo dos opciones:\n\n1. **Reintentar en unos minutos** y te paso la cotización apenas el sistema esté disponible.\n2. **Dejarme tus datos** (nombre y comuna exacta) para que un ejecutivo te contacte con el costo de envío.\n\nMientras tanto, recuerda que la **Barra Olímpica 15kg** está en $89.990 CLP y tenemos stock disponible. ¿Cómo prefieres avanzar?"
+    ]
+  },
+  {
+    "scenarioId": "H0-13",
+    "category": "product_change_after_shipping",
+    "turnCount": 3,
+    "totalElapsedMs": 13916,
+    "toolCalls": 3,
+    "toolNames": [
+      "search_products",
+      "get_shipping_options",
+      "search_products"
+    ],
+    "modelSteps": 6,
+    "inputTokens": 1028,
+    "outputTokens": 932,
+    "reasoningTokens": 310,
+    "cacheReadTokens": 6528,
+    "finalResponses": [
+      "¡Hola! En PesasChile tenemos justo lo que buscas 😊\n\n🏋️ **Barra Olímpica 15kg**\n- Barra olímpica cromada de 15 kg, 220 cm\n- Precio: **$89.990 CLP**\n- Disponible: Sí, con stock (12 unidades)\n\n¿Te gustaría que te cotice el despacho? Para eso necesito saber a qué comuna vas a enviarla. ¿Algo más que quieras saber sobre la barra?",
+      "Hola 🙌 Te tengo una mala noticia: al consultar el despacho a Concepción, el sistema del transportista no respondió correctamente, así que **no puedo darte un valor exacto en este momento** y no quiero inventarte un número.\n\nTe propongo dos opciones:\n1. **Reintentar en unos minutos** — a veces es un problema transitorio del carrier.\n2. **Dejar tu consulta tomada** para que te contactemos apenas el sistema esté disponible con el costo real de despacho.\n\n¿Cómo prefieres seguir? También puedo ayudarte con cualquier otra duda sobre la barra mientras tanto 😊",
+      "Te revisé el catálogo completo de barras y te cuento la situación 😅\n\nActualmente solo tenemos **dos barras olímpicas** en stock:\n\n| Producto | Precio |\n|---|---|\n| **Barra Olímpica 15kg** (la que viste) | $89.990 |\n| Barra Olímpica 20kg (uso competencia) | $129.990 |\n\nLamentablemente, **la barra de 15 kg es la más económica** que manejamos, así que no hay una opción más barata dentro de las barras.\n\n¿Quieres que busquemos otra alternativa dentro de tu presupuesto? Por ejemplo, puedo revisar **discos, mancuernas o kits de pesas** que te sirvan para entrenar. ¿Qué te parece?"
+    ]
+  },
+  {
+    "scenarioId": "H0-14",
+    "category": "catalog_no_match",
+    "turnCount": 1,
+    "totalElapsedMs": 9249,
+    "toolCalls": 7,
+    "toolNames": [
+      "search_products",
+      "get_customer_context",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products"
+    ],
+    "modelSteps": 5,
+    "inputTokens": 932,
+    "outputTokens": 733,
+    "reasoningTokens": 251,
+    "cacheReadTokens": 5120,
+    "finalResponses": [
+      "Hola 👋 Te cuento que revisé nuestro catálogo buscando cintas de correr eléctricas plegables con inclinación motorizada y **lamentablemente no tenemos ese producto en stock** en este momento.\n\nIntenté buscar por varios términos (cinta de correr, caminadora, trotadora, cardio) y no apareció ningún resultado en nuestro sistema.\n\nNuestro catálogo está enfocado principalmente en equipamiento de musculación y gimnasio en casa. Si te interesa, puedo ayudarte a buscar algo como:\n\n- 🏋️ **Barras y mancuernas**\n- 🛋️ **Bancas de pesas**\n- 💪 **Máquinas de fuerza / multifuerza**\n- 🏠 **Equipos compactos para el hogar**\n\n¿Qué otro tipo de equipo estás buscando? Con gusto lo reviso por ti. 😊"
+    ]
+  },
+  {
+    "scenarioId": "H0-15",
+    "category": "catalog_unavailable",
+    "turnCount": 1,
+    "totalElapsedMs": 5092,
+    "toolCalls": 2,
+    "toolNames": [
+      "search_products",
+      "get_customer_context"
+    ],
+    "modelSteps": 2,
+    "inputTokens": 123,
+    "outputTokens": 382,
+    "reasoningTokens": 118,
+    "cacheReadTokens": 1408,
+    "finalResponses": [
+      "¡Hola! Claro que sí, te puedo ayudar con eso 💪\n\nLamentablemente en este momento el catálogo de PesasChile está presentando una falla y no logro acceder a las barras olímpicas disponibles. No quiero darte información inventada sobre modelos, precios o stock.\n\n**¿Qué te propongo?** Inténtalo de nuevo en unos minutos y con gusto te muestro las opciones de barras olímpicas que tenemos.\n\nMientras tanto, ¿me ayudas con un par de datos para que cuando se restablezca el sistema te dé una recomendación más precisa?\n\n1. ¿Qué uso le darás? (peso muerto, sentadilla, press, o entrenamiento general)\n2. ¿Tienes discos olímpicos de 50 mm o estás empezando desde cero?\n\nQuedo atento a tu respuesta 🙌"
+    ]
+  },
+  {
+    "scenarioId": "H0-16",
+    "category": "customer_profile_unavailable",
+    "turnCount": 1,
+    "totalElapsedMs": 8870,
+    "toolCalls": 4,
+    "toolNames": [
+      "get_customer_context",
+      "get_purchase_history",
+      "search_products",
+      "search_products"
+    ],
+    "modelSteps": 3,
+    "inputTokens": 859,
+    "outputTokens": 789,
+    "reasoningTokens": 252,
+    "cacheReadTokens": 2432,
+    "finalResponses": [
+      "No encontré tu historial, pero igual te dejo algunas opciones súper populares en PesasChile para que te hagas una idea 😊\n\n**🏋️ Opciones recomendadas:**\n\n1. **Mancuerna Ajustable 20kg (par)** — $119.990\n   - Regulable de 2 a 20kg, ideal si quieres versatilidad sin llenarte de discos. ¡Tenemos 8 disponibles!\n\n2. **Barra Olímpica 20kg** — $129.990\n   - Cromada, 220cm, uso competencia. La favorita para entrenamiento serio.\n\n3. **Barra Olímpica 15kg** — $89.990\n   - Cromada, 220cm. Buena opción si estás partiendo o prefieres menos peso base.\n\n¿Alguna te llama la atención? Si me cuentas tu **objetivo** y **presupuesto**, te puedo recomendar algo más específico (mancuernas + discos, banco, rack, etc.). También te puedo cotizar el **despacho** si me dices tu comuna 😉"
+    ]
+  },
+  {
+    "scenarioId": "H0-17",
+    "category": "mid_conversation_intent_change",
+    "turnCount": 2,
+    "totalElapsedMs": 7655,
+    "toolCalls": 2,
+    "toolNames": [
+      "search_products",
+      "get_customer_context"
+    ],
+    "modelSteps": 3,
+    "inputTokens": 328,
+    "outputTokens": 664,
+    "reasoningTokens": 350,
+    "cacheReadTokens": 2688,
+    "finalResponses": [
+      "¡Hola! Claro, te ayudo con eso. 😊\n\nEncontré en nuestro catálogo la **Barra Olímpica 15kg**, que coincide justo con lo que buscas:\n\n🏋️ **Barra Olímpica 15kg**\n- Cromada, 220 cm de largo\n- Precio: **$89.990**\n- Disponibilidad: **En stock** (12 unidades disponibles)\n\n¿Te interesa? Si quieres, puedo cotizarte el **despacho a tu comuna** para que sepas el costo total. ¿Me confirmas a qué comuna sería el envío?",
+      "¡Buena pregunta! Sí, hacemos **despacho a regiones**, no solo a Santiago. 🇨🇱\n\nPara darte un valor exacto y real del despacho, puedo consultar la cotización según tu comuna, el peso del producto y el total del pedido. \n\nDéjame saber **a qué comuna y región** sería el envío y te paso el costo del despacho de la Barra Olímpica de 15kg. 🙌"
+    ]
+  },
+  {
+    "scenarioId": "H0-18",
+    "category": "broad_consultative_question",
+    "turnCount": 1,
+    "totalElapsedMs": 15317,
+    "toolCalls": 13,
+    "toolNames": [
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "search_products",
+      "get_customer_context",
+      "get_purchase_history",
+      "search_products",
+      "search_products",
+      "search_products"
+    ],
+    "modelSteps": 4,
+    "inputTokens": 2094,
+    "outputTokens": 1497,
+    "reasoningTokens": 518,
+    "cacheReadTokens": 6144,
+    "finalResponses": [
+      "¡Perfecto! Para un depto chico lo clave es **equipamiento compacto, plegable y que no ocupe espacio de más**. Esto es lo que tenemos disponible en PesasChile y te serviría para partir:\n\n**🟢 El combo ideal para partir (compacto):**\n1. **Mancuerna Ajustable 20kg (par)** – $119.990\n   La mejor inversión para espacio reducido: reemplaza de 2 a 20kg por mancuerna, así no necesitas un rack lleno de pesas. Hay 8 unidades en stock.\n2. **Banco de Musculación Plegable** – $79.990\n   Ajustable multiposición y se pliega, ideal para guardarlo cuando no lo uses. Hay 5 en stock.\n\nCon eso dos ya armas un excelente entrenamiento de full body en un rincón del depto.\n\n**🟡 Si quieres ir un paso más allá (o tienes algo más de espacio):**\n3. **Rack de Sentadillas Básico** – $199.990\n   Para sentadillas y press con barra. Es más voluminoso, así que evalúa el espacio. Quedan 3 unidades.\n4. **Barra Olímpica 15kg** – $89.990 + **Discos Olímpicos 10kg (par)** – $34.990\n   Si decides sumar el rack, estos son el complemento natural.\n\n**Mi recomendación para partir en un depto chico:** las mancuernas ajustables + el banco plegable. Son súper versátiles y no te vas a arrepentir por el espacio.\n\n¿Te interesa alguno? Si quieres, te calculo el **despacho a tu comuna** y vemos costos de envío. Solo dime a qué comuna te lo enviaríamos y cuál combo te tinca 🙌"
+    ]
+  },
+  {
+    "scenarioId": "H0-19",
+    "category": "return_to_earlier_goal",
+    "turnCount": 3,
+    "totalElapsedMs": 13280,
+    "toolCalls": 3,
+    "toolNames": [
+      "search_products",
+      "search_products",
+      "search_products"
+    ],
+    "modelSteps": 5,
+    "inputTokens": 707,
+    "outputTokens": 1160,
+    "reasoningTokens": 467,
+    "cacheReadTokens": 5888,
+    "finalResponses": [
+      "¡Hola! Encontré exactamente lo que buscas en nuestro catálogo:\n\n🏋️ **Barra Olímpica 15kg**\n- Barra olímpica cromada, 220 cm\n- Precio: **$89.990 CLP**\n- Disponibilidad: **En stock** (12 unidades disponibles)\n\n¿Te interesa? Si quieres, puedo cotizarte el despacho. ¿A qué comuna te lo tendríamos que enviar? Así te digo el costo de envío según el destino. 😊",
+      "Hola de nuevo! 😊\n\nBuena pregunta. Lamentablemente, desde esta herramienta de WhatsApp no tengo acceso a información sobre tiendas físicas ni sucursales, así que no te puedo confirmar si tenemos tienda en Santiago sin arriesgarme a darte datos incorrectos.\n\nLo que sí te recomiendo:\n\n- Revisar la sección de **\"Sucursales\" o \"Contacto\"** en nuestra página web, donde debería aparecer la información oficial de tiendas físicas.\n- O escribirnos por otro canal oficial (formulario de contacto o redes sociales) para que te confirmen.\n\nMientras tanto, si te sirve, **todo lo que manejamos por aquí es con despacho a domicilio** y puedo cotizarte el envío de la Barra Olímpica de 15kg ($89.990) al tiro. ¿A qué comuna te la enviaríamos? 🙌",
+      "¡Perfecto! Te agrego los discos que encontré en el catálogo:\n\n🛢️ **Disco Olímpico 10kg**\n- Disco de goma para barra olímpica\n- Se vende como **par** (2 discos de 10kg)\n- Precio: **$34.990 CLP** por par\n- Disponibilidad: **En stock**\n\nAsí quedaría tu pedido con la barra:\n\n| Producto | Precio |\n|---|---|\n| Barra Olímpica 15kg | $89.990 |\n| Disco Olímpico 10kg (par) | $34.990 |\n| **Subtotal** | **$124.980** |\n\n⚠️ Ojo: como los discos se venden por **par**, ¿cuántos pares quieres? (1 par = 2 discos, 2 pares = 4 discos, etc.)\n\nY dime la comuna de despacho para cotizarte el envío. 💪"
+    ]
+  },
+  {
+    "scenarioId": "H0-20",
+    "category": "duplicate_repeated_message",
+    "turnCount": 2,
+    "totalElapsedMs": 9006,
+    "toolCalls": 2,
+    "toolNames": [
+      "search_products",
+      "get_customer_context"
+    ],
+    "modelSteps": 3,
+    "inputTokens": 414,
+    "outputTokens": 845,
+    "reasoningTokens": 495,
+    "cacheReadTokens": 2688,
+    "finalResponses": [
+      "¡Hola! Te encontré justo lo que buscas 😊\n\n**Disco Olímpico 10kg** (goma para barra olímpica)\n- 💰 Precio: **$34.990** (por **par**, es decir, incluye 2 discos de 10kg)\n- ✅ Stock disponible: 40 unidades\n\nAsí que con **1 par** ya tienes tus 2 discos de 10kg. \n\n¿Quieres que te cotice el despacho? Solo necesito saber tu **comuna** para calcular el envío. También si tienes dudas del producto, dime nomás 🙌",
+      "Claro, te confirmo cómo funciona para que no queden dudas 😄\n\nEl **Disco Olímpico 10kg** se vende **por par** a **$34.990**. O sea, cuando compras 1 par, ya recibes **tus 2 discos de 10kg**. No necesitas comprar 2 unidades.\n\nEntonces tu pedido sería:\n- **1 par de Discos Olímpicos 10kg** → $34.990\n\n¿Te sirve así? Si quieres, te cotizo el despacho: dime tu **comuna** y te calculo el envío 🙌"
+    ]
+  }
+]

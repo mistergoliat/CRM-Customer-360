@@ -1,0 +1,512 @@
+[
+  {
+    "scenarioId": "H0-01",
+    "category": "simple_product_search",
+    "turnCount": 1,
+    "totalElapsedMs": 19613,
+    "llmCalls": 1,
+    "inputTokens": 2947,
+    "outputTokens": 2370,
+    "reasoningTokens": 2342,
+    "outcomes": [
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "unsupported",
+          "description": "Pregunta por disponibilidad de barra olimpica"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-02",
+    "category": "ambiguous_product",
+    "turnCount": 1,
+    "totalElapsedMs": 5589,
+    "llmCalls": 1,
+    "inputTokens": 2945,
+    "outputTokens": 700,
+    "reasoningTokens": 677,
+    "outcomes": [
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "barra olimpica"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-03",
+    "category": "product_comparison",
+    "turnCount": 2,
+    "totalElapsedMs": 18845,
+    "llmCalls": 2,
+    "inputTokens": 5892,
+    "outputTokens": 2357,
+    "reasoningTokens": 2294,
+    "outcomes": [
+      "valid",
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "unsupported",
+          "description": "Customer asks about the difference between two barbells, which is not a supported commercial intent."
+        }
+      ],
+      [
+        {
+          "type": "customer_aware_recommendation",
+          "queryHint": "si entreno fuerza cuatro veces por semana"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-04",
+    "category": "customer_correction",
+    "turnCount": 2,
+    "totalElapsedMs": 21859,
+    "llmCalls": 2,
+    "inputTokens": 5878,
+    "outputTokens": 2869,
+    "reasoningTokens": 2803,
+    "outcomes": [
+      "valid",
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "barra olimpica de 15kg",
+          "quantity": 1
+        },
+        {
+          "type": "get_shipping_quote",
+          "destination": "Providencia"
+        }
+      ],
+      [
+        {
+          "type": "get_shipping_quote",
+          "destination": "Nunoa"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-05",
+    "category": "quantity_correction",
+    "turnCount": 2,
+    "totalElapsedMs": 11638,
+    "llmCalls": 2,
+    "inputTokens": 5865,
+    "outputTokens": 1454,
+    "reasoningTokens": 1396,
+    "outcomes": [
+      "valid",
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "disco olimpico de 10kg",
+          "quantity": 1
+        }
+      ],
+      [
+        {
+          "type": "unsupported",
+          "description": "Customer requests 'send me 4' without specifying a product."
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-06",
+    "category": "product_replacement_after_selection",
+    "turnCount": 2,
+    "totalElapsedMs": 26134,
+    "llmCalls": 2,
+    "inputTokens": 2940,
+    "outputTokens": 790,
+    "reasoningTokens": 763,
+    "outcomes": [
+      "valid",
+      "timeout"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "barra olimpica de 20kg"
+        }
+      ],
+      null
+    ]
+  },
+  {
+    "scenarioId": "H0-07",
+    "category": "multi_product_request",
+    "turnCount": 1,
+    "totalElapsedMs": 20052,
+    "llmCalls": 1,
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "reasoningTokens": 0,
+    "outcomes": [
+      "timeout"
+    ],
+    "plans": [
+      null
+    ]
+  },
+  {
+    "scenarioId": "H0-08",
+    "category": "customer_aware_recommendation",
+    "turnCount": 1,
+    "totalElapsedMs": 1236,
+    "llmCalls": 1,
+    "inputTokens": 2932,
+    "outputTokens": 61,
+    "reasoningTokens": 43,
+    "outcomes": [
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "customer_aware_recommendation"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-09",
+    "category": "repeat_purchase_like_request",
+    "turnCount": 1,
+    "totalElapsedMs": 2294,
+    "llmCalls": 1,
+    "inputTokens": 2930,
+    "outputTokens": 193,
+    "reasoningTokens": 179,
+    "outcomes": [
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "repeat_purchase"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-10",
+    "category": "long_conversation",
+    "turnCount": 7,
+    "totalElapsedMs": 75468,
+    "llmCalls": 7,
+    "inputTokens": 11739,
+    "outputTokens": 1748,
+    "reasoningTokens": 1648,
+    "outcomes": [
+      "timeout",
+      "valid",
+      "valid",
+      "valid",
+      "valid",
+      "timeout",
+      "timeout"
+    ],
+    "plans": [
+      null,
+      [
+        {
+          "type": "select_products",
+          "productReference": "barra olimpica"
+        }
+      ],
+      [
+        {
+          "type": "select_products",
+          "productReference": "Barra Olimpica 15kg",
+          "quantity": 1
+        }
+      ],
+      [
+        {
+          "type": "select_products",
+          "productReference": "Disco Olimpico 10kg"
+        }
+      ],
+      [
+        {
+          "type": "get_shipping_quote",
+          "destination": "Concepcion"
+        }
+      ],
+      null,
+      null
+    ]
+  },
+  {
+    "scenarioId": "H0-11",
+    "category": "budget_constrained_recommendation",
+    "turnCount": 1,
+    "totalElapsedMs": 6572,
+    "llmCalls": 1,
+    "inputTokens": 2938,
+    "outputTokens": 780,
+    "reasoningTokens": 748,
+    "outcomes": [
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "customer_aware_recommendation",
+          "queryHint": "armar un home gym con 700 lucas"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-12",
+    "category": "shipping_after_selection",
+    "turnCount": 2,
+    "totalElapsedMs": 5675,
+    "llmCalls": 2,
+    "inputTokens": 5867,
+    "outputTokens": 493,
+    "reasoningTokens": 441,
+    "outcomes": [
+      "valid",
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "barra olimpica de 15kg",
+          "quantity": 1
+        }
+      ],
+      [
+        {
+          "type": "get_shipping_quote",
+          "destination": "Concepcion"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-13",
+    "category": "product_change_after_shipping",
+    "turnCount": 3,
+    "totalElapsedMs": 31412,
+    "llmCalls": 3,
+    "inputTokens": 5867,
+    "outputTokens": 1050,
+    "reasoningTokens": 1001,
+    "outcomes": [
+      "valid",
+      "valid",
+      "timeout"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "barra olimpica de 15kg"
+        }
+      ],
+      [
+        {
+          "type": "get_shipping_quote",
+          "destination": "Concepcion"
+        }
+      ],
+      null
+    ]
+  },
+  {
+    "scenarioId": "H0-14",
+    "category": "catalog_no_match",
+    "turnCount": 1,
+    "totalElapsedMs": 17467,
+    "llmCalls": 1,
+    "inputTokens": 2938,
+    "outputTokens": 1866,
+    "reasoningTokens": 1847,
+    "outcomes": [
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "unsupported",
+          "description": "Product availability inquiry"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-15",
+    "category": "catalog_unavailable",
+    "turnCount": 1,
+    "totalElapsedMs": 5715,
+    "llmCalls": 1,
+    "inputTokens": 2927,
+    "outputTokens": 637,
+    "reasoningTokens": 614,
+    "outcomes": [
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "barra olimpica"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-16",
+    "category": "customer_profile_unavailable",
+    "turnCount": 1,
+    "totalElapsedMs": 2018,
+    "llmCalls": 1,
+    "inputTokens": 2932,
+    "outputTokens": 160,
+    "reasoningTokens": 142,
+    "outcomes": [
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "customer_aware_recommendation"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-17",
+    "category": "mid_conversation_intent_change",
+    "turnCount": 2,
+    "totalElapsedMs": 10960,
+    "llmCalls": 2,
+    "inputTokens": 5876,
+    "outputTokens": 1228,
+    "reasoningTokens": 1185,
+    "outcomes": [
+      "valid",
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "barra olimpica de 15kg"
+        }
+      ],
+      [
+        {
+          "type": "get_shipping_quote"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-18",
+    "category": "broad_consultative_question",
+    "turnCount": 1,
+    "totalElapsedMs": 14190,
+    "llmCalls": 1,
+    "inputTokens": 2936,
+    "outputTokens": 1810,
+    "reasoningTokens": 1776,
+    "outcomes": [
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "customer_aware_recommendation",
+          "queryHint": "armar mi primer home gym en un depto chico"
+        }
+      ]
+    ]
+  },
+  {
+    "scenarioId": "H0-19",
+    "category": "return_to_earlier_goal",
+    "turnCount": 3,
+    "totalElapsedMs": 28868,
+    "llmCalls": 3,
+    "inputTokens": 5874,
+    "outputTokens": 1069,
+    "reasoningTokens": 1018,
+    "outcomes": [
+      "valid",
+      "valid",
+      "timeout"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "barra olimpica de 15kg"
+        }
+      ],
+      [
+        {
+          "type": "unsupported",
+          "description": "tienen tienda fisica en Santiago"
+        }
+      ],
+      null
+    ]
+  },
+  {
+    "scenarioId": "H0-20",
+    "category": "duplicate_repeated_message",
+    "turnCount": 2,
+    "totalElapsedMs": 7633,
+    "llmCalls": 2,
+    "inputTokens": 5882,
+    "outputTokens": 854,
+    "reasoningTokens": 794,
+    "outcomes": [
+      "valid",
+      "valid"
+    ],
+    "plans": [
+      [
+        {
+          "type": "select_products",
+          "productReference": "discos olimpicos de 10kg",
+          "quantity": 2
+        }
+      ],
+      [
+        {
+          "type": "select_products",
+          "productReference": "discos olimpicos de 10kg",
+          "quantity": 2
+        }
+      ]
+    ]
+  }
+]
