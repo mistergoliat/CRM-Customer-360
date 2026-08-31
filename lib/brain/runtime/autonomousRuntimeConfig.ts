@@ -65,6 +65,17 @@ export function loadCommercialWorkRuntimeAllowlist(env: NodeJS.ProcessEnv = proc
 }
 
 /**
+ * SALES-AGENT-R3-V1.4. BRAIN_SALES_AGENT_RUNTIME_WA_IDS, digit-normalized
+ * and deduped - a dedicated allowlist for the SalesAgentRuntime (R3) pilot
+ * routing gate, independent of every other allowlist in this file (pilot,
+ * CommercialWork). Empty means "nobody routed", same fail-closed semantics
+ * as loadCommercialWorkRuntimeAllowlist above.
+ */
+export function loadSalesAgentRuntimeAllowlist(env: NodeJS.ProcessEnv = process.env): string[] {
+  return readWaIdAllowlist("BRAIN_SALES_AGENT_RUNTIME_WA_IDS", env);
+}
+
+/**
  * Whether waId is authorized to receive any autonomous side effect (LLM
  * call, action creation, follow-up claim, outbox claim, Meta send) during
  * the pilot. An empty allowlist means no restriction is configured (normal

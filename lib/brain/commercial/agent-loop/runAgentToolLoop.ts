@@ -19,6 +19,8 @@ import { resolveObservedRecommendationSourceProduct } from "./resolveObservedRec
 import { checkUnbackedCommercialMutationClaim } from "./commercialMutationClaims";
 import { buildCommercialActionRequestFromAtlStep } from "../commercial-action-request/atlAdapter";
 import { executeCommercialActionRequest } from "../commercial-action-request/executeCommercialActionRequest";
+import { ensureCommercialActionOpportunity } from "../commercial-action-request/ensureCommercialActionOpportunity";
+import type { EnsureCommercialActionOpportunityInput, EnsureCommercialActionOpportunityResult } from "../commercial-action-request/ensureCommercialActionOpportunity";
 
 /**
  * ACS-R1-05.1-T02.1 (spec section 5). Fixed, backend-owned pool - never
@@ -117,6 +119,8 @@ export type RunAgentToolLoopInput = {
   abortSignal?: AbortSignal | null;
   /** Defaults to the generic safe default (no PesasChile branding) - production callers always resolve and pass the effective one (ACS-R1-05.1-T02.3B). */
   identityConfiguration?: SalesAgentPromptConfiguration;
+  /** SALES-AGENT-R3-V1.2. Test-only injection point; production callers never set this (defaults to the real, MariaDB-backed ensureCommercialActionOpportunity). */
+  ensureOpportunity?: (input: EnsureCommercialActionOpportunityInput) => Promise<EnsureCommercialActionOpportunityResult>;
 };
 
 /**
@@ -386,6 +390,8 @@ async function processUseToolStep(
   gatewayContext: CapabilityGatewayContext,
   warnings: string[],
   inboundMessageId: string | null,
+  currentTime: string,
+  ensureOpportunity: (input: EnsureCommercialActionOpportunityInput) => Promise<EnsureCommercialActionOpportunityResult>,
   continuity: {
     recentCatalogContext: RecentCatalogContext | null;
     toolObservationsThisTurn: ToolObservation[];
@@ -521,6 +527,50 @@ async function processUseToolStep(
 
   let gatewayResult: CapabilityGatewayResult;
   if (exposure === "COMMERCIAL_ACTION") {
+    // SALES-AGENT-R3-V1.2. Lazy opportunity resolution: the one shared seam
+    // for every mutating tool, ahead of building the CommercialActionRequest.
+    // An already-known opportunityId is reused as-is (no DB round trip); a
+    // missing one is resolved/created exactly once via resolveRuntimeOpportunity
+    // (R3-V1.1) - never inside a capability, never inside the Capability
+    // Gateway. The READ_TOOL branch below never reaches this code, so a pure
+    // browsing turn never creates an opportunity.
+    const ensuredOpportunity = await ensureOpportunity({
+      conversationId: gatewayContext.conversationId ?? null,
+      existingOpportunityId: typeof gatewayContext.opportunityId === "number" ? gatewayContext.opportunityId : null,
+      trustedCustomerSession: gatewayContext.trustedCustomerSession,
+      correlationId: gatewayContext.correlationId,
+      currentTime
+    });
+
+    if (!ensuredOpportunity.ok) {
+      // Infrastructure failure, never a fabricated business denial - a
+      // distinct errorCode from the capability's own "no_active_opportunity"
+      // (which means the resolver ran successfully and genuinely found
+      // nothing active). Never reaches executeCommercialActionRequest/the
+      // Gateway - the request is never built, so it cannot execute.
+      // executed:true (unlike the evidence-gate/dedupe blocks above, which
+      // are pure client-side gating with zero backend interaction): a real
+      // resolution attempt was made and failed, the same budget-accounting
+      // treatment this loop already gives a capability-level "denied" -
+      // matches the pre-existing convention that only a call rejected before
+      // any real attempt (invalid_arguments, duplicate, unregistered,
+      // evidence-blocked) is free of budget cost.
+      warnings.push(`agent_loop_opportunity_unavailable:${step.tool}:${ensuredOpportunity.reason}`);
+      return {
+        step: enrichedStep,
+        governance: "authorized",
+        observation: { tool: step.tool, status: "failed", errorCode: "opportunity_unavailable" },
+        executed: true
+      };
+    }
+
+    // Propagated onto the shared, turn-scoped gatewayContext: this is what
+    // executeCommercialActionRequest -> executeGovernedCapability actually
+    // reads as context.opportunityId (never re-derived from the request
+    // object), and what a second mutating tool call later in the SAME turn
+    // will see as `existingOpportunityId` above - one resolution per turn.
+    gatewayContext.opportunityId = ensuredOpportunity.opportunityId;
+
     // Never a rewrite of this function, only this branch's call site: every
     // check above (dedupe, catalog/selection evidence) still runs first,
     // unchanged, and executeGovernedCapability remains the one place a side
@@ -528,7 +578,7 @@ async function processUseToolStep(
     const commercialActionRequest = buildCommercialActionRequestFromAtlStep({
       step: enrichedStep,
       conversationId: gatewayContext.conversationId ?? null,
-      opportunityId: typeof gatewayContext.opportunityId === "number" ? gatewayContext.opportunityId : null,
+      opportunityId: ensuredOpportunity.opportunityId,
       correlationId: gatewayContext.correlationId,
       inboundMessageId
     });
@@ -591,6 +641,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   const maxToolExecutions = input.maxToolExecutions ?? DEFAULT_MAX_TOOL_EXECUTIONS;
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const identityConfiguration = input.identityConfiguration ?? SALES_AGENT_CONFIGURATION_SAFE_DEFAULT;
+  const ensureOpportunity = input.ensureOpportunity ?? ensureCommercialActionOpportunity;
   const deadline = Date.now() + timeoutMs;
   const warnings: string[] = [];
 
@@ -831,7 +882,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     }
 
     const toolObservationsThisTurn = steps.map((record) => record.observation).filter((observation): observation is ToolObservation => observation !== null);
-    const result = await processUseToolStep(step, input.commercialContextSummary, executedCalls, gatewayContext, warnings, input.inboundMessageId ?? null, {
+    const result = await processUseToolStep(step, input.commercialContextSummary, executedCalls, gatewayContext, warnings, input.inboundMessageId ?? null, input.currentTime, ensureOpportunity, {
       recentCatalogContext: input.recentCatalogContext ?? null,
       toolObservationsThisTurn,
       activeRecommendationPendingAction: recommendationPendingActionConsumed ? null : activeRecommendationPendingAction

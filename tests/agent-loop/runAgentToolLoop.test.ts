@@ -8,6 +8,7 @@ import { createFakeAgentLoopProvider } from "@/lib/brain/commercial/agent-loop/p
 import type { AgentLoopProvider } from "@/lib/brain/commercial/agent-loop/agentLoopProviderTypes";
 import { resetCapabilityGatewayCatalogPortForTests } from "@/lib/brain/commercial/capability-gateway/registry";
 import { markAgentLoopProviderFailure } from "@/lib/brain/commercial/agent-loop/providers/providerFailureClassification";
+import type { EnsureCommercialActionOpportunityInput } from "@/lib/brain/commercial/commercial-action-request/ensureCommercialActionOpportunity";
 
 // LLM-R1-T08D. Same local dev DB credentials tests/commercial/selectProductsCapability.test.ts
 // already establishes - node:test loads every matched file into one process,
@@ -34,6 +35,52 @@ Object.assign(process.env, {
 
 function uniqueOpportunityId() {
   return 830000000 + Math.floor(Math.random() * 9999999);
+}
+
+let conversationSeq = Date.now();
+function uniqueConversationId() {
+  conversationSeq += 1;
+  return conversationSeq;
+}
+
+async function countOpportunitiesForConversation(conversationId: number) {
+  const [rows] = await getPool().execute("SELECT id FROM crm_opportunities WHERE conversation_case_id = ?", [String(conversationId)]);
+  return (rows as unknown[]).length;
+}
+
+async function opportunityIdForConversation(conversationId: number) {
+  const [rows] = await getPool().execute(
+    "SELECT id FROM crm_opportunities WHERE conversation_case_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+    [String(conversationId)]
+  );
+  const row = (rows as Array<{ id: number }>)[0];
+  return row ? row.id : null;
+}
+
+function level0SessionForOpportunityTests(): NonNullable<Parameters<typeof runAgentToolLoop>[0]["trustedCustomerSession"]> {
+  return {
+    conversationId: "conv-r3v12",
+    opportunityId: null,
+    trustedInbound: { channel: "whatsapp", externalId: "56900001111", normalizedPhone: "56900001111", messageId: "wamid.r3v12", receivedAt: "2026-08-31T12:00:00.000Z" },
+    identity: { status: "anonymous", customerId: null, source: "none", localResolutionOutcome: "anonymous", externalResolutionOutcome: null },
+    masterCustomerIdentity: { status: "identity_unresolved", reason: "identity_source_unsupported" },
+    runtimeIdentity: {
+      status: "ANONYMOUS",
+      identityLevel: "LEVEL_0_ANONYMOUS",
+      masterCustomerId: null,
+      prestashopCustomerId: null,
+      verificationRequired: false,
+      requiredEvidence: [],
+      readyToLink: false,
+      conflictCode: null,
+      policyCode: "NO_CHANNEL_EVIDENCE",
+      evidenceRefs: []
+    },
+    onboarding: null,
+    contextAccess: "none",
+    currentTurnConsent: { createCustomer: null, linkExternalIdentity: null, linkPrestashopIdentity: null },
+    freshExternalResolutionEvidence: null
+  };
 }
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
@@ -168,11 +215,44 @@ function catalogUpWithExplore(explorePayload: Record<string, unknown>, detailPay
   };
 }
 
+// SALES-AGENT-R3-V1.2. Before this task, opportunityId: null made every
+// mutating tool call short-circuit to "denied" purely in-memory, inside
+// selectProductsCapability.ts's own no_active_opportunity check - no DB
+// touched. Lazy opportunity resolution (runAgentToolLoop.ts's new
+// COMMERCIAL_ACTION branch) would otherwise call the real, MariaDB-backed
+// resolveRuntimeOpportunity for every one of those calls instead - this file
+// never opened that path before (see the file-level comment above) and must
+// not start doing so here, for the same reason: hundreds of tests below use
+// this exact fixture as a cheap, deterministic "the mutation did not
+// complete" scaffold for unrelated mechanisms (finalization recovery,
+// mutation-claim guard, budget/sequencing). Injecting a fake that always
+// reports "unavailable" (never touching the DB) preserves that scaffold
+// unchanged: the resulting tool observation is status "failed"/
+// "opportunity_unavailable" instead of the old "blocked"/"no_active_opportunity",
+// but every existing assertion here cares only about "select_products never
+// reached status completed" (see commercialMutationClaims.ts#backed), not
+// which specific denial code produced that. Tests that genuinely need a real,
+// completed mutation already override opportunityId with uniqueOpportunityId()
+// (see below) - ensureCommercialActionOpportunity treats a non-null
+// existingOpportunityId as already resolved and never calls this fake at all.
+async function testOpportunityUnavailable(input: EnsureCommercialActionOpportunityInput) {
+  // Mirrors the real ensureCommercialActionOpportunity's own "existing"
+  // short-circuit (a test that already overrides opportunityId, e.g. with
+  // uniqueOpportunityId() below, must still reach the Gateway with that real
+  // id) - only a genuinely missing opportunityId is reported unavailable,
+  // never touching the DB.
+  if (input.existingOpportunityId !== null) {
+    return { ok: true as const, opportunityId: input.existingOpportunityId, source: "existing" as const };
+  }
+  return { ok: false as const, reason: "test_fixture_opportunity_resolution_disabled" };
+}
+
 const baseInput = {
   correlationId: "corr-1",
   conversationId: 1,
   opportunityId: null,
-  currentTime: "2026-07-21T15:00:00.000Z"
+  currentTime: "2026-07-21T15:00:00.000Z",
+  ensureOpportunity: testOpportunityUnavailable
 };
 
 function createRecentCatalogReferenceProvider(): AgentLoopProvider {
@@ -1606,6 +1686,13 @@ test("select_products: an item observed via search_products this conversation cl
 
   const result = await runAgentToolLoop({
     ...baseInput,
+    // SALES-AGENT-R3-V1.2. This test's own point is the evidence gate, not
+    // opportunity resolution - a real, pre-known opportunityId (same pattern
+    // as the mutation-guard tests below) makes ensureCommercialActionOpportunity
+    // short-circuit to "existing" without ever calling baseInput's
+    // always-unavailable fake, so the call reaches the Gateway exactly as
+    // this test already asserts.
+    opportunityId: uniqueOpportunityId(),
     customerMessage: "quiero 2 del kettlebell",
     commercialContextSummary: {},
     recentCatalogContext: {
@@ -2889,4 +2976,221 @@ test("[T08E-6] duplicate tool protection is unchanged when maxToolExecutions=3",
   assert.equal(result.toolExecutionCount, 1);
   assert.equal(result.steps[1].governance, "blocked_duplicate");
   assert.equal(result.steps[1].observation?.errorCode, "duplicate_tool_call");
+});
+
+// --- SALES-AGENT-R3-V1.2: lazy opportunity resolution wired into the
+// COMMERCIAL_ACTION dispatch path. Every test below passes its own
+// conversationId (never the shared baseInput.conversationId: 1) and its own
+// ensureOpportunity override (real production default, not baseInput's
+// always-unavailable test fake) so it can assert on real crm_opportunities
+// rows without disturbing every other test in this file. ---
+
+test("[R3-V1.2] a READ_TOOL call never creates an opportunity, even with opportunityId null", async () => {
+  catalogUp(1);
+  const conversationId = uniqueConversationId();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "barra olimpica" } },
+      { type: "respond", message: "Tenemos barras olimpicas disponibles." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    conversationId,
+    ensureOpportunity: undefined,
+    customerMessage: "que barras olimpicas tienen?",
+    commercialContextSummary: {},
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 1);
+  assert.equal(await countOpportunitiesForConversation(conversationId), 0, "pure browsing must never create a durable opportunity");
+});
+
+test("[R3-V1.2] a COMMERCIAL_ACTION call with opportunityId null resolves/creates one lazily and the action completes", async () => {
+  catalogUp(1);
+  const conversationId = uniqueConversationId();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 1 }] } },
+      { type: "respond", message: "Listo, agregue el kettlebell." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    conversationId,
+    ensureOpportunity: undefined,
+    customerMessage: "quiero esa",
+    commercialContextSummary: {},
+    provider
+  });
+
+  assert.equal(await countOpportunitiesForConversation(conversationId), 1, "exactly one durable opportunity for this conversation");
+  const selectStep = result.steps.find((step) => step.step.type === "use_tool" && step.step.tool === "select_products");
+  assert.equal(selectStep?.observation?.status, "completed");
+});
+
+test("[R3-V1.2] a second turn on the same conversation reuses the opportunity created on the first turn - no duplicate row", async () => {
+  catalogUp(1);
+  const conversationId = uniqueConversationId();
+
+  const turn1 = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 1 }] } },
+      { type: "respond", message: "Listo, agregue el kettlebell." }
+    ]
+  });
+  await runAgentToolLoop({ ...baseInput, conversationId, ensureOpportunity: undefined, customerMessage: "quiero esa", commercialContextSummary: {}, provider: turn1 });
+
+  const firstOpportunityId = await opportunityIdForConversation(conversationId);
+  assert.notEqual(firstOpportunityId, null);
+
+  // Turn 2: a fresh runAgentToolLoop call, opportunityId null again (as a
+  // real caller would compute it fresh per turn from crm_opportunities) -
+  // never re-derived from turn 1's in-memory state.
+  const turn2 = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 2 }] } },
+      { type: "respond", message: "Listo, ahora son 2 unidades." }
+    ]
+  });
+  await runAgentToolLoop({ ...baseInput, conversationId, ensureOpportunity: undefined, customerMessage: "mejor 2", commercialContextSummary: {}, provider: turn2 });
+
+  assert.equal(await countOpportunitiesForConversation(conversationId), 1, "the second turn must reuse the same opportunity, never create a sibling");
+  assert.equal(await opportunityIdForConversation(conversationId), firstOpportunityId);
+});
+
+test("[R3-V1.2] opportunity unavailable blocks the CommercialActionRequest before the Gateway - never a fabricated no_active_opportunity denial", async () => {
+  catalogUp(1);
+  const conversationId = uniqueConversationId();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 1 }] } },
+      { type: "respond", message: "Listo, agregue el kettlebell." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    conversationId,
+    ensureOpportunity: async () => ({ ok: false, reason: "simulated_infrastructure_failure" }),
+    customerMessage: "quiero esa",
+    commercialContextSummary: {},
+    provider
+  });
+
+  const selectStep = result.steps.find((step) => step.step.type === "use_tool" && step.step.tool === "select_products");
+  assert.equal(selectStep?.observation?.status, "failed");
+  assert.equal(selectStep?.observation?.errorCode, "opportunity_unavailable");
+  assert.notEqual(selectStep?.observation?.errorCode, "no_active_opportunity", "an infrastructure failure must never be reported as the real business denial code");
+  assert.ok(result.warnings.some((warning) => warning.startsWith("agent_loop_opportunity_unavailable:select_products:")));
+  assert.equal(await countOpportunitiesForConversation(conversationId), 0, "a request that never reached executeCommercialActionRequest must never have created anything either");
+});
+
+test("[R3-V1.2] CREATE_QUOTE: lazy resolution still creates a durable opportunity, but the identity gate - not opportunity resolution - denies the mutation at LEVEL_0", async () => {
+  const conversationId = uniqueConversationId();
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "create_quote", arguments: {} },
+      { type: "respond", message: "Necesito verificar tu identidad antes de generar la cotizacion." }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    conversationId,
+    ensureOpportunity: undefined,
+    trustedCustomerSession: level0SessionForOpportunityTests(),
+    customerMessage: "hazme una cotizacion",
+    commercialContextSummary: {},
+    provider
+  });
+
+  // The opportunity resolution seam ran and succeeded independently of
+  // identity - creating an opportunity never implies any business authority
+  // (task brief Phase 9).
+  assert.equal(await countOpportunitiesForConversation(conversationId), 1);
+
+  const quoteStep = result.steps.find((step) => step.step.type === "use_tool" && step.step.tool === "create_quote");
+  assert.equal(quoteStep?.observation?.status, "blocked");
+  assert.equal(quoteStep?.observation?.errorCode, "master_identity_required");
+  assert.notEqual(quoteStep?.observation?.errorCode, "no_active_opportunity");
+});
+
+test("[R3-V1.2 E2E] one durable opportunity across a full browse -> select -> quote sequence, no intent/objective workflow needed", async () => {
+  catalogUp(1);
+  const conversationId = uniqueConversationId();
+
+  // Turn 1: pure product question. No commercial mutation, no opportunity.
+  const turn1 = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+      { type: "respond", message: "Tenemos el Kettlebell 16kg disponible." }
+    ]
+  });
+  const result1 = await runAgentToolLoop({
+    ...baseInput,
+    conversationId,
+    ensureOpportunity: undefined,
+    customerMessage: "que kettlebells tienen?",
+    commercialContextSummary: {},
+    provider: turn1
+  });
+  assert.equal(result1.toolExecutionCount, 1);
+  assert.equal(await countOpportunitiesForConversation(conversationId), 0, "turn 1: pure browsing creates nothing");
+
+  // Turn 2: customer chooses a product. A COMMERCIAL_ACTION with no prior
+  // opportunity - resolved/created lazily, exactly once, right here.
+  const turn2 = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "501", quantity: 1 }] } },
+      { type: "respond", message: "Listo, agregue el kettlebell." }
+    ]
+  });
+  const result2 = await runAgentToolLoop({
+    ...baseInput,
+    conversationId,
+    ensureOpportunity: undefined,
+    customerMessage: "quiero ese",
+    commercialContextSummary: {},
+    provider: turn2
+  });
+  assert.equal(await countOpportunitiesForConversation(conversationId), 1, "turn 2: exactly one opportunity now exists");
+  const selectStep = result2.steps.find((step) => step.step.type === "use_tool" && step.step.tool === "select_products");
+  assert.equal(selectStep?.observation?.status, "completed");
+  const opportunityAfterTurn2 = await opportunityIdForConversation(conversationId);
+
+  // Turn 3: customer asks to quote. Same opportunity reused (no third row,
+  // no second creation) - CREATE_QUOTE then reaches the real identity gate,
+  // which denies it at LEVEL_0 on its own merits, never on
+  // no_active_opportunity - proving identity authority was never bypassed by
+  // opportunity resolution across turns.
+  const turn3 = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "create_quote", arguments: {} },
+      { type: "respond", message: "Necesito verificar tu identidad antes de generar la cotizacion." }
+    ]
+  });
+  const result3 = await runAgentToolLoop({
+    ...baseInput,
+    conversationId,
+    ensureOpportunity: undefined,
+    trustedCustomerSession: level0SessionForOpportunityTests(),
+    customerMessage: "hazme una cotizacion",
+    commercialContextSummary: {},
+    provider: turn3
+  });
+
+  assert.equal(await countOpportunitiesForConversation(conversationId), 1, "turn 3: still exactly one opportunity - reused, not duplicated");
+  assert.equal(await opportunityIdForConversation(conversationId), opportunityAfterTurn2);
+  const quoteStep = result3.steps.find((step) => step.step.type === "use_tool" && step.step.tool === "create_quote");
+  assert.equal(quoteStep?.observation?.status, "blocked");
+  assert.equal(quoteStep?.observation?.errorCode, "master_identity_required");
 });

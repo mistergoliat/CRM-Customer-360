@@ -34,3 +34,6 @@ export { executeCommercialActionRequest } from "./executeCommercialActionRequest
 
 export type { AtlCommercialActionRequestSourceInput } from "./atlAdapter";
 export { buildCommercialActionRequestFromAtlStep } from "./atlAdapter";
+
+export type { EnsureCommercialActionOpportunityInput, EnsureCommercialActionOpportunityResult } from "./ensureCommercialActionOpportunity";
+export { ensureCommercialActionOpportunity } from "./ensureCommercialActionOpportunity";
