@@ -52,3 +52,15 @@ export function buildToolEventDedupeKey(
 ): string {
   return `session:${sessionId}:tool:${inboundMessageId.trim()}:${stepIndex}:${tool.trim()}:${eventType}`;
 }
+
+/**
+ * SALES-AGENT-R3-A03. One event per (session, CommercialActionRequest,
+ * eventType) - requestId is already a deterministic, replay-stable id
+ * (commercial-action-request/requestIdentity.ts), so a genuine crash/retry
+ * that recomputes the same requestId also recomputes the same dedupe key,
+ * making a repeated REQUESTED/ACCEPTED/REJECTED/COMPLETED/FAILED emission a
+ * no-op rather than a duplicate row.
+ */
+export function buildCommercialActionRequestDedupeKey(sessionId: string, requestId: string, eventType: string): string {
+  return `session:${sessionId}:commercial_action_request:${requestId.trim()}:${eventType}`;
+}

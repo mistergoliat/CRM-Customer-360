@@ -549,6 +549,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     opportunityId,
     currentTime: input.currentTime,
     customerMessage: input.customerMessage,
+    inboundMessageId: input.inboundMessageId,
     commercialContextSummary: buildCommercialContextSummary(input.snapshot, {
       inboundMessageId: input.inboundMessageId,
       customerMessage: input.customerMessage
