@@ -711,6 +711,16 @@ export async function runNativeAutonomousCycle(
     // provider configuration unless a test explicitly overrides it via
     // input.agentLoopProvider - no second DeepSeek provider, no dependency
     // on experiments/deepseek-harness.
+    //
+    // R3 PILOT HOTFIX (2026-08-31): thinking: "disabled" is set here only -
+    // never on the agentToolLoopEnabled branch above. Real pilot evidence:
+    // DeepSeek was consuming the entire output-token budget as
+    // reasoning_content, leaving `content` empty (finish_reason "stop" with
+    // outputTokens===reasoningTokens, or finish_reason "length" at the
+    // configured ceiling) - httpAgentLoopProvider.ts correctly classifies
+    // that as empty_response, but the turn produced no outbound message.
+    // Scoped to this one call site (not a global provider default) per the
+    // hotfix's own scope guard - ATL's existing behavior is unchanged.
     const salesAgentRuntimeResult = await runSalesAgentRuntimeCycle({
       conversationId: input.conversationId,
       conversationPublicId: input.conversationPublicId,
@@ -729,7 +739,8 @@ export async function runNativeAutonomousCycle(
           model: resolvedSalesAgentConfiguration.effectiveModelConfiguration.model,
           temperature: resolvedSalesAgentConfiguration.effectiveModelConfiguration.temperature,
           maxOutputTokens: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxOutputTokens,
-          maxModelRetries: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxModelRetries
+          maxModelRetries: resolvedSalesAgentConfiguration.effectiveModelConfiguration.maxModelRetries,
+          thinking: "disabled"
         }),
       trustedCustomerSession: session.execution,
       recentCatalogContext: recentCatalogContextResult.context,

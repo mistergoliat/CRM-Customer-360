@@ -94,7 +94,14 @@ export const SALES_AGENT_MODEL_CONFIGURATION_LIMITS = {
   temperatureMin: 0,
   temperatureMax: 1,
   maxOutputTokensMin: 128,
-  maxOutputTokensMax: 2048,
+  // R3 pilot hotfix (2026-08-31): raised from 2048 - DeepSeek's
+  // reasoning_content can consume the whole output-token budget before any
+  // visible `content` is emitted (see httpAgentLoopProvider.ts's `thinking`
+  // comment), so 2048 left zero room for an actual response on a
+  // multi-step turn. The resolver/validator clamp against this same
+  // constant (resolver.ts/validation.ts), so both stay consistent
+  // automatically.
+  maxOutputTokensMax: 8192,
   timeoutMsMin: 5_000,
   timeoutMsMax: 60_000,
   maxModelRetriesMin: 0,
