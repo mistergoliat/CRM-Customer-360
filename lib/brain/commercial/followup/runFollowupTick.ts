@@ -1,6 +1,10 @@
 import { safeExecute, safeQueryRows } from "@/lib/db";
-import { runNativeAutonomousCycle } from "@/lib/brain/commercial/native-cycle";
 import { redactErrorMessage } from "@/lib/brain/commercial/redactErrorMessage";
+import { runAgentRuntimeEvent } from "@/lib/brain/commercial/agent-runtime-event";
+import { buildFollowUpWakeEvent } from "@/lib/brain/commercial/followup-wake/buildFollowUpWakeEvent";
+import { recordFollowUpWake } from "@/lib/brain/commercial/followup-wake/sessionEvents";
+import { dispatchDraftedFollowUpMessage } from "@/lib/brain/commercial/followup-wake/dispatchDraftedFollowUpMessage";
+import type { FollowUpWakeDisposition, FollowUpWakeEvent } from "@/lib/brain/commercial/followup-wake/types";
 import {
   loadAutonomousPilotAllowlist,
   isWaIdAuthorizedForPilot,
@@ -19,8 +23,8 @@ import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS, FOLLOW_UP_STALE_EXECUTION_EXHAU
 
 /**
  * One follow-up polling tick, shared by the worker script, tests and the E2E
- * harness (the cycle runner is injectable so no LLM call is needed to
- * exercise selection, cancellation and idempotency).
+ * harness (the dispatch function is injectable so no real WhatsApp send is
+ * needed to exercise selection, cancellation and idempotency).
  *
  * Candidate selection (selectDueFollowUps) returns three disjoint groups:
  *  - status='planned' and due                     -> claimPlannedFollowUp
@@ -33,18 +37,27 @@ import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS, FOLLOW_UP_STALE_EXECUTION_EXHAU
  *
  * Sequence for every claimable candidate (ACS-R1-05-T03.1): select -> claim
  * CAS -> revalidate the commercial state -> abort (cancelled) if it no
- * longer applies -> only then re-enter runNativeAutonomousCycle. Revalidation
- * always runs after the claim, uniformly for planned/failed/recovered rows -
- * a claim only reserves the row, it never certifies the commercial state is
- * still safe to act on.
+ * longer applies -> only then dispatch. Revalidation always runs after the
+ * claim, uniformly for planned/failed/recovered rows - a claim only reserves
+ * the row, it never certifies the commercial state is still safe to act on.
  *
- * Cancellation rules (checked after claim, before re-entry):
+ * Cancellation rules (checked after claim, before dispatch):
  *  - customer replied since the follow-up was scheduled → cancel
  *  - human owner active / AI paused / conversation closed → cancel
  *  - opportunity in terminal status → cancel
  * cancelFollowUp (standalone, pre-claim) only overwrites planned/failed rows
  * (P1-1) - it is never called from this tick's own loop, which always aborts
  * an already-claimed row via abortClaimedFollowUp instead.
+ *
+ * SALES-AGENT-R3-A05: a claimed, still-relevant candidate is a structured
+ * FOLLOWUP_WAKE system event, never a fabricated customer message. It
+ * dispatches its own already-drafted message directly through the canonical
+ * outbound path (runAgentRuntimeEvent -> dispatchDraftedFollowUpMessage) -
+ * this tick never re-enters runNativeAutonomousCycle with follow-up text
+ * posing as something the customer said. Every fired wake is recorded into
+ * AgentSessionStore (recordWake) with its final disposition, correlated by a
+ * wakeId deterministic from (actionPublicId, attempt) - see
+ * docs/releases/SALES-AGENT-R3-A05-structured-followup-wake.md.
  */
 
 export type FollowUpCandidate = {
@@ -71,15 +84,17 @@ export type FollowUpCandidate = {
  * SALES-AGENT-R2-A11, Part 19/22. schedule_followup rows come from two
  * producers sharing the same table/claim primitives (persistAgentAction.ts's
  * legitimate second-persister exception, followUpRuntimeAuthority.test.ts):
- * the legacy sales-consultative scheduler (draft_payload_json is its own
- * shape or absent) and R2's scheduleObjectiveAwareFollowUp
+ * the native shadow/operational-loop runtime (draft_payload_json shaped
+ * {nextAction, ...} - see followup-wake/dispatchDraftedFollowUpMessage.ts,
+ * SALES-AGENT-R3-A05) and R2's scheduleObjectiveAwareFollowUp
  * (objectiveAwareFollowUp.ts, payload kind "objective_aware_followup"). This
- * tick's loop must route each due row to the correct processor - never feed
- * an R2 follow-up's own reminder text into runNativeAutonomousCycle as if it
- * were a customer message. Deliberately minimal (only the "kind" field) to
- * avoid a circular import with objectiveAwareFollowUp.ts, which already
- * imports this file's claim primitives - the actual full parse/revalidation
- * still happens once, inside processObjectiveAwareFollowUpDue itself.
+ * tick's loop must route each due row to the correct processor - neither one
+ * ever feeds a follow-up's own reminder text into runNativeAutonomousCycle
+ * as if it were a customer message (R3-A05 removed the one path that still
+ * did). Deliberately minimal (only the "kind" field) to avoid a circular
+ * import with objectiveAwareFollowUp.ts, which already imports this file's
+ * claim primitives - the actual full parse/revalidation still happens once,
+ * inside processObjectiveAwareFollowUpDue itself.
  */
 export function isObjectiveAwareFollowUpPayload(value: unknown): boolean {
   let parsed = value;
@@ -127,8 +142,15 @@ export type FollowupTickOptions = {
   dryRun?: boolean;
   /** Restrict the tick to these action_ids (tests/harness isolation). */
   actionIds?: string[];
-  cycleRunner?: typeof runNativeAutonomousCycle;
-  defaultPhoneNumberId?: string;
+  /**
+   * SALES-AGENT-R3-A05. Test/DI seam for the deterministic follow-up
+   * dispatch (a durable draft_message, dispatched through the canonical
+   * outbound path) - defaults to the real dispatchDraftedFollowUpMessage.
+   * Replaces the pre-A05 `cycleRunner` seam: a follow-up wake no longer
+   * re-enters runNativeAutonomousCycle with a fabricated customer message,
+   * so there is nothing left for a "cycle runner" to inject.
+   */
+  dispatchDraftedFollowUpMessage?: typeof dispatchDraftedFollowUpMessage;
   log?: (message: string) => void;
   /**
    * Test-only determinism hook. Defaults to the real wall clock
@@ -406,6 +428,19 @@ export async function claimFailedFollowUpRetry(actionId: string): Promise<boolea
   return result.ok && result.affectedRows > 0;
 }
 
+/**
+ * SALES-AGENT-R3-A05. Records the fired wake into AgentSessionStore -
+ * shadow/additive (recordFollowUpWake never throws); a failure here is
+ * logged the same way every other technical, non-blocking signal in this
+ * file already is, never fatal to the tick.
+ */
+async function recordWake(event: FollowUpWakeEvent, disposition: FollowUpWakeDisposition, log: (message: string) => void): Promise<void> {
+  const recorded = await recordFollowUpWake(event, disposition);
+  if (!recorded.ok) {
+    log(`[worker:followup] agent_session_followup_wake_write_failed for action ${event.actionPublicId}: ${recorded.warning}`);
+  }
+}
+
 async function claimFollowUpCandidate(candidate: FollowUpCandidate): Promise<boolean> {
   if (candidate.status === "planned") return claimPlannedFollowUp(candidate.action_id);
   if (candidate.status === "executing") return claimStaleExecutingFollowUp(candidate.action_id);
@@ -528,7 +563,6 @@ export async function revalidateFollowUpConfiguration(
 
 export async function runFollowupTick(options: FollowupTickOptions): Promise<FollowupTickResult> {
   const log = options.log ?? (() => void 0);
-  const cycleRunner = options.cycleRunner ?? runNativeAutonomousCycle;
   const result: FollowupTickResult = {
     processed: 0,
     cancelled: [],
@@ -594,12 +628,12 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
 
     // SALES-AGENT-R2-A11, Part 19/22. R2's own objective-aware follow-up
     // (scheduleObjectiveAwareFollowUp) shares this table/action_type with the
-    // legacy scheduler - delegate entirely to its own processor (which does
-    // its own claim/revalidation/canonical-outbox dispatch) rather than
-    // falling through to the legacy claim + runNativeAutonomousCycle
-    // re-entry below, which would otherwise feed this row's own reminder
-    // text back in as if it were a new customer message. Dynamic import
-    // avoids a circular dependency (objectiveAwareFollowUp.ts already
+    // native shadow/operational-loop scheduler - delegate entirely to its
+    // own processor (which does its own claim/revalidation/canonical-outbox
+    // dispatch, and since SALES-AGENT-R3-A05 its own FOLLOWUP_WAKE session
+    // recording) rather than falling through to the generalized dispatch
+    // below, which is built around the OTHER payload shape's fields. Dynamic
+    // import avoids a circular dependency (objectiveAwareFollowUp.ts already
     // imports this file's claim primitives).
     if (isObjectiveAwareFollowUpPayload(candidate.draft_payload_json)) {
       // A11 Part 20: the R2 follow-up worker's own enablement flag, plus
@@ -658,9 +692,38 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     // recovered-executing alike, ACS-R1-05-T03.1): the claim only reserves
     // the row, it never certifies the commercial state is still safe to act
     // on. A row that no longer qualifies is aborted, never silently executed.
+    const nowIso = options.now ?? new Date().toISOString();
+    // SALES-AGENT-R3-A05. One correlationId per fired wake, shared by the
+    // AgentSession FOLLOWUP_WAKE event and (if this wake proceeds) the
+    // outbound message it dispatches. wakeEvent is built from the candidate
+    // row alone (conversation_case_id not yet confirmed to resolve to a real
+    // row) - null-guarded until the conversation lookup below confirms it;
+    // every disposition before that point still records a wake when the id
+    // parses, since the row was genuinely claimed and evaluated regardless
+    // of whether the conversation happens to still exist.
+    const correlationId = `followup:${candidate.action_id}:${Date.now()}`;
+    const conversationIdForWake =
+      candidate.conversation_case_id === null || candidate.conversation_case_id === undefined
+        ? null
+        : Number(candidate.conversation_case_id);
+    const wakeEvent =
+      conversationIdForWake !== null && Number.isFinite(conversationIdForWake)
+        ? buildFollowUpWakeEvent({
+            actionPublicId: candidate.action_id,
+            statusPreClaim: candidate.status,
+            attemptNumberPreClaim: candidate.attempt_number,
+            conversationId: conversationIdForWake,
+            opportunityId: candidate.opportunity_id,
+            correlationId,
+            scheduledFor: candidate.scheduled_for,
+            firedAt: nowIso
+          })
+        : null;
+
     if (!candidate.wa_id) {
       await abortClaimedFollowUp(candidate.action_id, "missing_wa_id");
       result.cancelled.push({ actionId: candidate.action_id, reason: "missing_wa_id" });
+      if (wakeEvent) await recordWake(wakeEvent, { status: "cancelled", reason: "missing_wa_id" }, log);
       continue;
     }
 
@@ -673,7 +736,6 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
     // open. "unavailable" (a real DB read failure) is a TECHNICAL problem,
     // never treated as "not opted out" - routed through the same bounded,
     // non-attempt-consuming backoff as a configuration resolver failure.
-    const nowIso = options.now ?? new Date().toISOString();
     const optOutStatus = await checkCustomerOptOutStatus(candidate.wa_id);
     if (optOutStatus === "unavailable") {
       const backoff = await applyTechnicalFailureBackoff(candidate, nowIso, log);
@@ -684,12 +746,14 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
         scheduledFor: backoff.scheduledFor,
         persisted: backoff.persisted
       });
+      if (wakeEvent) await recordWake(wakeEvent, { status: "technical_failure", reason: "opt_out_status_unavailable" }, log);
       continue;
     }
     if (optOutStatus === "opted_out") {
       await abortClaimedFollowUp(candidate.action_id, "customer_opted_out");
       log(`[worker:followup] cancelling action ${candidate.action_id}: customer_opted_out`);
       result.cancelled.push({ actionId: candidate.action_id, reason: "customer_opted_out" });
+      if (wakeEvent) await recordWake(wakeEvent, { status: "cancelled", reason: "customer_opted_out" }, log);
       continue;
     }
 
@@ -698,6 +762,7 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
       await abortClaimedFollowUp(candidate.action_id, reason);
       log(`[worker:followup] cancelling action ${candidate.action_id}: ${reason}`);
       result.cancelled.push({ actionId: candidate.action_id, reason });
+      if (wakeEvent) await recordWake(wakeEvent, { status: "cancelled", reason }, log);
       continue;
     }
 
@@ -727,61 +792,102 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
           scheduledFor: backoff.scheduledFor,
           persisted: backoff.persisted
         });
+        if (wakeEvent) await recordWake(wakeEvent, { status: "technical_failure", reason: revalidation.reason }, log);
         continue;
       }
       if (revalidation.outcome === "cancel") {
         await abortClaimedFollowUp(candidate.action_id, revalidation.reason);
         log(`[worker:followup] cancelling action ${candidate.action_id}: ${revalidation.reason}`);
         result.cancelled.push({ actionId: candidate.action_id, reason: revalidation.reason });
+        if (wakeEvent) await recordWake(wakeEvent, { status: "cancelled", reason: revalidation.reason }, log);
         continue;
       }
       if (revalidation.outcome === "reschedule") {
         await rescheduleClaimedFollowUp(candidate.action_id, revalidation.scheduledFor);
         log(`[worker:followup] rescheduling action ${candidate.action_id} to ${revalidation.scheduledFor}: ${revalidation.reason}`);
         result.rescheduled.push({ actionId: candidate.action_id, scheduledFor: revalidation.scheduledFor });
+        if (wakeEvent) {
+          await recordWake(wakeEvent, { status: "rescheduled", reason: revalidation.reason, scheduledFor: revalidation.scheduledFor }, log);
+        }
         continue;
       }
     }
 
-    const convRows = await safeQueryRows<{ id: number; public_id: string }>(
-      `SELECT id, public_id FROM conversation WHERE id = ? LIMIT 1`,
+    const convRows = await safeQueryRows<{ id: number; public_id: string; status: string | null; human_owner_active: number; ai_enabled: number }>(
+      `SELECT id, public_id, status, human_owner_active, ai_enabled FROM conversation WHERE id = ? LIMIT 1`,
       [candidate.conversation_case_id]
     );
     const conversation = convRows.ok ? convRows.rows[0] ?? null : null;
     if (!conversation) {
       await abortClaimedFollowUp(candidate.action_id, "conversation_not_found");
       result.cancelled.push({ actionId: candidate.action_id, reason: "conversation_not_found" });
+      if (wakeEvent) await recordWake(wakeEvent, { status: "cancelled", reason: "conversation_not_found" }, log);
       continue;
     }
 
-    const followUpMessage = candidate.draft_message ?? "Hola, ¿en qué puedo ayudarte?";
-    const correlationId = `followup:${candidate.action_id}:${Date.now()}`;
+    // SALES-AGENT-R3-A05. This row's draft_message was already decided when
+    // it was scheduled (buildAgentActionFromNextAction.ts, at the moment the
+    // native shadow/operational-loop runtime chose propose_followup) - the
+    // wake dispatches it directly through the canonical outbound path
+    // (runAgentRuntimeEvent -> dispatchDraftedFollowUpMessage -> execution
+    // gate -> outbox). It never re-enters runNativeAutonomousCycle with this
+    // text posing as a customer message - that fabricated-inbound path is
+    // exactly what this task removes (see
+    // docs/releases/SALES-AGENT-R3-A05-structured-followup-wake.md).
+    // conversation.id is guaranteed to be the same numeric id
+    // conversationIdForWake already parsed above (the SELECT above matched
+    // on it), so a fresh, definitely-non-null wake event is safe here.
+    const confirmedWakeEvent = buildFollowUpWakeEvent({
+      actionPublicId: candidate.action_id,
+      statusPreClaim: candidate.status,
+      attemptNumberPreClaim: candidate.attempt_number,
+      conversationId: conversation.id,
+      opportunityId: candidate.opportunity_id,
+      correlationId,
+      scheduledFor: candidate.scheduled_for,
+      firedAt: nowIso
+    });
 
     try {
-      const cycleResult = await cycleRunner({
-        conversationId: conversation.id,
-        conversationPublicId: conversation.public_id,
-        customerMasterId: null,
-        waId: candidate.wa_id,
-        phoneNumberId: options.defaultPhoneNumberId ?? process.env.META_WHATSAPP_DEFAULT_PHONE_NUMBER_ID ?? "",
-        messageId: null,
-        messageText: followUpMessage,
-        correlationId,
-        currentTime: new Date().toISOString()
+      const dispatchOutcome = await runAgentRuntimeEvent(confirmedWakeEvent, {
+        followUpDispatcher: options.dispatchDraftedFollowUpMessage,
+        followUpDispatch: {
+          waId: candidate.wa_id,
+          draftMessage: candidate.draft_message,
+          caseStatus: conversation.status,
+          humanOwnerActive: Number(conversation.human_owner_active) === 1,
+          aiEnabled: Number(conversation.ai_enabled) === 1
+        }
       });
+      // runAgentRuntimeEvent's return type is a union over BOTH event kinds
+      // (event.type doesn't narrow its own return type at the call site) -
+      // confirmedWakeEvent is always FOLLOWUP_WAKE, so this branch is always
+      // taken; the check itself is what lets TypeScript narrow
+      // dispatchOutcome.result to DispatchDraftedFollowUpMessageResult below.
+      if (dispatchOutcome.type !== "FOLLOWUP_WAKE") {
+        throw new Error(`agent_runtime_event_unexpected_result_type:${dispatchOutcome.type}`);
+      }
+      const dispatch = dispatchOutcome.result;
 
-      const nextAction = cycleResult.loop?.selectedNextAction?.type ?? "none";
-      log(`[worker:followup] executed follow-up for ${candidate.wa_id} → loop decided: ${nextAction}`);
+      if (dispatch.status === "sent") {
+        log(`[worker:followup] dispatched follow-up for ${candidate.wa_id} via the canonical outbound path`);
 
-      // CAS guard: only this claim's own 'executing' row may complete it, so a
-      // concurrent cancellation (e.g. an operator taking control mid-flight)
-      // is never silently clobbered by a late completion write.
-      await safeQueryRows(
-        `UPDATE crm_agent_actions SET status = 'executed', executed_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ? AND status = 'executing'`,
-        [candidate.action_id]
-      );
-      result.executed.push(candidate.action_id);
-      result.processed++;
+        // CAS guard: only this claim's own 'executing' row may complete it, so a
+        // concurrent cancellation (e.g. an operator taking control mid-flight)
+        // is never silently clobbered by a late completion write.
+        await safeQueryRows(
+          `UPDATE crm_agent_actions SET status = 'executed', executed_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3) WHERE action_id = ? AND status = 'executing'`,
+          [candidate.action_id]
+        );
+        result.executed.push(candidate.action_id);
+        result.processed++;
+        await recordWake(confirmedWakeEvent, { status: "executed" }, log);
+      } else {
+        log(`[worker:followup] follow-up dispatch blocked for action ${candidate.action_id}: ${dispatch.reason}`);
+        await abortClaimedFollowUp(candidate.action_id, `dispatch_blocked:${dispatch.reason}`);
+        result.cancelled.push({ actionId: candidate.action_id, reason: `dispatch_blocked:${dispatch.reason}` });
+        await recordWake(confirmedWakeEvent, { status: "cancelled", reason: `dispatch_blocked:${dispatch.reason}` }, log);
+      }
     } catch (error) {
       const safeMessage = redactErrorMessage(error) || "unknown";
       log(`[worker:followup] error for action ${candidate.action_id}: ${safeMessage}`);
@@ -794,6 +900,7 @@ export async function runFollowupTick(options: FollowupTickOptions): Promise<Fol
         [safeMessage, candidate.action_id]
       );
       result.failed.push(candidate.action_id);
+      await recordWake(confirmedWakeEvent, { status: "technical_failure", reason: safeMessage }, log);
     }
   }
 

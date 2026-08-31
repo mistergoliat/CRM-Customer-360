@@ -16,7 +16,10 @@ import {
   FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS,
   FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON
 } from "@/lib/brain/commercial/followup/followUpWorkerPolicy";
-import type { runNativeAutonomousCycle, NativeAutonomousCycleResult } from "@/lib/brain/commercial/native-cycle";
+import type {
+  dispatchDraftedFollowUpMessage,
+  DispatchDraftedFollowUpMessageResult
+} from "@/lib/brain/commercial/followup-wake/dispatchDraftedFollowUpMessage";
 
 Object.assign(process.env, {
   NODE_ENV: "development",
@@ -56,12 +59,9 @@ function uniqueSuffix(label: string) {
   return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
-const fakeCycleRunner: typeof runNativeAutonomousCycle = async (): Promise<NativeAutonomousCycleResult> => ({
-  ran: true,
-  shadow: null,
-  loop: null,
-  bridge: null,
-  warnings: []
+const fakeDispatch: typeof dispatchDraftedFollowUpMessage = async (): Promise<DispatchDraftedFollowUpMessageResult> => ({
+  status: "sent",
+  outboxId: null
 });
 
 async function seedConversation(): Promise<{ id: number; publicId: string; waId: string }> {
@@ -158,7 +158,7 @@ async function setActionState(
   assert.ok(result.ok, result.ok ? "" : result.error);
 }
 
-test("a due follow-up executes exactly once through the injected cycle runner", async () => {
+test("a due follow-up executes exactly once through the injected dispatch function", async () => {
   const conversation = await seedConversation();
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
 
@@ -166,9 +166,9 @@ test("a due follow-up executes exactly once through the injected cycle runner", 
   const result = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -206,9 +206,9 @@ test("a customer reply after scheduling cancels the follow-up instead of executi
   const result = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -225,14 +225,14 @@ test("human ownership and a paused AI cancel the follow-up", async () => {
   const humanAction = await scheduleFollowUpAction({ conversationId: humanOwned.id, waId: humanOwned.waId });
   await safeExecute("UPDATE conversation SET human_owner_active = 1, ai_enabled = 0 WHERE id = ?", [humanOwned.id]);
 
-  const humanResult = await runFollowupTick({ limit: 10, actionIds: [humanAction], cycleRunner: fakeCycleRunner });
+  const humanResult = await runFollowupTick({ limit: 10, actionIds: [humanAction], dispatchDraftedFollowUpMessage: fakeDispatch });
   assert.equal(humanResult.cancelled[0]?.reason, "human_owner_active");
 
   const paused = await seedConversation();
   const pausedAction = await scheduleFollowUpAction({ conversationId: paused.id, waId: paused.waId });
   await safeExecute("UPDATE conversation SET human_owner_active = 0, ai_enabled = 0 WHERE id = ?", [paused.id]);
 
-  const pausedResult = await runFollowupTick({ limit: 10, actionIds: [pausedAction], cycleRunner: fakeCycleRunner });
+  const pausedResult = await runFollowupTick({ limit: 10, actionIds: [pausedAction], dispatchDraftedFollowUpMessage: fakeDispatch });
   assert.equal(pausedResult.cancelled[0]?.reason, "ai_paused");
 });
 
@@ -241,7 +241,7 @@ test("a closed conversation cancels the follow-up", async () => {
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
   await safeExecute("UPDATE conversation SET status = 'closed' WHERE id = ?", [conversation.id]);
 
-  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: fakeDispatch });
   assert.equal(result.cancelled[0]?.reason, "conversation_closed");
 });
 
@@ -257,7 +257,7 @@ test("a terminal opportunity cancels the follow-up", async () => {
   );
   assert.ok(oppInsert.ok, oppInsert.ok ? "" : oppInsert.error);
 
-  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: fakeDispatch });
   assert.equal(result.cancelled[0]?.reason, "opportunity_terminal_status:won");
 });
 
@@ -272,7 +272,7 @@ test("selectDueFollowUps ignores rows not yet due, expired rows and rows outside
   assert.equal(ids.includes(futureAction), false);
 });
 
-test("the claim is atomic: a concurrent tick on the same action never runs the cycle twice", async () => {
+test("the claim is atomic: a concurrent tick on the same action never dispatches twice", async () => {
   const conversation = await seedConversation();
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
 
@@ -281,10 +281,10 @@ test("the claim is atomic: a concurrent tick on the same action never runs the c
     runFollowupTick({
       limit: 10,
       actionIds: [actionId],
-      cycleRunner: async (...args) => {
+      dispatchDraftedFollowUpMessage: async (...args) => {
         calls += 1;
         await new Promise((resolve) => setTimeout(resolve, 20));
-        return fakeCycleRunner(...args);
+        return fakeDispatch(...args);
       }
     });
 
@@ -300,14 +300,14 @@ test("a completion write only applies to the row's own executing claim (CAS), ne
   await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       // Simulate an operator/other process cancelling the row mid-flight,
       // i.e. after this tick's own CAS claim moved it to 'executing'.
       await safeExecute(
         `UPDATE crm_agent_actions SET status = 'cancelled', cancel_reason = 'operator_intervened' WHERE action_id = ? AND status = 'executing'`,
         [actionId]
       );
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -340,9 +340,9 @@ test("a recently-locked executing action is not recovered as stale", async () =>
   const result = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -362,9 +362,9 @@ test("a stale-locked executing action with attempts remaining is recovered and e
   const result = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -417,9 +417,9 @@ test("a stale-locked executing action with no attempts remaining is terminalized
   const result = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -439,13 +439,13 @@ test("a second tick never re-touches a terminalized exhausted stale action", asy
   const staleUpdatedAt = new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
   await setActionState(actionId, { status: "executing", attemptNumber: 3, maxAttempts: 3, updatedAt: staleUpdatedAt });
 
-  const first = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  const first = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: fakeDispatch });
   assert.deepEqual(first.failed, [actionId]);
 
   const due = await selectDueFollowUps(50, [actionId]);
   assert.equal(due.length, 0);
 
-  const second = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  const second = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: fakeDispatch });
   assert.equal(second.processed, 0);
   assert.equal(second.failed.length, 0);
   const row = await loadAction(actionId);
@@ -464,10 +464,10 @@ test("two concurrent ticks racing to recover the same stale-locked action: only 
     runFollowupTick({
       limit: 10,
       actionIds: [actionId],
-      cycleRunner: async (...args) => {
+      dispatchDraftedFollowUpMessage: async (...args) => {
         calls += 1;
         await new Promise((resolve) => setTimeout(resolve, 20));
-        return fakeCycleRunner(...args);
+        return fakeDispatch(...args);
       }
     });
 
@@ -500,7 +500,7 @@ test("two concurrent terminalizations of the same exhausted stale action: only o
 // ACS-R1-05-T03.1: uniform post-claim revalidation (all claim origins)
 // ---------------------------------------------------------------------------
 
-test("a planned claim followed by a customer reply cancels before the cycle runs", async () => {
+test("a planned claim followed by a customer reply cancels before dispatch", async () => {
   const conversation = await seedConversation();
   const actionId = await scheduleFollowUpAction({
     conversationId: conversation.id,
@@ -529,9 +529,9 @@ test("a planned claim followed by a customer reply cancels before the cycle runs
         rawPayload: {}
       });
     },
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -541,7 +541,7 @@ test("a planned claim followed by a customer reply cancels before the cycle runs
   assert.equal(row?.status, "cancelled");
 });
 
-test("a retry claim from failed followed by a terminal opportunity cancels before the cycle runs", async () => {
+test("a retry claim from failed followed by a terminal opportunity cancels before dispatch", async () => {
   const conversation = await seedConversation();
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
   await setActionState(actionId, { status: "failed", attemptNumber: 1, maxAttempts: 3 });
@@ -565,9 +565,9 @@ test("a retry claim from failed followed by a terminal opportunity cancels befor
       );
       assert.ok(oppInsert.ok, oppInsert.ok ? "" : oppInsert.error);
     },
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -577,7 +577,7 @@ test("a retry claim from failed followed by a terminal opportunity cancels befor
   assert.equal(row?.status, "cancelled");
 });
 
-test("a stale-lock recovery claim followed by a human takeover cancels before the cycle runs", async () => {
+test("a stale-lock recovery claim followed by a human takeover cancels before dispatch", async () => {
   const conversation = await seedConversation();
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
   const staleUpdatedAt = new Date(Date.now() - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 60) * 1000);
@@ -595,9 +595,9 @@ test("a stale-lock recovery claim followed by a human takeover cancels before th
       assert.equal(midClaim?.attempt_number, 2);
       await safeExecute("UPDATE conversation SET human_owner_active = 1 WHERE id = ?", [conversation.id]);
     },
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -620,9 +620,9 @@ test("a failed action with attempts remaining is retried and attempt_number is i
   const result = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -642,9 +642,9 @@ test("a failed action at max_attempts is never retried", async () => {
   const result = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async (...args) => {
+    dispatchDraftedFollowUpMessage: async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     }
   });
 
@@ -655,7 +655,7 @@ test("a failed action at max_attempts is never retried", async () => {
   assert.equal(row?.attempt_number, 3);
 });
 
-test("a cycle failure with attempts remaining leaves the action retryable", async () => {
+test("a dispatch failure with attempts remaining leaves the action retryable", async () => {
   const conversation = await seedConversation();
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
   await setActionState(actionId, { status: "planned", attemptNumber: 1, maxAttempts: 3 });
@@ -663,7 +663,7 @@ test("a cycle failure with attempts remaining leaves the action retryable", asyn
   const result = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async () => {
+    dispatchDraftedFollowUpMessage: async () => {
       throw new Error("boom");
     }
   });
@@ -676,7 +676,7 @@ test("a cycle failure with attempts remaining leaves the action retryable", asyn
   assert.equal(due.length, 1);
 });
 
-test("a cycle failure at max_attempts leaves the action terminal", async () => {
+test("a dispatch failure at max_attempts leaves the action terminal", async () => {
   const conversation = await seedConversation();
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
   // Default attempt_number/max_attempts from scheduleFollowUpAction is 1/1.
@@ -684,7 +684,7 @@ test("a cycle failure at max_attempts leaves the action terminal", async () => {
   const result = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: async () => {
+    dispatchDraftedFollowUpMessage: async () => {
       throw new Error("boom");
     }
   });
@@ -765,7 +765,7 @@ test("a requires_review action is never selected or executed by the follow-up ti
   const due = await selectDueFollowUps(50, [actionId]);
   assert.equal(due.length, 0);
 
-  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: fakeDispatch });
   assert.equal(result.processed, 0);
   const row = await loadAction(actionId);
   assert.equal(row?.status, "requires_review");
@@ -793,7 +793,7 @@ test("an action of a different action_type is never touched by the follow-up tic
   const due = await selectDueFollowUps(50, [actionId]);
   assert.equal(due.length, 0);
 
-  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: fakeCycleRunner });
+  const result = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: fakeDispatch });
   assert.equal(result.processed, 0);
   const row = await loadAction(actionId);
   assert.equal(row?.status, "planned");
@@ -804,15 +804,15 @@ test("a second tick does not duplicate execution of an already-executed action",
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
 
   let calls = 0;
-  const cycleRunner: typeof runNativeAutonomousCycle = async (...args) => {
+  const dispatchDraftedFollowUpMessage: typeof fakeDispatch = async (...args) => {
     calls += 1;
-    return fakeCycleRunner(...args);
+    return fakeDispatch(...args);
   };
 
-  const first = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+  const first = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage });
   assert.deepEqual(first.executed, [actionId]);
 
-  const second = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+  const second = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage });
   assert.equal(second.processed, 0);
   assert.equal(calls, 1);
 
@@ -951,7 +951,7 @@ async function withPilotAllowlist<T>(allowlist: string, run: () => Promise<T>): 
   }
 }
 
-test("[T06.1] an unauthorized wa_id is skipped before any claim - row and attempt_number stay intact, cycle runner never called", async () => {
+test("[T06.1] an unauthorized wa_id is skipped before any claim - row and attempt_number stay intact, dispatch never called", async () => {
   const conversation = await seedConversation();
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId });
   const before = await loadAction(actionId);
@@ -961,9 +961,9 @@ test("[T06.1] an unauthorized wa_id is skipped before any claim - row and attemp
     runFollowupTick({
       limit: 10,
       actionIds: [actionId],
-      cycleRunner: async (...args) => {
+      dispatchDraftedFollowUpMessage: async (...args) => {
         calls += 1;
-        return fakeCycleRunner(...args);
+        return fakeDispatch(...args);
       }
     })
   );
@@ -992,9 +992,9 @@ test("[T06.1] a mixed batch executes the authorized wa_id and leaves the unautho
     runFollowupTick({
       limit: 10,
       actionIds: [authorizedActionId, unauthorizedActionId],
-      cycleRunner: async (...args) => {
+      dispatchDraftedFollowUpMessage: async (...args) => {
         calls += 1;
-        return fakeCycleRunner(...args);
+        return fakeDispatch(...args);
       }
     })
   );
@@ -1020,9 +1020,9 @@ test("[T06.1] an empty pilot allowlist keeps existing unrestricted behavior (no 
     runFollowupTick({
       limit: 10,
       actionIds: [actionId],
-      cycleRunner: async (...args) => {
+      dispatchDraftedFollowUpMessage: async (...args) => {
         calls += 1;
-        return fakeCycleRunner(...args);
+        return fakeDispatch(...args);
       }
     })
   );

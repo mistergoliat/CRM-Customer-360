@@ -28,7 +28,10 @@ import {
 import { FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS, FOLLOW_UP_STALE_EXECUTION_EXHAUSTED_REASON } from "@/lib/brain/commercial/followup/followUpWorkerPolicy";
 import { createSalesConsultativeOperationsRepository } from "@/lib/brain/commercial/sales-consultative/repository";
 import type { SalesConsultativeOpportunity } from "@/lib/brain/commercial/sales-consultative/types";
-import type { runNativeAutonomousCycle, NativeAutonomousCycleResult } from "@/lib/brain/commercial/native-cycle";
+import type {
+  dispatchDraftedFollowUpMessage,
+  DispatchDraftedFollowUpMessageResult
+} from "@/lib/brain/commercial/followup-wake/dispatchDraftedFollowUpMessage";
 
 /**
  * ACS-R1-05-T07. E2E follow-up runtime coverage (T07-E10..E14): the durable
@@ -169,18 +172,18 @@ async function loadAction(actionId: string) {
   return result.rows[0] ?? null;
 }
 
-function createCountingCycleRunner(): { runner: typeof runNativeAutonomousCycle; calls: string[] } {
+function createCountingDispatch(): { dispatch: typeof dispatchDraftedFollowUpMessage; calls: string[] } {
   const calls: string[] = [];
-  const runner: typeof runNativeAutonomousCycle = async (input): Promise<NativeAutonomousCycleResult> => {
-    calls.push(input.correlationId);
-    return { ran: true, shadow: null, loop: null, bridge: null, warnings: [] };
+  const dispatch: typeof dispatchDraftedFollowUpMessage = async (input): Promise<DispatchDraftedFollowUpMessageResult> => {
+    calls.push(input.actionPublicId);
+    return { status: "sent", outboxId: null };
   };
-  return { runner, calls };
+  return { dispatch, calls };
 }
 
 const STALE_UPDATED_AT = new Date(FIXED_NOW_MS - (FOLLOW_UP_STALE_EXECUTING_LOCK_SECONDS + 120) * 1000);
 
-test("T07-E10: follow-up normal - canonical route, exact claim, correct attempt_number, cycle runner invoked, coherent final state, no parallel planner", async () => {
+test("T07-E10: follow-up normal - canonical route, exact claim, correct attempt_number, dispatch invoked, coherent final state, no parallel planner", async () => {
   const waId = randomWaId();
   const seed = await seedOpportunity(waId);
   const opportunity = buildOpportunity({ ...seed, lastActivityAt: new Date(FIXED_NOW_MS - 2 * 24 * 60 * 60 * 1000).toISOString() });
@@ -212,11 +215,11 @@ test("T07-E10: follow-up normal - canonical route, exact claim, correct attempt_
   // and the tick's own conversation lookup key off).
   await setActionState(actionId, { status: "planned", conversationCaseId: conversation.id, waId });
 
-  const { runner, calls } = createCountingCycleRunner();
-  const tickResult = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: runner });
+  const { dispatch, calls } = createCountingDispatch();
+  const tickResult = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: dispatch });
 
   assert.deepEqual(tickResult.executed, [actionId], `tickResult=${JSON.stringify(tickResult)}`);
-  assert.equal(calls.length, 1, "runNativeAutonomousCycle (the injected cycle runner) must be invoked exactly once");
+  assert.equal(calls.length, 1, "the injected dispatch function must be invoked exactly once");
 
   const finalRow = await loadAction(actionId);
   assert.equal(finalRow?.status, "executed");
@@ -252,11 +255,11 @@ test("T07-E11: restart with follow-up executing stale - CAS recovers exactly onc
   await destroyRuntimeForRestart();
 
   // Phase 2: a fresh worker instance reads only from MariaDB and recovers it.
-  const { runner, calls } = createCountingCycleRunner();
-  const tickResult = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: runner });
+  const { dispatch, calls } = createCountingDispatch();
+  const tickResult = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: dispatch });
 
   assert.deepEqual(tickResult.executed, [actionId]);
-  assert.equal(calls.length, 1, "exactly one instance must run the cycle for the recovered row");
+  assert.equal(calls.length, 1, "exactly one instance must dispatch for the recovered row");
 
   const recovered = await loadAction(actionId);
   assert.equal(recovered?.status, "executed");
@@ -279,11 +282,11 @@ test("T07-E11: restart with follow-up executing stale - CAS recovers exactly onc
   const actionId2 = await resolveActionIdByRowId(created2.actionId!);
   await setActionState(actionId2, { status: "executing", attemptNumber: 1, maxAttempts: 3, updatedAt: STALE_UPDATED_AT, conversationCaseId: conversation2.id, waId: seed2.waId });
 
-  const counterA = createCountingCycleRunner();
-  const counterB = createCountingCycleRunner();
+  const counterA = createCountingDispatch();
+  const counterB = createCountingDispatch();
   const [tickA, tickB] = await Promise.all([
-    runFollowupTick({ limit: 10, actionIds: [actionId2], cycleRunner: counterA.runner }),
-    runFollowupTick({ limit: 10, actionIds: [actionId2], cycleRunner: counterB.runner })
+    runFollowupTick({ limit: 10, actionIds: [actionId2], dispatchDraftedFollowUpMessage: counterA.dispatch }),
+    runFollowupTick({ limit: 10, actionIds: [actionId2], dispatchDraftedFollowUpMessage: counterB.dispatch })
   ]);
 
   const totalExecuted = tickA.executed.length + tickB.executed.length;
@@ -318,12 +321,12 @@ test("T07-E12: follow-up exhausted - terminalized to failed, never re-entered, s
   // final legitimate attempt.
   await setActionState(actionId, { status: "executing", attemptNumber: 3, maxAttempts: 3, updatedAt: STALE_UPDATED_AT, conversationCaseId: conversation.id, waId });
 
-  const { runner, calls } = createCountingCycleRunner();
-  const tickResult = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: runner });
+  const { dispatch, calls } = createCountingDispatch();
+  const tickResult = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: dispatch });
 
   assert.deepEqual(tickResult.failed, [actionId]);
   assert.equal(tickResult.executed.length, 0);
-  assert.equal(calls.length, 0, "an exhausted stale execution must never re-enter the cycle runner");
+  assert.equal(calls.length, 0, "an exhausted stale execution must never dispatch");
 
   const terminalized = await loadAction(actionId);
   assert.equal(terminalized?.status, "failed");
@@ -334,8 +337,8 @@ test("T07-E12: follow-up exhausted - terminalized to failed, never re-entered, s
   assert.equal(rowsAfter.length, 1, "no new action is ever created for an exhausted follow-up");
 
   // A second tick against the same (now terminal) row must be a true no-op.
-  const secondCounter = createCountingCycleRunner();
-  const secondTick = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: secondCounter.runner });
+  const secondCounter = createCountingDispatch();
+  const secondTick = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: secondCounter.dispatch });
   assert.equal(secondTick.executed.length, 0);
   assert.equal(secondTick.failed.length, 0);
   assert.equal(secondCounter.calls.length, 0);
@@ -345,7 +348,7 @@ test("T07-E12: follow-up exhausted - terminalized to failed, never re-entered, s
   assert.equal(afterSecondTick?.attempt_number, 3, "the second tick must never modify the already-terminal row");
 });
 
-test("T07-E13: customer replies between claim and revalidation - follow-up aborted, cycle runner never invoked, no proactive outbox", async () => {
+test("T07-E13: customer replies between claim and revalidation - follow-up aborted, dispatch never invoked, no proactive outbox", async () => {
   const waId = randomWaId();
   const conversation = await seedConversation(waId);
   const seed = await seedOpportunity(waId);
@@ -364,11 +367,11 @@ test("T07-E13: customer replies between claim and revalidation - follow-up abort
   const actionId = await resolveActionIdByRowId(created.actionId!);
   await setActionState(actionId, { status: "planned", conversationCaseId: conversation.id, waId });
 
-  const { runner, calls } = createCountingCycleRunner();
+  const { dispatch, calls } = createCountingDispatch();
   const tickResult = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner: runner,
+    dispatchDraftedFollowUpMessage: dispatch,
     // Deterministic race: the customer's reply lands exactly between this
     // tick's claim and its revalidation, via the existing test-only hook
     // (no sleeps, no real elapsed time).
@@ -396,7 +399,7 @@ test("T07-E13: customer replies between claim and revalidation - follow-up abort
   assert.equal(tickResult.cancelled.length, 1);
   assert.equal(tickResult.cancelled[0]?.actionId, actionId);
   assert.equal(tickResult.cancelled[0]?.reason, "customer_replied_since_schedule");
-  assert.equal(calls.length, 0, "the cycle runner must never be invoked once a customer reply is detected");
+  assert.equal(calls.length, 0, "the dispatch function must never be invoked once a customer reply is detected");
 
   const finalRow = await loadAction(actionId);
   assert.equal(finalRow?.status, "cancelled");
@@ -442,8 +445,8 @@ test("T07-E14: human ownership active - follow-up never executes, cancelled with
   assert.equal(revalidation.cancel, true);
   assert.equal(revalidation.reason, "human_owner_active");
 
-  const { runner, calls } = createCountingCycleRunner();
-  const tickResult = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner: runner });
+  const { dispatch, calls } = createCountingDispatch();
+  const tickResult = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage: dispatch });
 
   assert.equal(tickResult.executed.length, 0, "a human-owned conversation's follow-up must never execute");
   assert.equal(tickResult.cancelled.length, 1);

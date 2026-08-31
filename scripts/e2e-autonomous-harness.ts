@@ -404,27 +404,27 @@ async function main() {
       return actionId;
     }
 
-    // (1) due follow-up executes through the cycle runner exactly once
+    // (1) due follow-up executes through the dispatch function exactly once
     const actionA = await seedFollowUp("run", 2);
-    let cycleCalls = 0;
-    const fakeCycle = async () => {
-      cycleCalls++;
-      return { ran: true, shadow: null, loop: null, bridge: null, warnings: [] };
+    let dispatchCalls = 0;
+    const fakeDispatch = async () => {
+      dispatchCalls++;
+      return { status: "sent", outboxId: null };
     };
-    const tick1 = await runFollowupTick({ limit: 20, actionIds: [actionA], cycleRunner: fakeCycle as never });
-    assertTrue(tick1.executed.includes(actionA) && cycleCalls === 1, "follow-up executed once");
+    const tick1 = await runFollowupTick({ limit: 20, actionIds: [actionA], dispatchDraftedFollowUpMessage: fakeDispatch as never });
+    assertTrue(tick1.executed.includes(actionA) && dispatchCalls === 1, "follow-up executed once");
 
     // (2) idempotent: a second tick finds nothing for the same action
-    const tick2 = await runFollowupTick({ limit: 20, actionIds: [actionA], cycleRunner: fakeCycle as never });
-    assertTrue(tick2.processed === 0 && cycleCalls === 1, "no duplicate execution");
+    const tick2 = await runFollowupTick({ limit: 20, actionIds: [actionA], dispatchDraftedFollowUpMessage: fakeDispatch as never });
+    assertTrue(tick2.processed === 0 && dispatchCalls === 1, "no duplicate execution");
     evidence.push("due follow-up executed exactly once (CAS planned→executing)");
 
     // (3) customer replies → a due follow-up is cancelled instead of executed
     const actionB = await seedFollowUp("cancel", -5);
     await inject(waId, phoneNumberId, "Ya me decidí, lo quiero");
-    const tick3 = await runFollowupTick({ limit: 20, actionIds: [actionB], cycleRunner: fakeCycle as never });
+    const tick3 = await runFollowupTick({ limit: 20, actionIds: [actionB], dispatchDraftedFollowUpMessage: fakeDispatch as never });
     assertTrue(tick3.cancelled.some((c) => c.actionId === actionB && c.reason === "customer_replied_since_schedule"), "cancelled on reply");
-    assertTrue(cycleCalls === 1, "no cycle run for the cancelled follow-up");
+    assertTrue(dispatchCalls === 1, "no dispatch for the cancelled follow-up");
     evidence.push("follow-up cancelled with reason=customer_replied_since_schedule after inbound");
 
     return "PASS";

@@ -14,20 +14,25 @@ import {
 import type { SalesAgentProvider, SalesAgentProviderRequest } from "@/lib/brain/commercial/sales-agent/runtimeTypes";
 
 /**
- * ACS-R1-05.1-T02.3D review correction, decision 5. Direct validation
- * against the REAL runtime chain, never a shortcut through
- * resolveFollowUpSchedulingContext/revalidateFollowUpConfiguration in
- * isolation:
+ * ACS-R1-05.1-T02.3D review correction, decision 5, updated for
+ * SALES-AGENT-R3-A05. Direct validation against the REAL runtime chain,
+ * never a shortcut through resolveFollowUpSchedulingContext/
+ * revalidateFollowUpConfiguration in isolation:
  *
  *   inbound -> runNativeAutonomousCycle (real operational loop, scripted
  *   provider standing in for the live LLM - same convention as
  *   tests/native/catalogConversationFlow.test.ts, no live network/LLM
  *   credentials in this environment) -> propose_followup ->
  *   runCommercialExecutionBridge persists a REAL crm_agent_actions row
- *   (scheduled_for, sequence key, config snapshot all non-null) -> the row
- *   is forced due -> the REAL runFollowupTick claims and re-enters the REAL
- *   runNativeAutonomousCycle (Agent Tool Loop, not a fake cycleRunner) ->
- *   a REAL brain_message_outbox row lands as 'planned', never 'sent'.
+ *   (scheduled_for, sequence key, config snapshot all non-null, and a
+ *   real draft_message decided by turn 2's own model call) -> the row is
+ *   forced due -> the REAL runFollowupTick claims it as a structured
+ *   FOLLOWUP_WAKE and dispatches that already-decided draft_message
+ *   directly through the REAL canonical outbound path (no second model
+ *   call, no re-entry into runNativeAutonomousCycle - that fabricated-
+ *   customer-message re-entry is exactly what R3-A05 removed) -> a REAL
+ *   brain_message_outbox row lands as 'planned', never 'sent', carrying
+ *   the SAME text the model decided at schedule time.
  *
  * BRAIN_META_SEND_ENABLED/BRAIN_OUTBOX_WORKER_ENABLED/
  * BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND stay false throughout - nothing in
@@ -358,15 +363,19 @@ test("direct runtime validation: real inbound -> real model decision -> real sch
       [seeded.conversationId]
     );
 
-    // The REAL worker, re-entering the REAL Agent Tool Loop - never a fake
-    // cycleRunner. Only the provider is injected (same reason as above: no
-    // live LLM credentials in this environment).
-    const replyProvider = createScriptedProvider([{ messageIntent: "answer", draftText: "Hola de nuevo! Seguimos con tu cotizacion?" }]);
-    const tick = await runFollowupTick({
-      limit: 10,
-      actionIds: [followUpRow.action_id],
-      cycleRunner: (input) => runNativeAutonomousCycle({ ...input, provider: replyProvider })
-    });
+    // SALES-AGENT-R3-A05: the REAL worker dispatches the row's own,
+    // already-decided draft_message directly through the canonical outbound
+    // path - no injected provider, no re-entry into runNativeAutonomousCycle
+    // at all. The default (real) dispatchDraftedFollowUpMessage is used
+    // unmodified, proving the actual production path, not a stand-in.
+    const draftMessageResult = await safeQueryRows<{ draft_message: string | null }>(
+      "SELECT draft_message FROM crm_agent_actions WHERE action_id = ? LIMIT 1",
+      [followUpRow.action_id]
+    );
+    const expectedDraftMessage = draftMessageResult.ok ? draftMessageResult.rows[0]?.draft_message ?? null : null;
+    assert.ok(expectedDraftMessage, "the row must already carry the real draft_message the model decided at schedule time");
+
+    const tick = await runFollowupTick({ limit: 10, actionIds: [followUpRow.action_id] });
 
     assert.deepEqual(tick.executed, [followUpRow.action_id], "the real worker must execute the real, forced-due follow-up row");
     const finalRow = await safeQueryRows<{ status: string }>("SELECT status FROM crm_agent_actions WHERE action_id = ? LIMIT 1", [
@@ -377,14 +386,17 @@ test("direct runtime validation: real inbound -> real model decision -> real sch
     // Real outbox row, planned - never sent (BRAIN_META_SEND_ENABLED/
     // BRAIN_OUTBOX_WORKER_ENABLED/BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND all
     // false throughout this whole test).
-    const outboxRows = await queryRows<{ status: string; sent_at: string | null }>(
-      "SELECT status, sent_at FROM brain_message_outbox WHERE conversation_case_id = ? ORDER BY id DESC LIMIT 5",
+    const outboxRows = await queryRows<{ status: string; sent_at: string | null; message_text: string | null }>(
+      "SELECT status, sent_at, message_text FROM brain_message_outbox WHERE conversation_case_id = ? ORDER BY id DESC LIMIT 5",
       [seeded.conversationId]
     );
-    assert.ok(outboxRows.length > Number(outboxCountBefore[0].count), "the follow-up re-entry must produce at least one new real outbox row");
+    assert.ok(outboxRows.length > Number(outboxCountBefore[0].count), "the follow-up wake must produce at least one new real outbox row");
     const newOutboxRow = outboxRows[0];
     assert.equal(newOutboxRow.status, "planned");
     assert.equal(newOutboxRow.sent_at, null, "must never actually send - BRAIN_META_SEND_ENABLED/BRAIN_OUTBOX_WORKER_ENABLED are false");
+    // The dispatched text is exactly the row's own durable draft - never a
+    // fresh model response to a fabricated customer message.
+    assert.equal(newOutboxRow.message_text, expectedDraftMessage);
   } finally {
     process.env = previousEnv;
   }
