@@ -770,3 +770,98 @@ test("resolveProductIntent sends inStockOnly under filters and omits limit/filte
   await makeAdapter().resolveProductIntent({ query: "disco olimpico 20kg", inStockOnly: true }, { correlationId: "corr-t12" });
   assert.deepEqual(requestBody, { query: "disco olimpico 20kg", filters: { inStockOnly: true } });
 });
+
+function semanticsPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    productId: 29,
+    classificationStatus: "CLASSIFIED",
+    primaryProductFamily: { axis: "PRODUCT_FAMILY", code: "BARBELL", confidence: "EXPLICIT", ruleId: "PF_BARBELL_NAME_V1" },
+    secondaryProductFamilies: [],
+    disciplines: [{ axis: "DISCIPLINE", code: "CROSSFIT", confidence: "STRONGLY_INFERRED", ruleId: "DISC_CROSSFIT_V1" }],
+    useContexts: [{ axis: "USE_CONTEXT", code: "HOME_GYM", confidence: "STRONGLY_INFERRED", ruleId: "UC_HOME_GYM_V1" }],
+    ontologyVersion: "commercial-product-ontology-v3",
+    ontologyHash: "a".repeat(64),
+    classifierVersion: "product-semantic-classifier-v1",
+    snapshotId: `sha256:${"c".repeat(64)}`,
+    provenance: { evidence: [], exclusion: null },
+    ...overrides
+  };
+}
+
+test("CATALOG-INTELLIGENCE-A00.5.1: getProductSemantics GETs /v1/products/:productId/semantics and trims tags to their code", async () => {
+  handler = (req, res) => {
+    assert.equal(req.url, "/v1/products/29/semantics");
+    sendJson(res, 200, semanticsPayload());
+  };
+
+  const result = await makeAdapter().getProductSemantics?.({ productId: "29" }, { correlationId: "corr-sem-1" });
+  assert.ok(result);
+  assert.equal(result!.ok, true);
+  if (!result!.ok) return;
+  assert.equal(result!.value?.productId, "29");
+  assert.equal(result!.value?.classificationStatus, "CLASSIFIED");
+  assert.equal(result!.value?.primaryProductFamily, "BARBELL");
+  assert.deepEqual(result!.value?.secondaryProductFamilies, []);
+  assert.deepEqual(result!.value?.disciplines, ["CROSSFIT"]);
+  assert.deepEqual(result!.value?.useContexts, ["HOME_GYM"]);
+  assert.equal(result!.value?.ontologyVersion, "commercial-product-ontology-v3");
+  assert.equal(result!.value?.classifierVersion, "product-semantic-classifier-v1");
+  assert.equal(result!.value?.snapshotId, `sha256:${"c".repeat(64)}`);
+  assert.equal(result!.value?.exclusion, null);
+  assert.equal(result!.value?.provenance.source, "catalog_service_http");
+  assert.equal(requestCount, 1);
+});
+
+test("getProductSemantics maps OTHER (no family) without inventing a placeholder", async () => {
+  handler = (_req, res) => sendJson(res, 200, semanticsPayload({ classificationStatus: "OTHER", primaryProductFamily: null, disciplines: [], useContexts: [] }));
+
+  const result = await makeAdapter().getProductSemantics?.({ productId: "1023" }, { correlationId: "corr-sem-2" });
+  assert.ok(result);
+  assert.equal(result!.ok, true);
+  if (!result!.ok) return;
+  assert.equal(result!.value?.classificationStatus, "OTHER");
+  assert.equal(result!.value?.primaryProductFamily, null);
+});
+
+test("getProductSemantics preserves exclusion provenance for EXCLUDED_NON_PRODUCT", async () => {
+  handler = (_req, res) =>
+    sendJson(
+      res,
+      200,
+      semanticsPayload({
+        classificationStatus: "EXCLUDED_NON_PRODUCT",
+        primaryProductFamily: null,
+        disciplines: [],
+        useContexts: [],
+        provenance: { evidence: [], exclusion: { ruleId: "NON_PRODUCT_KNOWN_ID_V1", reason: "known non-product id" } }
+      })
+    );
+
+  const result = await makeAdapter().getProductSemantics?.({ productId: "444" }, { correlationId: "corr-sem-3" });
+  assert.ok(result);
+  assert.equal(result!.ok, true);
+  if (!result!.ok) return;
+  assert.equal(result!.value?.classificationStatus, "EXCLUDED_NON_PRODUCT");
+  assert.deepEqual(result!.value?.exclusion, { ruleId: "NON_PRODUCT_KNOWN_ID_V1", reason: "known non-product id" });
+});
+
+test("getProductSemantics maps 404 to ok:true value:null (product outside the classified universe), not an error", async () => {
+  handler = (_req, res) => sendJson(res, 404, { error: { code: "PRODUCT_SEMANTICS_NOT_FOUND", message: "Product is not present in the active product semantic snapshot", correlationId: "c" } });
+
+  const result = await makeAdapter().getProductSemantics?.({ productId: "999999" }, { correlationId: "corr-sem-4" });
+  assert.ok(result);
+  assert.equal(result!.ok, true);
+  if (!result!.ok) return;
+  assert.equal(result!.value, null);
+});
+
+test("getProductSemantics maps 503 (snapshot not loaded) to a retryable unavailable error, never a silent empty success", async () => {
+  handler = (_req, res) => sendJson(res, 503, { error: { code: "PRODUCT_SEMANTICS_UNAVAILABLE", message: "Active product semantic snapshot is not loaded", correlationId: "c" } });
+
+  const result = await makeAdapter().getProductSemantics?.({ productId: "29" }, { correlationId: "corr-sem-5" });
+  assert.ok(result);
+  assert.equal(result!.ok, false);
+  if (result!.ok) return;
+  assert.equal(result!.error.code, "unavailable");
+  assert.equal(result!.error.retryable, true);
+});

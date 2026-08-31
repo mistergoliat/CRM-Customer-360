@@ -158,6 +158,9 @@ function fakeCatalogPort(overrides: Partial<CatalogPort> = {}): CatalogPort {
     async resolveProductIntent() {
       throw new Error("not used");
     },
+    async getProductSemantics() {
+      return { ok: true, value: null };
+    },
     ...overrides
   };
 }
@@ -321,6 +324,73 @@ test("invalid product id is rejected before server-side catalog clients are need
     assert.equal(result.error.code, "invalid_product_id");
     assert.equal(statusForCatalogConsoleError(result.error), 400);
   }
+});
+
+test("CATALOG-INTELLIGENCE-A00.5.1: context includes available semantics alongside detail and recommendations", async () => {
+  const result = await getCatalogConsoleProductContext("10", {
+    catalogPort: fakeCatalogPort({
+      async getProductSemantics() {
+        return {
+          ok: true,
+          value: {
+            productId: "10",
+            classificationStatus: "CLASSIFIED",
+            primaryProductFamily: "BARBELL",
+            secondaryProductFamilies: [],
+            disciplines: ["CROSSFIT"],
+            useContexts: ["HOME_GYM"],
+            ontologyVersion: "commercial-product-ontology-v3",
+            classifierVersion: "product-semantic-classifier-v1",
+            snapshotId: "sha256:abc",
+            exclusion: null,
+            provenance: { source: "catalog_service_http", retrievedAt: "2026-08-29T00:00:00.000Z", cached: false }
+          }
+        };
+      }
+    }),
+    recommendationsClient: fakeRecommendationsClient()
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.semantics.status, "available");
+  if (result.semantics.status === "available") {
+    assert.equal(result.semantics.semantics.primaryProductFamily, "BARBELL");
+    assert.deepEqual(result.semantics.semantics.disciplines, ["CROSSFIT"]);
+  }
+});
+
+test("CATALOG-INTELLIGENCE-A00.5.1: a product outside the classified universe is not_available, not an error", async () => {
+  const result = await getCatalogConsoleProductContext("10", {
+    catalogPort: fakeCatalogPort({
+      async getProductSemantics() {
+        return { ok: true, value: null };
+      }
+    }),
+    recommendationsClient: fakeRecommendationsClient()
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.semantics.status, "not_available");
+});
+
+test("CATALOG-INTELLIGENCE-A00.5.1: semantics failure never fails detail/recommendations (degradable inspection branch)", async () => {
+  const result = await getCatalogConsoleProductContext("10", {
+    catalogPort: fakeCatalogPort({
+      async getProductSemantics() {
+        return { ok: false, error: { code: "unavailable", message: "Active product semantic snapshot is not loaded", retryable: true } };
+      }
+    }),
+    recommendationsClient: fakeRecommendationsClient()
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.product.productId, "10");
+  assert.equal(result.recommendations.status, "available");
+  assert.equal(result.semantics.status, "error");
+  if (result.semantics.status === "error") assert.equal(result.semantics.error.code, "catalog_unavailable");
 });
 
 test("status mapping keeps upstream unauthorized distinct from browser auth", () => {
