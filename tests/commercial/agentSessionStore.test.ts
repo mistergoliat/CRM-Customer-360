@@ -52,17 +52,24 @@ test("appendEvent persists events and loadRecentEvents returns ascending occurre
   const store = freshStore();
   const session = await store.ensureSession({ conversationId: 1 });
 
+  // Relative to Date.now(), not a hardcoded calendar date: AGENT_SESSION_DEFAULT_MAX_AGE_MS
+  // (24h, applied by loadRecentEvents's default window) would otherwise
+  // silently filter out an absolute fixture date once real wall-clock time
+  // moves more than 24h past it - this must stay green indefinitely,
+  // regardless of when it runs. Same relative-offset structure as before
+  // (+0s/+5s/+2s), only the anchor changed.
+  const base = Date.now();
   await store.appendEvent({
     sessionId: session.id, conversationId: 1, eventType: "USER_MESSAGE_RECEIVED", correlationId: "c1",
-    dedupeKey: "k-user", payload: {}, occurredAt: "2026-08-30T10:00:00.000Z"
+    dedupeKey: "k-user", payload: {}, occurredAt: new Date(base).toISOString()
   });
   await store.appendEvent({
     sessionId: session.id, conversationId: 1, eventType: "ASSISTANT_MESSAGE_SENT", correlationId: "c1",
-    dedupeKey: "k-assistant", payload: { outcome: "message" }, occurredAt: "2026-08-30T10:00:05.000Z"
+    dedupeKey: "k-assistant", payload: { outcome: "message" }, occurredAt: new Date(base + 5000).toISOString()
   });
   await store.appendEvent({
     sessionId: session.id, conversationId: 1, eventType: "READ_TOOL_REQUESTED", correlationId: "c1",
-    dedupeKey: "k-tool", payload: { tool: "search_products" }, occurredAt: "2026-08-30T10:00:02.000Z"
+    dedupeKey: "k-tool", payload: { tool: "search_products" }, occurredAt: new Date(base + 2000).toISOString()
   });
 
   const events = await store.loadRecentEvents({ sessionId: session.id });
@@ -140,11 +147,15 @@ test("a fresh store instance over the same backing data resumes the same session
 test("loadRecentEvents is bounded by maxEvents and never exceeds the hard cap", async () => {
   const store = freshStore();
   const session = await store.ensureSession({ conversationId: 1 });
+  // Relative to Date.now(), not a hardcoded calendar date - see the ordering
+  // test above for why. Same structure (30 events, 1 second apart,
+  // ascending), only the anchor changed.
+  const base = Date.now();
   for (let index = 0; index < 30; index += 1) {
     await store.appendEvent({
       sessionId: session.id, conversationId: 1, eventType: "READ_TOOL_REQUESTED", correlationId: "c1",
       dedupeKey: `k-${index}`, payload: { tool: "search_products" },
-      occurredAt: new Date(Date.UTC(2026, 7, 30, 10, 0, index)).toISOString()
+      occurredAt: new Date(base + index * 1000).toISOString()
     });
   }
 
