@@ -7,6 +7,8 @@ export {
   resetCapabilityGatewayCatalogPortForTests
 } from "./registry";
 export { insertCapabilityExecution } from "./repository";
+export { evaluateCapabilityIdentityGate } from "./identityGate";
+export type { CapabilityIdentityGateOutcome } from "./identityGate";
 export {
   CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS,
   resetCustomerServicePortForTests,

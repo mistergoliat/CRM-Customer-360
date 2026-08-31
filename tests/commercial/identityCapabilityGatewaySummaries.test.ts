@@ -196,7 +196,13 @@ test("create_customer's persisted response summary reports business outcome conf
 test("link_external_identity's persisted request/response summaries are also allowlisted and PII-free", async () => {
   handler = (_req, res) => sendJson(res, 200, { status: "completed", customerMasterId: "700", externalIdentityId: "ext-1" });
   const correlationId = `identity-summary-link-${Date.now()}`;
-  const linkedSession = session({ identity: { status: "identified", customerId: "700", source: "normalized_phone", localResolutionOutcome: "identified", externalResolutionOutcome: null } });
+  const linkedSession = session({
+    identity: { status: "identified", customerId: "700", source: "normalized_phone", localResolutionOutcome: "identified", externalResolutionOutcome: null },
+    // SALES-AGENT-R3-A02: link_external_identity requires LEVEL_2_MASTER_RESOLVED
+    // at the shared identity gate now - a resolved local customerId (above)
+    // realistically comes with a resolved RuntimeIdentityContext too.
+    runtimeIdentity: { status: "MASTER_RESOLVED", identityLevel: "LEVEL_2_MASTER_RESOLVED", masterCustomerId: "700", prestashopCustomerId: null, verificationRequired: false, requiredEvidence: [], readyToLink: false, conflictCode: null, policyCode: "MASTER_IDENTITY_VERIFIED", evidenceRefs: [] }
+  });
   await executeGovernedCapability("link_external_identity", {}, context(linkedSession, correlationId));
   const row = await loadExecutionRow(correlationId);
   const requestSummary = JSON.parse(String(row!.request_summary_json));

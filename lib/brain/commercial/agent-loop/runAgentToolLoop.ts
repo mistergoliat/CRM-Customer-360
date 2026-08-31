@@ -14,6 +14,8 @@ import { classifyAgentLoopProviderFailure, logAgentLoopProviderFailure } from ".
 import { buildPendingCatalogActionFromRecommendation, collectAllowedProductIds, matchesPendingCatalogActionCandidate, normalizePendingCatalogActionForEvidence } from "./pendingCatalogAction";
 import { resolveObservedRecommendationSourceProduct } from "./resolveObservedRecommendationSourceProduct";
 import { checkUnbackedCommercialMutationClaim } from "./commercialMutationClaims";
+import { buildCommercialActionRequestFromAtlStep } from "../commercial-action-request/atlAdapter";
+import { executeCommercialActionRequest } from "../commercial-action-request/executeCommercialActionRequest";
 
 /**
  * ACS-R1-05.1-T02.1 (spec section 5). Fixed, backend-owned pool - never
@@ -96,6 +98,8 @@ export type RunAgentToolLoopInput = {
   opportunityId: number | null;
   currentTime: string;
   customerMessage: string;
+  /** SALES-AGENT-R3-A03: the causation id a mutating tool call's CommercialActionRequest is built from. Optional/additive - absent means causationId is null, never a routing change. */
+  inboundMessageId?: string | null;
   /** Already-sanitized, already-reduced context - never raw PII, never a full domain snapshot. */
   commercialContextSummary: Record<string, unknown>;
   /** Ephemeral recent catalog product identity context. Never a source of current price, stock, availability or URLs. */
@@ -378,6 +382,7 @@ async function processUseToolStep(
   executedCalls: Set<string>,
   gatewayContext: CapabilityGatewayContext,
   warnings: string[],
+  inboundMessageId: string | null,
   continuity: {
     recentCatalogContext: RecentCatalogContext | null;
     toolObservationsThisTurn: ToolObservation[];
@@ -488,7 +493,25 @@ async function processUseToolStep(
     }
   }
 
-  const gatewayResult = await executeGovernedCapability(step.tool, effectiveArguments, gatewayContext);
+  // SALES-AGENT-R3-A03. A tool this boundary supports (select_products/
+  // set_shipping_destination/select_shipping_option/create_quote) is routed
+  // through CommercialActionRequest -> executeCommercialActionRequest
+  // instead of calling the Gateway directly - never a rewrite of this
+  // function, only its final call site: every check above (dedupe, catalog/
+  // selection evidence) still runs first, unchanged, and
+  // executeGovernedCapability remains the one place a side effect can occur
+  // either way. A tool this boundary does not (yet) cover - every read-only
+  // tool - keeps calling the Gateway directly, byte-for-byte as before.
+  const commercialActionRequest = buildCommercialActionRequestFromAtlStep({
+    step: enrichedStep,
+    conversationId: gatewayContext.conversationId ?? null,
+    opportunityId: typeof gatewayContext.opportunityId === "number" ? gatewayContext.opportunityId : null,
+    correlationId: gatewayContext.correlationId,
+    inboundMessageId
+  });
+  const gatewayResult = commercialActionRequest
+    ? (await executeCommercialActionRequest(commercialActionRequest, gatewayContext)).gatewayResult
+    : await executeGovernedCapability(step.tool, effectiveArguments, gatewayContext);
 
   // ACS-R1-05.1-T02.6.1 (spec section 7). A call rejected before any real
   // work happened (bad shape, never reached the Catalog Service) never
@@ -772,7 +795,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     }
 
     const toolObservationsThisTurn = steps.map((record) => record.observation).filter((observation): observation is ToolObservation => observation !== null);
-    const result = await processUseToolStep(step, input.commercialContextSummary, executedCalls, gatewayContext, warnings, {
+    const result = await processUseToolStep(step, input.commercialContextSummary, executedCalls, gatewayContext, warnings, input.inboundMessageId ?? null, {
       recentCatalogContext: input.recentCatalogContext ?? null,
       toolObservationsThisTurn,
       activeRecommendationPendingAction: recommendationPendingActionConsumed ? null : activeRecommendationPendingAction
