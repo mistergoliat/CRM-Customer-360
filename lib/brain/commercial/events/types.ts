@@ -226,7 +226,11 @@ export type AgentToolLoopStepSummary = {
   type: "use_tool" | "respond" | "handoff";
   phase: "gathering" | "finalization";
   tool?: string;
-  governance?: "authorized" | "blocked_unregistered" | "blocked_duplicate";
+  // SALES-AGENT-R3-A04 added "blocked_not_exposed" - a tool that IS
+  // registered in the Capability Gateway but is classified NOT_AGENT_EXPOSED
+  // (agent-capability-exposure/types.ts), distinct from "blocked_unregistered"
+  // (no Gateway registration at all).
+  governance?: "authorized" | "blocked_unregistered" | "blocked_duplicate" | "blocked_not_exposed";
   // CP-R1-T10B8C added "skipped" - exclusive to recommend_catalog_products,
   // mirrors agent-loop/agentStepTypes.ts#ToolObservationStatus.
   observationStatus?: "completed" | "failed" | "blocked" | "skipped";

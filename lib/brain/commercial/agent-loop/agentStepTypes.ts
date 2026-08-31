@@ -163,7 +163,13 @@ export type AgentLoopStepRecord = {
    * use_tool attempt at the validation layer (wrong type for that phase)
    * before it ever reaches a governance decision.
    */
-  governance: "authorized" | "blocked_unregistered" | "blocked_duplicate" | null;
+  /**
+   * SALES-AGENT-R3-A04 added "blocked_not_exposed" - a tool that IS
+   * registered in the Capability Gateway but is classified
+   * NOT_AGENT_EXPOSED (agent-capability-exposure/types.ts). Distinct from
+   * "blocked_unregistered" (no Gateway registration exists at all).
+   */
+  governance: "authorized" | "blocked_unregistered" | "blocked_duplicate" | "blocked_not_exposed" | null;
   observation: ToolObservation | null;
   /** Which loop phase produced this step - see runAgentToolLoop.ts. */
   phase: AgentLoopStepPhase;

@@ -64,3 +64,13 @@ export function buildToolEventDedupeKey(
 export function buildCommercialActionRequestDedupeKey(sessionId: string, requestId: string, eventType: string): string {
   return `session:${sessionId}:commercial_action_request:${requestId.trim()}:${eventType}`;
 }
+
+/**
+ * SALES-AGENT-R3-A04. One event per (session, ReadToolRequest, eventType) -
+ * same replay-stability property as buildCommercialActionRequestDedupeKey
+ * above, mirrored for the read-side boundary's own deterministic requestId
+ * (read-tool-request/requestIdentity.ts).
+ */
+export function buildReadToolRequestDedupeKey(sessionId: string, requestId: string, eventType: string): string {
+  return `session:${sessionId}:read_tool_request:${requestId.trim()}:${eventType}`;
+}

@@ -1,6 +1,9 @@
 import { executeGovernedCapability } from "../capability-gateway/executeCapability";
 import { resolveCapabilityGatewayDefinition } from "../capability-gateway/registry";
-import type { CapabilityGatewayContext } from "../capability-gateway/types";
+import type { CapabilityGatewayContext, CapabilityGatewayResult } from "../capability-gateway/types";
+import { resolveAgentCapabilityExposure } from "../agent-capability-exposure/types";
+import { buildReadToolRequestFromAtlStep } from "../read-tool-request/atlAdapter";
+import { executeReadTool } from "../read-tool-request/executeReadTool";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfiguration } from "../sales-agent-configuration";
 import { buildAgentStepPromptPackage, type AgentLoopPriorAttemptFailure, type AgentLoopToolDescription } from "./buildAgentStepPromptPackage";
@@ -389,7 +392,7 @@ async function processUseToolStep(
     /** CP-R1-T10B8D. Already null when consumed - callers only ever pass an action still active for this exact call. */
     activeRecommendationPendingAction: PendingCatalogActionStep | null;
   }
-): Promise<{ step: AgentStepUseTool; governance: "authorized" | "blocked_unregistered" | "blocked_duplicate"; observation: ToolObservation; executed: boolean }> {
+): Promise<{ step: AgentStepUseTool; governance: "authorized" | "blocked_unregistered" | "blocked_duplicate" | "blocked_not_exposed"; observation: ToolObservation; executed: boolean }> {
   const effectiveArguments = enrichToolArguments(step.tool, step.arguments, commercialContextSummary);
   const enrichedStep: AgentStepUseTool = { ...step, arguments: effectiveArguments };
   const dedupeKey = buildDedupeKey(step.tool, effectiveArguments);
@@ -493,25 +496,58 @@ async function processUseToolStep(
     }
   }
 
-  // SALES-AGENT-R3-A03. A tool this boundary supports (select_products/
-  // set_shipping_destination/select_shipping_option/create_quote) is routed
-  // through CommercialActionRequest -> executeCommercialActionRequest
-  // instead of calling the Gateway directly - never a rewrite of this
-  // function, only its final call site: every check above (dedupe, catalog/
-  // selection evidence) still runs first, unchanged, and
-  // executeGovernedCapability remains the one place a side effect can occur
-  // either way. A tool this boundary does not (yet) cover - every read-only
-  // tool - keeps calling the Gateway directly, byte-for-byte as before.
-  const commercialActionRequest = buildCommercialActionRequestFromAtlStep({
-    step: enrichedStep,
-    conversationId: gatewayContext.conversationId ?? null,
-    opportunityId: typeof gatewayContext.opportunityId === "number" ? gatewayContext.opportunityId : null,
-    correlationId: gatewayContext.correlationId,
-    inboundMessageId
-  });
-  const gatewayResult = commercialActionRequest
-    ? (await executeCommercialActionRequest(commercialActionRequest, gatewayContext)).gatewayResult
-    : await executeGovernedCapability(step.tool, effectiveArguments, gatewayContext);
+  // SALES-AGENT-R3-A04. Explicit classification replaces the former
+  // "CommercialActionRequest, else call the Gateway directly" fallback: every
+  // agent-visible tool now resolves deterministically to exactly one of the
+  // two structurally disjoint surfaces (agent-capability-exposure/types.ts),
+  // or is failed closed before ever reaching the Gateway.
+  //
+  // NOT_AGENT_EXPOSED is structurally unreachable today (AGENT_LOOP_TOOL_POOL
+  // above already only contains capabilities classified READ_TOOL or
+  // COMMERCIAL_ACTION), kept as defense in depth - never trusted implicitly,
+  // still tested (agentCapabilityExposure.test.ts) so a future pool addition
+  // without a classification entry fails closed instead of silently calling
+  // the Gateway.
+  const exposure = resolveAgentCapabilityExposure(step.tool);
+  if (exposure === "NOT_AGENT_EXPOSED") {
+    warnings.push(`agent_loop_tool_blocked_not_exposed:${step.tool}`);
+    return {
+      step: enrichedStep,
+      governance: "blocked_not_exposed",
+      observation: { tool: step.tool, status: "blocked", errorCode: "capability_not_agent_exposed" },
+      executed: false
+    };
+  }
+
+  let gatewayResult: CapabilityGatewayResult;
+  if (exposure === "COMMERCIAL_ACTION") {
+    // Never a rewrite of this function, only this branch's call site: every
+    // check above (dedupe, catalog/selection evidence) still runs first,
+    // unchanged, and executeGovernedCapability remains the one place a side
+    // effect can occur either way.
+    const commercialActionRequest = buildCommercialActionRequestFromAtlStep({
+      step: enrichedStep,
+      conversationId: gatewayContext.conversationId ?? null,
+      opportunityId: typeof gatewayContext.opportunityId === "number" ? gatewayContext.opportunityId : null,
+      correlationId: gatewayContext.correlationId,
+      inboundMessageId
+    });
+    gatewayResult = commercialActionRequest
+      ? (await executeCommercialActionRequest(commercialActionRequest, gatewayContext)).gatewayResult
+      : await executeGovernedCapability(step.tool, effectiveArguments, gatewayContext);
+  } else {
+    // exposure === "READ_TOOL"
+    const readToolRequest = buildReadToolRequestFromAtlStep({
+      step: enrichedStep,
+      conversationId: gatewayContext.conversationId ?? null,
+      opportunityId: typeof gatewayContext.opportunityId === "number" ? gatewayContext.opportunityId : null,
+      correlationId: gatewayContext.correlationId,
+      inboundMessageId
+    });
+    gatewayResult = readToolRequest
+      ? (await executeReadTool(readToolRequest, gatewayContext)).gatewayResult
+      : await executeGovernedCapability(step.tool, effectiveArguments, gatewayContext);
+  }
 
   // ACS-R1-05.1-T02.6.1 (spec section 7). A call rejected before any real
   // work happened (bad shape, never reached the Catalog Service) never
