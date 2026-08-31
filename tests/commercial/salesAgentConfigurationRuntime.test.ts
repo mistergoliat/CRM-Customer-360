@@ -10,6 +10,7 @@ import {
   SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_MODEL_CONFIGURATION_GENERIC_FALLBACK_MODEL,
+  SALES_AGENT_MODEL_CONFIGURATION_LIMITS,
   SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT,
   archiveConfiguration,
   computeSalesAgentConfigurationHash,
@@ -170,7 +171,7 @@ test("[M4] validateSalesAgentModelConfiguration enforces platform bounds on ever
     ["temperature", 1.5],
     ["temperature", -0.1],
     ["maxOutputTokens", 127],
-    ["maxOutputTokens", 2049],
+    ["maxOutputTokens", 8193],
     ["timeoutMs", 4999],
     ["timeoutMs", 60001],
     ["maxModelRetries", -1],
@@ -182,9 +183,10 @@ test("[M4] validateSalesAgentModelConfiguration enforces platform bounds on ever
     if (!result.valid) assert.equal(result.code, "out_of_range", `${field}=${value}`);
   }
 
-  // Exactly at the boundary must be accepted.
+  // Exactly at the boundary must be accepted. maxOutputTokensMax raised
+  // 2048 -> 8192 by the R3 pilot hotfix (2026-08-31).
   const atBounds = validateSalesAgentModelConfiguration(
-    buildValidModelConfiguration({ temperature: 1, maxOutputTokens: 2048, timeoutMs: 60000, maxModelRetries: 5 })
+    buildValidModelConfiguration({ temperature: 1, maxOutputTokens: 8192, timeoutMs: 60000, maxModelRetries: 5 })
   );
   assert.equal(atBounds.valid, true);
 });
@@ -724,6 +726,65 @@ test("[E3] resolver clamps an out-of-range persisted value to platform limits (d
   assert.equal(resolved.effectiveModelConfiguration.timeoutMs, 60000, "timeoutMs must be clamped to the platform max");
   assert.equal(resolved.effectiveModelConfiguration.maxModelRetries, 5, "maxModelRetries must be clamped to the platform max");
   assert.equal(resolved.effectiveLoopConfiguration.maxToolCallsPerTurn, 12, "maxToolCallsPerTurn must be clamped to the platform max");
+});
+
+// ---------------------------------------------------------------------------
+// R3 pilot hotfix (2026-08-31): maxOutputTokensMax raised 2048 -> 8192.
+// ---------------------------------------------------------------------------
+
+test("[R3HF-1] the platform ceiling is 8192, not the pre-hotfix 2048", () => {
+  assert.equal(SALES_AGENT_MODEL_CONFIGURATION_LIMITS.maxOutputTokensMax, 8192);
+});
+
+test("[R3HF-2] a published maxOutputTokens=4096 (the R3 pilot target) resolves unclamped - it must not be capped to the old 2048 ceiling", async () => {
+  await clearActivePublication();
+  const draft = await createDraftConfiguration({
+    name: uniqueName("r3-hotfix-4096"),
+    configuration: {
+      ...buildValidPromptConfiguration(),
+      modelConfiguration: buildValidModelConfiguration({ model: "deepseek-v4-flash", temperature: 0, maxOutputTokens: 4096, timeoutMs: 30000, maxModelRetries: 1 }),
+      loopConfiguration: buildValidLoopConfiguration({ maxAgentStepsPerTurn: 8, maxToolCallsPerTurn: 8 })
+    },
+    createdBy: "test-suite"
+  });
+  await publishDraftConfiguration({ id: draft.id });
+
+  const resolved = await resolveSalesAgentConfiguration();
+  assert.equal(resolved.effectiveModelConfiguration.model, "deepseek-v4-flash");
+  assert.equal(resolved.effectiveModelConfiguration.temperature, 0);
+  assert.equal(resolved.effectiveModelConfiguration.maxOutputTokens, 4096, "4096 must pass through unclamped now that the ceiling is 8192");
+  assert.equal(resolved.effectiveModelConfiguration.timeoutMs, 30000);
+  assert.equal(resolved.effectiveModelConfiguration.maxModelRetries, 1);
+  assert.equal(resolved.effectiveLoopConfiguration.maxAgentStepsPerTurn, 8);
+  assert.equal(resolved.effectiveLoopConfiguration.maxToolCallsPerTurn, 8);
+});
+
+test("[R3HF-3] a persisted maxOutputTokens above the new ceiling is clamped to 8192, never let through uncapped (defense in depth, same as [E3])", async () => {
+  await clearActivePublication();
+  const draft = await createDraftConfiguration({
+    name: uniqueName("r3-hotfix-clamp"),
+    configuration: {
+      ...buildValidPromptConfiguration(),
+      modelConfiguration: buildValidModelConfiguration({ maxOutputTokens: 8192 }),
+      loopConfiguration: buildValidLoopConfiguration()
+    },
+    createdBy: "test-suite"
+  });
+  const published = await publishDraftConfiguration({ id: draft.id });
+
+  // Bypass validation directly - simulates a platform cap tightened again
+  // after this row was written (same technique [E3] already uses).
+  const corruptedConfiguration = {
+    ...published.configuration,
+    modelConfiguration: { ...published.configuration.modelConfiguration, maxOutputTokens: 999999 }
+  };
+  await queryRows(`UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET configuration_json = ? WHERE id = ?`, [
+    JSON.stringify(corruptedConfiguration),
+    published.id
+  ]);
+
+  const resolved = await resolveSalesAgentConfiguration();
+  assert.equal(resolved.effectiveModelConfiguration.maxOutputTokens, 8192, "maxOutputTokens must be clamped to the new platform max, never left uncapped");
 });
 
 test("[E6] model precedence: a published (and still-allowed) model wins over BRAIN_MODEL_NAME", async () => {

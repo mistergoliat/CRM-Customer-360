@@ -455,3 +455,28 @@ test("[RC7] pendingCatalogAction is persisted only when dispatch actually writes
     assert.deepEqual(loaded.pendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["501"] });
   });
 });
+
+test("[RC8] R3 pilot hotfix: an 8/8 effective loop configuration really reaches SalesAgentRuntime and is honored (not silently capped at the old 3/2 safe default)", async () => {
+  catalogUp();
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  const script: unknown[] = [];
+  for (let index = 1; index <= 8; index += 1) {
+    script.push({ type: "use_tool", tool: "search_products", arguments: { query: `kettlebell-${index}` } });
+  }
+  script.push({ type: "respond", message: "Listo, revise varias opciones." });
+  const provider = createFakeAgentLoopProvider({ script });
+
+  await withEnv(DISPATCH_ENABLED_ENV, async () => {
+    const result = await runSalesAgentRuntimeCycle({
+      ...input,
+      snapshot: buildSnapshot(),
+      provider,
+      resolvedSalesAgentConfiguration: buildResolvedConfig({ effectiveLoopConfiguration: { maxAgentStepsPerTurn: 8, maxToolCallsPerTurn: 8 } })
+    });
+
+    assert.equal(result.runtime.status, "responded");
+    assert.equal(result.runtime.toolCalls, 8, "all 8 distinct tool calls must complete within the 8/8 budget, never truncated at the old default of 2");
+    assert.equal(result.runtime.modelSteps, 9, "8 gathering decisions + 1 finalization respond");
+  });
+});

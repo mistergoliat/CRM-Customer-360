@@ -592,3 +592,30 @@ test("[T08E-9] production thinking wiring is unchanged by T08E: the legacy loop 
     "runNativeAgentToolLoopCycle.ts must not introduce a new thinking override as part of T08E"
   );
 });
+
+test("[R3-Hotfix-1] SalesAgentRuntime (R3) provider construction sets thinking: \"disabled\" unconditionally; ATL's own call site and thinking override are unaffected", () => {
+  const nativeCycleSource = readFileSync(resolve(process.cwd(), "lib/brain/commercial/native-cycle/runNativeAutonomousCycle.ts"), "utf8");
+
+  const r3CallIndex = nativeCycleSource.indexOf("await runSalesAgentRuntimeCycle({");
+  assert.notEqual(r3CallIndex, -1, "runSalesAgentRuntimeCycle call site must exist");
+  const r3Slice = nativeCycleSource.slice(r3CallIndex, r3CallIndex + 2000);
+
+  assert.match(
+    r3Slice,
+    /thinking:\s*"disabled"/,
+    "the SalesAgentRuntime (R3) provider construction must set thinking: \"disabled\" - real pilot evidence showed DeepSeek consuming the whole output budget as reasoning_content otherwise"
+  );
+  assert.doesNotMatch(
+    r3Slice,
+    /shouldRouteToMultiIntentPlanner/,
+    "the R3 thinking override must be unconditional (a hardcoded pilot hotfix), never reusing ATL's allowlisted multi-intent ternary"
+  );
+
+  // T08E-9 (above) already proves ATL's own ternary is untouched; this
+  // reconfirms it here too so a single test failure names both properties.
+  assert.match(
+    nativeCycleSource,
+    /shouldRouteToMultiIntentPlanner\(input\.waId\)\s*\?\s*\{\s*thinking:\s*"disabled" as const\s*\}\s*:\s*\{\}/,
+    "the R3 hotfix must not change ATL's own conditional thinking override"
+  );
+});

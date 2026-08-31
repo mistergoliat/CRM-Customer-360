@@ -20,12 +20,16 @@ type HttpAgentLoopProviderConfig = {
   /** Technical HTTP/model retries only - never a second model decision or a finalization attempt (those live in runAgentToolLoop.ts). */
   maxModelRetries?: number;
   /**
-   * LLM-R1-T08B. Benchmark-only lever - never set by any production caller
-   * (runNativeAutonomousCycle.ts never passes this). Undefined (the default)
-   * omits the `thinking` field from the request entirely, byte-identical to
-   * pre-T08B behavior - the provider's own default (currently "enabled")
-   * governs, exactly as today. Only liveProvider.ts's benchmark config
-   * resolver ever sets this, gated behind its own explicit env var.
+   * LLM-R1-T08B. Undefined (the default) omits the `thinking` field from
+   * the request entirely - the provider's own default ("enabled") governs.
+   * Two production callers set this explicitly today, both narrowly scoped
+   * (never a global default): liveProvider.ts's benchmark config resolver
+   * (gated behind its own explicit env var), and - as of the R3 pilot
+   * hotfix (2026-08-31) - runNativeAutonomousCycle.ts's SalesAgentRuntime
+   * (R3) branch only, set to "disabled" because DeepSeek was observed
+   * consuming the entire output-token budget as reasoning_content and
+   * returning an empty `content` field. The Agent Tool Loop (ATL)
+   * production call site in the same file still omits this field.
    */
   thinking?: "enabled" | "disabled";
   fetchImpl?: typeof fetch;
