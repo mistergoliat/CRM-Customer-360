@@ -1,0 +1,168 @@
+{
+  "$schema": "shared bake-off corpus, SALES-AGENT-R2-A13-H0 -- plain JSON so both the R2 runner and the Harness runner consume the exact same scenario definitions",
+  "scenarios": [
+    {
+      "id": "H0-01",
+      "category": "simple_product_search",
+      "title": "Simple product search",
+      "waId": "bakeoff-h0-01",
+      "turns": ["Hola, tienen barra olimpica?"]
+    },
+    {
+      "id": "H0-02",
+      "category": "ambiguous_product",
+      "title": "Ambiguous product reference (two candidates)",
+      "waId": "bakeoff-h0-02",
+      "turns": ["Quiero una barra olimpica"]
+    },
+    {
+      "id": "H0-03",
+      "category": "product_comparison",
+      "title": "Head-to-head product comparison before choosing",
+      "waId": "bakeoff-h0-03",
+      "turns": [
+        "Estoy viendo la barra olimpica de 15kg y la de 20kg, cual es la diferencia?",
+        "Estoy entre esas dos, cual me conviene si entreno fuerza cuatro veces por semana?"
+      ]
+    },
+    {
+      "id": "H0-04",
+      "category": "customer_correction",
+      "title": "Customer corrects a stated fact (destination)",
+      "waId": "bakeoff-h0-04",
+      "turns": [
+        "Quiero una barra olimpica de 15kg, despachala a Providencia",
+        "Perdon, no era Providencia, es Nunoa"
+      ]
+    },
+    {
+      "id": "H0-05",
+      "category": "quantity_correction",
+      "title": "Bare quantity correction after selection",
+      "waId": "bakeoff-h0-05",
+      "turns": ["Quiero 1 disco olimpico de 10kg", "Mejor mandame 4"]
+    },
+    {
+      "id": "H0-06",
+      "category": "product_replacement_after_selection",
+      "title": "Product swap after an earlier selection",
+      "waId": "bakeoff-h0-06",
+      "turns": ["Quiero una barra olimpica de 20kg", "Mejor cambia la barra por una mas barata"]
+    },
+    {
+      "id": "H0-07",
+      "category": "multi_product_request",
+      "title": "Multiple products in one request",
+      "waId": "bakeoff-h0-07",
+      "turns": ["Quiero una barra olimpica y un par de discos de 10kg"]
+    },
+    {
+      "id": "H0-08",
+      "category": "customer_aware_recommendation",
+      "title": "Customer-aware recommendation from purchase history",
+      "waId": "bakeoff-h0-08",
+      "seedIdentityLevel": "LEVEL_3_PRESTASHOP_LINKED",
+      "turns": ["Que me recomiendas segun lo que suelo comprar?"]
+    },
+    {
+      "id": "H0-09",
+      "category": "repeat_purchase_like_request",
+      "title": "Repeat-purchase-like request",
+      "waId": "bakeoff-h0-09",
+      "seedIdentityLevel": "LEVEL_3_PRESTASHOP_LINKED",
+      "turns": ["Quiero pedir lo mismo que la ultima vez"]
+    },
+    {
+      "id": "H0-10",
+      "category": "long_conversation",
+      "title": "Long 6-10 turn home-gym conversation",
+      "waId": "bakeoff-h0-10",
+      "turns": [
+        "Quiero armar un home gym con 700 lucas",
+        "Quiero una barra olimpica",
+        "Mejor una de 15kg",
+        "Agregale discos",
+        "Cuanto sale a Concepcion",
+        "Mejor cambia la barra por una mas barata",
+        "Ya, dejemoslo asi, cual es el total con despacho?"
+      ]
+    },
+    {
+      "id": "H0-11",
+      "category": "budget_constrained_recommendation",
+      "title": "Budget-constrained home gym recommendation",
+      "waId": "bakeoff-h0-11",
+      "turns": ["Quiero armar un home gym con 700 lucas, que me recomiendas?"]
+    },
+    {
+      "id": "H0-12",
+      "category": "shipping_after_selection",
+      "title": "Shipping question right after product selection",
+      "waId": "bakeoff-h0-12",
+      "turns": ["Quiero una barra olimpica de 15kg", "Cuanto sale a Concepcion?"]
+    },
+    {
+      "id": "H0-13",
+      "category": "product_change_after_shipping",
+      "title": "Product change after shipping was already discussed",
+      "waId": "bakeoff-h0-13",
+      "turns": ["Quiero una barra olimpica de 15kg", "Cuanto sale a Concepcion?", "Mejor cambia la barra por una mas barata"]
+    },
+    {
+      "id": "H0-14",
+      "category": "catalog_no_match",
+      "title": "Catalog search with zero real matches",
+      "waId": "bakeoff-h0-14",
+      "turns": ["Tienen cinta de correr electrica plegable con inclinacion motorizada?"]
+    },
+    {
+      "id": "H0-15",
+      "category": "catalog_unavailable",
+      "title": "Catalog service unavailable mid-conversation",
+      "waId": "bakeoff-h0-15",
+      "injectFault": "catalog_unavailable",
+      "turns": ["Quiero una barra olimpica"]
+    },
+    {
+      "id": "H0-16",
+      "category": "customer_profile_unavailable",
+      "title": "Customer Profile unavailable for a customer-aware ask",
+      "waId": "bakeoff-h0-16",
+      "seedIdentityLevel": "LEVEL_3_PRESTASHOP_LINKED",
+      "injectFault": "customer_profile_unavailable",
+      "turns": ["Que me recomiendas segun lo que suelo comprar?"]
+    },
+    {
+      "id": "H0-17",
+      "category": "mid_conversation_intent_change",
+      "title": "Customer changes intent mid-conversation",
+      "waId": "bakeoff-h0-17",
+      "turns": ["Quiero una barra olimpica de 15kg", "En realidad, antes de eso, hacen despacho a regiones o solo Santiago?"]
+    },
+    {
+      "id": "H0-18",
+      "category": "broad_consultative_question",
+      "title": "Broad consultative question with no specific product yet",
+      "waId": "bakeoff-h0-18",
+      "turns": ["Que necesito para armar mi primer home gym en un depto chico?"]
+    },
+    {
+      "id": "H0-19",
+      "category": "return_to_earlier_goal",
+      "title": "Customer returns to an earlier goal after a detour",
+      "waId": "bakeoff-h0-19",
+      "turns": [
+        "Quiero una barra olimpica de 15kg",
+        "Oye, antes de seguir, tienen tienda fisica en Santiago?",
+        "Bueno, volvamos a la barra que estabamos viendo, agregale discos de 10kg"
+      ]
+    },
+    {
+      "id": "H0-20",
+      "category": "duplicate_repeated_message",
+      "title": "Same message sent twice in a row",
+      "waId": "bakeoff-h0-20",
+      "turns": ["Quiero 2 discos olimpicos de 10kg", "Quiero 2 discos olimpicos de 10kg"]
+    }
+  ]
+}
