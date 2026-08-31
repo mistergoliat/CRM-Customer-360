@@ -43,7 +43,15 @@ import {
   buildInternalCommandCommercialEventDedupeKey
 } from "./dedupe";
 
-const SENSITIVE_KEY_PATTERN = /authorization|api[-_]?key|token|secret|password|cookie|header|webhook/i;
+// SALES-AGENT-R3-A01. Extended (additive, never loosened) with reasoning/
+// raw-model-output-shaped keys, so AgentSessionStore (lib/brain/commercial/
+// agent-session/) can reuse this exact sanitizer for its own event payloads
+// without a second, parallel implementation. Every existing commercial_event
+// payload shape (events/types.ts) was audited against this addition and
+// contains no field name matching the new terms - this only makes rejection
+// stricter, never looser, for every existing caller.
+const SENSITIVE_KEY_PATTERN =
+  /authorization|api[-_]?key|token|secret|password|cookie|header|webhook|reasoning[-_]?(content|text)|chain[-_]?of[-_]?thought|thinking|raw[-_]?(output|prompt)|prompt/i;
 const COMMERCIAL_EVENT_CAUSATION_ID_PATTERN = /^cevt_[a-f0-9]{32}$/i;
 
 function nowIso() {

@@ -4,6 +4,7 @@ import { runCommercialMultiIntentLoop } from "../multi-intent/runCommercialMulti
 import { shouldRouteToMultiIntentPlanner } from "../config/commercialCycleConfig";
 import { dispatchAgentLoopResponse, type DispatchAgentLoopResponseResult } from "./dispatchAgentLoopResponse";
 import { recordAgentToolLoopCompletedCommercialEvent } from "../events/service";
+import { recordAgentToolLoopSessionShadowEvents } from "../agent-session/shadowRecorder";
 import type { AgentToolLoopLlmCallSummary, AgentToolLoopLlmMetricsPayload, AgentToolLoopStepSummary } from "../events/types";
 import type { ContinuityFallbackContext } from "../continuity/buildContinuityFallbackMessage";
 import type { AgentLoopProvider } from "./agentLoopProviderTypes";
@@ -592,6 +593,8 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     );
   }
 
+  const stepsSummary = buildStepsSummary(loop);
+
   try {
     await recordAgentToolLoopCompletedCommercialEvent({
       inboundMessageId: input.inboundMessageId,
@@ -604,7 +607,7 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
       toolsUsed: [...new Set(loop.steps.filter((record) => record.step.type === "use_tool").map((record) => (record.step as { tool: string }).tool))],
       finalMessagePresent: loop.finalMessage !== null,
       handoffReasonPresent: loop.handoffReason !== null,
-      stepsSummary: buildStepsSummary(loop),
+      stepsSummary,
       // ACS-R1-05.1-T02.3B: which configuration produced this turn's prompt/
       // model/loop parameters, and the effective (already-clamped) values
       // actually used - never just what was requested. No prompt text, no
@@ -638,6 +641,31 @@ export async function runNativeAgentToolLoopCycle(input: RunNativeAgentToolLoopC
     // through (see runNativeAgentToolLoopCycleConfigurationFailure above).
     const message = error instanceof Error ? error.message : "unknown";
     loop.warnings.push(`agent_tool_loop_completed_event_write_failed:${message}`);
+  }
+
+  // SALES-AGENT-R3-A01. Shadow/additive only - runs strictly after the real
+  // turn (model decisions, capability execution, dispatch) already
+  // completed. Never influences loop/dispatch above; a failure here is
+  // degradable (never fatal to the turn), surfaced the same way every other
+  // technical, non-customer-facing signal in this cycle already is - see
+  // docs/releases/SALES-AGENT-R3-A01-agent-session-store.md "Shadow
+  // integration".
+  try {
+    const shadowResult = await recordAgentToolLoopSessionShadowEvents({
+      conversationId: input.conversationId,
+      inboundMessageId: input.inboundMessageId,
+      correlationId: input.correlationId,
+      terminalReason: loop.terminalReason,
+      finalMessagePresent: loop.finalMessage !== null,
+      handoffReasonPresent: loop.handoffReason !== null,
+      stepsSummary
+    });
+    if (!shadowResult.ok) {
+      loop.warnings.push(`agent_session_shadow_event_write_failed:${shadowResult.warning}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    loop.warnings.push(`agent_session_shadow_event_write_failed:${message}`);
   }
 
   return { loop, dispatch, humanOwnerActive, aiBlocked };
