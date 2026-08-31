@@ -272,6 +272,90 @@ export async function ensureAutonomousSalesTurnContinuity(
     return { cycle, disposition };
   }
 
+  // SALES-AGENT-R3-V1.4: runSalesAgentRuntimeCycle already called
+  // dispatchAgentLoopResponse - this branch only derives the terminal
+  // disposition/audit trail, it never dispatches a second time. Mirrors the
+  // cycle.agentLoop branch above field-for-field, adapted to
+  // SalesAgentRuntimeResult's status/responseText/reason vocabulary instead
+  // of AgentLoopResult's terminalReason/finalMessage/handoffReason.
+  if (cycle.salesAgentRuntime) {
+    const { runtime, dispatch } = cycle.salesAgentRuntime;
+
+    if (runtime.status === "blocked") {
+      // Skipped before ever calling the model - human owner active or AI blocked.
+      const disposition = baseDisposition({
+        terminalOutcome: "human_response_required",
+        responseOwner: "human",
+        waitingFor: "human_response",
+        handoffCreated: true
+      });
+      await persistDisposition({
+        inboundMessageId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        opportunityId: null,
+        disposition,
+        primaryActionId: null,
+        primaryDisposition: null,
+        primaryBlockReasons: [],
+        fallbackActionId: null,
+        outboxId: null
+      });
+      return { cycle, disposition };
+    }
+
+    const toolUsed = runtime.readToolCalls > 0 || runtime.commercialActionCalls > 0;
+    const commercialObjective: AutonomousTurnCommercialObjective =
+      runtime.status === "handoff" ? "handoff" : toolUsed ? "recommend" : runtime.status === "responded" ? "discover_need" : "none";
+    const terminalOutcome =
+      runtime.status === "responded"
+        ? toolUsed
+          ? "catalog_recommendation_planned"
+          : "commercial_response_planned"
+        : runtime.status === "handoff"
+          ? dispatch.outboxWritten
+            ? "handoff_acknowledgement_planned"
+            : "human_response_required"
+          : dispatch.outboxWritten
+            ? "fallback_outbox_planned"
+            : "continuity_failed";
+
+    const disposition = baseDisposition({
+      terminalOutcome,
+      responseOwner: runtime.status === "handoff" ? "human" : "ai",
+      acknowledgementSender: runtime.status === "handoff" && dispatch.outboxWritten ? "ai" : null,
+      waitingFor: runtime.status === "handoff" ? "human_response" : "none",
+      handoffCreated: runtime.status === "handoff",
+      commercialObjective,
+      responsePlanned: dispatch.outboxWritten,
+      nextBestActionDefined: Boolean(runtime.responseText || runtime.reason)
+    });
+
+    if (dispatch.outboxWritten) {
+      await persistDisposition({
+        inboundMessageId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        opportunityId: dispatch.action?.opportunityId ?? null,
+        disposition,
+        primaryActionId: dispatch.action?.actionId ?? null,
+        primaryDisposition: dispatch.executionGate?.status ?? null,
+        primaryBlockReasons: [],
+        fallbackActionId: null,
+        outboxId: dispatch.outboxId === null ? null : String(dispatch.outboxId)
+      });
+    } else {
+      await persistContinuityFailed({
+        inboundMessageId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        reason: `sales_agent_runtime_dispatch_failed:${runtime.status}:${dispatch.warnings.join(",")}`
+      });
+    }
+
+    return { cycle, disposition };
+  }
+
   const loop = cycle.loop;
   const bridge = cycle.bridge;
   const resultingState = loop?.resultingState ?? null;

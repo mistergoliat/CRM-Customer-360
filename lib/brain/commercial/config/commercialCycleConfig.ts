@@ -32,7 +32,8 @@ import { SALES_AGENT_RUNTIME_DEFAULT_DRY_RUN } from "../sales-agent/runtimeTypes
 import {
   loadAutonomousPilotAllowlist,
   isWaIdAuthorizedForPilot,
-  loadCommercialWorkRuntimeAllowlist
+  loadCommercialWorkRuntimeAllowlist,
+  loadSalesAgentRuntimeAllowlist
 } from "../../runtime/autonomousRuntimeConfig";
 
 export function readEnvFlag(name: string, fallback = false): boolean {
@@ -236,6 +237,41 @@ export function buildCommercialWorkParallelExecutionFeatureFlags(overrides?: Par
     maxParallelSteps: readEnvPositiveInt("BRAIN_COMMERCIAL_WORK_PARALLEL_MAX_STEPS", 3),
     ...(overrides ?? {})
   };
+}
+
+/**
+ * SALES-AGENT-R3-V1.4. Fail-closed (default false) toggle for the
+ * SalesAgentRuntime pilot route on the native WhatsApp inbound path.
+ * Meaningless on its own - see shouldRouteToSalesAgentRuntime below for the
+ * actual per-turn routing decision, which additionally requires a
+ * non-empty BRAIN_SALES_AGENT_RUNTIME_WA_IDS allowlist. Same shape as
+ * buildCommercialWorkRuntimeFeatureFlags above.
+ */
+export function buildSalesAgentRuntimeRoutingFeatureFlags(overrides?: Partial<{ salesAgentRuntimeEnabled: boolean }>) {
+  return {
+    salesAgentRuntimeEnabled: readEnvFlag("BRAIN_SALES_AGENT_RUNTIME_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
+
+/**
+ * SALES-AGENT-R3-V1.4. Same fail-closed shape as shouldRouteToCommercialWork
+ * above: SalesAgentRuntime handles a turn only when the flag is on AND this
+ * exact waId is one of the explicitly configured
+ * BRAIN_SALES_AGENT_RUNTIME_WA_IDS entries - never a global switch, never
+ * simply because another pilot's allowlist happens to be populated. An
+ * empty allowlist with the flag on is ambiguous configuration (nobody to
+ * route) and fails closed, same reasoning as shouldRouteToCommercialWork.
+ * Checked last among the runtime-selection branches in
+ * runNativeAutonomousCycle.ts (after commercialWork/multiRequest/
+ * agentToolLoop) so this new pilot can never silently steal a wa_id already
+ * allowlisted for an existing, more mature pilot route.
+ */
+export function shouldRouteToSalesAgentRuntime(waId: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!buildSalesAgentRuntimeRoutingFeatureFlags(undefined).salesAgentRuntimeEnabled) return false;
+  const allowlist = loadSalesAgentRuntimeAllowlist(env);
+  if (allowlist.length === 0) return false;
+  return isWaIdAuthorizedForPilot(waId, allowlist);
 }
 
 export function buildCommercialSalesAgentDryRun(): boolean {
