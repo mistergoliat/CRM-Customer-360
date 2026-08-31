@@ -5,6 +5,8 @@ import { buildSandboxAutonomyConfig, evaluateAgentActionForSandbox, normalizeWaI
 import { executeActionThroughGate, SqlExecutionUnitOfWork, type ExecutionGateResult } from "@/lib/brain/commercial/execution-gate";
 import { checkCustomerOptOutStatus } from "@/lib/brain/commercial/optOutStore";
 import { claimFailedFollowUpRetry, claimPlannedFollowUp, claimStaleExecutingFollowUp } from "@/lib/brain/commercial/followup/runFollowupTick";
+import { buildFollowUpWakeEvent } from "@/lib/brain/commercial/followup-wake/buildFollowUpWakeEvent";
+import { recordFollowUpWake } from "@/lib/brain/commercial/followup-wake/sessionEvents";
 import { getCommercialWorkByPublicId } from "../repository";
 import type { PersistedCommercialWork } from "../persistenceTypes";
 import type { CommercialConversationProjection, CommercialObjective, CommercialOpportunityProjection } from "../types";
@@ -547,10 +549,35 @@ export async function processObjectiveAwareFollowUpDue(input: {
   const claimed = await claimAction(row);
   if (!claimed) return { status: "skipped", scheduleActionId: row.action_id, reason: "already_claimed" };
 
+  // SALES-AGENT-R3-A05. row.status/row.attempt_number are the PRE-claim
+  // values (claimAction reuses runFollowupTick.ts's own CAS primitives,
+  // which bump attempt_number for the 'executing'/'failed' origins as part
+  // of the same claim) - buildFollowUpWakeEvent mirrors that arithmetic, so
+  // this wakeId matches what claimAction actually persisted. conversationId/
+  // opportunityId come from the durable row itself, never from the
+  // objective-aware payload (which has no such fields).
+  const conversationIdForWake =
+    row.conversation_case_id === null || row.conversation_case_id === undefined ? null : Number(row.conversation_case_id);
+  const wakeCorrelationId = `followup:${row.action_id}:${Date.now()}`;
+  const wakeEvent =
+    conversationIdForWake !== null && Number.isFinite(conversationIdForWake)
+      ? buildFollowUpWakeEvent({
+          actionPublicId: row.action_id,
+          statusPreClaim: row.status,
+          attemptNumberPreClaim: row.attempt_number,
+          conversationId: conversationIdForWake,
+          opportunityId: row.opportunity_id,
+          correlationId: wakeCorrelationId,
+          scheduledFor: row.scheduled_for,
+          firedAt: now
+        })
+      : null;
+
   const claimedRow = (await loadAction(input.actionId)) ?? row;
   const revalidation = await revalidateObjectiveAwareFollowUp(claimedRow, payload);
   if (!revalidation.ok) {
     await abortScheduleAction(row.action_id, revalidation.reason);
+    if (wakeEvent) await recordFollowUpWake(wakeEvent, { status: "cancelled", reason: revalidation.reason });
     return { status: "cancelled", scheduleActionId: row.action_id, reason: revalidation.reason };
   }
 
@@ -570,6 +597,9 @@ export async function processObjectiveAwareFollowUpDue(input: {
   });
   if (!(persistence.status === "inserted" || persistence.status === "updated_existing" || persistence.status === "duplicate_ignored")) {
     await abortScheduleAction(row.action_id, "send_action_persistence_failed");
+    if (wakeEvent) {
+      await recordFollowUpWake(wakeEvent, { status: "technical_failure", reason: persistence.error ?? persistence.status });
+    }
     return { status: "failed", scheduleActionId: row.action_id, reason: persistence.error ?? persistence.status };
   }
 
@@ -617,11 +647,14 @@ export async function processObjectiveAwareFollowUpDue(input: {
 
   if (executionGate.allowed || executionGate.status === "duplicate") {
     await markScheduleExecuted(row.action_id);
+    if (wakeEvent) await recordFollowUpWake(wakeEvent, { status: "executed" });
     return { status: "sent", scheduleActionId: row.action_id, sendAction: persistence.action, persistence, executionGate };
   }
 
-  await abortScheduleAction(row.action_id, `dispatch_blocked:${executionGate.blockReasons[0] ?? executionGate.status}`);
-  return { status: "cancelled", scheduleActionId: row.action_id, reason: `dispatch_blocked:${executionGate.blockReasons[0] ?? executionGate.status}` };
+  const blockedReason = `dispatch_blocked:${executionGate.blockReasons[0] ?? executionGate.status}`;
+  await abortScheduleAction(row.action_id, blockedReason);
+  if (wakeEvent) await recordFollowUpWake(wakeEvent, { status: "cancelled", reason: blockedReason });
+  return { status: "cancelled", scheduleActionId: row.action_id, reason: blockedReason };
 }
 
 export async function cancelObjectiveAwareFollowUps(input: {

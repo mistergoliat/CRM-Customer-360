@@ -18,7 +18,10 @@ import {
   type SalesAgentFollowUpConfiguration
 } from "@/lib/brain/commercial/sales-agent-configuration";
 import { SALES_AGENT_CONFIGURATION_TABLE } from "@/lib/brain/commercial/sales-agent-configuration/constants";
-import type { runNativeAutonomousCycle, NativeAutonomousCycleResult } from "@/lib/brain/commercial/native-cycle";
+import type {
+  dispatchDraftedFollowUpMessage,
+  DispatchDraftedFollowUpMessageResult
+} from "@/lib/brain/commercial/followup-wake/dispatchDraftedFollowUpMessage";
 
 // Real MariaDB, real crm_test - same convention as runFollowupTick.test.ts /
 // followUpSequenceContinuity.test.ts.
@@ -62,12 +65,9 @@ function uniqueWaId(label: string) {
   return `569${uniqueSuffix(label)}`.slice(0, 20);
 }
 
-const fakeCycleRunner: typeof runNativeAutonomousCycle = async (): Promise<NativeAutonomousCycleResult> => ({
-  ran: true,
-  shadow: null,
-  loop: null,
-  bridge: null,
-  warnings: []
+const fakeDispatch: typeof dispatchDraftedFollowUpMessage = async (): Promise<DispatchDraftedFollowUpMessageResult> => ({
+  status: "sent",
+  outboxId: null
 });
 
 async function seedConversation(): Promise<{ id: number; publicId: string; waId: string }> {
@@ -427,12 +427,12 @@ test("[RT1] a customer with a recorded opt-out never gets the follow-up executed
   await recordCustomerOptOut({ waId: conversation.waId, reason: "explicit_customer_command" });
 
   let calls = 0;
-  const cycleRunner: typeof runNativeAutonomousCycle = async (...args) => {
+  const dispatchDraftedFollowUpMessage: typeof fakeDispatch = async (...args) => {
     calls += 1;
-    return fakeCycleRunner(...args);
+    return fakeDispatch(...args);
   };
 
-  const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+  const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage });
   assert.equal(calls, 0, "the cycle runner must never be invoked for an opted-out customer");
   const row = await loadAction(actionId);
   assert.equal(row?.status, "cancelled");
@@ -448,11 +448,11 @@ test("[RT2] a config-sourced row is cancelled when the CURRENT published config 
   await publishFollowUpConfiguration({ ...ENABLED_CONFIG, enabled: false });
 
   let calls = 0;
-  const cycleRunner: typeof runNativeAutonomousCycle = async (...args) => {
+  const dispatchDraftedFollowUpMessage: typeof fakeDispatch = async (...args) => {
     calls += 1;
-    return fakeCycleRunner(...args);
+    return fakeDispatch(...args);
   };
-  const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+  const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage });
   assert.equal(calls, 0);
   assert.ok(tick.cancelled.some((c) => c.actionId === actionId && c.reason === "follow_up_disabled"));
 });
@@ -463,11 +463,11 @@ test("[RT3] a legacy/unsourced row (followup_configuration_source = NULL) is nev
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId, followUpConfigurationSource: null });
 
   let calls = 0;
-  const cycleRunner: typeof runNativeAutonomousCycle = async (...args) => {
+  const dispatchDraftedFollowUpMessage: typeof fakeDispatch = async (...args) => {
     calls += 1;
-    return fakeCycleRunner(...args);
+    return fakeDispatch(...args);
   };
-  const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+  const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage });
   assert.equal(calls, 1, "an unsourced row must run exactly like pre-T02.3D behavior, ignoring the (disabled) published config");
   assert.deepEqual(tick.executed, [actionId]);
   const row = await loadAction(actionId);
@@ -488,11 +488,11 @@ test("[RT4] a config-sourced row due outside the CURRENT allowed window is resch
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId, followUpConfigurationSource: "published" });
 
   let calls = 0;
-  const cycleRunner: typeof runNativeAutonomousCycle = async (...args) => {
+  const dispatchDraftedFollowUpMessage: typeof fakeDispatch = async (...args) => {
     calls += 1;
-    return fakeCycleRunner(...args);
+    return fakeDispatch(...args);
   };
-  const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+  const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage });
   assert.equal(calls, 0, "the cycle runner must never be invoked while outside the allowed window");
   assert.ok(tick.rescheduled.some((r) => r.actionId === actionId));
   const row = await loadAction(actionId);
@@ -512,13 +512,13 @@ test("[TF1] three consecutive technical failures (corrupted config) never consum
   await queryRows(`UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET configuration_json = ? WHERE id = ?`, [JSON.stringify({}), published.id]);
   try {
     let calls = 0;
-    const cycleRunner: typeof runNativeAutonomousCycle = async (...args) => {
+    const dispatchDraftedFollowUpMessage: typeof fakeDispatch = async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     };
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+      const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage });
       assert.ok(tick.technicalFailures.some((t) => t.actionId === actionId), `tick ${attempt + 1} must report a technical failure`);
       const row = await loadAction(actionId);
       assert.equal(row?.status, "planned");
@@ -555,11 +555,11 @@ test("[TF2] a technical failure during a RETRY claim reverts the claim's own att
   await queryRows(`UPDATE ${SALES_AGENT_CONFIGURATION_TABLE} SET configuration_json = ? WHERE id = ?`, [JSON.stringify({}), published.id]);
   try {
     let calls = 0;
-    const cycleRunner: typeof runNativeAutonomousCycle = async (...args) => {
+    const dispatchDraftedFollowUpMessage: typeof fakeDispatch = async (...args) => {
       calls += 1;
-      return fakeCycleRunner(...args);
+      return fakeDispatch(...args);
     };
-    const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], cycleRunner });
+    const tick = await runFollowupTick({ limit: 10, actionIds: [actionId], dispatchDraftedFollowUpMessage });
     assert.equal(calls, 0);
     assert.ok(tick.technicalFailures.some((t) => t.actionId === actionId));
     const row = await loadAction(actionId);
@@ -579,9 +579,9 @@ test("[TF3] a customer opt-out status check failure (DB unavailable) is a techni
   const actionId = await scheduleFollowUpAction({ conversationId: conversation.id, waId: conversation.waId, followUpConfigurationSource: "published" });
 
   let calls = 0;
-  const cycleRunner: typeof runNativeAutonomousCycle = async (...args) => {
+  const dispatchDraftedFollowUpMessage: typeof fakeDispatch = async (...args) => {
     calls += 1;
-    return fakeCycleRunner(...args);
+    return fakeDispatch(...args);
   };
 
   // Breaking the DB connection BEFORE the tick would also break
@@ -594,7 +594,7 @@ test("[TF3] a customer opt-out status check failure (DB unavailable) is a techni
   const tick = await runFollowupTick({
     limit: 10,
     actionIds: [actionId],
-    cycleRunner,
+    dispatchDraftedFollowUpMessage,
     onAfterClaim: async () => {
       await resetPoolForTests();
       process.env.DB_NAME = "crm_test_nonexistent_for_tf3";

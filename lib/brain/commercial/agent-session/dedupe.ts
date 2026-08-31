@@ -74,3 +74,28 @@ export function buildCommercialActionRequestDedupeKey(sessionId: string, request
 export function buildReadToolRequestDedupeKey(sessionId: string, requestId: string, eventType: string): string {
   return `session:${sessionId}:read_tool_request:${requestId.trim()}:${eventType}`;
 }
+
+/**
+ * SALES-AGENT-R3-A05. Deterministic from the durable scheduled-action row's
+ * own public id plus its attempt_number - never a timestamp/nonce. This is
+ * the "one durable scheduled action -> one logical wake" invariant: two
+ * concurrent worker ticks racing to claim the same attempt can only ever
+ * produce this one wakeId (the CAS claim in runFollowupTick.ts already
+ * guarantees only one of them proceeds past the claim at all - this is
+ * defense in depth, the same "second safety net" role every other
+ * *DedupeKey builder in this file already plays for its own boundary).
+ *
+ * A technical-failure retry of the SAME attempt (attempt_number
+ * deliberately not advanced - see applyTechnicalFailureBackoff) computes
+ * the same wakeId on purpose: it is a retry of the same logical wake, not a
+ * new one. A genuine new attempt (a real retry/stale-recovery, which DOES
+ * advance attempt_number) gets its own distinct wakeId, because the system
+ * genuinely woke up again to re-evaluate.
+ */
+export function buildFollowUpWakeId(actionPublicId: string, attemptNumber: number): string {
+  return `fwake_${stableId([actionPublicId, String(attemptNumber)])}`;
+}
+
+export function buildFollowUpWakeDedupeKey(sessionId: string, wakeId: string, eventType: string): string {
+  return `session:${sessionId}:followup_wake:${wakeId}:${eventType}`;
+}
