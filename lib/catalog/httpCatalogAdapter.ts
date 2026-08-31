@@ -32,6 +32,8 @@ import {
   type CatalogPortErrorCode,
   type CatalogPortResult,
   type CatalogProduct,
+  type CatalogProductSemantics,
+  type CatalogProductSemanticsExclusion,
   type CatalogProductVariant,
   type CatalogRequestContext,
   type CatalogSearchResult,
@@ -49,9 +51,11 @@ import {
   type ProductIntentStockStatus,
   type ProductIntentWarning,
   type ProductPublicLink,
+  type ProductSemanticClassificationStatus,
   PRODUCT_INTENT_CLARIFICATION_DIMENSIONS,
   PRODUCT_INTENT_RESOLUTION_STATUSES,
-  PRODUCT_INTENT_STOCK_STATUSES
+  PRODUCT_INTENT_STOCK_STATUSES,
+  PRODUCT_SEMANTIC_CLASSIFICATION_STATUSES
 } from "./types";
 
 /** Real service contract (POST /v1/products/batch): max 20 items per call. */
@@ -633,6 +637,69 @@ function parseProductIntentResponse(payload: unknown, retrievedAt: string): Prod
   };
 }
 
+/** Reads only `code` off an ontology tag object - axis/confidence/ruleId are upstream audit detail this console does not render. */
+function parseOntologyTagCode(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  return asString(value.code);
+}
+
+function parseOntologyTagCodes(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const codes: string[] = [];
+  for (const entry of value) {
+    const code = parseOntologyTagCode(entry);
+    if (code === null) return null;
+    codes.push(code);
+  }
+  return codes;
+}
+
+function parseSemanticsExclusion(value: unknown): CatalogProductSemanticsExclusion | null {
+  if (!isRecord(value)) return null;
+  const ruleId = asString(value.ruleId);
+  const reason = asString(value.reason);
+  if (ruleId === null || reason === null) return null;
+  return { ruleId, reason };
+}
+
+function parseProductSemanticsResponse(payload: unknown, retrievedAt: string): CatalogProductSemantics | null {
+  if (!isRecord(payload)) return null;
+  const productId = asNumber(payload.productId);
+  const classificationStatus = asString(payload.classificationStatus);
+  if (productId === null || classificationStatus === null) return null;
+  if (!(PRODUCT_SEMANTIC_CLASSIFICATION_STATUSES as readonly string[]).includes(classificationStatus)) return null;
+
+  const primaryProductFamily = payload.primaryProductFamily === null ? null : parseOntologyTagCode(payload.primaryProductFamily);
+  if (payload.primaryProductFamily !== null && primaryProductFamily === null) return null;
+
+  const secondaryProductFamilies = parseOntologyTagCodes(payload.secondaryProductFamilies);
+  const disciplines = parseOntologyTagCodes(payload.disciplines);
+  const useContexts = parseOntologyTagCodes(payload.useContexts);
+  if (secondaryProductFamilies === null || disciplines === null || useContexts === null) return null;
+
+  const ontologyVersion = asString(payload.ontologyVersion);
+  const classifierVersion = asString(payload.classifierVersion);
+  const snapshotId = asString(payload.snapshotId);
+  if (ontologyVersion === null || classifierVersion === null || snapshotId === null) return null;
+
+  const provenance = isRecord(payload.provenance) ? payload.provenance : null;
+  const exclusion = provenance ? parseSemanticsExclusion(provenance.exclusion) : null;
+
+  return {
+    productId: String(productId),
+    classificationStatus: classificationStatus as ProductSemanticClassificationStatus,
+    primaryProductFamily,
+    secondaryProductFamilies,
+    disciplines,
+    useContexts,
+    ontologyVersion,
+    classifierVersion,
+    snapshotId,
+    exclusion,
+    provenance: { source: "catalog_service_http", retrievedAt, cached: false }
+  };
+}
+
 async function fetchJson(
   config: HttpCatalogAdapterConfig,
   path: string,
@@ -747,6 +814,13 @@ export function createHttpCatalogAdapter(config: HttpCatalogAdapterConfig): Cata
       if (input.limit !== undefined) body.limit = input.limit;
       if (input.inStockOnly !== undefined) body.filters = { inStockOnly: input.inStockOnly };
       return requestOnce(config, "/api/v2/catalog/resolve-product-intent", context, parseProductIntentResponse, { method: "POST", body });
+    },
+    async getProductSemantics(input, context) {
+      const result = await requestOnce(config, `/v1/products/${input.productId}/semantics`, context, parseProductSemanticsResponse);
+      if (!result.ok && result.error.code === "not_found") {
+        return { ok: true, value: null };
+      }
+      return result;
     }
   };
 }

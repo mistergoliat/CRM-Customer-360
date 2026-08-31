@@ -76,6 +76,7 @@ async function emptyRelatedContext(): Promise<CatalogProductContextResult> {
       execution: { degraded: false, stages: {} },
       snapshot: { id: "snapshot-1", modelVersion: "v1" }
     },
+    semantics: { status: "not_available" },
     warnings: []
   };
 }

@@ -10,6 +10,7 @@ import type { CatalogConsoleError, CatalogConsoleProduct, CatalogProductContextR
 import { DEFAULT_RECOMMENDATION_LIMIT } from "@/lib/catalog/consoleLimits";
 import { availabilityLabel, errorMessage, formatMoney, formatStock } from "./catalogDisplay";
 import { ProductIdentity } from "./ProductIdentity";
+import { ProductSemantics } from "./ProductSemantics";
 import { RecommendationList } from "./RecommendationList";
 import { createRelatedRecommendationsCache, type RelatedRecommendationsCache } from "./relatedRecommendationsCache";
 
@@ -219,6 +220,7 @@ export function CatalogConsole() {
           <>
             {context.warnings.length > 0 ? <ErrorState title="Datos parciales" message={`Detalle con advertencias: ${context.warnings.join(", ")}`} /> : null}
             <ProductDetail product={context.product} />
+            <ProductSemantics block={context.semantics} />
             <RecommendationList
               context={context}
               selectedLimit={recommendationLimit}

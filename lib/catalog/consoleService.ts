@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createCatalogPort, type CatalogPort, type CatalogPortError, type CatalogProduct, type CatalogSearchResultItem } from "@/lib/catalog";
+import { createCatalogPort, type CatalogPort, type CatalogPortError, type CatalogPortResult, type CatalogProduct, type CatalogProductSemantics, type CatalogSearchResultItem } from "@/lib/catalog";
 import { DEFAULT_RECOMMENDATION_LIMIT, MAX_RECOMMENDATION_LIMIT } from "@/lib/catalog/consoleLimits";
 import { createCatalogSearchProductsV2Client, type CatalogSearchProductsV2Client, type SearchProductsV2ClientError, type SearchProductsV2ProductSummary } from "@/lib/catalog/search-products-v2";
 
@@ -99,8 +99,21 @@ export type CatalogRecommendationsBlock =
   | (CatalogRecommendationsBaseBlock & { status: "empty" })
   | { status: "error"; error: CatalogConsoleError };
 
+/**
+ * CATALOG-INTELLIGENCE-A00.5.1: semantics is a degradable inspection branch
+ * of the product context - its failure never turns the whole context result
+ * into { ok: false }, unlike product detail. "not_available" means the
+ * product exists commercially but is outside the classified universe (real
+ * service 404), distinct from "error" (e.g. the snapshot is not loaded, a
+ * real 503).
+ */
+export type CatalogSemanticsBlock =
+  | { status: "available"; semantics: CatalogProductSemantics }
+  | { status: "not_available" }
+  | { status: "error"; error: CatalogConsoleError };
+
 export type CatalogProductContextResult =
-  | { ok: true; product: CatalogConsoleProduct; recommendations: CatalogRecommendationsBlock; warnings: string[] }
+  | { ok: true; product: CatalogConsoleProduct; recommendations: CatalogRecommendationsBlock; semantics: CatalogSemanticsBlock; warnings: string[] }
   | { ok: false; error: CatalogConsoleError };
 
 type Deps = {
@@ -273,12 +286,23 @@ export async function getCatalogConsoleProductContextWithLimit(productId: string
   const catalogPort = deps.catalogPort ?? createCatalogPort();
   const recommendationsClient = deps.recommendationsClient ?? createCatalogSearchProductsV2Client();
 
-  const [detailResult, recommendationsResult] = await Promise.all([
+  const semanticsPromise: Promise<CatalogPortResult<CatalogProductSemantics | null>> = catalogPort?.getProductSemantics
+    ? catalogPort.getProductSemantics({ productId: normalizedProductId }, { correlationId })
+    : Promise.resolve({ ok: false as const, error: { code: "not_configured" as const, message: "Catalog Service is not configured.", retryable: false } });
+
+  const [detailResult, recommendationsResult, semanticsResult] = await Promise.all([
     catalogPort
       ? catalogPort.getProductDetails({ productId: normalizedProductId }, { correlationId })
       : Promise.resolve({ ok: false as const, error: { code: "not_configured" as const, message: "Catalog Service is not configured.", retryable: false } }),
-    recommendationsClient.searchProducts({ sourceProduct: { productId: normalizedProductId }, limit: normalizedLimit.value }, { correlationId })
+    recommendationsClient.searchProducts({ sourceProduct: { productId: normalizedProductId }, limit: normalizedLimit.value }, { correlationId }),
+    semanticsPromise
   ]);
+
+  const semantics: CatalogSemanticsBlock = semanticsResult.ok
+    ? semanticsResult.value === null
+      ? { status: "not_available" }
+      : { status: "available", semantics: semanticsResult.value }
+    : { status: "error", error: mapCatalogPortError(semanticsResult.error) };
 
   const warnings: string[] = [];
   let product: CatalogConsoleProduct | null = null;
@@ -355,7 +379,7 @@ export async function getCatalogConsoleProductContextWithLimit(productId: string
     return { ok: false, error: { code: "product_not_found", message: "Product was not found.", retryable: false } };
   }
 
-  return { ok: true, product, recommendations, warnings };
+  return { ok: true, product, recommendations, semantics, warnings };
 }
 
 export function statusForCatalogConsoleError(error: CatalogConsoleError): number {

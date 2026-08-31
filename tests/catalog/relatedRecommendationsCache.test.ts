@@ -36,6 +36,7 @@ function okContext(productId: string): CatalogProductContextResult {
       execution: { degraded: false, stages: { commercialRecommendation: "completed", customerAffinity: "skipped", personalization: "skipped" } },
       snapshot: { id: "snapshot-1", modelVersion: "v1" }
     },
+    semantics: { status: "not_available" },
     warnings: []
   };
 }

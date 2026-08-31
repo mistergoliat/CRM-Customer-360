@@ -303,6 +303,47 @@ export type ProductIntentResolutionResult = {
   provenance: CatalogProvenance;
 };
 
+/**
+ * CATALOG-INTELLIGENCE-A00.5.1. GET /v1/products/:productId/semantics reads
+ * MS-pesaschile-catalog-service's published product semantic snapshot
+ * (offline classifier + ontology, never re-run per request). NEEDS_REVIEW is
+ * listed for forward-compatibility even though the upstream snapshot has not
+ * emitted it yet (confirmed against A00.5's documented classificationCounts).
+ */
+export const PRODUCT_SEMANTIC_CLASSIFICATION_STATUSES = [
+  "CLASSIFIED",
+  "PARTIALLY_CLASSIFIED",
+  "OTHER",
+  "EXCLUDED_NON_PRODUCT",
+  "NEEDS_REVIEW"
+] as const;
+export type ProductSemanticClassificationStatus = (typeof PRODUCT_SEMANTIC_CLASSIFICATION_STATUSES)[number];
+
+export type CatalogProductSemanticsExclusion = {
+  ruleId: string;
+  reason: string;
+};
+
+/**
+ * Read-only projection of the upstream fact. Tags are trimmed to their
+ * durable ontology code - axis/confidence/ruleId are upstream audit detail
+ * this console does not currently render, intentionally absent rather than
+ * carried as dead weight (same convention as CatalogExploreItem, etc.).
+ */
+export type CatalogProductSemantics = {
+  productId: string;
+  classificationStatus: ProductSemanticClassificationStatus;
+  primaryProductFamily: string | null;
+  secondaryProductFamilies: string[];
+  disciplines: string[];
+  useContexts: string[];
+  ontologyVersion: string;
+  classifierVersion: string;
+  snapshotId: string;
+  exclusion: CatalogProductSemanticsExclusion | null;
+  provenance: CatalogProvenance;
+};
+
 export const CATALOG_PORT_ERROR_CODES = [
   "invalid_input",
   "unauthorized",
@@ -372,6 +413,21 @@ export type CatalogPort = {
     input: { query: string; limit?: number; inStockOnly?: boolean },
     context: CatalogRequestContext
   ): Promise<CatalogPortResult<ProductIntentResolutionResult>>;
+  /**
+   * CATALOG-INTELLIGENCE-A00.5.1: read-only inspection of a product's
+   * published semantic facts (real service contract: GET
+   * /v1/products/:productId/semantics). Optional - this is an
+   * inspection-only capability layered on the existing boundary, so callers
+   * that only need commercial data (search, details, batch, explore, product
+   * intent) are unaffected and existing CatalogPort test doubles do not need
+   * to implement it. `value: null` means the product is outside the
+   * classified universe (real service 404) - distinct from an error, and
+   * mirroring getProductDetails' null-for-not-found convention.
+   */
+  getProductSemantics?(
+    input: { productId: string },
+    context: CatalogRequestContext
+  ): Promise<CatalogPortResult<CatalogProductSemantics | null>>;
 };
 
 export const CATALOG_ADAPTER_CONTRACT_VERSION = "catalog-service.v1" as const;
