@@ -14,7 +14,8 @@ import {
   normalizeInternalCommandCommercialEvent,
   normalizeMetaWhatsAppInboundCommercialEvent,
   normalizeMetaWhatsAppStatusCommercialEvent,
-  normalizeSalesAgentRuntimeResponseDispatchedEvent
+  normalizeSalesAgentRuntimeResponseDispatchedEvent,
+  normalizeSalesAgentRuntimeTerminalDispatchedEvent
 } from "./normalize";
 import { recordCommercialEvent } from "./repository";
 
@@ -122,4 +123,13 @@ export async function recordSalesAgentRuntimeResponseDispatchedEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeSalesAgentRuntimeResponseDispatchedEvent(input), connection);
+}
+
+// SALES-AGENT-R3-V1.6.
+
+export async function recordSalesAgentRuntimeTerminalDispatchedEvent(
+  input: Parameters<typeof normalizeSalesAgentRuntimeTerminalDispatchedEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeSalesAgentRuntimeTerminalDispatchedEvent(input), connection);
 }

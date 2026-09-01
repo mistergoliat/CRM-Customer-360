@@ -344,18 +344,27 @@ test("[RC2] governance blocked (human owner active): zero dispatch, zero commerc
   });
 });
 
-test("[RC3] handoff: dispatched through the same handoff-acknowledgement pipeline as ATL, never a fabricated business response", async () => {
+test("[RC3] ambiguous handoff: routed to the R3-native fallback dispatcher, never a fabricated business response, ownership stays AI", async () => {
+  // SALES-AGENT-R3-V1.6: this free-text reason ("needs_human_pricing_negotiation")
+  // does not match the minimal hard-handoff eligible reason-code vocabulary
+  // (dispatchSalesAgentHardHandoff.ts) - it is ordinary model-uncertainty
+  // language, exactly the case this task requires to fail safe toward
+  // NON-HANDOFF. No more R1 bridge flags for this path (see RESPONSE_DISPATCH_ENABLED_ENV).
   const conversationId = await insertConversation();
   const input = baseInput(conversationId);
   const provider = createFakeAgentLoopProvider({ script: [{ type: "handoff", reason: "needs_human_pricing_negotiation" }] });
 
-  await withEnv(DISPATCH_ENABLED_ENV, async () => {
+  await withEnv(RESPONSE_DISPATCH_ENABLED_ENV, async () => {
     const result = await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider });
 
     assert.equal(result.runtime.status, "handoff");
     assert.equal(result.runtime.responseText, null);
     assert.equal(result.dispatch.outboxWritten, true);
-    assert.ok(result.dispatch.messageSent, "a handoff still dispatches a neutral acknowledgement, never silence");
+    assert.ok(result.dispatch.messageSent, "an ambiguous handoff still dispatches a neutral fallback, never silence");
+
+    const conversationRow = (await getPool().execute("SELECT ai_enabled, human_owner_active FROM conversation WHERE id = ?", [conversationId]))[0] as Record<string, unknown>[];
+    assert.equal(Number(conversationRow[0].ai_enabled), 1, "ambiguous handoff must never transfer ownership away from the AI");
+    assert.equal(Number(conversationRow[0].human_owner_active), 0);
 
     const payload = await loadAgentToolLoopPayload(input.inboundMessageId);
     assert.equal(payload.terminalReason, "handoff");
@@ -364,7 +373,30 @@ test("[RC3] handoff: dispatched through the same handoff-acknowledgement pipelin
   });
 });
 
-test("[RC4] provider failure: a structured fallback is dispatched, never a fabricated business response", async () => {
+test("[RC3b] eligible hard handoff: durable ownership transfer, exactly one acknowledgement, AI disabled afterward", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  const provider = createFakeAgentLoopProvider({ script: [{ type: "handoff", reason: "customer_requested_human" }] });
+
+  await withEnv(RESPONSE_DISPATCH_ENABLED_ENV, async () => {
+    const result = await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider });
+
+    assert.equal(result.runtime.status, "handoff");
+    assert.equal(result.dispatch.outboxWritten, true);
+    assert.ok(result.dispatch.messageSent);
+
+    const conversationRow = (await getPool().execute("SELECT ai_enabled, human_owner_active FROM conversation WHERE id = ?", [conversationId]))[0] as Record<string, unknown>[];
+    assert.equal(Number(conversationRow[0].ai_enabled), 0, "an eligible hard handoff must disable the AI");
+    assert.equal(Number(conversationRow[0].human_owner_active), 1, "an eligible hard handoff must durably transfer ownership to a human");
+
+    const outboxRows = (await getPool().execute("SELECT id FROM brain_message_outbox WHERE dedupe_key = ?", [`sales-agent-r3:${conversationId}:${input.inboundMessageId}:handoff`]))[0] as unknown[];
+    assert.equal(outboxRows.length, 1, "exactly one acknowledgement row");
+
+    assert.equal(await countAgentActionsForConversation(conversationId), 0, "no crm_agent_actions row for a hard handoff");
+  });
+});
+
+test("[RC4] provider failure: a structured fallback is dispatched, never a fabricated business response, ownership stays AI", async () => {
   const conversationId = await insertConversation();
   const input = baseInput(conversationId);
   const provider: AgentLoopProvider = {
@@ -374,15 +406,57 @@ test("[RC4] provider failure: a structured fallback is dispatched, never a fabri
     }
   };
 
-  await withEnv(DISPATCH_ENABLED_ENV, async () => {
+  await withEnv(RESPONSE_DISPATCH_ENABLED_ENV, async () => {
     const result = await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider });
 
     assert.equal(result.runtime.status, "failed");
     assert.equal(result.runtime.responseText, null);
     assert.equal(result.dispatch.outboxWritten, true, "a technical failure still owes the customer a neutral fallback message");
+    assert.equal(await countAgentActionsForConversation(conversationId), 0, "no crm_agent_actions row for a technical-failure fallback");
+
+    const conversationRow = (await getPool().execute("SELECT ai_enabled, human_owner_active FROM conversation WHERE id = ?", [conversationId]))[0] as Record<string, unknown>[];
+    assert.equal(Number(conversationRow[0].ai_enabled), 1, "a technical failure must never transfer ownership away from the AI");
 
     const payload = await loadAgentToolLoopPayload(input.inboundMessageId);
     assert.equal(payload.terminalReason, "provider_unavailable");
+  });
+});
+
+test("[RC9] all six R1 bridge flags false: every SalesAgentRuntime terminal outcome still dispatches on R3's own flags alone", async () => {
+  const flagsFalse = {
+    BRAIN_AGENT_ACTION_QUEUE_ENABLED: "false",
+    BRAIN_AGENT_ACTION_PERSISTENCE_ENABLED: "false",
+    BRAIN_EXECUTION_GATE_ENABLED: "false",
+    BRAIN_OUTBOX_BRIDGE_ENABLED: "false",
+    BRAIN_AUTONOMOUS_SANDBOX_ENABLED: "false",
+    BRAIN_AUTONOMOUS_REPLY_ENABLED: "false",
+    ...RESPONSE_DISPATCH_ENABLED_ENV
+  };
+
+  const conversationIdFailure = await insertConversation();
+  const inputFailure = baseInput(conversationIdFailure);
+  const providerFailure: AgentLoopProvider = {
+    name: "throwing-test-provider",
+    async invoke() {
+      throw new Error("simulated network failure");
+    }
+  };
+  await withEnv(flagsFalse, async () => {
+    const result = await runSalesAgentRuntimeCycle({ ...inputFailure, snapshot: buildSnapshot(), provider: providerFailure });
+    assert.equal(result.runtime.status, "failed");
+    assert.equal(result.dispatch.outboxWritten, true);
+    assert.equal(await countAgentActionsForConversation(conversationIdFailure), 0);
+  });
+
+  const conversationIdHandoff = await insertConversation();
+  const inputHandoff = baseInput(conversationIdHandoff);
+  const providerHandoff = createFakeAgentLoopProvider({ script: [{ type: "handoff", reason: "policy_requires_human" }] });
+  await withEnv(flagsFalse, async () => {
+    const result = await runSalesAgentRuntimeCycle({ ...inputHandoff, snapshot: buildSnapshot(), provider: providerHandoff });
+    assert.equal(result.dispatch.outboxWritten, true);
+    const conversationRow = (await getPool().execute("SELECT ai_enabled FROM conversation WHERE id = ?", [conversationIdHandoff]))[0] as Record<string, unknown>[];
+    assert.equal(Number(conversationRow[0].ai_enabled), 0, "hard handoff ownership transfer must not depend on any R1 bridge flag");
+    assert.equal(await countAgentActionsForConversation(conversationIdHandoff), 0);
   });
 });
 

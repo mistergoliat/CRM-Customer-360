@@ -21,7 +21,10 @@ import type {
   IdentityVerificationDecisionRecordedPayload,
   IdentityVerificationDecisionRuntimeStatus,
   SalesAgentRuntimeResponseDispatchedPayload,
-  SalesAgentRuntimeResponseDispatchReason
+  SalesAgentRuntimeResponseDispatchReason,
+  SalesAgentRuntimeTerminalDispatchedPayload,
+  SalesAgentRuntimeTerminalDispatchKind,
+  SalesAgentRuntimeTerminalDispatchReason
 } from "./types";
 import {
   COMMERCIAL_EVENT_CONTRACT_NAME,
@@ -43,7 +46,8 @@ import {
   buildIdentityVerificationDecisionDedupeKey,
   buildInboundCommercialEventDedupeKey,
   buildInternalCommandCommercialEventDedupeKey,
-  buildSalesAgentRuntimeResponseDispatchedDedupeKey
+  buildSalesAgentRuntimeResponseDispatchedDedupeKey,
+  buildSalesAgentRuntimeTerminalDispatchedDedupeKey
 } from "./dedupe";
 
 // SALES-AGENT-R3-A01. Extended (additive, never loosened) with reasoning/
@@ -809,5 +813,59 @@ export function normalizeSalesAgentRuntimeResponseDispatchedEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "sales_agent_runtime_response_dispatched" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-V1.6. One canonical event per inbound message on the
+ * broader R3 terminal-dispatch path (responded/fallback/hard_handoff) - same
+ * discipline as normalizeSalesAgentRuntimeResponseDispatchedEvent above,
+ * never a raw error message or chain-of-thought.
+ */
+export function normalizeSalesAgentRuntimeTerminalDispatchedEvent(input: {
+  inboundMessageId: string | null;
+  terminalReason: AgentToolLoopTerminalReason;
+  dispatchKind: SalesAgentRuntimeTerminalDispatchKind;
+  outboxWritten: boolean;
+  outboxId: number | null;
+  duplicate: boolean;
+  reason: SalesAgentRuntimeTerminalDispatchReason;
+  dispatcherVersion: string;
+  ownershipTransferred: boolean;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = (input.inboundMessageId ?? input.correlationId ?? "").trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  const payload: SalesAgentRuntimeTerminalDispatchedPayload = {
+    inboundMessageId: input.inboundMessageId,
+    terminalReason: input.terminalReason,
+    dispatchKind: input.dispatchKind,
+    outboxWritten: input.outboxWritten,
+    outboxId: input.outboxId,
+    duplicate: input.duplicate,
+    reason: input.reason,
+    dispatcherVersion: input.dispatcherVersion,
+    ownershipTransferred: input.ownershipTransferred
+  };
+  return buildBaseEvent({
+    eventType: "sales_agent_runtime_terminal_dispatched",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildSalesAgentRuntimeTerminalDispatchedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "sales_agent_runtime_terminal_dispatched" }
   });
 }

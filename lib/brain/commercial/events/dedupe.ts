@@ -104,6 +104,13 @@ export function buildSalesAgentRuntimeResponseDispatchedDedupeKey(inboundMessage
   return `sales-agent-r3-response-dispatched:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R3-V1.6. One canonical event per inbound message on the
+// broader terminal-dispatch path (responded/fallback/hard_handoff), same
+// rationale as buildSalesAgentRuntimeResponseDispatchedDedupeKey above.
+export function buildSalesAgentRuntimeTerminalDispatchedDedupeKey(inboundMessageId: string) {
+  return `sales-agent-r3-terminal-dispatched:${inboundMessageId.trim()}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

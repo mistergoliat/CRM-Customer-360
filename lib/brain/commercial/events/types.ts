@@ -43,7 +43,14 @@ export type CommercialEventType =
   // "responded" turn (dispatched/duplicate/governed-skip/failed) - the R3
   // native response dispatcher's own audit trail. Descriptive only; the
   // durable state is the brain_message_outbox row itself (or its absence).
-  | "sales_agent_runtime_response_dispatched";
+  | "sales_agent_runtime_response_dispatched"
+  // SALES-AGENT-R3-V1.6. One per dispatch attempt of ANY SalesAgentRuntime
+  // terminal outcome (responded/fallback/hard_handoff) - broader than
+  // sales_agent_runtime_response_dispatched above (kept, unchanged, for its
+  // existing "responded"-only consumers). Descriptive only; the durable
+  // state is the brain_message_outbox row and, for hard_handoff, the
+  // conversation ownership columns themselves.
+  | "sales_agent_runtime_terminal_dispatched";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -459,6 +466,33 @@ export type SalesAgentRuntimeResponseDispatchedPayload = {
   duplicate: boolean;
   reason: SalesAgentRuntimeResponseDispatchReason;
   dispatcherVersion: string;
+};
+
+// SALES-AGENT-R3-V1.6. Every reason value the broader terminal dispatcher
+// (dispatchSalesAgentTerminalOutcome.ts) can report - the response-dispatch
+// vocabulary above, plus the hard-handoff eligibility gate's own two
+// fail-safe classes (an ambiguous/non-eligible handoff never transfers
+// ownership - see dispatchSalesAgentHardHandoff.ts) and one narrow hard-
+// handoff race class (ownership reverted between the transfer commit and
+// the acknowledgement write, e.g. a concurrent operator "release").
+export type SalesAgentRuntimeTerminalDispatchReason =
+  | SalesAgentRuntimeResponseDispatchReason
+  | "hard_handoff_not_eligible"
+  | "ambiguous_handoff_reason"
+  | "ownership_transfer_lost_before_acknowledgement";
+
+export type SalesAgentRuntimeTerminalDispatchKind = "responded" | "fallback" | "hard_handoff";
+
+export type SalesAgentRuntimeTerminalDispatchedPayload = {
+  inboundMessageId: string | null;
+  terminalReason: AgentToolLoopTerminalReason;
+  dispatchKind: SalesAgentRuntimeTerminalDispatchKind;
+  outboxWritten: boolean;
+  outboxId: number | null;
+  duplicate: boolean;
+  reason: SalesAgentRuntimeTerminalDispatchReason;
+  dispatcherVersion: string;
+  ownershipTransferred: boolean;
 };
 
 export type CommercialEventPersistStatus = "created" | "duplicate";
