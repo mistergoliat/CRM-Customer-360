@@ -3,6 +3,8 @@ import type { SalesAgentRuntimeResult } from "./salesAgentRuntime";
 import type { AgentRuntimeEvent } from "../agent-runtime-event/types";
 import { dispatchAgentLoopResponse } from "../agent-loop/dispatchAgentLoopResponse";
 import type { DispatchAgentLoopResponseResult } from "../agent-loop/dispatchAgentLoopResponse";
+import { dispatchSalesAgentResponse } from "./dispatchSalesAgentResponse";
+import type { DispatchSalesAgentResponseResult } from "./dispatchSalesAgentResponse";
 import { recordAgentToolLoopCompletedCommercialEvent } from "../events/service";
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
 import type { AgentLoopResult, AgentLoopTerminalReason, PendingCatalogActionStep } from "../agent-loop/agentStepTypes";
@@ -12,17 +14,24 @@ import type { NativeCustomerSessionExecutionContext } from "../native-cycle/cust
 import type { CommercialContextSnapshot } from "../context/buildNativeCommercialContext";
 import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
 
-// SALES-AGENT-R3-V1.4. The channel-adapter/dispatch seam around
+// SALES-AGENT-R3-V1.4/V1.5. The channel-adapter/dispatch seam around
 // SalesAgentRuntime (V1.3) - deliberately NOT part of the runtime module
 // itself (see salesAgentRuntime.ts's own "SalesAgentRuntime reasons, the
 // channel adapter routes" boundary). This file is the adapter: it builds a
 // CustomerMessageEvent from already-normalized WhatsApp inbound data, calls
-// the runtime, and dispatches the terminal outcome through the exact same
-// canonical primitives runNativeAgentToolLoopCycle.ts already uses for ATL
-// (dispatchAgentLoopResponse -> persistAgentAction -> execution-gate ->
-// outbox, and recordAgentToolLoopCompletedCommercialEvent for cross-turn
-// RecentCatalogContext continuity - Phase 9 of the V1.4 task). Never a
-// second outbox writer, never a second commercial_event type.
+// the runtime, and dispatches the terminal outcome. Since V1.5, a
+// terminalReason "responded" turn dispatches through the R3-native
+// dispatchSalesAgentResponse.ts (deterministic governance -> canonical
+// brain_message_outbox directly, no crm_agent_actions/autonomy-sandbox/
+// execution-gate); every other terminal reason (handoff/timeout/
+// invalid_output/max_steps_exceeded/provider_unavailable) still dispatches
+// through the same R1 primitives runNativeAgentToolLoopCycle.ts already uses
+// for ATL (dispatchAgentLoopResponse -> persistAgentAction -> execution-gate
+// -> outbox), unchanged - see docs/releases/SALES-AGENT-R3-V1.5-native-response-dispatch.md.
+// recordAgentToolLoopCompletedCommercialEvent (cross-turn RecentCatalogContext
+// continuity, Phase 9 of the V1.4 task) runs for every terminal reason,
+// unchanged. Never a second outbox writer, never a second
+// agent_tool_loop_completed-shaped event type for this table.
 //
 // Deliberately NOT a reuse of runNativeAgentToolLoopCycle.ts itself: that
 // function bundles ATL-specific machinery (customer-profile-context
@@ -97,6 +106,30 @@ function buildMinimalCommercialContextSummary(
       : null,
     commercialLineItems: snapshot.commercialLineItems ? { items: snapshot.commercialLineItems.items } : null,
     recentMessages: recentMessages.slice(-5).map((message) => ({ direction: message.direction, body: message.body }))
+  };
+}
+
+/**
+ * SALES-AGENT-R3-V1.5. Maps the R3-native dispatcher's own typed result onto
+ * the pre-existing DispatchAgentLoopResponseResult shape so this function's
+ * public return type (SalesAgentRuntimeCycleResult) and every downstream
+ * reader (ensureAutonomousSalesTurnContinuity.ts's `cycle.salesAgentRuntime`
+ * branch) need zero changes - action/actionPersistence/sandboxEvaluation/
+ * executionGate are honestly `null` (no crm_agent_actions row exists for a
+ * "responded" turn anymore; see dispatchSalesAgentResponse.ts's own
+ * "commercial mutation" boundary comment), never a fabricated stand-in.
+ */
+function adaptSalesAgentResponseDispatch(finalMessage: string | null, result: DispatchSalesAgentResponseResult): DispatchAgentLoopResponseResult {
+  return {
+    attempted: result.attempted,
+    messageSent: result.status === "dispatched" ? finalMessage : null,
+    action: null,
+    actionPersistence: null,
+    sandboxEvaluation: null,
+    executionGate: null,
+    outboxWritten: result.outboxWritten,
+    outboxId: result.outboxId,
+    warnings: result.warnings
   };
 }
 
@@ -214,19 +247,43 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     llmCalls: []
   };
 
-  const dispatch = await dispatchAgentLoopResponse({
-    conversationId: input.conversationId,
-    conversationCaseId,
-    opportunityId: runtime.resolvedOpportunityId,
-    waId: input.waId,
-    inboundMessageId: input.inboundMessageId,
-    currentTime: input.currentTime,
-    humanOwnerActive,
-    aiBlocked,
-    caseStatus: input.snapshot.opportunity?.status ?? input.snapshot.conversation?.status ?? null,
-    loop,
-    commercialNeed: buildCommercialNeed(input.snapshot)
-  });
+  // SALES-AGENT-R3-V1.5. Scope Guard: only terminalReason "responded" moves
+  // to the R3-native dispatcher (deterministic governance -> canonical
+  // outbox directly, no crm_agent_actions/execution-gate). Every other
+  // terminal reason (handoff, timeout, invalid_output, max_steps_exceeded,
+  // provider_unavailable) keeps calling dispatchAgentLoopResponse exactly as
+  // before - unchanged, not silently rerouted - per this task's own explicit
+  // out-of-scope list.
+  const dispatch =
+    loop.terminalReason === "responded"
+      ? adaptSalesAgentResponseDispatch(
+          loop.finalMessage,
+          await dispatchSalesAgentResponse({
+            conversationId: input.conversationId,
+            conversationCaseId,
+            opportunityId: runtime.resolvedOpportunityId,
+            waId: input.waId,
+            inboundMessageId: input.inboundMessageId,
+            correlationId: input.correlationId,
+            currentTime: input.currentTime,
+            humanOwnerActive,
+            aiBlocked,
+            finalMessage: loop.finalMessage
+          })
+        )
+      : await dispatchAgentLoopResponse({
+          conversationId: input.conversationId,
+          conversationCaseId,
+          opportunityId: runtime.resolvedOpportunityId,
+          waId: input.waId,
+          inboundMessageId: input.inboundMessageId,
+          currentTime: input.currentTime,
+          humanOwnerActive,
+          aiBlocked,
+          caseStatus: input.snapshot.opportunity?.status ?? input.snapshot.conversation?.status ?? null,
+          loop,
+          commercialNeed: buildCommercialNeed(input.snapshot)
+        });
 
   const persistedPendingCatalogAction = dispatch.outboxWritten ? runtime.finalPendingCatalogAction : null;
   if (runtime.finalPendingCatalogAction && !dispatch.outboxWritten) {

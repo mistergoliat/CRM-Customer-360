@@ -19,7 +19,9 @@ import type {
   CustomerSessionWarningRecordedPayload,
   IdentityVerificationDecisionIdentityLevel,
   IdentityVerificationDecisionRecordedPayload,
-  IdentityVerificationDecisionRuntimeStatus
+  IdentityVerificationDecisionRuntimeStatus,
+  SalesAgentRuntimeResponseDispatchedPayload,
+  SalesAgentRuntimeResponseDispatchReason
 } from "./types";
 import {
   COMMERCIAL_EVENT_CONTRACT_NAME,
@@ -40,7 +42,8 @@ import {
   buildFollowUpDueCommercialEventDedupeKey,
   buildIdentityVerificationDecisionDedupeKey,
   buildInboundCommercialEventDedupeKey,
-  buildInternalCommandCommercialEventDedupeKey
+  buildInternalCommandCommercialEventDedupeKey,
+  buildSalesAgentRuntimeResponseDispatchedDedupeKey
 } from "./dedupe";
 
 // SALES-AGENT-R3-A01. Extended (additive, never loosened) with reasoning/
@@ -755,5 +758,56 @@ export function normalizeCommercialWorkInboundCycleCompletedEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "commercial_work_inbound_cycle_completed" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-V1.5. Same discipline as
+ * normalizeAgentToolLoopCompletedCommercialEvent above - one canonical event
+ * per inbound message on the R3 native response-dispatch path, regardless of
+ * whether that attempt dispatched, was a duplicate, was governed-skipped, or
+ * failed technically (all distinguished by `reason`, never a raw error
+ * message).
+ */
+export function normalizeSalesAgentRuntimeResponseDispatchedEvent(input: {
+  inboundMessageId: string | null;
+  outboxWritten: boolean;
+  outboxId: number | null;
+  duplicate: boolean;
+  reason: SalesAgentRuntimeResponseDispatchReason;
+  dispatcherVersion: string;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = (input.inboundMessageId ?? input.correlationId ?? "").trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  const payload: SalesAgentRuntimeResponseDispatchedPayload = {
+    inboundMessageId: input.inboundMessageId,
+    terminalReason: "responded",
+    outboxWritten: input.outboxWritten,
+    outboxId: input.outboxId,
+    duplicate: input.duplicate,
+    reason: input.reason,
+    dispatcherVersion: input.dispatcherVersion
+  };
+  return buildBaseEvent({
+    eventType: "sales_agent_runtime_response_dispatched",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildSalesAgentRuntimeResponseDispatchedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "sales_agent_runtime_response_dispatched" }
   });
 }

@@ -38,7 +38,12 @@ export type CommercialEventType =
   // state (evidence, verification) already lives in
   // crm_customer_identity_evidence/customer_external_identity; this is
   // audit trail on top, same discipline as customer_identity_resolution_recorded.
-  | "identity_verification_decision_recorded";
+  | "identity_verification_decision_recorded"
+  // SALES-AGENT-R3-V1.5. One per dispatch attempt of a SalesAgentRuntime
+  // "responded" turn (dispatched/duplicate/governed-skip/failed) - the R3
+  // native response dispatcher's own audit trail. Descriptive only; the
+  // durable state is the brain_message_outbox row itself (or its absence).
+  | "sales_agent_runtime_response_dispatched";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -429,6 +434,32 @@ export interface CommercialEventV1 {
   payload: Record<string, unknown>;
   metadata: Record<string, unknown>;
 }
+
+// SALES-AGENT-R3-V1.5. Distinguishes every governed-skip/failure class the
+// R3 native response dispatcher can produce, plus the two non-skip outcomes
+// (dispatched/duplicate) - never a raw error message, never reasoning.
+export type SalesAgentRuntimeResponseDispatchReason =
+  | "dispatched"
+  | "duplicate"
+  | "human_owner_active"
+  | "ai_blocked"
+  | "autonomous_responses_disabled"
+  | "wa_not_allowlisted"
+  | "empty_message"
+  | "invalid_wa_id"
+  | "conversation_closed"
+  | "conversation_not_found"
+  | "persistence_error";
+
+export type SalesAgentRuntimeResponseDispatchedPayload = {
+  inboundMessageId: string | null;
+  terminalReason: "responded";
+  outboxWritten: boolean;
+  outboxId: number | null;
+  duplicate: boolean;
+  reason: SalesAgentRuntimeResponseDispatchReason;
+  dispatcherVersion: string;
+};
 
 export type CommercialEventPersistStatus = "created" | "duplicate";
 

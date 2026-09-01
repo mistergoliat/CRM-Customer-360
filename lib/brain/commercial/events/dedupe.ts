@@ -97,6 +97,13 @@ export function buildCommercialWorkInboundCycleCompletedDedupeKey(inboundMessage
   return `commercial-work-inbound-cycle-completed:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R3-V1.5. One canonical event per inbound message on the R3
+// native response-dispatch path, same rationale as
+// buildAgentToolLoopCompletedDedupeKey above.
+export function buildSalesAgentRuntimeResponseDispatchedDedupeKey(inboundMessageId: string) {
+  return `sales-agent-r3-response-dispatched:${inboundMessageId.trim()}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

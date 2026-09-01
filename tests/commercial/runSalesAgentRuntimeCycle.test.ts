@@ -65,6 +65,17 @@ const DISPATCH_ENABLED_ENV = {
 };
 
 /**
+ * SALES-AGENT-R3-V1.5. A terminalReason "responded" turn no longer goes
+ * through the R1 bridge flags above (dispatchSalesAgentResponse.ts's own
+ * "no false dependency" contract) - only BRAIN_AUTONOMOUS_RESPONSES_ENABLED
+ * (the R3 top-level autonomous-response killswitch) governs it. Kept as a
+ * separate constant (not folded into DISPATCH_ENABLED_ENV) so a test that
+ * asserts R1 flags are irrelevant to a "responded" turn can prove it by
+ * omitting DISPATCH_ENABLED_ENV entirely.
+ */
+const RESPONSE_DISPATCH_ENABLED_ENV = { BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true" };
+
+/**
  * crm_capability_executions.conversation_id carries a real FOREIGN KEY onto
  * conversation(id) (migration 022) - an arbitrary Date.now()-based fake id
  * (the pattern several sibling test files use for tables with no such FK)
@@ -169,19 +180,35 @@ async function countAgentToolLoopCompletedEvents(inboundMessageId: string) {
   return Number(rows.rows[0]?.count ?? 0);
 }
 
-async function countDispatchActions(input: { conversationId: number; inboundMessageId: string; terminalReason: string }) {
-  const idempotencyKey = `agent-tool-loop:${input.conversationId}:${input.inboundMessageId}:${input.terminalReason}`;
-  const rows = await safeQueryRows<{ opportunity_id: number | string | null; count: number | string | bigint }>(
-    "SELECT opportunity_id, COUNT(*) AS count FROM crm_agent_actions WHERE idempotency_key = ? AND action_type = 'send_whatsapp_reply' GROUP BY opportunity_id",
-    [idempotencyKey]
-  );
-  assert.ok(rows.ok, rows.ok ? "" : rows.error);
-  return rows.rows;
-}
-
 async function countOpportunitiesForConversation(conversationId: number) {
   const [rows] = await getPool().execute("SELECT id FROM crm_opportunities WHERE conversation_case_id = ?", [String(conversationId)]);
   return (rows as unknown[]).length;
+}
+
+/** SALES-AGENT-R3-V1.5. A "responded" turn no longer creates a crm_agent_actions row at all - see dispatchSalesAgentResponse.ts. */
+async function countAgentActionsForConversation(conversationId: number) {
+  const [rows] = await getPool().execute("SELECT id FROM crm_agent_actions WHERE conversation_case_id = ?", [String(conversationId)]);
+  return (rows as unknown[]).length;
+}
+
+function salesAgentR3DedupeKey(conversationId: number, inboundMessageId: string) {
+  return `sales-agent-r3:${conversationId}:${inboundMessageId}:responded`;
+}
+
+async function loadOutboxRowByDedupeKey(dedupeKey: string) {
+  const [rows] = await getPool().execute("SELECT id, wa_id, conversation_case_id, message_text, status, meta_payload_json FROM brain_message_outbox WHERE dedupe_key = ? LIMIT 1", [dedupeKey]);
+  const row = (rows as Record<string, unknown>[])[0];
+  if (!row) return null;
+  const rawMeta = row.meta_payload_json;
+  const meta = typeof rawMeta === "string" ? JSON.parse(rawMeta) : (rawMeta as Record<string, unknown> | null);
+  return { ...row, meta_payload_json: meta } as {
+    id: number;
+    wa_id: string | null;
+    conversation_case_id: number | string | null;
+    message_text: string | null;
+    status: string;
+    meta_payload_json: Record<string, unknown> | null;
+  };
 }
 
 function unreachableProvider(): AgentLoopProvider {
@@ -270,15 +297,21 @@ test("[RC1] responded: dispatches through the canonical outbox exactly once, eve
     ]
   });
 
-  await withEnv(DISPATCH_ENABLED_ENV, async () => {
+  await withEnv(RESPONSE_DISPATCH_ENABLED_ENV, async () => {
     const result = await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider });
 
     assert.equal(result.runtime.status, "responded");
     assert.equal(result.dispatch.outboxWritten, true);
     assert.equal(result.dispatch.messageSent, "Tenemos el Kettlebell 16kg disponible.");
 
-    const rows = await countDispatchActions({ conversationId, inboundMessageId: input.inboundMessageId, terminalReason: "responded" });
-    assert.equal(rows.length, 1, "exactly one send_whatsapp_reply action for this inbound message");
+    // SALES-AGENT-R3-V1.5: a "responded" turn dispatches straight to the
+    // canonical outbox via dispatchSalesAgentResponse.ts - no crm_agent_actions
+    // row is ever created for it (requirement B of the V1.5 task).
+    assert.equal(await countAgentActionsForConversation(conversationId), 0, "no crm_agent_actions row for a responded turn");
+    const outboxRow = await loadOutboxRowByDedupeKey(salesAgentR3DedupeKey(conversationId, input.inboundMessageId));
+    assert.ok(outboxRow, "exactly one canonical outbox row for this inbound message");
+    assert.equal(outboxRow!.status, "planned");
+    assert.equal(outboxRow!.message_text, "Tenemos el Kettlebell 16kg disponible.");
 
     const payload = await loadAgentToolLoopPayload(input.inboundMessageId);
     assert.equal(payload.configurationSource, "safe_default");
@@ -370,15 +403,16 @@ test("[RC5] resolvedOpportunityId propagates to the dispatched action and to the
     ]
   });
 
-  await withEnv({ ...DISPATCH_ENABLED_ENV, BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId }, async () => {
+  await withEnv({ ...RESPONSE_DISPATCH_ENABLED_ENV, BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId }, async () => {
     const result = await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider });
 
     assert.equal(result.runtime.status, "responded");
     assert.notEqual(result.runtime.resolvedOpportunityId, null);
     assert.equal(await countOpportunitiesForConversation(conversationId), 1);
 
-    const rows = await countDispatchActions({ conversationId, inboundMessageId: input.inboundMessageId, terminalReason: "responded" });
-    assert.equal(Number(rows[0]?.opportunity_id), result.runtime.resolvedOpportunityId);
+    const outboxRow = await loadOutboxRowByDedupeKey(salesAgentR3DedupeKey(conversationId, input.inboundMessageId));
+    assert.ok(outboxRow, "exactly one canonical outbox row for this inbound message");
+    assert.equal(Number(outboxRow!.meta_payload_json?.opportunity_id), result.runtime.resolvedOpportunityId);
 
     const payload = await loadAgentToolLoopPayload(input.inboundMessageId);
     const eventRow = await safeQueryRows<{ opportunity_id: number | string | null }>(
@@ -448,7 +482,7 @@ test("[RC7] pendingCatalogAction is persisted only when dispatch actually writes
     script: [{ type: "respond", message: "Te envio el link?", pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"] } }]
   });
 
-  await withEnv(DISPATCH_ENABLED_ENV, async () => {
+  await withEnv(RESPONSE_DISPATCH_ENABLED_ENV, async () => {
     const result = await runSalesAgentRuntimeCycle({ ...inputWithOutbox, snapshot: buildSnapshot(), provider: providerWithOutbox, recentCatalogContext: catalogEvidence });
     assert.equal(result.dispatch.outboxWritten, true);
     const loaded = await loadPendingCatalogAction({ conversationId: conversationIdWithOutbox });
