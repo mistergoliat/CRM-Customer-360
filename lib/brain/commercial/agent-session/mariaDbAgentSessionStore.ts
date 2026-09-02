@@ -19,7 +19,14 @@ import type {
 import { buildAgentSessionEventId, buildAgentSessionId } from "./dedupe";
 import { sanitizeAgentSessionPayload } from "./sanitizer";
 import { projectAgentSessionSummary } from "./summary";
-import { AGENT_SESSION_DEFAULT_MAX_AGE_MS, AGENT_SESSION_DEFAULT_MAX_RECENT_EVENTS, AGENT_SESSION_HARD_MAX_RECENT_EVENTS, type AgentSessionStore } from "./store";
+import {
+  AGENT_SESSION_DEFAULT_MAX_AGE_MS,
+  AGENT_SESSION_DEFAULT_MAX_RECENT_EVENTS,
+  AGENT_SESSION_HARD_MAX_RECENT_EVENTS,
+  type AgentSessionStore,
+  type PersistCompactedPrefixInput,
+  type PersistCompactedPrefixResult
+} from "./store";
 
 const SESSIONS_TABLE = "agent_sessions";
 const EVENTS_TABLE = "agent_session_events";
@@ -290,5 +297,31 @@ export function createMariaDbAgentSessionStore(): AgentSessionStore {
     });
   }
 
-  return { ensureSession, appendEvent, loadSession, loadSessionForConversation, loadRecentEvents, loadSummary, rebuildSummary };
+  /**
+   * SALES-AGENT-R3-V1.8-D7. Single-statement atomic write (Section J) - all
+   * three columns refer to the same compaction result by construction. The
+   * WHERE clause's monotonic-advance guard (Section K) is the entire
+   * concurrency control: no separate read-then-compare round trip, no
+   * advisory lock held across this call (the caller never holds one across
+   * the model call either - see runSessionCompaction.ts). A losing writer's
+   * UPDATE simply matches zero rows; MariaDB never errors on that, so this
+   * never throws for the "someone else already advanced further" case.
+   */
+  async function persistCompactedPrefix(input: PersistCompactedPrefixInput): Promise<PersistCompactedPrefixResult> {
+    try {
+      return await withConnection(async (connection) => {
+        const [result] = await connection.execute<ResultSetHeader>(
+          `UPDATE \`${SESSIONS_TABLE}\`
+           SET compacted_prefix_json = ?, compacted_through_seq = ?, compacted_prefix_updated_at = CURRENT_TIMESTAMP(3)
+           WHERE id = ? AND (compacted_through_seq IS NULL OR compacted_through_seq < ?)`,
+          [JSON.stringify(input.prefixJson), input.throughSeq, input.sessionId, input.throughSeq]
+        );
+        return { ok: true as const, applied: result.affectedRows > 0 };
+      });
+    } catch (error) {
+      return { ok: false, applied: false, warning: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  return { ensureSession, appendEvent, loadSession, loadSessionForConversation, loadRecentEvents, loadSummary, rebuildSummary, persistCompactedPrefix };
 }

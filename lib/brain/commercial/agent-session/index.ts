@@ -15,7 +15,7 @@ export type {
 } from "./types";
 export { AGENT_SESSION_CONTRACT_NAME, AGENT_SESSION_EVENT_TYPES, AGENT_SESSION_SCHEMA_VERSION } from "./types";
 
-export type { AgentSessionStore } from "./store";
+export type { AgentSessionStore, PersistCompactedPrefixInput, PersistCompactedPrefixResult } from "./store";
 export {
   AGENT_SESSION_DEFAULT_MAX_AGE_MS,
   AGENT_SESSION_DEFAULT_MAX_RECENT_EVENTS,
@@ -53,11 +53,41 @@ export {
   deriveMessages,
   deriveConversationMessages,
   deriveToolActivityObservations,
+  transcriptRowToProviderMessage,
   type PersistentSessionCompactedPrefix,
   type DeriveConversationMessagesInput,
   type DeriveMessagesInput,
   type DeriveMessagesResult
 } from "./deriveMessages";
+
+export {
+  COMPACTED_SESSION_PREFIX_SCHEMA_VERSION,
+  buildCompactedSessionPrefixContent,
+  parseCompactedSessionPrefixContent,
+  resolveValidCompactionCutoff,
+  type CompactedSessionPrefixContent
+} from "./compactedSessionPrefixContent";
+
+export {
+  shouldTriggerSessionCompaction,
+  splitForCompaction,
+  SESSION_COMPACTION_MAX_RAW_MESSAGES_CEILING,
+  SESSION_COMPACTION_DEFAULT_MAX_RAW_MESSAGES,
+  SESSION_COMPACTION_DEFAULT_TARGET_RECENT_MESSAGES,
+  type SessionCompactionSplit
+} from "./sessionCompactionPolicy";
+
+export {
+  compactAgentSessionHistory,
+  type CompactAgentSessionHistoryInput,
+  type CompactAgentSessionHistoryResult
+} from "./compactAgentSessionHistory";
+
+export {
+  runSessionCompactionIfEligible,
+  type RunSessionCompactionInput,
+  type RunSessionCompactionResult
+} from "./runSessionCompaction";
 
 export {
   loadPersistentSessionContext,

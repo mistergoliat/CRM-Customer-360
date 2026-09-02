@@ -18,6 +18,7 @@
 import type { AgentLoopProviderMessage } from "../agent-loop/agentLoopProviderTypes";
 import type { AgentSessionEvent, AgentSessionEventType, AgentSessionToolActivity } from "./types";
 import type { ConversationTranscriptMessage } from "./conversationTranscriptReader";
+import { parseCompactedSessionPrefixContent, resolveValidCompactionCutoff } from "./compactedSessionPrefixContent";
 
 /**
  * agent_sessions.compacted_prefix_json/compacted_through_seq (migration 034)
@@ -47,30 +48,50 @@ export type DeriveConversationMessagesInput = {
 
 const HUMAN_TRANSCRIPT_DIRECTIONS = new Set(["inbound", "outbound"]);
 
-function buildCompactedPrefixMessage(prefix: PersistentSessionCompactedPrefix): AgentLoopProviderMessage {
+function buildCompactedPrefixMessage(throughMessageId: number, summaryText: string): AgentLoopProviderMessage {
   return {
     role: "system",
-    content: `[Compacted session history through event #${prefix.throughSeq}] ${JSON.stringify(prefix.prefixJson)}`
+    content: `[Compacted session history through message #${throughMessageId}] ${summaryText}`
   };
 }
 
 /**
+ * Shared by deriveConversationMessages below and runSessionCompaction.ts (the
+ * D7 writer) so both agree on exactly one inbound/outbound -> role/content
+ * mapping. Never a direction other than inbound/outbound (conversation
+ * control's own "system" timeline rows, lib/domains/conversations/control.ts,
+ * are operational markers, not conversational turns) and never an empty body
+ * (a system row with no text, or a legacy row with body=NULL).
+ */
+export function transcriptRowToProviderMessage(row: ConversationTranscriptMessage): AgentLoopProviderMessage | null {
+  if (!HUMAN_TRANSCRIPT_DIRECTIONS.has(row.direction)) return null;
+  if (!row.body || !row.body.trim()) return null;
+  return { role: row.direction === "inbound" ? "user" : "assistant", content: row.body };
+}
+
+/**
  * "Historical slots only" (Section J) - the compacted prefix (if any)
- * followed by the bounded, ordered human transcript. Never a direction other
- * than inbound/outbound (conversation control's own "system" timeline rows,
- * lib/domains/conversations/control.ts, are operational markers, not
- * conversational turns) and never an empty body (a system row with no text,
- * or a legacy row with body=NULL).
+ * followed by the bounded, ordered human transcript.
+ *
+ * D7: a valid compacted prefix (Section M, no-overlap/no-gap) also excludes
+ * every transcript row already covered by it (row.id <= throughSeq) - never
+ * applied when the stored content fails to parse (resolveValidCompactionCutoff
+ * returns null), so a malformed prefix degrades to "no compaction" rather
+ * than silently dropping history with nothing compensating it.
  */
 export function deriveConversationMessages(input: DeriveConversationMessagesInput): AgentLoopProviderMessage[] {
   const messages: AgentLoopProviderMessage[] = [];
-  if (input.compactedPrefix) messages.push(buildCompactedPrefixMessage(input.compactedPrefix));
+  const throughMessageId = resolveValidCompactionCutoff(input.compactedPrefix);
+  if (throughMessageId !== null) {
+    const content = parseCompactedSessionPrefixContent(input.compactedPrefix!.prefixJson)!;
+    messages.push(buildCompactedPrefixMessage(throughMessageId, content.summaryText));
+  }
 
   for (const row of input.transcriptMessages) {
     if (input.currentInboundMessageId !== null && row.id === input.currentInboundMessageId) continue;
-    if (!HUMAN_TRANSCRIPT_DIRECTIONS.has(row.direction)) continue;
-    if (!row.body || !row.body.trim()) continue;
-    messages.push({ role: row.direction === "inbound" ? "user" : "assistant", content: row.body });
+    if (throughMessageId !== null && Number(row.id) <= throughMessageId) continue;
+    const mapped = transcriptRowToProviderMessage(row);
+    if (mapped) messages.push(mapped);
   }
   return messages;
 }

@@ -9,6 +9,11 @@ import { buildAssistantMessageDedupeKey } from "../agent-session/dedupe";
 import { getDefaultAgentSessionStore } from "../agent-session/defaultStore";
 import type { AgentSessionAssistantMessagePayload } from "../agent-session/types";
 import type { AgentSessionStore } from "../agent-session/store";
+import { runSessionCompactionIfEligible } from "../agent-session/runSessionCompaction";
+import {
+  SESSION_COMPACTION_DEFAULT_MAX_RAW_MESSAGES,
+  SESSION_COMPACTION_DEFAULT_TARGET_RECENT_MESSAGES
+} from "../agent-session/sessionCompactionPolicy";
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
 import type { AgentLoopResult, AgentLoopTerminalReason, PendingCatalogActionStep } from "../agent-loop/agentStepTypes";
 import type { RecentCatalogContext } from "../agent-loop/recentCatalogContext";
@@ -67,6 +72,17 @@ export type RunSalesAgentRuntimeCycleInput = {
   persistentSessionShadowEnabled?: boolean;
   /** SALES-AGENT-R3-V1.8-D5/D6. Threaded to runSalesAgentRuntime unchanged - see that type's own comment. Default-true since D6, read by the caller (runNativeAutonomousCycle.ts) via shouldEnablePersistentSessionCognition, never inside this file. */
   persistentSessionCognitionEnabled?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8-D7. Fail-closed (default false), read by the caller
+   * (runNativeAutonomousCycle.ts) via buildSessionCompactionFeatureFlags -
+   * unlike the D5/D6 flags above, this one IS consumed inside this file (the
+   * post-dispatch compaction check below), never inside runSalesAgentRuntime
+   * itself (compaction is a context-management optimization, not a
+   * per-decision concern of the loop).
+   */
+  sessionCompactionEnabled?: boolean;
+  sessionCompactionMaxRawMessages?: number;
+  sessionCompactionTargetRecentMessages?: number;
 };
 
 /**
@@ -371,6 +387,27 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
   });
   if (!assistantMessageResult.ok) {
     loop.warnings.push(`agent_session_assistant_message_event_write_failed:${assistantMessageResult.warning}`);
+  }
+
+  // SALES-AGENT-R3-V1.8-D7. Lazily checked after every turn, never blocking
+  // the response above (already dispatched or correctly not) - a compaction
+  // failure only ever produces a warning here (exit gate G8). Own flag,
+  // independent of every other post-dispatch write in this function.
+  if (input.sessionCompactionEnabled) {
+    try {
+      const compactionResult = await runSessionCompactionIfEligible({
+        conversationId: input.conversationId,
+        correlationId: input.correlationId,
+        maxRawMessages: input.sessionCompactionMaxRawMessages ?? SESSION_COMPACTION_DEFAULT_MAX_RAW_MESSAGES,
+        targetRecentMessages: input.sessionCompactionTargetRecentMessages ?? SESSION_COMPACTION_DEFAULT_TARGET_RECENT_MESSAGES,
+        sessionStore: input.sessionStore
+      });
+      if (compactionResult.ran && !compactionResult.persisted) {
+        loop.warnings.push(`session_compaction_failed:${compactionResult.warning}`);
+      }
+    } catch (error) {
+      loop.warnings.push(`session_compaction_failed:${error instanceof Error ? error.message : "unknown"}`);
+    }
   }
 
   const persistedPendingCatalogAction = dispatch.outboxWritten ? runtime.finalPendingCatalogAction : null;

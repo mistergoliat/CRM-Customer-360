@@ -82,6 +82,9 @@ function throwingStore(): AgentSessionStore {
     loadSummary: async () => null,
     rebuildSummary: () => {
       throw new Error("should not be called by the shadow read side");
+    },
+    persistCompactedPrefix: () => {
+      throw new Error("should not be called by the shadow read side");
     }
   };
 }

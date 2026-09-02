@@ -42,4 +42,27 @@ export interface AgentSessionStore {
 
   /** Recomputes the summary from the FULL session event log (never the Phase-9-bounded recent window loadRecentEvents uses - correctness matters more than latency here, and this is not a per-turn hot path) and persists it as the new materialized optimization. */
   rebuildSummary(sessionId: string): Promise<AgentSessionSummary>;
+
+  /**
+   * SALES-AGENT-R3-V1.8-D7. Atomically writes agent_sessions.compacted_prefix_json/
+   * compacted_through_seq/compacted_prefix_updated_at (migration 034) as one
+   * unit (task brief Section J). Monotonic-advance guard only - `applied:
+   * false` (never an error) means a concurrent compaction already advanced
+   * compactedThroughSeq to `throughSeq` or beyond; the caller discards its
+   * own result safely (Section K) rather than retrying or overwriting.
+   */
+  persistCompactedPrefix(input: PersistCompactedPrefixInput): Promise<PersistCompactedPrefixResult>;
 }
+
+export type PersistCompactedPrefixInput = {
+  sessionId: string;
+  /** conversation_message.id boundary (inclusive) - see compactedSessionPrefixContent.ts's domain note. */
+  throughSeq: number;
+  prefixJson: Record<string, unknown>;
+};
+
+export type PersistCompactedPrefixResult =
+  | { ok: true; applied: true }
+  /** The guard rejected the write (a newer or equal compaction already exists) - not an error. */
+  | { ok: true; applied: false }
+  | { ok: false; applied: false; warning: string };

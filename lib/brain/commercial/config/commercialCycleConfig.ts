@@ -17,6 +17,11 @@
  */
 
 import { COMMERCIAL_POLICY_DEFAULT_FLAGS } from "../policy/policyConstants";
+import {
+  SESSION_COMPACTION_DEFAULT_MAX_RAW_MESSAGES,
+  SESSION_COMPACTION_DEFAULT_TARGET_RECENT_MESSAGES,
+  SESSION_COMPACTION_MAX_RAW_MESSAGES_CEILING
+} from "../agent-session/sessionCompactionPolicy";
 import type { CommercialPolicyFeatureFlags } from "../policy/policyTypes";
 import {
   COMMERCIAL_SHADOW_CONTEXT_TIMEOUT_MS,
@@ -368,6 +373,31 @@ export function buildPersistentSessionCognitionFeatureFlags(overrides?: Partial<
  */
 export function shouldEnablePersistentSessionCognition(): boolean {
   return buildPersistentSessionCognitionFeatureFlags(undefined).persistentSessionCognitionEnabled;
+}
+
+/**
+ * SALES-AGENT-R3-V1.8-D7. Fail-closed (default false) toggle for durable
+ * session compaction (agent-session/runSessionCompaction.ts) - a separate
+ * rollback lever from BRAIN_R3_PERSISTENT_SESSION_COGNITION_ENABLED (task
+ * brief Section X: "Compaction is a separate optimization and needs its own
+ * rollback"). maxRawMessages is clamped to SESSION_COMPACTION_MAX_RAW_MESSAGES_CEILING
+ * so a misconfigured env value can never exceed the headroom
+ * loadPersistentSessionContext.ts's own widened read window relies on for
+ * the no-gap invariant (sessionCompactionPolicy.ts's own comment).
+ */
+export function buildSessionCompactionFeatureFlags(
+  overrides?: Partial<{ sessionCompactionEnabled: boolean; maxRawMessages: number; targetRecentMessages: number }>
+) {
+  const maxRawMessages = Math.min(
+    readEnvPositiveInt("BRAIN_R3_SESSION_COMPACTION_MAX_RAW_MESSAGES", SESSION_COMPACTION_DEFAULT_MAX_RAW_MESSAGES),
+    SESSION_COMPACTION_MAX_RAW_MESSAGES_CEILING
+  );
+  return {
+    sessionCompactionEnabled: readEnvFlag("BRAIN_R3_SESSION_COMPACTION_ENABLED", false),
+    maxRawMessages,
+    targetRecentMessages: readEnvPositiveInt("BRAIN_R3_SESSION_COMPACTION_TARGET_RECENT_MESSAGES", SESSION_COMPACTION_DEFAULT_TARGET_RECENT_MESSAGES),
+    ...(overrides ?? {})
+  };
 }
 
 export function buildLegacySalesConsultativeFeatureFlags(

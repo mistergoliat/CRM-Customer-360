@@ -20,8 +20,13 @@ import { withConnection } from "@/lib/db";
 import { getDefaultAgentSessionStore } from "./defaultStore";
 import type { AgentSessionStore } from "./store";
 import type { AgentSession, AgentSessionEvent } from "./types";
-import { loadRecentConversationTranscript, type ConversationTranscriptMessage } from "./conversationTranscriptReader";
+import {
+  AGENT_SESSION_HARD_MAX_TRANSCRIPT_MESSAGES,
+  loadRecentConversationTranscript,
+  type ConversationTranscriptMessage
+} from "./conversationTranscriptReader";
 import type { PersistentSessionCompactedPrefix } from "./deriveMessages";
+import { resolveValidCompactionCutoff } from "./compactedSessionPrefixContent";
 
 const SESSION_READ_LOCK_TIMEOUT_SECONDS = 10;
 
@@ -116,8 +121,24 @@ export async function loadPersistentSessionContext(input: LoadPersistentSessionC
       try {
         const session = await store.loadSessionForConversation(input.conversationId);
         const events = session ? await store.loadRecentEvents({ sessionId: session.id, maxEvents: input.maxEvents }) : [];
-        const transcriptMessages = await loadRecentConversationTranscript(input.conversationId, input.maxTranscriptMessages);
         const { compactedPrefix, warning } = extractCompactedPrefix(session);
+        // SALES-AGENT-R3-V1.8-D7 (Section M, no-gap invariant). Once a valid
+        // compacted prefix exists, the recency-bounded window above
+        // (default AGENT_SESSION_DEFAULT_MAX_TRANSCRIPT_MESSAGES) could be
+        // smaller than "everything since the last compaction," silently
+        // dropping a middle slice that is in neither the compacted prefix
+        // nor the raw tail. Widening to the existing hard cap whenever a
+        // valid cutoff exists guarantees the full post-cutoff span is read
+        // (deriveMessages.ts then filters out anything at/before the
+        // cutoff) as long as the compaction trigger keeps the true
+        // uncompacted count under that cap - see
+        // sessionCompactionPolicy.ts's own SESSION_COMPACTION_MAX_RAW_MESSAGES_CEILING.
+        // No change at all when no valid compacted prefix exists (the
+        // normal case for every session before D7 ever runs) - byte-
+        // identical to D3-D6 in that case.
+        const effectiveMaxTranscriptMessages =
+          resolveValidCompactionCutoff(compactedPrefix) !== null ? AGENT_SESSION_HARD_MAX_TRANSCRIPT_MESSAGES : input.maxTranscriptMessages;
+        const transcriptMessages = await loadRecentConversationTranscript(input.conversationId, effectiveMaxTranscriptMessages);
 
         return {
           ok: true as const,

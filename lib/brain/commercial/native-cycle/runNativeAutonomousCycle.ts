@@ -21,6 +21,7 @@ import {
   buildCommercialCycleTimeouts,
   buildCommercialSalesAgentDryRun,
   buildPersistentSessionShadowFeatureFlags,
+  buildSessionCompactionFeatureFlags,
   shouldEnablePersistentSessionCognition,
   readEnvFlag,
   shouldRouteToMultiIntentPlanner,
@@ -723,6 +724,7 @@ export async function runNativeAutonomousCycle(
     // that as empty_response, but the turn produced no outbound message.
     // Scoped to this one call site (not a global provider default) per the
     // hotfix's own scope guard - ATL's existing behavior is unchanged.
+    const sessionCompactionFeatureFlags = buildSessionCompactionFeatureFlags();
     const salesAgentRuntimeResult = await runSalesAgentRuntimeCycle({
       conversationId: input.conversationId,
       conversationPublicId: input.conversationPublicId,
@@ -763,7 +765,16 @@ export async function runNativeAutonomousCycle(
       // just BRAIN_R3_PERSISTENT_SESSION_COGNITION_ENABLED (default true) -
       // set it to "false" for an immediate, global rollback to the legacy
       // recentMessages path.
-      persistentSessionCognitionEnabled: shouldEnablePersistentSessionCognition()
+      persistentSessionCognitionEnabled: shouldEnablePersistentSessionCognition(),
+      // SALES-AGENT-R3-V1.8-D7. Own rollback lever
+      // (BRAIN_R3_SESSION_COMPACTION_ENABLED, default false) - additionally
+      // gated on live cognition being active this turn so a D6 rollback
+      // (persistent cognition disabled) also pauses compaction rather than
+      // burning model calls compacting a session nothing currently reads
+      // (see buildSessionCompactionFeatureFlags' own comment).
+      sessionCompactionEnabled: sessionCompactionFeatureFlags.sessionCompactionEnabled && shouldEnablePersistentSessionCognition(),
+      sessionCompactionMaxRawMessages: sessionCompactionFeatureFlags.maxRawMessages,
+      sessionCompactionTargetRecentMessages: sessionCompactionFeatureFlags.targetRecentMessages
     });
 
     const commercialNeed: NativeAutonomousCycleCommercialNeed = {

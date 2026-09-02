@@ -737,3 +737,70 @@ test("[D2-O-B] one transient ASSISTANT_MESSAGE_SENT write failure retries and re
     assert.equal(await countAssistantMessageSentEvents(conversationId), 1, "replay must not create a second ASSISTANT_MESSAGE_SENT event");
   });
 });
+
+// SALES-AGENT-R3-V1.8-D7. Post-dispatch session-compaction hook - fires
+// after the customer's response is already dispatched, gated on its own
+// flag, and never fails the turn even when the compaction model itself
+// fails (exit gate G8).
+
+async function insertPlainConversationMessages(conversationId: number, count: number): Promise<void> {
+  await getPool().query(
+    `INSERT INTO conversation_message (public_id, conversation_id, provider, direction, sender_type, message_type, body, status, created_at)
+     VALUES ${Array.from({ length: count }, () => "(UUID(), ?, 'meta', ?, 'customer', 'text', ?, 'received', NOW())").join(", ")}`,
+    Array.from({ length: count }, (_, i) => [conversationId, i % 2 === 0 ? "inbound" : "outbound", `turn-${i}`]).flat()
+  );
+}
+
+test("[D7-CC1] sessionCompactionEnabled false (default): no compacted prefix is ever written, even with many raw messages", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  const store = createMariaDbAgentSessionStore();
+  await insertPlainConversationMessages(conversationId, 50);
+
+  await withEnv({ ...RESPONSE_DISPATCH_ENABLED_ENV, BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId }, async () => {
+    const result = await runSalesAgentRuntimeCycle({
+      ...input,
+      snapshot: buildSnapshot(),
+      provider: createFakeAgentLoopProvider({ script: [{ type: "respond", message: "hola" }] }),
+      sessionStore: store
+      // sessionCompactionEnabled omitted -> falsy, matching production default.
+    });
+    assert.equal(result.runtime.status, "responded");
+  });
+
+  const session = await store.loadSessionForConversation(conversationId);
+  assert.equal(session?.compactedThroughSeq, null);
+});
+
+test("[D7-CC3] sessionCompactionEnabled true but the compaction model fails: the turn still responds normally, only a warning is recorded", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  const store = createMariaDbAgentSessionStore();
+  await insertPlainConversationMessages(conversationId, 50);
+
+  await withEnv(
+    { ...RESPONSE_DISPATCH_ENABLED_ENV, BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId, BRAIN_MODEL_API_URL: "", BRAIN_MODEL_API_KEY: "" },
+    async () => {
+      const result = await runSalesAgentRuntimeCycle({
+        ...input,
+        snapshot: buildSnapshot(),
+        provider: createFakeAgentLoopProvider({ script: [{ type: "respond", message: "hola" }] }),
+        sessionStore: store,
+        sessionCompactionEnabled: true,
+        sessionCompactionMaxRawMessages: 40,
+        sessionCompactionTargetRecentMessages: 20
+      });
+      // Unconfigured provider (missing endpoint/key) fails generation - the
+      // turn itself must still succeed end to end (exit gate G8).
+      assert.equal(result.runtime.status, "responded");
+      assert.equal(result.dispatch.outboxWritten, true);
+      assert.ok(
+        result.runtime.warnings.some((w) => w.startsWith("session_compaction_failed:")),
+        `expected a session_compaction_failed warning, got: ${JSON.stringify(result.runtime.warnings)}`
+      );
+    }
+  );
+
+  const session = await store.loadSessionForConversation(conversationId);
+  assert.equal(session?.compactedThroughSeq, null);
+});

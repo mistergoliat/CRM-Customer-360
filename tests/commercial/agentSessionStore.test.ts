@@ -293,7 +293,14 @@ test("[D1] SESSION_COMPACTED is accepted as a valid AgentSessionEvent type", asy
   const store = freshStore();
   const session = await store.ensureSession({ conversationId: 1 });
   const dedupeKey = buildSessionCompactedDedupeKey(session.id, 42);
-  const payload: AgentSessionCompactedPayload = { fromSeq: 1, toSeq: 42, summaryEstimatedSize: 900 };
+  const payload: AgentSessionCompactedPayload = {
+    fromSeq: 1,
+    toSeq: 42,
+    summaryEstimatedSize: 900,
+    rawMessageCount: 20,
+    rawEstimatedSize: 4000,
+    compactionDurationMs: 1200
+  };
   assert.equal(isValidAgentSessionCompactedPayload(payload), true);
 
   const result = await store.appendEvent({ sessionId: session.id, conversationId: 1, eventType: "SESSION_COMPACTED", correlationId: "c1", dedupeKey, payload });
@@ -307,10 +314,12 @@ test("[D1] SESSION_COMPACTED is accepted as a valid AgentSessionEvent type", asy
 });
 
 test("[D1] isValidAgentSessionCompactedPayload rejects a structurally nonsensical range", () => {
-  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 10, toSeq: 5, summaryEstimatedSize: 0 }), false);
-  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: -1, toSeq: 5, summaryEstimatedSize: 0 }), false);
-  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 0, toSeq: 5, summaryEstimatedSize: -1 }), false);
-  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 0, toSeq: 5, summaryEstimatedSize: 0 }), true);
+  const base = { rawMessageCount: 0, rawEstimatedSize: 0, compactionDurationMs: 0 };
+  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 10, toSeq: 5, summaryEstimatedSize: 0, ...base }), false);
+  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: -1, toSeq: 5, summaryEstimatedSize: 0, ...base }), false);
+  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 0, toSeq: 5, summaryEstimatedSize: -1, ...base }), false);
+  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 0, toSeq: 5, summaryEstimatedSize: 0, ...base }), true);
+  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 0, toSeq: 5, summaryEstimatedSize: 0, ...base, rawMessageCount: -1 }), false);
 });
 
 // SALES-AGENT-R3-V1.8-D1. ASSISTANT_MESSAGE_SENT's extended payload shape -

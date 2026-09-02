@@ -21,7 +21,14 @@ import type {
 import { buildAgentSessionEventId, buildAgentSessionId } from "./dedupe";
 import { sanitizeAgentSessionPayload } from "./sanitizer";
 import { projectAgentSessionSummary } from "./summary";
-import { AGENT_SESSION_DEFAULT_MAX_AGE_MS, AGENT_SESSION_DEFAULT_MAX_RECENT_EVENTS, AGENT_SESSION_HARD_MAX_RECENT_EVENTS, type AgentSessionStore } from "./store";
+import {
+  AGENT_SESSION_DEFAULT_MAX_AGE_MS,
+  AGENT_SESSION_DEFAULT_MAX_RECENT_EVENTS,
+  AGENT_SESSION_HARD_MAX_RECENT_EVENTS,
+  type AgentSessionStore,
+  type PersistCompactedPrefixInput,
+  type PersistCompactedPrefixResult
+} from "./store";
 
 type SessionRow = AgentSession;
 type SummaryRow = { summary: AgentSessionSummary; version: number };
@@ -188,5 +195,24 @@ export function createInMemoryAgentSessionStore(backing: InMemoryAgentSessionBac
     return stored;
   }
 
-  return { ensureSession, appendEvent, loadSession, loadSessionForConversation, loadRecentEvents, loadSummary, rebuildSummary };
+  /** Mirrors mariaDbAgentSessionStore.ts's own monotonic-advance guard (SALES-AGENT-R3-V1.8-D7). */
+  async function persistCompactedPrefix(input: PersistCompactedPrefixInput): Promise<PersistCompactedPrefixResult> {
+    const session = backing.sessionsById.get(input.sessionId);
+    if (!session) return { ok: false, applied: false, warning: "agent_session_not_found" };
+    if (session.compactedThroughSeq !== null && session.compactedThroughSeq >= input.throughSeq) {
+      return { ok: true, applied: false };
+    }
+    const updated: AgentSession = {
+      ...session,
+      compactedPrefixJson: input.prefixJson,
+      compactedThroughSeq: input.throughSeq,
+      compactedPrefixUpdatedAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    backing.sessionsById.set(input.sessionId, updated);
+    backing.sessionsByConversationId.set(updated.conversationId, updated);
+    return { ok: true, applied: true };
+  }
+
+  return { ensureSession, appendEvent, loadSession, loadSessionForConversation, loadRecentEvents, loadSummary, rebuildSummary, persistCompactedPrefix };
 }

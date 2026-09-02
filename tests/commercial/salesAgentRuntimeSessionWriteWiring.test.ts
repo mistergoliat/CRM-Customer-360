@@ -82,7 +82,8 @@ function trackingSessionStore(injection: FailureInjection = {}): AgentSessionSto
     loadSessionForConversation: (conversationId) => inner.loadSessionForConversation(conversationId),
     loadRecentEvents: (input) => inner.loadRecentEvents(input),
     loadSummary: (id) => inner.loadSummary(id),
-    rebuildSummary: (id) => inner.rebuildSummary(id)
+    rebuildSummary: (id) => inner.rebuildSummary(id),
+    persistCompactedPrefix: (input) => inner.persistCompactedPrefix(input)
   };
 }
 

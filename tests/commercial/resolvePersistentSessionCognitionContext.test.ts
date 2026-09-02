@@ -76,6 +76,9 @@ function throwingStore(): AgentSessionStore {
     loadSummary: async () => null,
     rebuildSummary: () => {
       throw new Error("should not be called by the resolver");
+    },
+    persistCompactedPrefix: () => {
+      throw new Error("should not be called by the resolver");
     }
   };
 }
@@ -106,6 +109,9 @@ function malformedEventsStore(): AgentSessionStore {
     loadRecentEvents: async () => [null] as unknown as AgentSessionEvent[],
     loadSummary: async () => null,
     rebuildSummary: () => {
+      throw new Error("should not be called by the resolver");
+    },
+    persistCompactedPrefix: () => {
       throw new Error("should not be called by the resolver");
     }
   };

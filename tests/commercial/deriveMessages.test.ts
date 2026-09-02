@@ -124,11 +124,13 @@ test("[D3-4] skips rows with a null or blank body", () => {
   assert.deepEqual(messages, [{ role: "user", content: "hola" }]);
 });
 
-// Section Q. compactedPrefix (once D7 ever populates it) is placed before
-// recent history, as a system-role message - never fabricated as a fake
-// user/assistant turn.
+// Section Q. compactedPrefix is placed before recent history, as a
+// system-role message - never fabricated as a fake user/assistant turn.
+// D7 owns the real content shape (compactedSessionPrefixContent.ts) -
+// {schemaVersion, summaryText} - superseding this test's pre-D7 placeholder
+// ({note: ...}), which pre-dated that decision.
 test("[D3-Q1] places a valid compacted prefix before recent history as a system message", () => {
-  const compactedPrefix: PersistentSessionCompactedPrefix = { throughSeq: 5, prefixJson: { note: "resumen de turnos previos" } };
+  const compactedPrefix: PersistentSessionCompactedPrefix = { throughSeq: 5, prefixJson: { schemaVersion: 1, summaryText: "resumen de turnos previos" } };
   const messages = deriveConversationMessages({
     transcriptMessages: [transcript("6", "inbound", "y las mancuernas?")],
     compactedPrefix,
@@ -148,6 +150,44 @@ test("[D3-Q2] compactedPrefix null (the normal case today) adds no extra message
   });
   assert.equal(messages.length, 1);
   assert.equal(messages[0].role, "user");
+});
+
+// D7. A compacted prefix excludes transcript rows already covered by it
+// (row.id <= throughSeq, Section M's no-overlap invariant) - never applied
+// to rows after the cutoff.
+test("[D7-M1] excludes transcript rows at or before the compacted cutoff, keeps rows after it", () => {
+  const compactedPrefix: PersistentSessionCompactedPrefix = { throughSeq: 3, prefixJson: { schemaVersion: 1, summaryText: "resumen 1-3" } };
+  const messages = deriveConversationMessages({
+    transcriptMessages: [
+      transcript("1", "inbound", "hola"),
+      transcript("2", "outbound", "hola, en que te ayudo?"),
+      transcript("3", "inbound", "busco una barra"),
+      transcript("4", "outbound", "tenemos varias opciones"),
+      transcript("5", "inbound", "cual me recomiendas?")
+    ],
+    compactedPrefix,
+    currentInboundMessageId: "5"
+  });
+  assert.deepEqual(messages, [
+    { role: "system", content: "[Compacted session history through message #3] resumen 1-3" },
+    { role: "assistant", content: "tenemos varias opciones" }
+  ]);
+});
+
+// D7. Section T: malformed compacted-prefix content degrades to "no
+// compaction" for BOTH the injected message and the filter - never silently
+// drops history it cannot summarize.
+test("[D7-M2] malformed compacted prefix content is ignored, no history dropped", () => {
+  const compactedPrefix: PersistentSessionCompactedPrefix = { throughSeq: 3, prefixJson: { schemaVersion: 1 } }; // missing summaryText
+  const messages = deriveConversationMessages({
+    transcriptMessages: [transcript("1", "inbound", "hola"), transcript("2", "outbound", "hola, en que te ayudo?")],
+    compactedPrefix,
+    currentInboundMessageId: null
+  });
+  assert.deepEqual(messages, [
+    { role: "user", content: "hola" },
+    { role: "assistant", content: "hola, en que te ayudo?" }
+  ]);
 });
 
 // Section L. Tool activity stays a separate, structured array - never

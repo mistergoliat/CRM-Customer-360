@@ -189,3 +189,77 @@ test("a payload with a forbidden key is rejected before any INSERT reaches the d
   const count = Number((rows[0] as unknown as { c: number }[])[0].c);
   assert.equal(count, 0);
 });
+
+// SALES-AGENT-R3-V1.8-D7. persistCompactedPrefix's own atomic write +
+// monotonic-advance guard (task brief Section J/K) - real MariaDB, real
+// concurrent connections, never a mocked UPDATE.
+
+test("[D7-S1] persistCompactedPrefix writes all three columns atomically on a first compaction", async () => {
+  const store = createMariaDbAgentSessionStore();
+  const conversationId = await ensureTestConversation();
+  const session = await store.ensureSession({ conversationId });
+
+  const result = await store.persistCompactedPrefix({ sessionId: session.id, throughSeq: 30, prefixJson: { schemaVersion: 1, summaryText: "resumen 1-30" } });
+  assert.deepEqual(result, { ok: true, applied: true });
+
+  const reloaded = await store.loadSession(session.id);
+  assert.equal(reloaded?.compactedThroughSeq, 30);
+  assert.deepEqual(reloaded?.compactedPrefixJson, { schemaVersion: 1, summaryText: "resumen 1-30" });
+  assert.ok(typeof reloaded?.compactedPrefixUpdatedAt === "string");
+});
+
+test("[D7-S2] persistCompactedPrefix advances an existing prefix forward", async () => {
+  const store = createMariaDbAgentSessionStore();
+  const conversationId = await ensureTestConversation();
+  const session = await store.ensureSession({ conversationId });
+
+  await store.persistCompactedPrefix({ sessionId: session.id, throughSeq: 30, prefixJson: { schemaVersion: 1, summaryText: "A" } });
+  const second = await store.persistCompactedPrefix({ sessionId: session.id, throughSeq: 45, prefixJson: { schemaVersion: 1, summaryText: "A + 31-45" } });
+  assert.deepEqual(second, { ok: true, applied: true });
+
+  const reloaded = await store.loadSession(session.id);
+  assert.equal(reloaded?.compactedThroughSeq, 45);
+});
+
+test("[D7-S3] the monotonic guard rejects a stale (lower or equal) throughSeq without error - a safe no-op discard", async () => {
+  const store = createMariaDbAgentSessionStore();
+  const conversationId = await ensureTestConversation();
+  const session = await store.ensureSession({ conversationId });
+
+  await store.persistCompactedPrefix({ sessionId: session.id, throughSeq: 50, prefixJson: { schemaVersion: 1, summaryText: "newer" } });
+  const staleEqual = await store.persistCompactedPrefix({ sessionId: session.id, throughSeq: 50, prefixJson: { schemaVersion: 1, summaryText: "stale-equal" } });
+  const staleLower = await store.persistCompactedPrefix({ sessionId: session.id, throughSeq: 40, prefixJson: { schemaVersion: 1, summaryText: "stale-lower" } });
+  assert.deepEqual(staleEqual, { ok: true, applied: false });
+  assert.deepEqual(staleLower, { ok: true, applied: false });
+
+  const reloaded = await store.loadSession(session.id);
+  assert.equal(reloaded?.compactedThroughSeq, 50);
+  assert.deepEqual(reloaded?.compactedPrefixJson, { schemaVersion: 1, summaryText: "newer" });
+});
+
+test("[D7-S4] concurrent compactions racing on the same session: only the higher throughSeq ever wins, never the last writer", async () => {
+  const store = createMariaDbAgentSessionStore();
+  const conversationId = await ensureTestConversation();
+  const session = await store.ensureSession({ conversationId });
+
+  // The lower throughSeq (40) is intentionally started AFTER the higher one
+  // (60) resolves is not guaranteed by Promise.all ordering - the guard
+  // itself (not call order) must be what decides the winner.
+  const [higher, lower] = await Promise.all([
+    store.persistCompactedPrefix({ sessionId: session.id, throughSeq: 60, prefixJson: { schemaVersion: 1, summaryText: "through-60" } }),
+    store.persistCompactedPrefix({ sessionId: session.id, throughSeq: 40, prefixJson: { schemaVersion: 1, summaryText: "through-40" } })
+  ]);
+  assert.ok(higher.ok && lower.ok);
+
+  const reloaded = await store.loadSession(session.id);
+  // Whichever of the two actually landed last in real time, the guard
+  // guarantees the STORED value is never lower than the highest one applied.
+  assert.equal(reloaded?.compactedThroughSeq, 60);
+  assert.deepEqual(reloaded?.compactedPrefixJson, { schemaVersion: 1, summaryText: "through-60" });
+});
+
+test("[D7-S5] persistCompactedPrefix on an unknown sessionId matches zero rows, applied: false, never throws", async () => {
+  const store = createMariaDbAgentSessionStore();
+  const result = await store.persistCompactedPrefix({ sessionId: "agsess_does_not_exist", throughSeq: 1, prefixJson: { schemaVersion: 1, summaryText: "x" } });
+  assert.deepEqual(result, { ok: true, applied: false });
+});

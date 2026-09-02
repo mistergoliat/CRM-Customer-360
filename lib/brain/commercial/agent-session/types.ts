@@ -178,15 +178,24 @@ export type LoadRecentEventsInput = {
 /**
  * The mandatory minimum for a future compaction event (D7) - never a
  * concrete summary text field here (that lives in agent_sessions.compacted_prefix_json,
- * migration 034, a separate durable slot, not the event payload). fromSeq/
- * toSeq identify exactly which agent_session_events range this compaction
- * covers (see agent_session_events.seq, migration 033).
+ * migration 034, a separate durable slot, not the event payload). D7
+ * populates fromSeq/toSeq with conversation_message.id boundaries (the real
+ * compaction unit - see compactedSessionPrefixContent.ts's own domain note),
+ * superseding this comment's original agent_session_events.seq assumption -
+ * that assumption predates D3, which confirmed conversation_message as the
+ * sole canonical transcript. rawMessageCount/rawEstimatedSize/
+ * compactionDurationMs (D7) are the observability metrics the task brief's
+ * own Section V names - non-sensitive counts/sizes only, never message
+ * bodies or summary text.
  */
 export type AgentSessionCompactedPayload = {
   fromSeq: number;
   toSeq: number;
   /** Never `summaryTokenEstimate` - the real sanitizer rejects any key containing "token" (V1.8-D0 section 7/8, verified by execution, not just reading the regex). */
   summaryEstimatedSize: number;
+  rawMessageCount: number;
+  rawEstimatedSize: number;
+  compactionDurationMs: number;
 };
 
 /**
@@ -204,7 +213,13 @@ export function isValidAgentSessionCompactedPayload(payload: AgentSessionCompact
     Number.isInteger(payload.toSeq) &&
     payload.toSeq >= payload.fromSeq &&
     Number.isInteger(payload.summaryEstimatedSize) &&
-    payload.summaryEstimatedSize >= 0
+    payload.summaryEstimatedSize >= 0 &&
+    Number.isInteger(payload.rawMessageCount) &&
+    payload.rawMessageCount >= 0 &&
+    Number.isInteger(payload.rawEstimatedSize) &&
+    payload.rawEstimatedSize >= 0 &&
+    Number.isInteger(payload.compactionDurationMs) &&
+    payload.compactionDurationMs >= 0
   );
 }
 
