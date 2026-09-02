@@ -99,6 +99,31 @@ test("[HP13b] no maxOutputTokens configured means max_tokens is omitted entirely
   assert.equal("max_tokens" in capturedBody, false, "max_tokens must be entirely absent from the request body");
 });
 
+// SALES-AGENT-R3-V1.8-D3. AgentLoopProviderMessage gained "assistant"
+// (agentLoopProviderTypes.ts) so deriveMessages.ts can represent real
+// historical assistant turns. This provider passes request.messages straight
+// through to the wire (no role-specific branching in httpAgentLoopProvider.ts
+// itself) - this proves that holds for real, over a real HTTP request, for
+// system/user/assistant together. D3 does not route derived messages into
+// this provider yet - this only proves the wire format is ready when a
+// future slice does.
+test("[D3-HP1] system/user/assistant messages all reach the request body's messages array unchanged", async () => {
+  let capturedBody: Record<string, unknown> = {};
+  handler = async (req, res) => {
+    capturedBody = await readBody(req);
+    sendJson(res, 200, successResponse());
+  };
+  const messagesWithHistory = [
+    { role: "system" as const, content: "sys" },
+    { role: "user" as const, content: "que barras tienen" },
+    { role: "assistant" as const, content: "tenemos varias opciones" },
+    { role: "user" as const, content: "quiero la segunda" }
+  ];
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  await provider.invoke({ messages: messagesWithHistory }, { timeoutMs: 5000 });
+  assert.deepEqual(capturedBody.messages, messagesWithHistory);
+});
+
 test("[HP14] the effective timeout controls abort - a hung response fails instead of hanging forever", async () => {
   handler = () => {
     // Never responds.

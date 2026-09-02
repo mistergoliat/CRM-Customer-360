@@ -96,7 +96,10 @@ function eventRowToContract(row: Record<string, unknown>): AgentSessionEvent {
     dedupeKey: String(row.dedupe_key),
     payload: asJsonRecord(row.payload_json),
     occurredAt: asIso(row.occurred_at),
-    createdAt: asIso(row.created_at)
+    createdAt: asIso(row.created_at),
+    // SALES-AGENT-R3-V1.8-D3. Real column, already selected by `SELECT *` -
+    // just not previously mapped onto the contract (see types.ts's own comment).
+    seq: Number(row.seq)
   };
 }
 
@@ -157,6 +160,7 @@ export function createMariaDbAgentSessionStore(): AgentSessionStore {
 
       const occurredAt = input.occurredAt?.trim() || new Date().toISOString();
       const id = buildAgentSessionEventId(input.dedupeKey);
+      let insertId = 0;
 
       try {
         const [result] = await connection.execute<ResultSetHeader>(
@@ -182,6 +186,9 @@ export function createMariaDbAgentSessionStore(): AgentSessionStore {
           if (raced) return { ok: true, status: "duplicate", event: raced };
           return { ok: false, status: "error", event: null, warning: "agent_session_event_insert_failed" };
         }
+        // `seq` (migration 033) is the table's only AUTO_INCREMENT column -
+        // insertId here is the real assigned seq, not a second query needed.
+        insertId = result.insertId;
       } catch (error) {
         const raced = await findEventByDedupeKey(connection, input.dedupeKey);
         if (raced) return { ok: true, status: "duplicate", event: raced };
@@ -200,7 +207,8 @@ export function createMariaDbAgentSessionStore(): AgentSessionStore {
         dedupeKey: input.dedupeKey,
         payload: sanitizedPayload,
         occurredAt,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        seq: insertId
       };
       return { ok: true, status: "created", event };
     });

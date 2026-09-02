@@ -41,3 +41,28 @@ export {
   type RecordAgentToolLoopSessionShadowInput,
   type RecordAgentToolLoopSessionShadowResult
 } from "./shadowRecorder";
+
+export {
+  loadRecentConversationTranscript,
+  AGENT_SESSION_DEFAULT_MAX_TRANSCRIPT_MESSAGES,
+  AGENT_SESSION_HARD_MAX_TRANSCRIPT_MESSAGES,
+  type ConversationTranscriptMessage
+} from "./conversationTranscriptReader";
+
+export {
+  deriveMessages,
+  deriveConversationMessages,
+  deriveToolActivityObservations,
+  type PersistentSessionCompactedPrefix,
+  type DeriveConversationMessagesInput,
+  type DeriveMessagesInput,
+  type DeriveMessagesResult
+} from "./deriveMessages";
+
+export {
+  loadPersistentSessionContext,
+  type LoadPersistentSessionContextInput,
+  type LoadPersistentSessionContextResult,
+  type LoadPersistentSessionContextSuccess,
+  type LoadPersistentSessionContextFailure
+} from "./loadPersistentSessionContext";

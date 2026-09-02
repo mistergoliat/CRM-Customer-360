@@ -40,6 +40,14 @@ export type InMemoryAgentSessionBacking = {
   eventsBySession: Map<string, AgentSessionEvent[]>;
   eventsByDedupeKey: Map<string, AgentSessionEvent>;
   summariesBySession: Map<string, SummaryRow>;
+  /**
+   * SALES-AGENT-R3-V1.8-D3. Mirrors agent_session_events.seq's real
+   * AUTO_INCREMENT semantics (migration 033) - a single counter on the
+   * shared backing object (not a per-store-instance closure variable) so two
+   * store instances sharing one `backing` see the same monotonic sequence,
+   * the same "simulated process restart" property every other field here already has.
+   */
+  nextSeq: number;
 };
 
 export function createInMemoryAgentSessionBacking(): InMemoryAgentSessionBacking {
@@ -48,7 +56,8 @@ export function createInMemoryAgentSessionBacking(): InMemoryAgentSessionBacking
     sessionsById: new Map(),
     eventsBySession: new Map(),
     eventsByDedupeKey: new Map(),
-    summariesBySession: new Map()
+    summariesBySession: new Map(),
+    nextSeq: 1
   };
 }
 
@@ -101,6 +110,11 @@ export function createInMemoryAgentSessionStore(backing: InMemoryAgentSessionBac
       return { ok: false, status: "error", event: null, warning: error instanceof Error ? error.message : String(error) };
     }
 
+    // Re-check after the async sanitizer step, mirroring the MariaDB
+    // implementation's check-then-insert-then-recheck race handling.
+    const raced = backing.eventsByDedupeKey.get(input.dedupeKey);
+    if (raced) return { ok: true, status: "duplicate", event: raced };
+
     const occurredAt = input.occurredAt?.trim() || nowIso();
     const event: AgentSessionEvent = {
       contractName: AGENT_SESSION_CONTRACT_NAME,
@@ -114,13 +128,9 @@ export function createInMemoryAgentSessionStore(backing: InMemoryAgentSessionBac
       dedupeKey: input.dedupeKey,
       payload: sanitizedPayload,
       occurredAt,
-      createdAt: nowIso()
+      createdAt: nowIso(),
+      seq: backing.nextSeq++
     };
-
-    // Re-check after the async sanitizer step, mirroring the MariaDB
-    // implementation's check-then-insert-then-recheck race handling.
-    const raced = backing.eventsByDedupeKey.get(input.dedupeKey);
-    if (raced) return { ok: true, status: "duplicate", event: raced };
 
     backing.eventsByDedupeKey.set(input.dedupeKey, event);
     const list = backing.eventsBySession.get(input.sessionId) ?? [];

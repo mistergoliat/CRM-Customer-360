@@ -7,6 +7,8 @@ import type { AgentSessionEvent } from "@/lib/brain/commercial/agent-session/typ
 // deterministic (event log -> summary) and handles malformed/non-applicable
 // events safely (task scenarios 11, 12, 23).
 
+let nextTestSeq = 1;
+
 function event(partial: Partial<AgentSessionEvent> & Pick<AgentSessionEvent, "eventType" | "occurredAt">): AgentSessionEvent {
   return {
     contractName: "AgentSession",
@@ -19,6 +21,7 @@ function event(partial: Partial<AgentSessionEvent> & Pick<AgentSessionEvent, "ev
     dedupeKey: `dedupe_${Math.random()}`,
     payload: {},
     createdAt: partial.occurredAt,
+    seq: nextTestSeq++,
     ...partial
   };
 }

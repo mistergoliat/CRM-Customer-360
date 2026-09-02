@@ -89,6 +89,15 @@ export type AgentSessionEvent = {
   payload: Record<string, unknown>;
   occurredAt: string;
   createdAt: string;
+  /**
+   * SALES-AGENT-R3-V1.8-D3. The real, monotonic `agent_session_events.seq`
+   * (migration 033, BIGINT UNSIGNED AUTO_INCREMENT, UNIQUE KEY) - previously
+   * used only inside ORDER BY clauses, never surfaced on this contract.
+   * deriveMessages.ts needs it to exclude event ranges already covered by
+   * AgentSession.compactedThroughSeq (migration 034) from the tool-activity
+   * projection once a future D7 compaction actually populates that column.
+   */
+  seq: number;
 };
 
 export type AgentSessionEventPersistStatus = "created" | "duplicate";

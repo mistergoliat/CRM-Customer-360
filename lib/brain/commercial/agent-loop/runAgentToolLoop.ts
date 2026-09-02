@@ -9,7 +9,7 @@ import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfigurat
 import { buildAgentStepPromptPackage, type AgentLoopPriorAttemptFailure, type AgentLoopToolDescription } from "./buildAgentStepPromptPackage";
 import { buildToolObservation } from "./buildToolObservation";
 import { validateAgentStep } from "./validateAgentStep";
-import type { AgentLoopProvider } from "./agentLoopProviderTypes";
+import type { AgentLoopProvider, AgentLoopProviderMessage } from "./agentLoopProviderTypes";
 import { GET_PRODUCT_DETAILS_PENDING_CATALOG_BLOCKED_REASON } from "./agentStepTypes";
 import type { AgentLoopInferenceRecord, AgentLoopProviderFailure, AgentLoopResult, AgentLoopStepRecord, AgentLoopStepPhase, AgentLoopTerminalReason, AgentStepRespond, AgentStepUseTool, PendingCatalogActionStep, ToolObservation } from "./agentStepTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
@@ -155,7 +155,12 @@ export type AgentLoopProviderCallMetadata = {
 
 export async function invokeProviderWithDeadline(
   provider: AgentLoopProvider,
-  messages: { role: "system" | "user"; content: string }[],
+  // SALES-AGENT-R3-V1.8-D3. Widened from an inline { role: "system"|"user" }
+  // duplicate to the real, now-wider AgentLoopProviderMessage (agent
+  // LoopProviderTypes.ts gained "assistant") - purely mechanical, no
+  // behavior change: every real caller here still only ever constructs
+  // "system"/"user" messages (buildAgentStepPromptPackage.ts is unchanged).
+  messages: AgentLoopProviderMessage[],
   correlationId: string,
   deadlineMs: number,
   externalSignal: AbortSignal | null | undefined

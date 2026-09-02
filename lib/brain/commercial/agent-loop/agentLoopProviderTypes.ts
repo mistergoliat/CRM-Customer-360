@@ -6,7 +6,21 @@
  */
 
 export type AgentLoopProviderMessage = {
-  role: "system" | "user";
+  /**
+   * SALES-AGENT-R3-V1.8-D3. "assistant" added so deriveMessages.ts (agent-session/
+   * deriveMessages.ts) can represent real historical assistant turns from
+   * conversation_message - the OpenAI-compatible endpoint this repo's HTTP
+   * provider already calls (httpAgentLoopProvider.ts) natively supports it,
+   * same request shape, no server-side change needed. "tool" deliberately NOT
+   * added: nothing in this loop's real request/response cycle uses OpenAI's
+   * multi-turn tool-call role today (Capability Gateway results are folded
+   * into the next user-role payload, not sent back as a `tool` message), so
+   * adding it now would be speculative, not evidence-based. Purely additive -
+   * buildAgentStepPromptPackage.ts's only two construction sites still emit
+   * "system"/"user" literals, byte-identical, and D3 does not wire this new
+   * role into that request path (Section W: shadow-only).
+   */
+  role: "system" | "user" | "assistant";
   content: string;
 };
 
