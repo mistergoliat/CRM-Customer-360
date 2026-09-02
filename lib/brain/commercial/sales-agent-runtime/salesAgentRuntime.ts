@@ -7,7 +7,10 @@ import type { AgentRuntimeEvent } from "../agent-runtime-event/types";
 import { resolveAgentCapabilityExposure } from "../agent-capability-exposure/types";
 import { ensureCommercialActionOpportunity } from "../commercial-action-request/ensureCommercialActionOpportunity";
 import type { EnsureCommercialActionOpportunityInput, EnsureCommercialActionOpportunityResult } from "../commercial-action-request/ensureCommercialActionOpportunity";
-import { recordAgentToolLoopSessionShadowEvents } from "../agent-session/shadowRecorder";
+import { recordAgentToolLoopToolActivityEvents } from "../agent-session/shadowRecorder";
+import { appendAgentSessionEventWithRetry } from "../agent-session/appendWithRetry";
+import { buildUserMessageDedupeKey } from "../agent-session/dedupe";
+import { getDefaultAgentSessionStore } from "../agent-session/defaultStore";
 import type { AgentSessionStore } from "../agent-session/store";
 import type { AgentToolLoopStepSummary } from "../events/types";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
@@ -100,6 +103,38 @@ function buildStepsSummary(steps: AgentLoopStepRecord[]): AgentToolLoopStepSumma
     governance: record.governance ?? undefined,
     observationStatus: record.observation?.status ?? undefined
   }));
+}
+
+/**
+ * SALES-AGENT-R3-V1.8-D2. Durable turn-start marker, written BEFORE
+ * runAgentToolLoop invokes the provider - not after, as the pre-D2 shadow
+ * recorder did. RETRY_THEN_DEGRADE (V1.8-D0 section 12): one short bounded
+ * retry, then a warning, never a blocked turn. Reference-only payload
+ * (`{inboundMessageId}`) - conversation_message already owns the actual
+ * text, unchanged by this task.
+ */
+async function recordUserMessageReceivedEvent(input: {
+  conversationId: number;
+  inboundMessageId: string;
+  correlationId: string;
+  store?: AgentSessionStore;
+}): Promise<{ ok: true } | { ok: false; warning: string }> {
+  const store = input.store ?? getDefaultAgentSessionStore();
+  try {
+    const session = await store.ensureSession({ conversationId: input.conversationId });
+    const result = await appendAgentSessionEventWithRetry(store, {
+      sessionId: session.id,
+      conversationId: input.conversationId,
+      eventType: "USER_MESSAGE_RECEIVED",
+      correlationId: input.correlationId,
+      dedupeKey: buildUserMessageDedupeKey(session.id, input.inboundMessageId),
+      payload: { inboundMessageId: input.inboundMessageId }
+    });
+    if (result.status === "degraded" || result.status === "invalid") return { ok: false, warning: result.warning };
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, warning: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function blockedResult(reason: string, opportunityId: number | null): SalesAgentRuntimeResult {
@@ -205,6 +240,23 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     ensureOpportunity
   };
 
+  // SALES-AGENT-R3-V1.8-D2. Durable BEFORE cognition starts - see
+  // recordUserMessageReceivedEvent's own comment. Skipped, not faked, when
+  // no real inboundMessageId exists (same condition the post-loop shadow
+  // write below already used for this reason).
+  const preLoopWarnings: string[] = [];
+  if (inboundMessageId) {
+    const userMessageResult = await recordUserMessageReceivedEvent({
+      conversationId: event.conversationId,
+      inboundMessageId,
+      correlationId: event.correlationId,
+      store: input.sessionStore
+    });
+    if (!userMessageResult.ok) preLoopWarnings.push(`agent_session_user_message_event_write_failed:${userMessageResult.warning}`);
+  } else {
+    preLoopWarnings.push("agent_session_user_message_skipped_no_inbound_message_id");
+  }
+
   const loop: AgentLoopResult = await runAgentToolLoop(loopInput);
   const durationMs = Date.now() - startedAt;
 
@@ -236,15 +288,12 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
   // for free, inside executeReadTool/executeCommercialActionRequest (called
   // by ATL itself) - this call only adds the turn-level envelope. Skipped,
   // not faked, when no real inboundMessageId exists to correlate against.
-  const warnings = [...loop.warnings];
+  const warnings = [...preLoopWarnings, ...loop.warnings];
   if (inboundMessageId) {
-    const shadowResult = await recordAgentToolLoopSessionShadowEvents({
+    const shadowResult = await recordAgentToolLoopToolActivityEvents({
       conversationId: event.conversationId,
       inboundMessageId,
       correlationId: event.correlationId,
-      terminalReason: loop.terminalReason,
-      finalMessagePresent: loop.finalMessage !== null,
-      handoffReasonPresent: loop.handoffReason !== null,
       stepsSummary: buildStepsSummary(loop.steps),
       store: input.sessionStore
     });
