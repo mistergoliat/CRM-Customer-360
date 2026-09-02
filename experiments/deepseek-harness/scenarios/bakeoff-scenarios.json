@@ -163,6 +163,18 @@
       "title": "Same message sent twice in a row",
       "waId": "bakeoff-h0-20",
       "turns": ["Quiero 2 discos olimpicos de 10kg", "Quiero 2 discos olimpicos de 10kg"]
+    },
+    {
+      "id": "V18B-01",
+      "category": "topic_switch_and_return",
+      "title": "SALES-AGENT-R3-V1.8-B characterization: topic switch to an unrelated category then explicit return",
+      "waId": "bakeoff-v18b-01",
+      "turns": [
+        "Estoy buscando una barra olimpica de 20 kg para home gym",
+        "Muestrame varias opciones",
+        "Ahora dime que colchonetas tienen",
+        "Volvamos a la barra anterior"
+      ]
     }
   ]
 }
