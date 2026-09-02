@@ -634,26 +634,27 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
     IMMUTABLE_CONFIGURATION_BOUNDARY_LINE
   ].join("\n");
 
-  // SALES-AGENT-R3-V1.8-D5. Persistent-session path - task brief Section J's
-  // order: (1-2) the same stable+identity system message built above,
-  // unchanged; (3-4) deriveMessages()'s own historicalMessages, spliced in
-  // verbatim (already carries a leading role:"system" compacted-prefix
-  // message when D7 ever populates one, and real role:"assistant" turns -
-  // D3, unchanged); (5) a fresh-context block, separate from (6) the current
-  // message + this turn's own observations, so the stable prefix (system +
-  // history) never mixes with the small mutable suffix that grows every
-  // loop iteration (Section K). commercialContextSummary here is trusted to
-  // already have recentMessages stripped by the caller (Section D) - this
-  // function never re-derives that itself.
+  // SALES-AGENT-R3-V1.8-D5.2. Persistent-session path - task brief Section B's
+  // target shape: (1-2) the same stable+identity system message built above,
+  // unchanged; (3) deriveMessages()'s own historicalMessages, spliced in
+  // verbatim as real provider-native user/assistant turns (already may carry
+  // a leading role:"system" compacted-prefix message when D7 ever populates
+  // one - D3, unchanged); (4) exactly one final user message carrying both
+  // the fresh authoritative commercial context and the current turn - D5's
+  // two-message split (fresh-context user + current-turn user) produced an
+  // artificial consecutive user/user adjacency that a real recoverable tool
+  // failure amplified into handoffs (D5.1-B06 regression); merging into one
+  // message removes that adjacency while keeping every field D5 delivered.
+  // commercialContextSummary here is trusted to already have recentMessages
+  // stripped by the caller (Section D) - this function never re-derives that
+  // itself.
   if (input.persistentSessionHistoricalMessages) {
-    const freshContextPayload = {
-      commercialContext: input.commercialContextSummary,
-      recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
-      ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {})
-    };
     const currentTurnPayload = {
       currentTime: input.currentTime,
       customerMessage: input.customerMessage,
+      commercialContext: input.commercialContextSummary,
+      recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
+      ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {}),
       priorStepsThisTurn: input.priorSteps.map(summarizeObservation),
       question: "What is the single next AgentStep?"
     };
@@ -661,7 +662,6 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
       messages: [
         { role: "system", content: systemInstructions },
         ...input.persistentSessionHistoricalMessages,
-        { role: "user", content: JSON.stringify(freshContextPayload) },
         { role: "user", content: JSON.stringify(currentTurnPayload) }
       ]
     };
