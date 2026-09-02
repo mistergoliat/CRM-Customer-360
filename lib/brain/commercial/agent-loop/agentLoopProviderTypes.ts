@@ -34,6 +34,26 @@ export type AgentLoopProviderResponse = {
    * ever be added. Absent/null for a provider that does not report it.
    */
   reasoningTokens?: number | null;
+  /**
+   * SALES-AGENT-R3-V1.8-D1. DeepSeek-specific cache accounting, confirmed
+   * real via a live provider call against this repo's own configured
+   * endpoint (docs/releases/SALES-AGENT-R3-V1.8-D0-PERSISTENT-SESSION-IMPLEMENTATION-PREFLIGHT.md
+   * section 9): usage.prompt_cache_hit_tokens / usage.prompt_cache_miss_tokens.
+   * Not the OpenAI-standard nested usage.prompt_tokens_details.cached_tokens
+   * shape (same information, one fewer level of null-safe traversal) and
+   * not the DeepSeek Harness's own field names (this repo does not use that
+   * package - V1.8-C0). null when the provider does not report it, same
+   * discipline as reasoningTokens above. This field lives on the provider
+   * response only - it must never be propagated into AgentToolLoopLlmCallSummary/
+   * llmMetrics (lib/brain/commercial/events/types.ts) under this name: that
+   * module's own sanitizer rejects any key containing "token"
+   * (events/types.ts's own documented reason inputSize/outputSize are named
+   * that way, not ...Tokens) - a future slice that wires this into the
+   * commercial_event-bound rollup must use cacheReadSize/cacheMissSize
+   * there instead.
+   */
+  cacheReadTokens?: number | null;
+  cacheMissTokens?: number | null;
   providerRequestId?: string | null;
   finishReason?: string | null;
 };

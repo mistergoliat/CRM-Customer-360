@@ -37,6 +37,29 @@ function asJsonRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+/**
+ * SALES-AGENT-R3-V1.8-D1. Unlike asJsonRecord above (used for payload_json,
+ * a NOT NULL column that is always at least an empty object), compacted_prefix_json
+ * is nullable and starts NULL on every existing row - collapsing NULL to
+ * {} here would make "no compaction has ever run" indistinguishable from
+ * "compaction ran and produced an empty prefix." Preserves null explicitly.
+ */
+function asJsonRecordOrNull(value: unknown): Record<string, unknown> | null {
+  if (value === null || value === undefined) return null;
+  return asJsonRecord(value);
+}
+
+function asNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function asIsoOrNull(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return asIso(value);
+}
+
 function asIso(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "string") return value;
@@ -51,7 +74,12 @@ function sessionRowToContract(row: Record<string, unknown>): AgentSession {
     conversationId: Number(row.conversation_id),
     status: (row.status as AgentSession["status"]) ?? "active",
     createdAt: asIso(row.created_at),
-    updatedAt: asIso(row.updated_at)
+    updatedAt: asIso(row.updated_at),
+    // SALES-AGENT-R3-V1.8-D1 (migration 034). NULL on every row until a
+    // future compaction slice (D7) ever writes them - never interpreted here.
+    compactedPrefixJson: asJsonRecordOrNull(row.compacted_prefix_json),
+    compactedThroughSeq: asNumberOrNull(row.compacted_through_seq),
+    compactedPrefixUpdatedAt: asIsoOrNull(row.compacted_prefix_updated_at)
   };
 }
 

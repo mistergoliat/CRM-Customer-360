@@ -653,6 +653,34 @@ test("[HP33] absence of completion_tokens_details is valid - reasoningTokens is 
   assert.equal(result.reasoningTokens, null);
 });
 
+// SALES-AGENT-R3-V1.8-D1. Mocked HTTP response only - V1.8-D0 already
+// proved these fields are real on the live DeepSeek endpoint (section 9);
+// this repo's own test suite never makes a real external call.
+
+test("[HP35] cacheReadTokens/cacheMissTokens parse from usage.prompt_cache_hit_tokens/prompt_cache_miss_tokens when the provider reports them", async () => {
+  handler = (_req, res) =>
+    sendJson(res, 200, {
+      id: "req-cache",
+      model: "deepseek-v4-flash",
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ type: "respond", message: "hola" }) } }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 80, prompt_cache_miss_tokens: 20 }
+    });
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  const result = await provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 });
+  assert.equal(result.inputTokens, 100);
+  assert.equal(result.outputTokens, 20);
+  assert.equal(result.cacheReadTokens, 80);
+  assert.equal(result.cacheMissTokens, 20);
+});
+
+test("[HP36] absence of cache fields is valid - cacheReadTokens/cacheMissTokens are null, never a thrown error or an invented 0", async () => {
+  handler = (_req, res) => sendJson(res, 200, successResponse());
+  const provider = createHttpAgentLoopProvider({ endpoint: baseUrl, apiKey: "k" });
+  const result = await provider.invoke({ messages: baseMessages }, { timeoutMs: 5000 });
+  assert.equal(result.cacheReadTokens, null);
+  assert.equal(result.cacheMissTokens, null);
+});
+
 test("[HP34] reasoning_content is never read into the response and never logged, even when the provider includes it", async () => {
   const marker = "SECRET-REASONING-TRACE-MARKER-12345";
   handler = (_req, res) =>

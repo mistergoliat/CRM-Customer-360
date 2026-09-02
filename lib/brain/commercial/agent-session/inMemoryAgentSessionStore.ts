@@ -70,7 +70,12 @@ export function createInMemoryAgentSessionStore(backing: InMemoryAgentSessionBac
       conversationId: input.conversationId,
       status: "active",
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
+      // SALES-AGENT-R3-V1.8-D1. Mirrors mariaDbAgentSessionStore.ts: null
+      // until a future compaction slice (D7) ever writes them.
+      compactedPrefixJson: null,
+      compactedThroughSeq: null,
+      compactedPrefixUpdatedAt: null
     };
     backing.sessionsByConversationId.set(input.conversationId, session);
     backing.sessionsById.set(id, session);

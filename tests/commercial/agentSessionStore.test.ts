@@ -7,6 +7,9 @@ import {
 } from "@/lib/brain/commercial/agent-session/inMemoryAgentSessionStore";
 import type { AgentSessionStore } from "@/lib/brain/commercial/agent-session/store";
 import { AGENT_SESSION_HARD_MAX_RECENT_EVENTS } from "@/lib/brain/commercial/agent-session/store";
+import { buildSessionCompactedDedupeKey } from "@/lib/brain/commercial/agent-session/dedupe";
+import { isValidAgentSessionCompactedPayload } from "@/lib/brain/commercial/agent-session/types";
+import type { AgentSessionAssistantMessagePayload, AgentSessionCompactedPayload } from "@/lib/brain/commercial/agent-session/types";
 
 // SALES-AGENT-R3-A01. Interface-level behavior tests against the in-memory
 // AgentSessionStore (a test double, never a second production persistence
@@ -278,4 +281,74 @@ test("loadSession and loadSessionForConversation return null for an unknown id",
   const store = freshStore();
   assert.equal(await store.loadSession("agsess_does_not_exist"), null);
   assert.equal(await store.loadSessionForConversation(999999), null);
+});
+
+// SALES-AGENT-R3-V1.8-D1. SESSION_COMPACTED is a valid AgentSessionEvent
+// type end to end through the real store interface - not just a sanitizer
+// check (see tests/commercial/agentSessionSanitizer.test.ts for that). No
+// production caller emits this yet (reserved for a future D7 compaction
+// slice) - this proves the contract accepts it today regardless.
+
+test("[D1] SESSION_COMPACTED is accepted as a valid AgentSessionEvent type", async () => {
+  const store = freshStore();
+  const session = await store.ensureSession({ conversationId: 1 });
+  const dedupeKey = buildSessionCompactedDedupeKey(session.id, 42);
+  const payload: AgentSessionCompactedPayload = { fromSeq: 1, toSeq: 42, summaryEstimatedSize: 900 };
+  assert.equal(isValidAgentSessionCompactedPayload(payload), true);
+
+  const result = await store.appendEvent({ sessionId: session.id, conversationId: 1, eventType: "SESSION_COMPACTED", correlationId: "c1", dedupeKey, payload });
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.status, "created");
+
+  const events = await store.loadRecentEvents({ sessionId: session.id });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].eventType, "SESSION_COMPACTED");
+  assert.deepEqual(events[0].payload, payload);
+});
+
+test("[D1] isValidAgentSessionCompactedPayload rejects a structurally nonsensical range", () => {
+  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 10, toSeq: 5, summaryEstimatedSize: 0 }), false);
+  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: -1, toSeq: 5, summaryEstimatedSize: 0 }), false);
+  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 0, toSeq: 5, summaryEstimatedSize: -1 }), false);
+  assert.equal(isValidAgentSessionCompactedPayload({ fromSeq: 0, toSeq: 5, summaryEstimatedSize: 0 }), true);
+});
+
+// SALES-AGENT-R3-V1.8-D1. ASSISTANT_MESSAGE_SENT's extended payload shape -
+// no call site populates outboundMessagePublicId yet (that is D2's job);
+// this proves the store accepts the extended shape today, both with a real
+// id and with null, and that the pre-existing (unextended) shape from every
+// call site still in production remains valid unchanged.
+
+test("[D1] ASSISTANT_MESSAGE_SENT accepts outboundMessagePublicId as a string", async () => {
+  const store = freshStore();
+  const session = await store.ensureSession({ conversationId: 1 });
+  const payload: AgentSessionAssistantMessagePayload = {
+    inboundMessageId: "msg_1",
+    outcome: "message",
+    terminalReason: "responded",
+    outboundMessagePublicId: "b2f2b6b0-1c1e-4b3a-9c2e-0f7a1a2b3c4d"
+  };
+  const result = await store.appendEvent({ sessionId: session.id, conversationId: 1, eventType: "ASSISTANT_MESSAGE_SENT", correlationId: "c1", dedupeKey: "am-1", payload });
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.event.payload.outboundMessagePublicId, "b2f2b6b0-1c1e-4b3a-9c2e-0f7a1a2b3c4d");
+});
+
+test("[D1] ASSISTANT_MESSAGE_SENT accepts outboundMessagePublicId = null", async () => {
+  const store = freshStore();
+  const session = await store.ensureSession({ conversationId: 1 });
+  const payload: AgentSessionAssistantMessagePayload = { inboundMessageId: "msg_2", outcome: "handoff", terminalReason: "handoff", outboundMessagePublicId: null };
+  const result = await store.appendEvent({ sessionId: session.id, conversationId: 1, eventType: "ASSISTANT_MESSAGE_SENT", correlationId: "c1", dedupeKey: "am-2", payload });
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.event.payload.outboundMessagePublicId, null);
+});
+
+test("[D1] the existing (unextended) ASSISTANT_MESSAGE_SENT shape from every production call site today remains valid", async () => {
+  const store = freshStore();
+  const session = await store.ensureSession({ conversationId: 1 });
+  // Exactly shadowRecorder.ts's real, unmodified payload shape (no
+  // outboundMessagePublicId field at all - D1 does not touch this call site).
+  const payload = { inboundMessageId: "msg_3", outcome: "message" as const, terminalReason: "responded" };
+  const result = await store.appendEvent({ sessionId: session.id, conversationId: 1, eventType: "ASSISTANT_MESSAGE_SENT", correlationId: "c1", dedupeKey: "am-3", payload });
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && "outboundMessagePublicId" in result.event.payload, false);
 });
