@@ -47,6 +47,14 @@ type OpenAiChatCompletionResponse = {
     completion_tokens?: number;
     /** LLM-R1-T08B. DeepSeek's documented reasoning-token breakdown (api-docs.deepseek.com) - completion_tokens already includes this count, never a separate budget. */
     completion_tokens_details?: { reasoning_tokens?: number };
+    /**
+     * SALES-AGENT-R3-V1.8-D1. DeepSeek-specific cache accounting
+     * (api-docs.deepseek.com), confirmed present on the real, live response
+     * from this repo's own configured endpoint (V1.8-D0 section 9) - not
+     * previously declared or read by this file.
+     */
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
   };
 };
 
@@ -320,6 +328,10 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
             // which this type never even declares (see OpenAiChatCompletionResponse
             // above). null (not 0) when the provider does not report it.
             reasoningTokens: data.usage?.completion_tokens_details?.reasoning_tokens ?? null,
+            // V1.8-D1. Metadata only - never read by the request-construction
+            // code above, so this cannot change what is sent to the model.
+            cacheReadTokens: data.usage?.prompt_cache_hit_tokens ?? null,
+            cacheMissTokens: data.usage?.prompt_cache_miss_tokens ?? null,
             providerRequestId: data.id ?? response.headers.get("x-request-id")
           };
           if (!content) {
@@ -359,6 +371,8 @@ export function createHttpAgentLoopProvider(config: HttpAgentLoopProviderConfig 
             inputTokens: availableResponseMetadata.inputTokens,
             outputTokens: availableResponseMetadata.outputTokens,
             reasoningTokens: availableResponseMetadata.reasoningTokens,
+            cacheReadTokens: availableResponseMetadata.cacheReadTokens,
+            cacheMissTokens: availableResponseMetadata.cacheMissTokens,
             providerRequestId: availableResponseMetadata.providerRequestId,
             finishReason: availableResponseMetadata.finishReason
           };

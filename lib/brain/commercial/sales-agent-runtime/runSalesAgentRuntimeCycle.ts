@@ -4,6 +4,11 @@ import type { AgentRuntimeEvent } from "../agent-runtime-event/types";
 import { dispatchSalesAgentTerminalOutcome } from "./dispatchSalesAgentTerminalOutcome";
 import type { DispatchSalesAgentTerminalOutcomeResult } from "./dispatchSalesAgentTerminalOutcome";
 import { recordAgentToolLoopCompletedCommercialEvent } from "../events/service";
+import { appendAgentSessionEventWithRetry } from "../agent-session/appendWithRetry";
+import { buildAssistantMessageDedupeKey } from "../agent-session/dedupe";
+import { getDefaultAgentSessionStore } from "../agent-session/defaultStore";
+import type { AgentSessionAssistantMessagePayload } from "../agent-session/types";
+import type { AgentSessionStore } from "../agent-session/store";
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
 import type { AgentLoopResult, AgentLoopTerminalReason, PendingCatalogActionStep } from "../agent-loop/agentStepTypes";
 import type { RecentCatalogContext } from "../agent-loop/recentCatalogContext";
@@ -56,6 +61,8 @@ export type RunSalesAgentRuntimeCycleInput = {
   pendingCatalogAction?: PendingCatalogActionStep | null;
   abortSignal?: AbortSignal | null;
   resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
+  /** Test/DI seam - defaults to the real, MariaDB-backed AgentSessionStore. Threaded to runSalesAgentRuntime unchanged, and used directly by this file's own post-dispatch ASSISTANT_MESSAGE_SENT write (V1.8-D2). */
+  sessionStore?: AgentSessionStore;
 };
 
 /**
@@ -153,6 +160,60 @@ function adaptTerminalOutcomeDispatch(result: DispatchSalesAgentTerminalOutcomeR
   };
 }
 
+/**
+ * SALES-AGENT-R3-V1.8-D2. Moved here from the pre-D2 shadow recorder
+ * (salesAgentRuntime.ts, pre-dispatch) - this is the boundary that actually
+ * owns the terminal dispatch outcome, per V1.8-D2 Section I ("one event, one
+ * clear writer"). `outcome`/`terminalReason` are computed from the loop's
+ * own result (unchanged semantic from the pre-D2 shadow write - a pure
+ * relocation, not a behavior change).
+ *
+ * outboundMessagePublicId is always null today - a real finding from tracing
+ * every R3-native dispatch path (dispatchSalesAgentResponse/
+ * dispatchSalesAgentFallback/dispatchSalesAgentHardHandoff, all the way
+ * through dispatchGovernedSalesAgentMessage.ts): none of them create or have
+ * access to a conversation_message row synchronously. The canonical outbound
+ * row is only ever created later, asynchronously, by the outbox-send worker
+ * (lib/brain/messaging/outboundMessages.ts#persistCanonicalOutboundMessage,
+ * called from outboxWorker.ts/autonomousOutboxTick.ts once Meta confirms
+ * delivery) - never within this call stack. Closing that gap is out of D2's
+ * scope (Section A forbids changing outbox/delivery semantics); see the D2
+ * release doc's "known deferred items."
+ */
+async function recordAssistantMessageSentEvent(input: {
+  conversationId: number;
+  inboundMessageId: string;
+  correlationId: string;
+  loop: AgentLoopResult;
+  store?: AgentSessionStore;
+}): Promise<{ ok: true } | { ok: false; warning: string }> {
+  const store = input.store ?? getDefaultAgentSessionStore();
+  const outcome: AgentSessionAssistantMessagePayload["outcome"] =
+    input.loop.finalMessage !== null ? "message" : input.loop.handoffReason !== null ? "handoff" : "none";
+  const payload: AgentSessionAssistantMessagePayload = {
+    inboundMessageId: input.inboundMessageId,
+    outcome,
+    terminalReason: input.loop.terminalReason,
+    outboundMessagePublicId: null
+  };
+
+  try {
+    const session = await store.ensureSession({ conversationId: input.conversationId });
+    const result = await appendAgentSessionEventWithRetry(store, {
+      sessionId: session.id,
+      conversationId: input.conversationId,
+      eventType: "ASSISTANT_MESSAGE_SENT",
+      correlationId: input.correlationId,
+      dedupeKey: buildAssistantMessageDedupeKey(session.id, input.inboundMessageId),
+      payload
+    });
+    if (result.status === "degraded" || result.status === "invalid") return { ok: false, warning: result.warning };
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, warning: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function buildCommercialNeed(snapshot: CommercialContextSnapshot): ContinuityFallbackContext {
   return {
     productQuery: null,
@@ -242,7 +303,8 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     maxToolExecutions: effectiveLoopConfiguration.maxToolCallsPerTurn,
     timeoutMs: effectiveModelConfiguration.timeoutMs,
     abortSignal: input.abortSignal,
-    governance: { humanOwnerActive, aiBlocked }
+    governance: { humanOwnerActive, aiBlocked },
+    sessionStore: input.sessionStore
   });
 
   if (runtime.status === "blocked") {
@@ -287,6 +349,23 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
       commercialNeed: buildCommercialNeed(input.snapshot)
     })
   );
+
+  // SALES-AGENT-R3-V1.8-D2. Written here, after terminal dispatch - see
+  // recordAssistantMessageSentEvent's own comment for why this boundary
+  // (not salesAgentRuntime.ts, and not dispatchSalesAgentTerminalOutcome.ts
+  // itself) owns this write, and why outboundMessagePublicId is always null
+  // today. Never blocks the turn - the customer's response was already
+  // dispatched (or correctly not) above.
+  const assistantMessageResult = await recordAssistantMessageSentEvent({
+    conversationId: input.conversationId,
+    inboundMessageId: input.inboundMessageId,
+    correlationId: input.correlationId,
+    loop,
+    store: input.sessionStore
+  });
+  if (!assistantMessageResult.ok) {
+    loop.warnings.push(`agent_session_assistant_message_event_write_failed:${assistantMessageResult.warning}`);
+  }
 
   const persistedPendingCatalogAction = dispatch.outboxWritten ? runtime.finalPendingCatalogAction : null;
   if (runtime.finalPendingCatalogAction && !dispatch.outboxWritten) {

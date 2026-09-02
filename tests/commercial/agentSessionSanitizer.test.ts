@@ -76,3 +76,32 @@ test("allows a bounded, PII-free payload shape typical of a session event", () =
   assert.equal(sanitized.inboundMessageId, "msg_123");
   assert.equal(sanitized.outcome, "message");
 });
+
+// SALES-AGENT-R3-V1.8-D1. Approved/rejected field names for the persistent
+// session design (V1.8-C section 6) - verified in V1.8-D0 by executing the
+// real regex, re-verified here as a standing regression test so a future
+// refactor can never silently reintroduce the rejected name.
+
+test("[D1] allows outboundMessagePublicId (ASSISTANT_MESSAGE_SENT extension)", () => {
+  const sanitized = sanitizeAgentSessionPayload({
+    inboundMessageId: "msg_123",
+    outcome: "message",
+    terminalReason: "responded",
+    outboundMessagePublicId: "b2f2b6b0-1c1e-4b3a-9c2e-0f7a1a2b3c4d"
+  });
+  assert.equal(sanitized.outboundMessagePublicId, "b2f2b6b0-1c1e-4b3a-9c2e-0f7a1a2b3c4d");
+});
+
+test("[D1] allows outboundMessagePublicId = null", () => {
+  const sanitized = sanitizeAgentSessionPayload({ inboundMessageId: "msg_123", outcome: "handoff", terminalReason: "handoff", outboundMessagePublicId: null });
+  assert.equal(sanitized.outboundMessagePublicId, null);
+});
+
+test("[D1] allows the full SESSION_COMPACTED payload: fromSeq, toSeq, summaryEstimatedSize", () => {
+  const sanitized = sanitizeAgentSessionPayload({ fromSeq: 1, toSeq: 42, summaryEstimatedSize: 900 });
+  assert.deepEqual(sanitized, { fromSeq: 1, toSeq: 42, summaryEstimatedSize: 900 });
+});
+
+test("[D1] rejects summaryTokenEstimate - the name V1.8-C proposed before V1.8-D0 found it fails the real sanitizer", () => {
+  assert.throws(() => sanitizeAgentSessionPayload({ fromSeq: 1, toSeq: 42, summaryTokenEstimate: 900 }), AgentSessionForbiddenPayloadError);
+});

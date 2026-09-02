@@ -23,6 +23,20 @@ export type AgentSession = {
   status: AgentSessionStatus;
   createdAt: string;
   updatedAt: string;
+  /**
+   * SALES-AGENT-R3-V1.8-D1 (migration 034). Compaction cache columns -
+   * additive, nullable, never interpreted or written by anything in this
+   * task. Deliberately separate from summary_json/summary_version above:
+   * those are AgentSessionSummary's own tool-activity/goal projection
+   * (a distinct, already-scoped concept, see docs/releases/SALES-AGENT-R3-V1.8-C-
+   * NATIVE-PERSISTENT-AGENT-SESSION-MEMORY-DESIGN.md section 14/15) - this
+   * is the future compacted historical-message prefix, never merged with
+   * the former. All three are null on every row until a future compaction
+   * slice (D7) writes them.
+   */
+  compactedPrefixJson: Record<string, unknown> | null;
+  compactedThroughSeq: number | null;
+  compactedPrefixUpdatedAt: string | null;
 };
 
 // Candidate taxonomy from the R3-A01 task brief, pruned to avoid an
@@ -46,7 +60,18 @@ export const AGENT_SESSION_EVENT_TYPES = [
   "FOLLOWUP_SCHEDULED",
   "FOLLOWUP_CANCELLED",
   "FOLLOWUP_WAKE",
-  "SESSION_SUMMARY_UPDATED"
+  "SESSION_SUMMARY_UPDATED",
+  /**
+   * SALES-AGENT-R3-V1.8-D1. Reserved for a future compaction slice (D7) -
+   * no caller emits this yet. V1.8-D0/V1.8-C deliberately do NOT add
+   * TURN_STARTED/TURN_COMPLETED/SESSION_RESUMED here: USER_MESSAGE_RECEIVED
+   * and ASSISTANT_MESSAGE_SENT already serve as turn-start/turn-complete
+   * markers once their append point moves (a D2 concern, not this one), and
+   * "resumed" is an observability metric only, never a durable event, since
+   * every turn resumes by construction in this design (no in-process object
+   * ever needs distinguishing a fresh session from a resumed one).
+   */
+  "SESSION_COMPACTED"
 ] as const;
 export type AgentSessionEventType = (typeof AGENT_SESSION_EVENT_TYPES)[number];
 
@@ -64,6 +89,15 @@ export type AgentSessionEvent = {
   payload: Record<string, unknown>;
   occurredAt: string;
   createdAt: string;
+  /**
+   * SALES-AGENT-R3-V1.8-D3. The real, monotonic `agent_session_events.seq`
+   * (migration 033, BIGINT UNSIGNED AUTO_INCREMENT, UNIQUE KEY) - previously
+   * used only inside ORDER BY clauses, never surfaced on this contract.
+   * deriveMessages.ts needs it to exclude event ranges already covered by
+   * AgentSession.compactedThroughSeq (migration 034) from the tool-activity
+   * projection once a future D7 compaction actually populates that column.
+   */
+  seq: number;
 };
 
 export type AgentSessionEventPersistStatus = "created" | "duplicate";
@@ -133,4 +167,69 @@ export type LoadRecentEventsInput = {
   /** Default and hard cap - see BOUNDED_CONTEXT constants in store.ts. */
   maxEvents?: number;
   maxAgeMs?: number;
+};
+
+// SALES-AGENT-R3-V1.8-D1. Structured payload contracts for two event types
+// (AppendEventInput.payload stays Record<string, unknown> at the store
+// interface - this task does not attempt a discriminated-union refactor of
+// that contract). Nothing constructs or consumes these yet; they exist so
+// D2+ has an approved shape to build against instead of a fresh guess.
+
+/**
+ * The mandatory minimum for a future compaction event (D7) - never a
+ * concrete summary text field here (that lives in agent_sessions.compacted_prefix_json,
+ * migration 034, a separate durable slot, not the event payload). fromSeq/
+ * toSeq identify exactly which agent_session_events range this compaction
+ * covers (see agent_session_events.seq, migration 033).
+ */
+export type AgentSessionCompactedPayload = {
+  fromSeq: number;
+  toSeq: number;
+  /** Never `summaryTokenEstimate` - the real sanitizer rejects any key containing "token" (V1.8-D0 section 7/8, verified by execution, not just reading the regex). */
+  summaryEstimatedSize: number;
+};
+
+/**
+ * Structural validation only - matches this module's own dedupe-key
+ * discipline (agent-session/dedupe.ts's pure builder functions), never a
+ * schema-validation library or framework. Callers still go through
+ * sanitizeAgentSessionPayload for the forbidden-key/PII check; this only
+ * catches a structurally nonsensical range (e.g. toSeq before fromSeq)
+ * before it would ever reach that layer.
+ */
+export function isValidAgentSessionCompactedPayload(payload: AgentSessionCompactedPayload): boolean {
+  return (
+    Number.isInteger(payload.fromSeq) &&
+    payload.fromSeq >= 0 &&
+    Number.isInteger(payload.toSeq) &&
+    payload.toSeq >= payload.fromSeq &&
+    Number.isInteger(payload.summaryEstimatedSize) &&
+    payload.summaryEstimatedSize >= 0
+  );
+}
+
+/**
+ * Extends today's real shadowRecorder.ts payload shape ({inboundMessageId,
+ * outcome, terminalReason}) with outboundMessagePublicId. Optional for now
+ * (per this task's own compatibility instruction) - the shadowRecorder.ts
+ * call site is not changed in this task, so no writer populates this field
+ * yet; a future slice makes it mandatory once every writer supplies it.
+ * `terminalReason` stays `string` rather than importing
+ * AgentToolLoopTerminalReason from ../events/types - this module has
+ * deliberately imported nothing from that module so far (see this file's
+ * own header comment), and the store layer never branches on the literal
+ * union, only persists it.
+ */
+export type AgentSessionAssistantMessagePayload = {
+  inboundMessageId: string;
+  outcome: "message" | "handoff" | "none";
+  terminalReason: string;
+  /**
+   * string when a customer-visible response was actually persisted to
+   * conversation_message (the sole canonical transcript store - this field
+   * is a reference to that row's public_id, never a duplicate of its text);
+   * null for a terminal outcome with no such message (e.g. a silent
+   * technical failure). Optional until every writer is migrated (D2).
+   */
+  outboundMessagePublicId?: string | null;
 };

@@ -242,6 +242,81 @@ test("manual reply takes control atomically and persists the operator message", 
   assert.equal(message.rows[0].status, "sent");
 });
 
+// SALES-AGENT-R3-V1.8-D2 (V1.8-D0's SESSION_MIRRORS_CONVERSATION_STATUS
+// policy). Real MariaDB - agent_sessions.status must flip inside the exact
+// same transaction as conversation.status, and reopening must reuse the
+// same session id, never create a second one.
+
+async function loadAgentSessionStatus(conversationId: number) {
+  const result = await safeQueryRows<{ id: string; status: string }>("SELECT id, status FROM agent_sessions WHERE conversation_id = ? LIMIT 1", [conversationId]);
+  assert.ok(result.ok, result.ok ? "" : result.error);
+  return result.rows[0] ?? null;
+}
+
+async function countAgentSessionsForConversation(conversationId: number) {
+  const result = await safeQueryRows<{ c: number }>("SELECT COUNT(*) AS c FROM agent_sessions WHERE conversation_id = ?", [conversationId]);
+  assert.ok(result.ok, result.ok ? "" : result.error);
+  return Number(result.rows[0].c);
+}
+
+test("[D2-N1] open conversation + active session -> close -> conversation closed, agent session closed", async () => {
+  const conv = await createConversation("lifecycle-close");
+  await safeQueryRows("INSERT INTO agent_sessions (id, conversation_id, status) VALUES (?, ?, 'active')", [`agsess_test_${conv.conversationId}`, conv.conversationId]);
+
+  const close = await applyConversationControl({ conversationPublicId: conv.conversationPublicId, action: "close" });
+  assert.ok(close.ok, close.ok ? "" : close.message);
+
+  const conversationRow = await loadConversation(conv.conversationId);
+  assert.equal(conversationRow.status, "closed");
+  const session = await loadAgentSessionStatus(conv.conversationId);
+  assert.equal(session?.status, "closed");
+});
+
+test("[D2-N2] closed conversation + closed session -> reopen -> same conversation id, same agent session id, session active", async () => {
+  const conv = await createConversation("lifecycle-reopen");
+  const sessionId = `agsess_test_${conv.conversationId}`;
+  await safeQueryRows("INSERT INTO agent_sessions (id, conversation_id, status) VALUES (?, ?, 'active')", [sessionId, conv.conversationId]);
+  await applyConversationControl({ conversationPublicId: conv.conversationPublicId, action: "close" });
+
+  const reopen = await applyConversationControl({ conversationPublicId: conv.conversationPublicId, action: "reopen" });
+  assert.ok(reopen.ok, reopen.ok ? "" : reopen.message);
+  assert.equal(reopen.ok ? reopen.status : "", "open");
+
+  const conversationRow = await loadConversation(conv.conversationId);
+  assert.equal(conversationRow.status, "open");
+  const session = await loadAgentSessionStatus(conv.conversationId);
+  assert.equal(session?.id, sessionId, "reopen must reuse the exact same agent_sessions row/id, never create a second one");
+  assert.equal(session?.status, "active");
+  assert.equal(await countAgentSessionsForConversation(conv.conversationId), 1);
+});
+
+test("[D2-N3] a conversation with no agent_sessions row: close/reopen succeed and never eagerly create one", async () => {
+  const conv = await createConversation("lifecycle-no-session");
+  assert.equal(await countAgentSessionsForConversation(conv.conversationId), 0);
+
+  const close = await applyConversationControl({ conversationPublicId: conv.conversationPublicId, action: "close" });
+  assert.ok(close.ok, close.ok ? "" : close.message);
+  assert.equal(await countAgentSessionsForConversation(conv.conversationId), 0, "closing must never eager-create an agent_sessions row for a conversation that never used R3");
+
+  const reopen = await applyConversationControl({ conversationPublicId: conv.conversationPublicId, action: "reopen" });
+  assert.ok(reopen.ok, reopen.ok ? "" : reopen.message);
+  assert.equal(await countAgentSessionsForConversation(conv.conversationId), 0, "reopening must never eager-create one either");
+});
+
+test("[D2-N4] take/release/pause never touch agent_sessions.status - ownership and lifecycle are independent axes", async () => {
+  const conv = await createConversation("lifecycle-ownership-independent");
+  await safeQueryRows("INSERT INTO agent_sessions (id, conversation_id, status) VALUES (?, ?, 'active')", [`agsess_test_${conv.conversationId}`, conv.conversationId]);
+
+  await applyConversationControl({ conversationPublicId: conv.conversationPublicId, action: "take", operatorName: "Ana" });
+  assert.equal((await loadAgentSessionStatus(conv.conversationId))?.status, "active");
+
+  await applyConversationControl({ conversationPublicId: conv.conversationPublicId, action: "release", operatorName: "Ana" });
+  assert.equal((await loadAgentSessionStatus(conv.conversationId))?.status, "active");
+
+  await applyConversationControl({ conversationPublicId: conv.conversationPublicId, action: "pause" });
+  assert.equal((await loadAgentSessionStatus(conv.conversationId))?.status, "active");
+});
+
 test("window helper: open within 24h of last inbound, closed after", () => {
   const now = Date.now();
   assert.equal(isWhatsAppWindowOpen(new Date(now - 60 * 60 * 1000).toISOString(), now), true);

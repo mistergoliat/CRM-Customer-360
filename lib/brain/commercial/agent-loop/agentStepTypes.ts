@@ -220,6 +220,9 @@ export type AgentLoopProviderFailure = {
   outputTokens?: number | null;
   /** LLM-R1-T08B. Numeric count only - never reasoning_content text. Same absence discipline as inputTokens/outputTokens above. */
   reasoningTokens?: number | null;
+  /** SALES-AGENT-R3-V1.8-D1. Same absence discipline as reasoningTokens above - see AgentLoopProviderResponse.cacheReadTokens for the full provenance note. */
+  cacheReadTokens?: number | null;
+  cacheMissTokens?: number | null;
   providerRequestId?: string | null;
 };
 

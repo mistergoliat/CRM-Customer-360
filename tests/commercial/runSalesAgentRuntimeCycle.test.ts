@@ -10,6 +10,8 @@ import type { AgentLoopProvider } from "@/lib/brain/commercial/agent-loop/agentL
 import { resetCapabilityGatewayCatalogPortForTests } from "@/lib/brain/commercial/capability-gateway/registry";
 import { loadRecentCatalogContext } from "@/lib/brain/commercial/agent-loop/recentCatalogContext";
 import { loadPendingCatalogAction } from "@/lib/brain/commercial/agent-loop/pendingCatalogAction";
+import { createMariaDbAgentSessionStore } from "@/lib/brain/commercial/agent-session/mariaDbAgentSessionStore";
+import type { AgentSessionStore } from "@/lib/brain/commercial/agent-session/store";
 import type { CommercialContextSnapshot } from "@/lib/brain/commercial/context/buildNativeCommercialContext";
 import {
   SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
@@ -586,5 +588,152 @@ test("[RC8] R3 pilot hotfix: an 8/8 effective loop configuration really reaches 
     assert.equal(result.runtime.status, "responded");
     assert.equal(result.runtime.toolCalls, 8, "all 8 distinct tool calls must complete within the 8/8 budget, never truncated at the old default of 2");
     assert.equal(result.runtime.modelSteps, 9, "8 gathering decisions + 1 finalization respond");
+  });
+});
+
+// SALES-AGENT-R3-V1.8-D2, Sections D/M. ASSISTANT_MESSAGE_SENT is now
+// written here (post-dispatch), not in the pre-D2 shadow recorder. These
+// tests read agent_session_events directly (same raw-SQL convention this
+// file already uses for every other table) rather than importing the
+// AgentSessionStore machinery.
+
+async function loadAssistantMessageSentEvent(conversationId: number, inboundMessageId: string) {
+  const [rows] = await getPool().execute(
+    `SELECT e.payload_json FROM agent_session_events e
+       JOIN agent_sessions s ON s.id = e.session_id
+      WHERE s.conversation_id = ? AND e.event_type = 'ASSISTANT_MESSAGE_SENT'
+      ORDER BY e.seq DESC LIMIT 1`,
+    [conversationId]
+  );
+  const row = (rows as Record<string, unknown>[])[0];
+  if (!row) return null;
+  const raw = row.payload_json;
+  return typeof raw === "string" ? (JSON.parse(raw) as Record<string, unknown>) : (raw as Record<string, unknown>);
+}
+
+async function countAssistantMessageSentEvents(conversationId: number) {
+  const [rows] = await getPool().execute(
+    `SELECT COUNT(*) AS c FROM agent_session_events e
+       JOIN agent_sessions s ON s.id = e.session_id
+      WHERE s.conversation_id = ? AND e.event_type = 'ASSISTANT_MESSAGE_SENT'`,
+    [conversationId]
+  );
+  return Number((rows as Record<string, unknown>[])[0].c);
+}
+
+test("[D2-M1] responded outcome: ASSISTANT_MESSAGE_SENT records outcome=message, terminalReason=responded, outboundMessagePublicId=null, no message text", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  const provider = createFakeAgentLoopProvider({ script: [{ type: "respond", message: "Hola! En que puedo ayudarte?" }] });
+
+  await withEnv({ ...RESPONSE_DISPATCH_ENABLED_ENV, BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId }, async () => {
+    const result = await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider });
+    assert.equal(result.runtime.status, "responded");
+    assert.equal(result.dispatch.outboxWritten, true);
+
+    const event = await loadAssistantMessageSentEvent(conversationId, input.inboundMessageId);
+    assert.ok(event, "ASSISTANT_MESSAGE_SENT must be recorded");
+    assert.equal(event!.outcome, "message");
+    assert.equal(event!.terminalReason, "responded");
+    assert.equal(event!.outboundMessagePublicId, null, "no R3-native dispatch path creates a conversation_message row synchronously - see the D2 release doc");
+    assert.equal(event!.inboundMessageId, input.inboundMessageId);
+    assert.ok(!("text" in event!) && !("body" in event!) && !("message" in event!), "no assistant message text/body in the session event");
+  });
+});
+
+test("[D2-M2] eligible hard handoff: ASSISTANT_MESSAGE_SENT records outcome=handoff, outboundMessagePublicId=null", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  const provider = createFakeAgentLoopProvider({ script: [{ type: "handoff", reason: "customer_requested_human" }] });
+
+  await withEnv(RESPONSE_DISPATCH_ENABLED_ENV, async () => {
+    const result = await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider });
+    assert.equal(result.runtime.status, "handoff");
+
+    const event = await loadAssistantMessageSentEvent(conversationId, input.inboundMessageId);
+    assert.ok(event);
+    assert.equal(event!.outcome, "handoff");
+    assert.equal(event!.terminalReason, "handoff");
+    assert.equal(event!.outboundMessagePublicId, null);
+  });
+});
+
+test("[D2-M3] technical failure (provider_unavailable): ASSISTANT_MESSAGE_SENT records outcome=none", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  const provider: AgentLoopProvider = {
+    name: "throwing-test-provider",
+    async invoke() {
+      throw new Error("simulated network failure");
+    }
+  };
+
+  await withEnv(RESPONSE_DISPATCH_ENABLED_ENV, async () => {
+    const result = await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider });
+    assert.equal(result.runtime.status, "failed");
+
+    const event = await loadAssistantMessageSentEvent(conversationId, input.inboundMessageId);
+    assert.ok(event);
+    assert.equal(event!.outcome, "none");
+    assert.equal(event!.terminalReason, "provider_unavailable");
+    assert.equal(event!.outboundMessagePublicId, null);
+  });
+});
+
+test("[D2-M4] a replayed turn for the same inbound message never duplicates ASSISTANT_MESSAGE_SENT", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+
+  await withEnv({ ...RESPONSE_DISPATCH_ENABLED_ENV, BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId }, async () => {
+    await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider: createFakeAgentLoopProvider({ script: [{ type: "respond", message: "primer intento" }] }) });
+    await runSalesAgentRuntimeCycle({ ...input, snapshot: buildSnapshot(), provider: createFakeAgentLoopProvider({ script: [{ type: "respond", message: "reintento" }] }) });
+
+    assert.equal(await countAssistantMessageSentEvents(conversationId), 1, "same inboundMessageId must collapse to one event, not two");
+  });
+});
+
+// SALES-AGENT-R3-V1.8-D2, Section O scenario B. Canonical outbound
+// (brain_message_outbox row) persisted -> the ASSISTANT_MESSAGE_SENT
+// session-event write fails once -> retries -> a simulated replay of the
+// same inbound never produces a second event. No real Meta call anywhere in
+// this file - the "canonical outbound persisted" here means the real,
+// governed brain_message_outbox write this file already exercises above,
+// never Meta delivery itself (which happens later, asynchronously, in the
+// outbox worker - out of this test's scope, same as production).
+test("[D2-O-B] one transient ASSISTANT_MESSAGE_SENT write failure retries and recovers; replay produces at most one event", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  let appendAttempts = 0;
+  const flakyOnceStore = {
+    ...createMariaDbAgentSessionStore(),
+    async appendEvent(appendInput: Parameters<AgentSessionStore["appendEvent"]>[0]) {
+      const real = createMariaDbAgentSessionStore();
+      if (appendInput.eventType === "ASSISTANT_MESSAGE_SENT") {
+        appendAttempts += 1;
+        if (appendAttempts === 1) return { ok: false as const, status: "error" as const, event: null, warning: "transient_test_failure" };
+      }
+      return real.appendEvent(appendInput);
+    }
+  };
+
+  await withEnv({ ...RESPONSE_DISPATCH_ENABLED_ENV, BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId }, async () => {
+    const result = await runSalesAgentRuntimeCycle({
+      ...input,
+      snapshot: buildSnapshot(),
+      provider: createFakeAgentLoopProvider({ script: [{ type: "respond", message: "hola" }] }),
+      sessionStore: flakyOnceStore
+    });
+    assert.equal(result.runtime.status, "responded");
+    assert.equal(appendAttempts, 2, "one retry after the injected transient failure");
+    assert.equal(await countAssistantMessageSentEvents(conversationId), 1);
+
+    // Replay: same inbound, dispatch collapses to duplicate via the outbox's
+    // own dedupe key - the session event must still be exactly one.
+    await runSalesAgentRuntimeCycle({
+      ...input,
+      snapshot: buildSnapshot(),
+      provider: createFakeAgentLoopProvider({ script: [{ type: "respond", message: "hola" }] })
+    });
+    assert.equal(await countAssistantMessageSentEvents(conversationId), 1, "replay must not create a second ASSISTANT_MESSAGE_SENT event");
   });
 });

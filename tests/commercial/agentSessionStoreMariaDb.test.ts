@@ -7,17 +7,12 @@ import { resetAgentSessionShadowStoreForTests } from "@/lib/brain/commercial/age
 // SALES-AGENT-R3-A01. Real MariaDB, real crm_test database (same
 // local-credential convention as tests/commercial/salesAgentConfiguration.test.ts) -
 // never a mock of the repository. Requires migrations/033_agent_sessions.sql
-// already applied to crm_test.
+// and migrations/034_agent_sessions_compaction_columns.sql already applied
+// to crm_test.
 //
-// COULD NOT BE RUN in the implementation session for this task: no reachable
-// local MariaDB (docker compose's engine was unavailable - see
-// docs/releases/SALES-AGENT-R3-A01-agent-session-store.md "Known limitations").
-// This file exists so the guarantees these tests assert (database-level
-// dedupe, ordering under seq, process-restart resume via resetPoolForTests())
-// can be verified the next time a real crm_test instance is reachable - it
-// is not a substitute for tests/commercial/agentSessionStore.test.ts's
-// interface-level coverage (which DID run, against the in-memory store), nor
-// is it presented as already-passing evidence.
+// SALES-AGENT-R3-V1.8-D1: this file DID run against a real, reachable local
+// MariaDB in this task's implementation session (unlike the A01 note this
+// comment used to carry) - see the release doc for exact pass counts.
 
 Object.assign(process.env, {
   NODE_ENV: "development",
@@ -119,6 +114,64 @@ test("loadRecentEvents ORDER BY occurred_at, seq returns true insertion order fo
 
   const events = await store.loadRecentEvents({ sessionId: session.id });
   assert.deepEqual(events.map((event) => event.eventType), ["COMMERCIAL_ACTION_REQUESTED", "COMMERCIAL_ACTION_COMPLETED"]);
+});
+
+// SALES-AGENT-R3-V1.8-D1 (migration 034). Nothing writes these columns yet
+// (compaction itself is a later slice, D7) - these tests use direct,
+// test-controlled SQL to populate them, then prove the existing mapper
+// (mariaDbAgentSessionStore.ts#sessionRowToContract) reads them back
+// correctly, exactly as V1.8-D1's own task brief allows.
+
+test("[D1] a session row created before this migration reads back with all three compaction columns null", async () => {
+  const store = createMariaDbAgentSessionStore();
+  const conversationId = await ensureTestConversation();
+  const session = await store.ensureSession({ conversationId });
+
+  assert.equal(session.compactedPrefixJson, null);
+  assert.equal(session.compactedThroughSeq, null);
+  assert.equal(session.compactedPrefixUpdatedAt, null);
+
+  const reloaded = await store.loadSessionForConversation(conversationId);
+  assert.equal(reloaded?.compactedPrefixJson, null);
+  assert.equal(reloaded?.compactedThroughSeq, null);
+  assert.equal(reloaded?.compactedPrefixUpdatedAt, null);
+});
+
+test("[D1] compacted_prefix_json round-trips through the mapper once populated by test-controlled SQL", async () => {
+  const store = createMariaDbAgentSessionStore();
+  const conversationId = await ensureTestConversation();
+  const session = await store.ensureSession({ conversationId });
+
+  await withConnection((connection) =>
+    connection.execute("UPDATE agent_sessions SET compacted_prefix_json = ? WHERE id = ?", [JSON.stringify({ note: "test-fixture-prefix" }), session.id])
+  );
+
+  const reloaded = await store.loadSession(session.id);
+  assert.deepEqual(reloaded?.compactedPrefixJson, { note: "test-fixture-prefix" });
+});
+
+test("[D1] compacted_through_seq round-trips as a number, not a string/BigInt artifact", async () => {
+  const store = createMariaDbAgentSessionStore();
+  const conversationId = await ensureTestConversation();
+  const session = await store.ensureSession({ conversationId });
+
+  await withConnection((connection) => connection.execute("UPDATE agent_sessions SET compacted_through_seq = ? WHERE id = ?", [42, session.id]));
+
+  const reloaded = await store.loadSession(session.id);
+  assert.equal(reloaded?.compactedThroughSeq, 42);
+  assert.equal(typeof reloaded?.compactedThroughSeq, "number");
+});
+
+test("[D1] compacted_prefix_updated_at round-trips as an ISO string", async () => {
+  const store = createMariaDbAgentSessionStore();
+  const conversationId = await ensureTestConversation();
+  const session = await store.ensureSession({ conversationId });
+
+  await withConnection((connection) => connection.execute("UPDATE agent_sessions SET compacted_prefix_updated_at = ? WHERE id = ?", ["2026-01-01 00:00:00.000", session.id]));
+
+  const reloaded = await store.loadSession(session.id);
+  assert.equal(typeof reloaded?.compactedPrefixUpdatedAt, "string");
+  assert.ok(reloaded?.compactedPrefixUpdatedAt?.startsWith("2026-01-01"));
 });
 
 test("a payload with a forbidden key is rejected before any INSERT reaches the database", async () => {

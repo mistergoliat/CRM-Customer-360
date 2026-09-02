@@ -205,11 +205,23 @@ export async function applyConversationControl(input: {
         break;
       case "close":
         await connection.execute("UPDATE conversation SET status = 'closed', updated_at = ? WHERE id = ?", [nowSql, conversation.id]);
+        // SALES-AGENT-R3-V1.8-D2 (V1.8-D0's SESSION_MIRRORS_CONVERSATION_STATUS
+        // policy). Same transaction as the canonical conversation update above -
+        // never an independent async write. A plain UPDATE ... WHERE
+        // conversation_id = ? is already the correct "no-op if no session
+        // exists" behavior: an old conversation that never used R3 has no
+        // agent_sessions row, so this affects zero rows and never eager-creates
+        // one merely because an operator closed it.
+        await connection.execute("UPDATE agent_sessions SET status = 'closed', updated_at = ? WHERE conversation_id = ?", [nowSql, conversation.id]);
         cancelledOutbox = await cancelPendingAutonomousSendsTx(connection, conversation.id, nowSql, "conversation_closed");
         nextStatus = "closed";
         break;
       case "reopen":
         await connection.execute("UPDATE conversation SET status = 'open', updated_at = ? WHERE id = ?", [nowSql, conversation.id]);
+        // Same session reused - agent_sessions.conversation_id never changes,
+        // and this UPDATE never creates a new row (see the "close" case above
+        // for the identical no-op-if-absent rationale).
+        await connection.execute("UPDATE agent_sessions SET status = 'active', updated_at = ? WHERE conversation_id = ?", [nowSql, conversation.id]);
         nextStatus = "open";
         break;
     }

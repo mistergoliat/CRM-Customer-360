@@ -99,3 +99,13 @@ export function buildFollowUpWakeId(actionPublicId: string, attemptNumber: numbe
 export function buildFollowUpWakeDedupeKey(sessionId: string, wakeId: string, eventType: string): string {
   return `session:${sessionId}:followup_wake:${wakeId}:${eventType}`;
 }
+
+/**
+ * SALES-AGENT-R3-V1.8-D1. A compaction range is identified by where it
+ * ends - a re-run that recomputes the identical toSeq for this session is a
+ * no-op, never a duplicate row. No caller emits SESSION_COMPACTED yet
+ * (reserved for a future D7 compaction slice).
+ */
+export function buildSessionCompactedDedupeKey(sessionId: string, toSeq: number): string {
+  return `session:${sessionId}:compacted:${toSeq}`;
+}
