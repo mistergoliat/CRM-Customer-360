@@ -754,12 +754,16 @@ export async function runNativeAutonomousCycle(
       // allowlist: salesAgentRuntimeEnabled above already scoped this whole
       // branch to shouldRouteToSalesAgentRuntime's allowlist.
       persistentSessionShadowEnabled: buildPersistentSessionShadowFeatureFlags().persistentSessionShadowEnabled,
-      // SALES-AGENT-R3-V1.8-D5. Live cognition - deliberately its OWN
-      // allowlist check (BRAIN_R3_PERSISTENT_SESSION_COGNITION_WA_IDS),
-      // never inherited from salesAgentRuntimeEnabled/shouldRouteToSalesAgentRuntime's
-      // own (broader) allowlist - see shouldEnablePersistentSessionCognition's
-      // own comment.
-      persistentSessionCognitionEnabled: shouldEnablePersistentSessionCognition(input.waId)
+      // SALES-AGENT-R3-V1.8-D6. Live cognition is now the R3 default: no
+      // separate allowlist any more (D5's BRAIN_R3_PERSISTENT_SESSION_COGNITION_WA_IDS
+      // is retired) - salesAgentRuntimeEnabled above already scoped this
+      // whole branch to shouldRouteToSalesAgentRuntime's own
+      // BRAIN_SALES_AGENT_RUNTIME_WA_IDS allowlist, the sole rollout
+      // boundary that remains. shouldEnablePersistentSessionCognition() is
+      // just BRAIN_R3_PERSISTENT_SESSION_COGNITION_ENABLED (default true) -
+      // set it to "false" for an immediate, global rollback to the legacy
+      // recentMessages path.
+      persistentSessionCognitionEnabled: shouldEnablePersistentSessionCognition()
     });
 
     const commercialNeed: NativeAutonomousCycleCommercialNeed = {

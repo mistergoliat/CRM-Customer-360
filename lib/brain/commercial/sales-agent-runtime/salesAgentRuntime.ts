@@ -77,16 +77,18 @@ export type SalesAgentRuntimeInput = {
    */
   persistentSessionShadowEnabled?: boolean;
   /**
-   * SALES-AGENT-R3-V1.8-D5. Fail-closed, default false - already-composed
-   * eligibility (flag AND owner allowlist), resolved at the call site
+   * SALES-AGENT-R3-V1.8-D5/D6. Fail-closed, default true since D6 (the
+   * normal R3 conversational-memory path) - resolved at the call site
    * (runNativeAutonomousCycle.ts, via shouldEnablePersistentSessionCognition)
    * exactly like persistentSessionShadowEnabled above, so this runtime never
    * reads process.env. Independent of persistentSessionShadowEnabled - see
    * resolvePersistentSessionCognitionContext.ts's own header for the
-   * fallback-to-legacy contract this depends on. Unlike the shadow flag,
-   * this one is a real input to the turn: when true and the read succeeds,
-   * it changes commercialContextSummary (recentMessages stripped) and
-   * loopInput.persistentSessionHistoricalMessages.
+   * fallback-to-legacy contract this depends on. This one is a real input to
+   * the turn: when true and the read succeeds, it changes
+   * commercialContextSummary (recentMessages stripped) and
+   * loopInput.persistentSessionHistoricalMessages. When false (D6's rollback
+   * lever, BRAIN_R3_PERSISTENT_SESSION_COGNITION_ENABLED=false) or when the
+   * read/derive fails, the turn takes the exact legacy path instead.
    */
   persistentSessionCognitionEnabled?: boolean;
 };
@@ -134,12 +136,18 @@ function buildStepsSummary(steps: AgentLoopStepRecord[]): AgentToolLoopStepSumma
 }
 
 /**
- * SALES-AGENT-R3-V1.8-D5. Non-blocking observability, emitted only for
- * turns already eligible this task's own gate (Section V: recording this
- * for every ordinary turn would be pure noise, since D5 is owner-only) -
- * see the one caller in runSalesAgentRuntime for the eligibility check. A
- * write failure here never blocks the turn, same idiom as every other
- * event write in this file - only ever adds a warning.
+ * SALES-AGENT-R3-V1.8-D5/D6. Non-blocking observability, emitted whenever
+ * persistent-session cognition is eligible this turn (`input.persistentSessionCognitionEnabled
+ * === true` at the one caller below) - under D6 that is now every ordinary
+ * R3 turn (BRAIN_R3_PERSISTENT_SESSION_COGNITION_ENABLED defaults true), not
+ * just D5's owner-only pilot, so this is the per-turn
+ * persistent-vs-legacy-fallback signal Section P asks for: `active` doubles
+ * as sessionCognitionMode (true=persistent_session, false=legacy_fallback),
+ * `fallbackReason`/`historyMessageCount` unchanged. Turns where the flag
+ * itself is off (the global rollback) write no event at all - that state is
+ * already visible from the env var, not from a per-turn row. A write
+ * failure here never blocks the turn, same idiom as every other event write
+ * in this file - only ever adds a warning.
  */
 async function recordPersistentSessionCognitionAppliedDiagnostic(input: {
   conversationId: number;
@@ -296,8 +304,9 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
   });
   if (persistentSessionCognition.fallbackWarning) preLoopWarnings.push(persistentSessionCognition.fallbackWarning);
 
-  // Section V observability - only for turns this task's own eligibility
-  // gate actually applied to (owner-only), never for ordinary traffic.
+  // D6 Section P observability - every turn where cognition is eligible
+  // (the normal case since D6's default-true flag), never when the global
+  // rollback flag is off.
   if (input.persistentSessionCognitionEnabled === true && inboundMessageId) {
     const diagnosticResult = await recordPersistentSessionCognitionAppliedDiagnostic({
       conversationId: event.conversationId,

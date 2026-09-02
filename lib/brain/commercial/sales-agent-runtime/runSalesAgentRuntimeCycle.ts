@@ -65,7 +65,7 @@ export type RunSalesAgentRuntimeCycleInput = {
   sessionStore?: AgentSessionStore;
   /** SALES-AGENT-R3-V1.8-D4. Threaded to runSalesAgentRuntime unchanged - see that type's own comment. Read by the caller (runNativeAutonomousCycle.ts) via buildPersistentSessionShadowFeatureFlags, never inside this file. */
   persistentSessionShadowEnabled?: boolean;
-  /** SALES-AGENT-R3-V1.8-D5. Threaded to runSalesAgentRuntime unchanged - see that type's own comment. Already-composed eligibility, read by the caller (runNativeAutonomousCycle.ts) via shouldEnablePersistentSessionCognition, never inside this file. */
+  /** SALES-AGENT-R3-V1.8-D5/D6. Threaded to runSalesAgentRuntime unchanged - see that type's own comment. Default-true since D6, read by the caller (runNativeAutonomousCycle.ts) via shouldEnablePersistentSessionCognition, never inside this file. */
   persistentSessionCognitionEnabled?: boolean;
 };
 

@@ -33,8 +33,7 @@ import {
   loadAutonomousPilotAllowlist,
   isWaIdAuthorizedForPilot,
   loadCommercialWorkRuntimeAllowlist,
-  loadSalesAgentRuntimeAllowlist,
-  loadPersistentSessionCognitionAllowlist
+  loadSalesAgentRuntimeAllowlist
 } from "../../runtime/autonomousRuntimeConfig";
 
 export function readEnvFlag(name: string, fallback = false): boolean {
@@ -333,42 +332,42 @@ export function buildPersistentSessionShadowFeatureFlags(overrides?: Partial<{ p
 }
 
 /**
- * SALES-AGENT-R3-V1.8-D5. Fail-closed (default false) toggle for LIVE
- * persistent-session cognition - unlike buildPersistentSessionShadowFeatureFlags
- * above (D4, load/derive/compare/discard only), enabling this actually
- * changes what the model sees. Meaningless on its own - see
- * shouldEnablePersistentSessionCognition below for the actual per-turn
- * decision, which additionally requires a non-empty
- * BRAIN_R3_PERSISTENT_SESSION_COGNITION_WA_IDS allowlist. Deliberately a
- * second, independent flag from D4's - a wa_id allowlisted for the shadow is
- * NOT automatically eligible for live cognition, and vice versa (task brief
- * Section I: "Do not make D5 depend on D4").
+ * SALES-AGENT-R3-V1.8-D5/D6. Fail-closed toggle for LIVE persistent-session
+ * cognition - unlike buildPersistentSessionShadowFeatureFlags above (D4,
+ * load/derive/compare/discard only), enabling this actually changes what the
+ * model sees. D5 defaulted this to false and additionally required a
+ * dedicated BRAIN_R3_PERSISTENT_SESSION_COGNITION_WA_IDS allowlist (owner-
+ * only pilot). D6 makes persistent-session cognition the default
+ * conversational-memory path for every turn already eligible for
+ * SalesAgentRuntime (shouldRouteToSalesAgentRuntime's own
+ * BRAIN_SALES_AGENT_RUNTIME_WA_IDS allowlist remains the sole rollout
+ * boundary - see shouldEnablePersistentSessionCognition below) - the default
+ * here therefore flips to true. The env var itself is now D6's rollback
+ * lever: BRAIN_R3_PERSISTENT_SESSION_COGNITION_ENABLED=false immediately
+ * reverts every R3 turn to the legacy recentMessages path, same as before
+ * D6 ever shipped.
  */
 export function buildPersistentSessionCognitionFeatureFlags(overrides?: Partial<{ persistentSessionCognitionEnabled: boolean }>) {
   return {
-    persistentSessionCognitionEnabled: readEnvFlag("BRAIN_R3_PERSISTENT_SESSION_COGNITION_ENABLED", false),
+    persistentSessionCognitionEnabled: readEnvFlag("BRAIN_R3_PERSISTENT_SESSION_COGNITION_ENABLED", true),
     ...(overrides ?? {})
   };
 }
 
 /**
- * SALES-AGENT-R3-V1.8-D5. Same fail-closed shape as shouldRouteToSalesAgentRuntime
- * above: live persistent-session cognition applies to a turn only when the
- * flag is on AND this exact waId is one of the explicitly configured
- * BRAIN_R3_PERSISTENT_SESSION_COGNITION_WA_IDS entries - never inherited
- * from shouldRouteToSalesAgentRuntime's own (broader, more mature) allowlist.
- * An empty allowlist with the flag on is ambiguous configuration (nobody to
- * apply it to) and fails closed, same reasoning as every other allowlisted
- * gate in this file. Callers are expected to only ever consult this after
- * shouldRouteToSalesAgentRuntime(waId) is already true for the same turn -
- * this function does not re-check that itself (see runNativeAutonomousCycle.ts's
- * own call site, inside the salesAgentRuntimeEnabled branch).
+ * SALES-AGENT-R3-V1.8-D6. The per-turn decision itself, now just the flag
+ * above - D5's separate BRAIN_R3_PERSISTENT_SESSION_COGNITION_WA_IDS
+ * allowlist is retired (no longer a distinct safety boundary once cognition
+ * is the R3 default): shouldRouteToSalesAgentRuntime's own
+ * BRAIN_SALES_AGENT_RUNTIME_WA_IDS allowlist already scopes every caller of
+ * this function to a turn that is eligible for SalesAgentRuntime at all, and
+ * this function is only ever consulted from inside that branch
+ * (runNativeAutonomousCycle.ts's own call site). No waId parameter is needed
+ * any more - kept as a named function (rather than reading the flag inline)
+ * only so call sites/tests keep a stable, greppable name for this decision.
  */
-export function shouldEnablePersistentSessionCognition(waId: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
-  if (!buildPersistentSessionCognitionFeatureFlags(undefined).persistentSessionCognitionEnabled) return false;
-  const allowlist = loadPersistentSessionCognitionAllowlist(env);
-  if (allowlist.length === 0) return false;
-  return isWaIdAuthorizedForPilot(waId, allowlist);
+export function shouldEnablePersistentSessionCognition(): boolean {
+  return buildPersistentSessionCognitionFeatureFlags(undefined).persistentSessionCognitionEnabled;
 }
 
 export function buildLegacySalesConsultativeFeatureFlags(
