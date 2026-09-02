@@ -20,6 +20,8 @@ import {
   buildCommercialCyclePolicyFlags,
   buildCommercialCycleTimeouts,
   buildCommercialSalesAgentDryRun,
+  buildPersistentSessionShadowFeatureFlags,
+  shouldEnablePersistentSessionCognition,
   readEnvFlag,
   shouldRouteToMultiIntentPlanner,
   shouldRouteToCommercialWork,
@@ -746,7 +748,18 @@ export async function runNativeAutonomousCycle(
       recentCatalogContext: recentCatalogContextResult.context,
       pendingCatalogAction: pendingCatalogActionResult.pendingCatalogAction,
       abortSignal: input.abortSignal ?? null,
-      resolvedSalesAgentConfiguration
+      resolvedSalesAgentConfiguration,
+      // SALES-AGENT-R3-V1.8-D4. Fail-closed shadow read - see
+      // buildPersistentSessionShadowFeatureFlags' own comment. No separate
+      // allowlist: salesAgentRuntimeEnabled above already scoped this whole
+      // branch to shouldRouteToSalesAgentRuntime's allowlist.
+      persistentSessionShadowEnabled: buildPersistentSessionShadowFeatureFlags().persistentSessionShadowEnabled,
+      // SALES-AGENT-R3-V1.8-D5. Live cognition - deliberately its OWN
+      // allowlist check (BRAIN_R3_PERSISTENT_SESSION_COGNITION_WA_IDS),
+      // never inherited from salesAgentRuntimeEnabled/shouldRouteToSalesAgentRuntime's
+      // own (broader) allowlist - see shouldEnablePersistentSessionCognition's
+      // own comment.
+      persistentSessionCognitionEnabled: shouldEnablePersistentSessionCognition(input.waId)
     });
 
     const commercialNeed: NativeAutonomousCycleCommercialNeed = {

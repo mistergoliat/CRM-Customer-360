@@ -84,6 +84,18 @@ export type AgentLoopPromptInput = {
    * exactly once - see runAgentToolLoop.ts's pendingRepairSignal).
    */
   priorAttemptFailure?: AgentLoopPriorAttemptFailure | null;
+  /**
+   * SALES-AGENT-R3-V1.8-D5. Present (even as an empty array) only for a turn
+   * the caller (salesAgentRuntime.ts) has already determined is eligible for
+   * live persistent-session cognition AND already stripped `recentMessages`
+   * from `commercialContextSummary` (Section D of the task brief) - this
+   * function trusts that contract rather than re-deriving it. `null`/absent
+   * means the exact legacy path below, byte-identical to every call before
+   * this task. Sourced from deriveMessages().historicalMessages (D3,
+   * unchanged) - may itself start with a `role:"system"` compacted-prefix
+   * message (D3's own placement), never re-ordered here.
+   */
+  persistentSessionHistoricalMessages?: AgentLoopProviderMessage[] | null;
 };
 
 const RESPOND_JSON_INSTRUCTION = "Return exactly one JSON object matching AgentStep, nothing else, no markdown fence.";
@@ -621,6 +633,39 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
     renderSalesAgentIdentityPrompt(input.identityConfiguration),
     IMMUTABLE_CONFIGURATION_BOUNDARY_LINE
   ].join("\n");
+
+  // SALES-AGENT-R3-V1.8-D5. Persistent-session path - task brief Section J's
+  // order: (1-2) the same stable+identity system message built above,
+  // unchanged; (3-4) deriveMessages()'s own historicalMessages, spliced in
+  // verbatim (already carries a leading role:"system" compacted-prefix
+  // message when D7 ever populates one, and real role:"assistant" turns -
+  // D3, unchanged); (5) a fresh-context block, separate from (6) the current
+  // message + this turn's own observations, so the stable prefix (system +
+  // history) never mixes with the small mutable suffix that grows every
+  // loop iteration (Section K). commercialContextSummary here is trusted to
+  // already have recentMessages stripped by the caller (Section D) - this
+  // function never re-derives that itself.
+  if (input.persistentSessionHistoricalMessages) {
+    const freshContextPayload = {
+      commercialContext: input.commercialContextSummary,
+      recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
+      ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {})
+    };
+    const currentTurnPayload = {
+      currentTime: input.currentTime,
+      customerMessage: input.customerMessage,
+      priorStepsThisTurn: input.priorSteps.map(summarizeObservation),
+      question: "What is the single next AgentStep?"
+    };
+    return {
+      messages: [
+        { role: "system", content: systemInstructions },
+        ...input.persistentSessionHistoricalMessages,
+        { role: "user", content: JSON.stringify(freshContextPayload) },
+        { role: "user", content: JSON.stringify(currentTurnPayload) }
+      ]
+    };
+  }
 
   const userPayload = {
     currentTime: input.currentTime,

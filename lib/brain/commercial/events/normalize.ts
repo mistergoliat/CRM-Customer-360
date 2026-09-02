@@ -20,6 +20,8 @@ import type {
   IdentityVerificationDecisionIdentityLevel,
   IdentityVerificationDecisionRecordedPayload,
   IdentityVerificationDecisionRuntimeStatus,
+  PersistentSessionCognitionAppliedPayload,
+  PersistentSessionShadowComparedPayload,
   SalesAgentRuntimeResponseDispatchedPayload,
   SalesAgentRuntimeResponseDispatchReason,
   SalesAgentRuntimeTerminalDispatchedPayload,
@@ -46,6 +48,8 @@ import {
   buildIdentityVerificationDecisionDedupeKey,
   buildInboundCommercialEventDedupeKey,
   buildInternalCommandCommercialEventDedupeKey,
+  buildPersistentSessionCognitionAppliedDedupeKey,
+  buildPersistentSessionShadowComparedDedupeKey,
   buildSalesAgentRuntimeResponseDispatchedDedupeKey,
   buildSalesAgentRuntimeTerminalDispatchedDedupeKey
 } from "./dedupe";
@@ -867,5 +871,117 @@ export function normalizeSalesAgentRuntimeTerminalDispatchedEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "sales_agent_runtime_terminal_dispatched" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-V1.8-D4. One canonical shadow-comparison event per eligible
+ * R3 turn - descriptive only, never authoritative, never influences the real
+ * turn (see runPersistentSessionShadow.ts, the sole caller). Structural
+ * counts/timings only, same discipline as normalizeAgentToolLoopCompletedCommercialEvent
+ * above - no message body, no raw transcript text.
+ */
+export function normalizePersistentSessionShadowComparedEvent(input: {
+  inboundMessageId: string;
+  legacyRecentMessageCount: number;
+  legacyInboundCount: number;
+  legacyOutboundCount: number;
+  persistentHistoryMessageCount: number;
+  persistentUserCount: number;
+  persistentAssistantCount: number;
+  persistentToolActivityCount: number;
+  bootstrapUsed: boolean;
+  degraded: boolean;
+  currentInboundExcluded: boolean;
+  duplicateTranscriptMessageCount: number;
+  persistentOlderMessageCount: number;
+  persistentAdditionalAssistantCount: number;
+  readMs: number;
+  deriveMs: number;
+  shadowTotalMs: number;
+  correlationId?: string | null;
+  conversationId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = input.inboundMessageId.trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  const payload: PersistentSessionShadowComparedPayload = {
+    inboundMessageId: input.inboundMessageId,
+    legacyRecentMessageCount: input.legacyRecentMessageCount,
+    legacyInboundCount: input.legacyInboundCount,
+    legacyOutboundCount: input.legacyOutboundCount,
+    persistentHistoryMessageCount: input.persistentHistoryMessageCount,
+    persistentUserCount: input.persistentUserCount,
+    persistentAssistantCount: input.persistentAssistantCount,
+    persistentToolActivityCount: input.persistentToolActivityCount,
+    bootstrapUsed: input.bootstrapUsed,
+    degraded: input.degraded,
+    currentInboundExcluded: input.currentInboundExcluded,
+    duplicateTranscriptMessageCount: input.duplicateTranscriptMessageCount,
+    persistentOlderMessageCount: input.persistentOlderMessageCount,
+    persistentAdditionalAssistantCount: input.persistentAdditionalAssistantCount,
+    readMs: input.readMs,
+    deriveMs: input.deriveMs,
+    shadowTotalMs: input.shadowTotalMs
+  };
+  return buildBaseEvent({
+    eventType: "persistent_session_shadow_compared",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildPersistentSessionShadowComparedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "persistent_session_shadow_compared" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-V1.8-D5. One canonical event per turn where live
+ * persistent-session cognition was eligible (see resolvePersistentSessionCognitionContext.ts,
+ * the sole caller) - descriptive only, never authoritative. `active`
+ * distinguishes "used the persistent path" from "fell back to legacy";
+ * `fallbackReason` is a stable reason prefix, never message text.
+ */
+export function normalizePersistentSessionCognitionAppliedEvent(input: {
+  inboundMessageId: string;
+  active: boolean;
+  fallbackReason: string | null;
+  historyMessageCount: number;
+  correlationId?: string | null;
+  conversationId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = input.inboundMessageId.trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  const payload: PersistentSessionCognitionAppliedPayload = {
+    inboundMessageId: input.inboundMessageId,
+    active: input.active,
+    fallbackReason: input.fallbackReason,
+    historyMessageCount: input.historyMessageCount
+  };
+  return buildBaseEvent({
+    eventType: "persistent_session_cognition_applied",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildPersistentSessionCognitionAppliedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "persistent_session_cognition_applied" }
   });
 }

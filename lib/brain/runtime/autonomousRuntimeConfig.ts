@@ -76,6 +76,20 @@ export function loadSalesAgentRuntimeAllowlist(env: NodeJS.ProcessEnv = process.
 }
 
 /**
+ * SALES-AGENT-R3-V1.8-D5. BRAIN_R3_PERSISTENT_SESSION_COGNITION_WA_IDS,
+ * digit-normalized and deduped - a dedicated allowlist for live
+ * persistent-session cognition, deliberately independent of
+ * loadSalesAgentRuntimeAllowlist above (which only decides whether
+ * SalesAgentRuntime handles the turn at all, never what context it sees).
+ * Empty means "nobody routed", same fail-closed semantics as every other
+ * allowlist in this file - a wa_id already allowlisted for SalesAgentRuntime
+ * is NOT automatically eligible for persistent-session cognition.
+ */
+export function loadPersistentSessionCognitionAllowlist(env: NodeJS.ProcessEnv = process.env): string[] {
+  return readWaIdAllowlist("BRAIN_R3_PERSISTENT_SESSION_COGNITION_WA_IDS", env);
+}
+
+/**
  * Whether waId is authorized to receive any autonomous side effect (LLM
  * call, action creation, follow-up claim, outbox claim, Meta send) during
  * the pilot. An empty allowlist means no restriction is configured (normal

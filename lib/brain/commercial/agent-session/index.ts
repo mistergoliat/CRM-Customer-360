@@ -66,3 +66,24 @@ export {
   type LoadPersistentSessionContextSuccess,
   type LoadPersistentSessionContextFailure
 } from "./loadPersistentSessionContext";
+
+export {
+  buildPersistentSessionShadowComparison,
+  extractLegacyRecentMessagesForShadow,
+  type PersistentSessionShadowComparison,
+  type PersistentSessionShadowLegacyMessage,
+  type BuildPersistentSessionShadowComparisonInput
+} from "./persistentSessionShadowComparison";
+
+export {
+  runPersistentSessionShadowComparison,
+  type RunPersistentSessionShadowComparisonInput,
+  type RunPersistentSessionShadowComparisonResult
+} from "./runPersistentSessionShadow";
+
+export {
+  resolvePersistentSessionCognitionContext,
+  stripRecentMessagesForPersistentSessionContext,
+  type PersistentSessionCognitionContext,
+  type ResolvePersistentSessionCognitionContextInput
+} from "./resolvePersistentSessionCognitionContext";

@@ -12,6 +12,10 @@ import { appendAgentSessionEventWithRetry } from "../agent-session/appendWithRet
 import { buildUserMessageDedupeKey } from "../agent-session/dedupe";
 import { getDefaultAgentSessionStore } from "../agent-session/defaultStore";
 import type { AgentSessionStore } from "../agent-session/store";
+import { runPersistentSessionShadowComparison } from "../agent-session/runPersistentSessionShadow";
+import { extractLegacyRecentMessagesForShadow } from "../agent-session/persistentSessionShadowComparison";
+import { resolvePersistentSessionCognitionContext, stripRecentMessagesForPersistentSessionContext } from "../agent-session/resolvePersistentSessionCognitionContext";
+import { recordPersistentSessionCognitionAppliedEvent } from "../events/service";
 import type { AgentToolLoopStepSummary } from "../events/types";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 import type { SalesAgentPromptConfiguration } from "../sales-agent-configuration";
@@ -61,6 +65,30 @@ export type SalesAgentRuntimeInput = {
   ensureOpportunity?: (input: EnsureCommercialActionOpportunityInput) => Promise<EnsureCommercialActionOpportunityResult>;
   /** Test/DI seam - defaults to the real, MariaDB-backed AgentSessionStore. */
   sessionStore?: AgentSessionStore;
+  /**
+   * SALES-AGENT-R3-V1.8-D4. Fail-closed, default false - reads the flag at
+   * the call site (runNativeAutonomousCycle.ts, via
+   * buildPersistentSessionShadowFeatureFlags), never inside this module, so
+   * this runtime keeps its existing no-env-read discipline (every other
+   * toggle here - governance, maxDecisions, timeoutMs - is threaded in the
+   * same way) and a test can flip it without touching process.env. Shadow-
+   * only: see runPersistentSessionShadow.ts's own failure-isolation
+   * contract - this can only ever add a warning, never alter loopInput.
+   */
+  persistentSessionShadowEnabled?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8-D5. Fail-closed, default false - already-composed
+   * eligibility (flag AND owner allowlist), resolved at the call site
+   * (runNativeAutonomousCycle.ts, via shouldEnablePersistentSessionCognition)
+   * exactly like persistentSessionShadowEnabled above, so this runtime never
+   * reads process.env. Independent of persistentSessionShadowEnabled - see
+   * resolvePersistentSessionCognitionContext.ts's own header for the
+   * fallback-to-legacy contract this depends on. Unlike the shadow flag,
+   * this one is a real input to the turn: when true and the read succeeds,
+   * it changes commercialContextSummary (recentMessages stripped) and
+   * loopInput.persistentSessionHistoricalMessages.
+   */
+  persistentSessionCognitionEnabled?: boolean;
 };
 
 export const SALES_AGENT_RUNTIME_STATUSES = ["responded", "blocked", "failed", "handoff"] as const;
@@ -103,6 +131,38 @@ function buildStepsSummary(steps: AgentLoopStepRecord[]): AgentToolLoopStepSumma
     governance: record.governance ?? undefined,
     observationStatus: record.observation?.status ?? undefined
   }));
+}
+
+/**
+ * SALES-AGENT-R3-V1.8-D5. Non-blocking observability, emitted only for
+ * turns already eligible this task's own gate (Section V: recording this
+ * for every ordinary turn would be pure noise, since D5 is owner-only) -
+ * see the one caller in runSalesAgentRuntime for the eligibility check. A
+ * write failure here never blocks the turn, same idiom as every other
+ * event write in this file - only ever adds a warning.
+ */
+async function recordPersistentSessionCognitionAppliedDiagnostic(input: {
+  conversationId: number;
+  inboundMessageId: string;
+  correlationId: string;
+  active: boolean;
+  fallbackReason: string | null;
+  historyMessageCount: number;
+}): Promise<{ ok: true } | { ok: false; warning: string }> {
+  try {
+    await recordPersistentSessionCognitionAppliedEvent({
+      inboundMessageId: input.inboundMessageId,
+      correlationId: input.correlationId,
+      conversationId: input.conversationId,
+      active: input.active,
+      fallbackReason: input.fallbackReason,
+      historyMessageCount: input.historyMessageCount
+    });
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    return { ok: false, warning: `persistent_session_cognition_applied_event_write_failed:${message}` };
+  }
 }
 
 /**
@@ -220,6 +280,36 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     return result;
   };
 
+  const preLoopWarnings: string[] = [];
+
+  // SALES-AGENT-R3-V1.8-D5. Resolved BEFORE loopInput is built, unlike D4's
+  // shadow (after loopInput, discard-only) - a successful read changes two
+  // of loopInput's own fields below (commercialContextSummary/
+  // persistentSessionHistoricalMessages). `active: false` (not eligible, or
+  // a degraded/failed read) always falls back to the exact legacy shape -
+  // no partial persistent prompt, never fail-closed (task brief Section H).
+  const persistentSessionCognition = await resolvePersistentSessionCognitionContext({
+    enabled: input.persistentSessionCognitionEnabled === true,
+    conversationId: event.conversationId,
+    inboundMessageId,
+    store: input.sessionStore
+  });
+  if (persistentSessionCognition.fallbackWarning) preLoopWarnings.push(persistentSessionCognition.fallbackWarning);
+
+  // Section V observability - only for turns this task's own eligibility
+  // gate actually applied to (owner-only), never for ordinary traffic.
+  if (input.persistentSessionCognitionEnabled === true && inboundMessageId) {
+    const diagnosticResult = await recordPersistentSessionCognitionAppliedDiagnostic({
+      conversationId: event.conversationId,
+      inboundMessageId,
+      correlationId: event.correlationId,
+      active: persistentSessionCognition.active,
+      fallbackReason: persistentSessionCognition.active ? null : persistentSessionCognition.fallbackWarning,
+      historyMessageCount: persistentSessionCognition.active ? persistentSessionCognition.historicalMessages.length : 0
+    });
+    if (!diagnosticResult.ok) preLoopWarnings.push(diagnosticResult.warning);
+  }
+
   const loopInput: RunAgentToolLoopInput = {
     correlationId: event.correlationId,
     conversationId: event.conversationId,
@@ -227,7 +317,12 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     currentTime: event.currentTime,
     customerMessage: event.messageText,
     inboundMessageId,
-    commercialContextSummary: input.commercialContextSummary ?? {},
+    // Task brief Section B: never send both persistent history and legacy
+    // recentMessages for the same turn - stripped only when the persistent
+    // path is actually active this turn.
+    commercialContextSummary: persistentSessionCognition.active
+      ? stripRecentMessagesForPersistentSessionContext(input.commercialContextSummary ?? {})
+      : (input.commercialContextSummary ?? {}),
     recentCatalogContext: input.recentCatalogContext ?? null,
     pendingCatalogAction: input.pendingCatalogAction ?? null,
     provider: input.provider,
@@ -237,14 +332,14 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     maxDecisions: input.maxDecisions,
     maxToolExecutions: input.maxToolExecutions,
     timeoutMs: input.timeoutMs,
-    ensureOpportunity
+    ensureOpportunity,
+    persistentSessionHistoricalMessages: persistentSessionCognition.active ? persistentSessionCognition.historicalMessages : null
   };
 
   // SALES-AGENT-R3-V1.8-D2. Durable BEFORE cognition starts - see
   // recordUserMessageReceivedEvent's own comment. Skipped, not faked, when
   // no real inboundMessageId exists (same condition the post-loop shadow
   // write below already used for this reason).
-  const preLoopWarnings: string[] = [];
   if (inboundMessageId) {
     const userMessageResult = await recordUserMessageReceivedEvent({
       conversationId: event.conversationId,
@@ -255,6 +350,22 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     if (!userMessageResult.ok) preLoopWarnings.push(`agent_session_user_message_event_write_failed:${userMessageResult.warning}`);
   } else {
     preLoopWarnings.push("agent_session_user_message_skipped_no_inbound_message_id");
+  }
+
+  // SALES-AGENT-R3-V1.8-D4. Shadow-only, after loopInput is already fully
+  // built and closed over above - this call can only ever push a warning
+  // onto preLoopWarnings, never touch loopInput itself. See
+  // runPersistentSessionShadow.ts's own header comment for the full
+  // failure-isolation contract this depends on.
+  if (input.persistentSessionShadowEnabled && inboundMessageId) {
+    const shadowResult = await runPersistentSessionShadowComparison({
+      conversationId: event.conversationId,
+      inboundMessageId,
+      correlationId: event.correlationId,
+      legacyRecentMessages: extractLegacyRecentMessagesForShadow(input.commercialContextSummary ?? {}),
+      store: input.sessionStore
+    });
+    if (shadowResult.warning) preLoopWarnings.push(shadowResult.warning);
   }
 
   const loop: AgentLoopResult = await runAgentToolLoop(loopInput);

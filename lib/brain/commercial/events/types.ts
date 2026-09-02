@@ -50,7 +50,18 @@ export type CommercialEventType =
   // existing "responded"-only consumers). Descriptive only; the durable
   // state is the brain_message_outbox row and, for hard_handoff, the
   // conversation ownership columns themselves.
-  | "sales_agent_runtime_terminal_dispatched";
+  | "sales_agent_runtime_terminal_dispatched"
+  // SALES-AGENT-R3-V1.8-D4. One per eligible R3 turn, shadow-only and purely
+  // descriptive - structural counts/timings comparing the persistent session
+  // read side (D3) against the legacy recentMessages tail, never message
+  // bodies, never an authoritative signal. See persistentSessionShadowComparison.ts.
+  | "persistent_session_shadow_compared"
+  // SALES-AGENT-R3-V1.8-D5. One per turn where live persistent-session
+  // cognition was eligible (owner-only allowlist), never for the vast
+  // majority of ordinary turns - see resolvePersistentSessionCognitionContext.ts.
+  // Descriptive only: whether the persistent path was actually used this
+  // turn, or fell back to legacy, and why.
+  | "persistent_session_cognition_applied";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -493,6 +504,48 @@ export type SalesAgentRuntimeTerminalDispatchedPayload = {
   reason: SalesAgentRuntimeTerminalDispatchReason;
   dispatcherVersion: string;
   ownershipTransferred: boolean;
+};
+
+/**
+ * SALES-AGENT-R3-V1.8-D4. Every field is a plain count/boolean/millisecond
+ * duration - never a message body, never raw transcript text (checked
+ * against the shared commercial_event sanitizer's SENSITIVE_KEY_PATTERN,
+ * events/normalize.ts, before this type was finalized: no key here contains
+ * "token"/"prompt"/"reasoning"/etc.). See
+ * persistentSessionShadowComparison.ts#PersistentSessionShadowComparison for
+ * the structured (non-flattened) shape this payload is built from.
+ */
+export type PersistentSessionShadowComparedPayload = {
+  inboundMessageId: string;
+  legacyRecentMessageCount: number;
+  legacyInboundCount: number;
+  legacyOutboundCount: number;
+  persistentHistoryMessageCount: number;
+  persistentUserCount: number;
+  persistentAssistantCount: number;
+  persistentToolActivityCount: number;
+  bootstrapUsed: boolean;
+  degraded: boolean;
+  currentInboundExcluded: boolean;
+  duplicateTranscriptMessageCount: number;
+  persistentOlderMessageCount: number;
+  persistentAdditionalAssistantCount: number;
+  readMs: number;
+  deriveMs: number;
+  shadowTotalMs: number;
+};
+
+/**
+ * SALES-AGENT-R3-V1.8-D5. `fallbackReason` is a stable prefix taken from
+ * resolvePersistentSessionCognitionContext.ts's own warning strings (e.g.
+ * "no_inbound_message_id", "agent_session_read_lock_timeout:123") - never
+ * message text, never a raw error message beyond that structured reason.
+ */
+export type PersistentSessionCognitionAppliedPayload = {
+  inboundMessageId: string;
+  active: boolean;
+  fallbackReason: string | null;
+  historyMessageCount: number;
 };
 
 export type CommercialEventPersistStatus = "created" | "duplicate";

@@ -111,6 +111,20 @@ export function buildSalesAgentRuntimeTerminalDispatchedDedupeKey(inboundMessage
   return `sales-agent-r3-terminal-dispatched:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R3-V1.8-D4. One canonical shadow-comparison event per inbound
+// message on the R3 SalesAgentRuntime path, same rationale as
+// buildAgentToolLoopCompletedDedupeKey above.
+export function buildPersistentSessionShadowComparedDedupeKey(inboundMessageId: string) {
+  return `persistent-session-shadow-compared:${inboundMessageId.trim()}`;
+}
+
+// SALES-AGENT-R3-V1.8-D5. One canonical live-cognition-applied event per
+// inbound message on the R3 SalesAgentRuntime path, same rationale as
+// buildPersistentSessionShadowComparedDedupeKey above.
+export function buildPersistentSessionCognitionAppliedDedupeKey(inboundMessageId: string) {
+  return `persistent-session-cognition-applied:${inboundMessageId.trim()}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

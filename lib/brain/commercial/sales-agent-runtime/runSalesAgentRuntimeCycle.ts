@@ -63,6 +63,10 @@ export type RunSalesAgentRuntimeCycleInput = {
   resolvedSalesAgentConfiguration: ResolvedSalesAgentConfiguration;
   /** Test/DI seam - defaults to the real, MariaDB-backed AgentSessionStore. Threaded to runSalesAgentRuntime unchanged, and used directly by this file's own post-dispatch ASSISTANT_MESSAGE_SENT write (V1.8-D2). */
   sessionStore?: AgentSessionStore;
+  /** SALES-AGENT-R3-V1.8-D4. Threaded to runSalesAgentRuntime unchanged - see that type's own comment. Read by the caller (runNativeAutonomousCycle.ts) via buildPersistentSessionShadowFeatureFlags, never inside this file. */
+  persistentSessionShadowEnabled?: boolean;
+  /** SALES-AGENT-R3-V1.8-D5. Threaded to runSalesAgentRuntime unchanged - see that type's own comment. Already-composed eligibility, read by the caller (runNativeAutonomousCycle.ts) via shouldEnablePersistentSessionCognition, never inside this file. */
+  persistentSessionCognitionEnabled?: boolean;
 };
 
 /**
@@ -304,7 +308,9 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     timeoutMs: effectiveModelConfiguration.timeoutMs,
     abortSignal: input.abortSignal,
     governance: { humanOwnerActive, aiBlocked },
-    sessionStore: input.sessionStore
+    sessionStore: input.sessionStore,
+    persistentSessionShadowEnabled: input.persistentSessionShadowEnabled,
+    persistentSessionCognitionEnabled: input.persistentSessionCognitionEnabled
   });
 
   if (runtime.status === "blocked") {

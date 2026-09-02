@@ -121,6 +121,16 @@ export type RunAgentToolLoopInput = {
   identityConfiguration?: SalesAgentPromptConfiguration;
   /** SALES-AGENT-R3-V1.2. Test-only injection point; production callers never set this (defaults to the real, MariaDB-backed ensureCommercialActionOpportunity). */
   ensureOpportunity?: (input: EnsureCommercialActionOpportunityInput) => Promise<EnsureCommercialActionOpportunityResult>;
+  /**
+   * SALES-AGENT-R3-V1.8-D5. Resolved once per turn by the caller
+   * (salesAgentRuntime.ts, via resolvePersistentSessionCognitionContext) -
+   * never re-loaded per loop iteration. Passed through unchanged to every
+   * buildAgentStepPromptPackage call this turn (gathering and finalization
+   * alike) so the historical prefix stays byte-stable across iterations
+   * (Section K) - see buildAgentStepPromptPackage.ts's own comment for the
+   * assembly this triggers. `null`/absent is the exact legacy path.
+   */
+  persistentSessionHistoricalMessages?: AgentLoopProviderMessage[] | null;
 };
 
 /**
@@ -812,7 +822,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       stepsRemaining: maxDecisions - decisionIndex,
       phase: "gathering",
       identityConfiguration,
-      priorAttemptFailure: gatheringPendingRepairSignal
+      priorAttemptFailure: gatheringPendingRepairSignal,
+      persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null
     });
     // LLM-R1-T04. Consumed immediately - this exact signal is for this one
     // call only, never for whatever call happens next.
@@ -981,7 +992,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       stepsRemaining: 1,
       phase: "finalization",
       identityConfiguration,
-      priorAttemptFailure: finalizationPendingRepairSignal
+      priorAttemptFailure: finalizationPendingRepairSignal,
+      persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null
     });
     // LLM-R1-T04. Consumed immediately - see the matching comment in gathering above.
     finalizationPendingRepairSignal = null;

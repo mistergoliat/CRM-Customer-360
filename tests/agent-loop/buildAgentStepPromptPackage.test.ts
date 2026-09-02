@@ -887,3 +887,149 @@ test("[T08C Case E] no selection intent (\"gracias\") - the new rule constrains 
   assert.ok(!/always call select_products/i.test(system), "the new rule must never read as an unconditional call requirement");
   assert.ok(!/must call select_products/i.test(system), "the new rule constrains claims, not tool invocation itself");
 });
+
+// ---------------------------------------------------------------------------
+// SALES-AGENT-R3-V1.8-D5 - persistent-session provider message assembly
+// ---------------------------------------------------------------------------
+
+test("[D5-G2] legacy path is byte-identical whether persistentSessionHistoricalMessages is absent, undefined, or null", () => {
+  const withoutField = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig() });
+  const withUndefined = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig(), persistentSessionHistoricalMessages: undefined });
+  const withNull = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig(), persistentSessionHistoricalMessages: null });
+  assert.deepEqual(withUndefined, withoutField);
+  assert.deepEqual(withNull, withoutField);
+  assert.equal(withoutField.messages.length, 2, "legacy shape is always exactly [system, user]");
+});
+
+test("[D5-G3/G4] persistent path: real user/assistant history present, current message occurs exactly once", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "me puedes dar varias opciones",
+    identityConfiguration: pesasChileConfig(),
+    persistentSessionHistoricalMessages: [
+      { role: "user", content: "necesito una barra olimpica de 20kg" },
+      { role: "assistant", content: "tenemos la barra olimpica 20kg" }
+    ]
+  });
+
+  assert.equal(messages[0].role, "system");
+  assert.equal(messages[1].role, "user");
+  assert.equal(messages[1].content, "necesito una barra olimpica de 20kg");
+  assert.equal(messages[2].role, "assistant");
+  assert.equal(messages[2].content, "tenemos la barra olimpica 20kg");
+
+  const occurrences = messages.filter((message) => JSON.stringify(message).includes("me puedes dar varias opciones")).length;
+  assert.equal(occurrences, 1, "the current customer message must appear exactly once across the whole assembled request");
+});
+
+test("[D5-G5/G6/G7] fresh context (without legacy recentMessages) + RecentCatalogContext + pendingCatalogAction all reach the persistent path", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    commercialContextSummary: { opportunityStatus: "open", needProfile: { useCase: "home gym" } }, // caller already stripped recentMessages
+    recentCatalogContext: { interactions: [{ tool: "search_products", query: "barra", productIds: ["10"] }] } as never,
+    pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["10"] } as never,
+    identityConfiguration: pesasChileConfig(),
+    persistentSessionHistoricalMessages: []
+  });
+
+  assert.equal(messages.length, 3, "system + 0 historical + context block + current turn");
+  const contextMessage = messages[1];
+  const currentTurnMessage = messages[2];
+  assert.equal(contextMessage.role, "user");
+  assert.equal(currentTurnMessage.role, "user");
+
+  const context = JSON.parse(contextMessage.content) as Record<string, unknown>;
+  assert.deepEqual(context.commercialContext, { opportunityStatus: "open", needProfile: { useCase: "home gym" } });
+  assert.ok(!("recentMessages" in (context.commercialContext as Record<string, unknown>)), "legacy recentMessages must never appear in the persistent path");
+  assert.ok(context.recentCatalogContext);
+  assert.ok(context.pendingCatalogAction);
+
+  const currentTurn = JSON.parse(currentTurnMessage.content) as Record<string, unknown>;
+  assert.ok(!("commercialContext" in currentTurn), "fresh context lives only in its own message, never duplicated into the current-turn message");
+  assert.ok(!("recentCatalogContext" in currentTurn));
+});
+
+test("[D5] no unexpected provider role - only system/user/assistant, never tool", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    persistentSessionHistoricalMessages: [
+      { role: "user", content: "hola" },
+      { role: "assistant", content: "hola! en que te ayudo?" }
+    ]
+  });
+  for (const message of messages) {
+    assert.ok(["system", "user", "assistant"].includes(message.role));
+  }
+});
+
+// Task brief Section K: stable prefix (system + history) never rebuilt
+// differently across sequential loop iterations - only the mutable suffix
+// (priorStepsThisTurn) grows.
+test("[D5-K] system + historical prefix stay byte-identical across sequential calls; only the current-turn suffix grows", () => {
+  const historicalMessages = [
+    { role: "user" as const, content: "necesito una barra olimpica de 20kg" },
+    { role: "assistant" as const, content: "tenemos la barra olimpica 20kg" }
+  ];
+  const callOne = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    persistentSessionHistoricalMessages: historicalMessages,
+    priorSteps: []
+  });
+  const callTwo = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    persistentSessionHistoricalMessages: historicalMessages,
+    priorSteps: [
+      {
+        stepIndex: 0,
+        phase: "gathering",
+        governance: "authorized",
+        step: { type: "use_tool", tool: "search_products", arguments: { query: "barra" } },
+        observation: { tool: "search_products", status: "completed", data: { results: [] } }
+      }
+    ]
+  });
+
+  // messages[0] (system) and messages[1..2] (historical prefix) are stable.
+  assert.equal(callOne.messages[0].content, callTwo.messages[0].content);
+  assert.deepEqual(callOne.messages.slice(1, 3), callTwo.messages.slice(1, 3));
+  // Only the current-turn message (the mutable suffix) differs.
+  assert.notEqual(callOne.messages[4].content, callTwo.messages[4].content);
+});
+
+// Task brief Section L: historical truth vs. current truth reach the
+// provider in separate layers, both verbatim, never cross-modified.
+test("[D5-L] a stale historical price and the fresh authoritative price both reach the provider, unmodified, in separate messages", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    commercialContextSummary: { commercialLineItems: { items: [{ productId: "10", unitPrice: 32990 }] } },
+    identityConfiguration: pesasChileConfig(),
+    persistentSessionHistoricalMessages: [
+      { role: "user", content: "cuanto cuesta?" },
+      { role: "assistant", content: "cuesta $29.990" } // stale, historical-only claim
+    ]
+  });
+
+  const historicalAssistantMessage = messages.find((m) => m.role === "assistant");
+  assert.equal(historicalAssistantMessage?.content, "cuesta $29.990", "historical text is never parsed or rewritten");
+
+  const contextMessage = messages.find((m) => {
+    if (m.role !== "user") return false;
+    try {
+      return "commercialContext" in (JSON.parse(m.content) as Record<string, unknown>);
+    } catch {
+      return false;
+    }
+  });
+  assert.ok(contextMessage);
+  const context = JSON.parse(contextMessage!.content) as { commercialContext: { commercialLineItems: { items: Array<{ unitPrice: number }> } } };
+  assert.equal(context.commercialContext.commercialLineItems.items[0].unitPrice, 32990, "the fresh authoritative price is unaffected by the historical text");
+});

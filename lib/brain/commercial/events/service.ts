@@ -14,6 +14,8 @@ import {
   normalizeInternalCommandCommercialEvent,
   normalizeMetaWhatsAppInboundCommercialEvent,
   normalizeMetaWhatsAppStatusCommercialEvent,
+  normalizePersistentSessionCognitionAppliedEvent,
+  normalizePersistentSessionShadowComparedEvent,
   normalizeSalesAgentRuntimeResponseDispatchedEvent,
   normalizeSalesAgentRuntimeTerminalDispatchedEvent
 } from "./normalize";
@@ -132,4 +134,22 @@ export async function recordSalesAgentRuntimeTerminalDispatchedEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeSalesAgentRuntimeTerminalDispatchedEvent(input), connection);
+}
+
+// SALES-AGENT-R3-V1.8-D4.
+
+export async function recordPersistentSessionShadowComparedEvent(
+  input: Parameters<typeof normalizePersistentSessionShadowComparedEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizePersistentSessionShadowComparedEvent(input), connection);
+}
+
+// SALES-AGENT-R3-V1.8-D5.
+
+export async function recordPersistentSessionCognitionAppliedEvent(
+  input: Parameters<typeof normalizePersistentSessionCognitionAppliedEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizePersistentSessionCognitionAppliedEvent(input), connection);
 }
