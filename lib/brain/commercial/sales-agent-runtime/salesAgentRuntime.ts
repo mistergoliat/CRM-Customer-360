@@ -91,6 +91,14 @@ export type SalesAgentRuntimeInput = {
    * read/derive fails, the turn takes the exact legacy path instead.
    */
   persistentSessionCognitionEnabled?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8.1. Set only by the turn-settlement worker, when
+   * event.messageText already aggregates more than one raw WhatsApp fragment.
+   * Threaded unchanged into resolvePersistentSessionCognitionContext so every
+   * fragment id is excluded from historicalMessages - the anchor id
+   * (event.messageId) is already excluded by the pre-existing single-id path.
+   */
+  additionalInboundMessageIds?: readonly string[] | null;
 };
 
 export const SALES_AGENT_RUNTIME_STATUSES = ["responded", "blocked", "failed", "handoff"] as const;
@@ -300,6 +308,7 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     enabled: input.persistentSessionCognitionEnabled === true,
     conversationId: event.conversationId,
     inboundMessageId,
+    additionalInboundMessageIds: input.additionalInboundMessageIds,
     store: input.sessionStore
   });
   if (persistentSessionCognition.fallbackWarning) preLoopWarnings.push(persistentSessionCognition.fallbackWarning);

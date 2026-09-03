@@ -41,6 +41,19 @@ export type DispatchGovernedSalesAgentMessageInput = {
   currentTime: string;
   humanOwnerActive: boolean;
   aiBlocked: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8.1. Opt-in only (undefined/false for every pre-existing
+   * caller - the delay=0 rollback path never sets this, preserving that path
+   * byte-for-byte). When true, immediately before the outbox insert this
+   * function also rechecks whether a newer inbound conversation_message
+   * (id > inboundMessageId, numeric) now exists for this conversation - set by
+   * the turn-settlement worker so a response drafted from stale fragments is
+   * never dispatched once a customer has already sent something newer (turn
+   * settling Section K). Only ever suppresses the DISPATCH of this text
+   * message; it can never undo a commercial-action tool call already executed
+   * during cognition (Section L - out of scope by design, not a gap).
+   */
+  checkInboundFreshness?: boolean;
 };
 
 export type DispatchGovernedSalesAgentMessageResult = {
@@ -96,6 +109,26 @@ async function recheckConversationOwnership(connection: PoolConnection, conversa
 }
 
 /**
+ * SALES-AGENT-R3-V1.8.1 (Section K/U). Same connection/transaction as the
+ * ownership recheck above and the outbox insert below - the last possible
+ * moment before this response becomes durable. A row here means the customer
+ * already sent something after the fragments this response was drafted from;
+ * dispatching anyway would answer a turn that no longer reflects what the
+ * customer actually said last.
+ */
+async function recheckInboundFreshness(connection: PoolConnection, conversationId: number, anchorMessageId: string): Promise<{ stale: false } | { stale: true; newerMessageId: number }> {
+  const anchorId = Number(anchorMessageId);
+  if (!Number.isFinite(anchorId)) return { stale: false };
+  const [rows] = await connection.execute(
+    "SELECT id FROM conversation_message WHERE conversation_id = ? AND direction = 'inbound' AND id > ? ORDER BY id ASC LIMIT 1",
+    [conversationId, anchorId]
+  );
+  const row = (rows as Record<string, unknown>[])[0];
+  if (!row) return { stale: false };
+  return { stale: true, newerMessageId: Number(row.id) };
+}
+
+/**
  * R3-native governed dispatch of one outbound message. Never throws for a
  * governed skip or a real persistence failure - callers branch on
  * `status`/`reason`, never on a caught exception.
@@ -117,6 +150,11 @@ export async function dispatchGovernedSalesAgentMessage(input: DispatchGovernedS
     return await withTransaction(async (connection) => {
       const ownership = await recheckConversationOwnership(connection, input.conversationId);
       if (!ownership.ok) return skipped(ownership.reason);
+
+      if (input.checkInboundFreshness) {
+        const freshness = await recheckInboundFreshness(connection, input.conversationId, input.inboundMessageId);
+        if (freshness.stale) return skipped("superseded_by_newer_inbound");
+      }
 
       const write = await writeCanonicalOutboxMessage(
         {

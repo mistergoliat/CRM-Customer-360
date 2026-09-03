@@ -44,6 +44,18 @@ export type DeriveConversationMessagesInput = {
    * turn) and excludes nothing.
    */
   currentInboundMessageId: string | null;
+  /**
+   * SALES-AGENT-R3-V1.8.1 (turn settling). Extra conversation_message ids
+   * belonging to the SAME current turn as currentInboundMessageId - set only
+   * when the inbound turn-settlement worker aggregated more than one raw
+   * WhatsApp fragment into this turn. Excluded from history for exactly the
+   * same reason currentInboundMessageId is: each one's text is already
+   * folded into the current turn's own joined customerMessage, so leaving
+   * it in the transcript window would emit it twice. null/undefined/empty
+   * excludes nothing - zero behavior change for every caller that never
+   * settles more than one fragment per turn (the delay=0 rollback path).
+   */
+  additionalExcludedMessageIds?: readonly string[] | null;
 };
 
 const HUMAN_TRANSCRIPT_DIRECTIONS = new Set(["inbound", "outbound"]);
@@ -89,6 +101,7 @@ export function deriveConversationMessages(input: DeriveConversationMessagesInpu
 
   for (const row of input.transcriptMessages) {
     if (input.currentInboundMessageId !== null && row.id === input.currentInboundMessageId) continue;
+    if (input.additionalExcludedMessageIds && input.additionalExcludedMessageIds.includes(row.id)) continue;
     if (throughMessageId !== null && Number(row.id) <= throughMessageId) continue;
     const mapped = transcriptRowToProviderMessage(row);
     if (mapped) messages.push(mapped);

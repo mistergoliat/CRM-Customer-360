@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { ensureAutonomousSalesTurnContinuity } from "@/lib/brain/commercial/continuity";
+import { loadTurnSettlementConfig, upsertPendingTurn } from "@/lib/brain/commercial/turn-settlement";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { auditLog } from "@/lib/audit";
 import { queryRows, safeExecute, safeQueryRows, withTransaction } from "@/lib/db";
@@ -1183,20 +1184,51 @@ export async function processNativeWhatsAppInbound(input: {
   // contextual fallback when a customer-facing response was owed but never
   // delivered, and persists a terminal disposition for every turn.
   if (!result.duplicate && result.conversationId && result.conversationPublicId) {
-    try {
-      await ensureAutonomousSalesTurnContinuity({
-        conversationId: result.conversationId,
-        conversationPublicId: result.conversationPublicId as string,
-        customerMasterId: result.customerId ?? null,
-        waId: normalizedExternalId,
-        phoneNumberId: input.phoneNumberId,
-        messageId: result.messageId,
-        messageText: input.text,
-        correlationId: result.correlationId,
-        currentTime: nowIso()
-      });
-    } catch (error) {
-      console.error("native_autonomous_cycle_failed", error instanceof Error ? error.message : String(error));
+    // SALES-AGENT-R3-V1.8.1. BRAIN_R3_INBOUND_TURN_SETTLE_DELAY_MS=0 (the
+    // default) takes this exact branch, unchanged from every prior release -
+    // the rollback path (Section D): no pending-turn row, no setTimeout, no
+    // aggregation, no extra wait between persistence and cognition.
+    const turnSettlementConfig = loadTurnSettlementConfig();
+    if (turnSettlementConfig.settleDelayMs <= 0) {
+      try {
+        await ensureAutonomousSalesTurnContinuity({
+          conversationId: result.conversationId,
+          conversationPublicId: result.conversationPublicId as string,
+          customerMasterId: result.customerId ?? null,
+          waId: normalizedExternalId,
+          phoneNumberId: input.phoneNumberId,
+          messageId: result.messageId,
+          messageText: input.text,
+          correlationId: result.correlationId,
+          currentTime: nowIso()
+        });
+      } catch (error) {
+        console.error("native_autonomous_cycle_failed", error instanceof Error ? error.message : String(error));
+      }
+    } else {
+      // Debounce path: persist-then-acknowledge (Section T) - cognition runs
+      // later, out of this request, once the turn-settlement worker
+      // (scripts/autonomous-turn-settle-worker.ts) observes the quiet/max
+      // window has closed. A failure here only ever drops this fragment's
+      // ability to extend/open its own pending-turn row - the fragment
+      // itself is already durably persisted above regardless.
+      try {
+        const upserted = await upsertPendingTurn({
+          conversationId: result.conversationId,
+          waId: normalizedExternalId,
+          phoneNumberId: input.phoneNumberId,
+          inboundMessageId: Number(result.messageId),
+          providerMessageId: input.providerMessageId,
+          correlationId: result.correlationId,
+          settleDelayMs: turnSettlementConfig.settleDelayMs,
+          maxSettleMs: turnSettlementConfig.maxSettleMs
+        });
+        if (!upserted.ok) {
+          console.error("inbound_turn_settlement_upsert_failed", upserted.error);
+        }
+      } catch (error) {
+        console.error("inbound_turn_settlement_upsert_failed", error instanceof Error ? error.message : String(error));
+      }
     }
   }
 
