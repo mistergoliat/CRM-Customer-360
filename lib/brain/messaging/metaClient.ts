@@ -306,3 +306,92 @@ export async function postMetaWhatsAppTextMessage(input: BrainMetaSendRequest): 
 export async function sendMetaWhatsAppTextMessage(input: BrainMetaSendRequest): Promise<BrainMetaSendResponse> {
   return postMetaWhatsAppTextMessage(input);
 }
+
+export type MetaTypingIndicatorRequest = {
+  phoneNumberId: string;
+  /** The Meta wamid (conversation_message.provider_message_id) of the latest inbound fragment - never conversation_message.id. */
+  messageId: string;
+  timeoutMs?: number;
+};
+
+export type MetaTypingIndicatorResponse = {
+  ok: boolean;
+  status: "sent" | "disabled" | "missing_credentials" | "invalid_payload" | "failed";
+  error_code: string | null;
+  error_message: string | null;
+  http_status: number | null;
+};
+
+/**
+ * SALES-AGENT-R3-V1.8.1 (Section M/P). One real Meta Cloud API call that
+ * both marks the inbound message read AND starts the typing indicator - the
+ * documented `{status:"read", typing_indicator:{type:"text"}}` shape on the
+ * existing /messages endpoint, no new endpoint. Deliberately mirrors
+ * postMetaWhatsAppTextMessage's own guard order (disabled -> missing
+ * payload -> missing credentials -> network/HTTP failure) so the two
+ * functions fail the same way for the same reasons, but this one is never
+ * gated by the recipient allowlist below (isMetaSendEnabled) - typing/read
+ * is UX only, not a new outbound message, and BRAIN_WHATSAPP_TYPING_INDICATOR_ENABLED
+ * (checked by the caller, not here) is the feature's own on/off switch.
+ * Callers MUST treat every non-"sent" status as a non-fatal warning (Section
+ * N) - this function itself never throws.
+ */
+export async function postMetaWhatsAppTypingIndicator(input: MetaTypingIndicatorRequest): Promise<MetaTypingIndicatorResponse> {
+  if (!isMetaSendEnabled()) {
+    return { ok: false, status: "disabled", error_code: "disabled", error_message: "BRAIN_META_SEND_ENABLED=false", http_status: null };
+  }
+
+  const phoneNumberId = asTrimmedString(input.phoneNumberId);
+  const messageId = asTrimmedString(input.messageId);
+  if (!phoneNumberId || !messageId) {
+    return { ok: false, status: "invalid_payload", error_code: "invalid_payload", error_message: "phoneNumberId y messageId son obligatorios.", http_status: null };
+  }
+
+  const accessToken = getMetaAccessToken();
+  if (!accessToken) {
+    return { ok: false, status: "missing_credentials", error_code: "missing_credentials", error_message: "META_WHATSAPP_ACCESS_TOKEN no configurado", http_status: null };
+  }
+
+  const timeoutMs = normalizeTimeoutMs(input.timeoutMs);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(buildMetaGraphUrl(phoneNumberId), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        status: "read",
+        message_id: messageId,
+        typing_indicator: { type: "text" }
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const responseBody = await response.json().catch(() => null);
+      let message = `Meta Graph API HTTP ${response.status}`;
+      if (isRecord(responseBody) && isRecord(responseBody.error) && typeof responseBody.error.message === "string") {
+        message = responseBody.error.message;
+      }
+      return { ok: false, status: "failed", error_code: "meta_http_error", error_message: message, http_status: response.status };
+    }
+
+    return { ok: true, status: "sent", error_code: null, error_message: null, http_status: response.status };
+  } catch (error) {
+    const isAbortError = error instanceof Error && (error.name === "AbortError" || error.message.toLowerCase().includes("aborted"));
+    return {
+      ok: false,
+      status: "failed",
+      error_code: "meta_network_error",
+      error_message: isAbortError ? `Meta typing indicator timeout after ${timeoutMs}ms` : error instanceof Error ? error.message : String(error),
+      http_status: null
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}

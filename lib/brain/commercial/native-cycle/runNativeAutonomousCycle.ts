@@ -110,6 +110,18 @@ export type NativeAutonomousCycleInput = {
   loadRecentCatalogContext?: ((input: { conversationId: number; currentTime: string | Date }) => Promise<RecentCatalogContextLoadResult>) | null;
   /** Test-only injection point for the ephemeral PendingCatalogAction read model; production callers use commercial_event. */
   loadPendingCatalogAction?: ((input: { conversationId: number }) => Promise<PendingCatalogActionLoadResult>) | null;
+  /**
+   * SALES-AGENT-R3-V1.8.1. Set only by the inbound turn-settlement worker
+   * (BRAIN_R3_INBOUND_TURN_SETTLE_DELAY_MS > 0), never by the webhook's
+   * direct delay=0 call - that path never sets this field, so its behavior
+   * is byte-for-byte unchanged. Threaded only into the salesAgentRuntimeEnabled
+   * branch below; every other runtime branch (commercialWork/multiRequest/
+   * agentToolLoop/legacy) ignores it, matching this task's Section Q scope
+   * (turn settling only ever affects the R3 path).
+   */
+  additionalInboundMessageIds?: readonly string[] | null;
+  /** SALES-AGENT-R3-V1.8.1. See dispatchGovernedSalesAgentMessage.ts's own comment. Same scope restriction as additionalInboundMessageIds above. */
+  checkInboundFreshnessBeforeDispatch?: boolean;
 };
 
 /** ACS-R1-05-T06.2 (C2): the commercial need for this turn, read from already-loaded, persisted sources - never re-derived from free text, never invented. */
@@ -774,7 +786,9 @@ export async function runNativeAutonomousCycle(
       // (see buildSessionCompactionFeatureFlags' own comment).
       sessionCompactionEnabled: sessionCompactionFeatureFlags.sessionCompactionEnabled && shouldEnablePersistentSessionCognition(),
       sessionCompactionMaxRawMessages: sessionCompactionFeatureFlags.maxRawMessages,
-      sessionCompactionTargetRecentMessages: sessionCompactionFeatureFlags.targetRecentMessages
+      sessionCompactionTargetRecentMessages: sessionCompactionFeatureFlags.targetRecentMessages,
+      additionalInboundMessageIds: input.additionalInboundMessageIds,
+      checkInboundFreshnessBeforeDispatch: input.checkInboundFreshnessBeforeDispatch
     });
 
     const commercialNeed: NativeAutonomousCycleCommercialNeed = {

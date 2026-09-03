@@ -83,6 +83,23 @@ export type RunSalesAgentRuntimeCycleInput = {
   sessionCompactionEnabled?: boolean;
   sessionCompactionMaxRawMessages?: number;
   sessionCompactionTargetRecentMessages?: number;
+  /**
+   * SALES-AGENT-R3-V1.8.1. Set only by the inbound turn-settlement worker,
+   * when this turn aggregates more than one raw WhatsApp fragment
+   * (conversation_message rows) into `customerMessage`. Every id here MUST
+   * also be excluded from persistent-session history alongside `messageId`
+   * itself, or the same fragment text would appear twice: once folded into
+   * `customerMessage`, once again as a standalone historical "user" turn.
+   * Never includes `messageId`/`inboundMessageId` itself (those are already
+   * excluded by the existing single-id path).
+   */
+  additionalInboundMessageIds?: readonly string[] | null;
+  /**
+   * SALES-AGENT-R3-V1.8.1. Set only by the turn-settlement worker - see
+   * dispatchGovernedSalesAgentMessage.ts's own comment. Threaded into the
+   * terminal dispatcher, never read anywhere else in this file.
+   */
+  checkInboundFreshnessBeforeDispatch?: boolean;
 };
 
 /**
@@ -132,10 +149,16 @@ export type SalesAgentRuntimeCycleResult = {
 function buildMinimalCommercialContextSummary(
   snapshot: CommercialContextSnapshot,
   inboundMessageId: string,
-  customerMessage: string
+  customerMessage: string,
+  additionalInboundMessageIds: readonly string[]
 ): Record<string, unknown> {
   const recentMessages = snapshot.recentMessages.filter((message, index, messages) => {
     if (message.id === inboundMessageId) return false;
+    // SALES-AGENT-R3-V1.8.1: same duplication guard as deriveMessages.ts's
+    // additionalExcludedMessageIds, applied to this legacy fallback context
+    // too - persistent-session cognition is the default path, but a degraded
+    // read still falls back to this field (Section J).
+    if (additionalInboundMessageIds.includes(message.id)) return false;
     const isLastMessage = index === messages.length - 1;
     if (isLastMessage && message.direction === "inbound" && message.body === customerMessage) return false;
     return true;
@@ -315,7 +338,12 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     opportunityId,
     provider: input.provider,
     trustedCustomerSession: input.trustedCustomerSession,
-    commercialContextSummary: buildMinimalCommercialContextSummary(input.snapshot, input.inboundMessageId, input.customerMessage),
+    commercialContextSummary: buildMinimalCommercialContextSummary(
+      input.snapshot,
+      input.inboundMessageId,
+      input.customerMessage,
+      input.additionalInboundMessageIds ?? []
+    ),
     recentCatalogContext: input.recentCatalogContext ?? null,
     pendingCatalogAction: input.pendingCatalogAction ?? null,
     identityConfiguration,
@@ -326,7 +354,8 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     governance: { humanOwnerActive, aiBlocked },
     sessionStore: input.sessionStore,
     persistentSessionShadowEnabled: input.persistentSessionShadowEnabled,
-    persistentSessionCognitionEnabled: input.persistentSessionCognitionEnabled
+    persistentSessionCognitionEnabled: input.persistentSessionCognitionEnabled,
+    additionalInboundMessageIds: input.additionalInboundMessageIds
   });
 
   if (runtime.status === "blocked") {
@@ -368,7 +397,8 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
       humanOwnerActive,
       aiBlocked,
       loop,
-      commercialNeed: buildCommercialNeed(input.snapshot)
+      commercialNeed: buildCommercialNeed(input.snapshot),
+      checkInboundFreshness: input.checkInboundFreshnessBeforeDispatch
     })
   );
 

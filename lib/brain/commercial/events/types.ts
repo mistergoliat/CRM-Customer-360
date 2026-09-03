@@ -467,7 +467,13 @@ export type SalesAgentRuntimeResponseDispatchReason =
   | "invalid_wa_id"
   | "conversation_closed"
   | "conversation_not_found"
-  | "persistence_error";
+  | "persistence_error"
+  // SALES-AGENT-R3-V1.8.1. Settle-before-dispatch: a newer inbound
+  // conversation_message arrived for this conversation after this turn's own
+  // cognition started, so this response is stale and was never written to
+  // brain_message_outbox. Only ever produced when the caller explicitly opts
+  // in (turn-settlement worker) - see dispatchGovernedSalesAgentMessage.ts.
+  | "superseded_by_newer_inbound";
 
 export type SalesAgentRuntimeResponseDispatchedPayload = {
   inboundMessageId: string | null;

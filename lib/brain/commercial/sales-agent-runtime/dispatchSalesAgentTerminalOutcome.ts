@@ -36,6 +36,19 @@ export type DispatchSalesAgentTerminalOutcomeInput = {
   aiBlocked: boolean;
   loop: AgentLoopResult;
   commercialNeed: ContinuityFallbackContext;
+  /**
+   * SALES-AGENT-R3-V1.8.1. Opt-in only (undefined for every pre-existing
+   * caller). Threaded into the "responded" and fallback branches below, which
+   * both draft genuinely new customer-facing text that can go stale while
+   * this turn was reasoning. Deliberately NOT threaded into the hard-handoff
+   * branch: an eligible handoff has already transferred conversation
+   * ownership to a human by the time its acknowledgement is about to be
+   * sent, and that transfer is real regardless of whether a newer customer
+   * fragment exists - the human who now owns the conversation will see that
+   * fragment directly, so suppressing the acknowledgement would only leave
+   * the customer with an unexplained ownership change.
+   */
+  checkInboundFreshness?: boolean;
 };
 
 export type DispatchSalesAgentTerminalOutcomeResult = {
@@ -93,7 +106,7 @@ export async function dispatchSalesAgentTerminalOutcome(input: DispatchSalesAgen
   let outcome: DispatchSalesAgentTerminalOutcomeResult;
 
   if (input.loop.terminalReason === "responded") {
-    const r = await dispatchSalesAgentResponse({ ...common, finalMessage: input.loop.finalMessage });
+    const r = await dispatchSalesAgentResponse({ ...common, finalMessage: input.loop.finalMessage, checkInboundFreshness: input.checkInboundFreshness });
     outcome = {
       attempted: r.attempted,
       dispatchKind: "responded",
@@ -127,7 +140,12 @@ export async function dispatchSalesAgentTerminalOutcome(input: DispatchSalesAgen
       // classification (per this task's own event contract), never the
       // fallback dispatch's own dispatched/duplicate/skip reason - that one
       // is preserved in `warnings` for full traceability.
-      const fb = await dispatchSalesAgentFallback({ ...common, terminalReason: "handoff" as SalesAgentFallbackTerminalReason, commercialNeed: input.commercialNeed });
+      const fb = await dispatchSalesAgentFallback({
+        ...common,
+        terminalReason: "handoff" as SalesAgentFallbackTerminalReason,
+        commercialNeed: input.commercialNeed,
+        checkInboundFreshness: input.checkInboundFreshness
+      });
       outcome = {
         attempted: fb.attempted,
         dispatchKind: "fallback",
@@ -142,7 +160,12 @@ export async function dispatchSalesAgentTerminalOutcome(input: DispatchSalesAgen
       };
     }
   } else {
-    const fb = await dispatchSalesAgentFallback({ ...common, terminalReason: input.loop.terminalReason, commercialNeed: input.commercialNeed });
+    const fb = await dispatchSalesAgentFallback({
+      ...common,
+      terminalReason: input.loop.terminalReason,
+      commercialNeed: input.commercialNeed,
+      checkInboundFreshness: input.checkInboundFreshness
+    });
     outcome = {
       attempted: fb.attempted,
       dispatchKind: "fallback",

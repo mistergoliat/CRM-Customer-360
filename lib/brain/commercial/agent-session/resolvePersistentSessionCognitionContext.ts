@@ -26,6 +26,16 @@ export type ResolvePersistentSessionCognitionContextInput = {
   enabled: boolean;
   conversationId: number;
   inboundMessageId: string | null;
+  /**
+   * SALES-AGENT-R3-V1.8.1. Extra conversation_message ids (beyond
+   * inboundMessageId itself) that belong to the current settled turn - set
+   * only by the turn-settlement worker when more than one raw WhatsApp
+   * fragment was aggregated into this turn's customerMessage. Excluded from
+   * historicalMessages alongside inboundMessageId so the aggregated text
+   * appears exactly once in the assembled provider messages, never once as
+   * history and again as the current turn (Section J).
+   */
+  additionalInboundMessageIds?: readonly string[] | null;
   /** Test/DI seam - defaults to the real, MariaDB-backed AgentSessionStore. */
   store?: AgentSessionStore;
 };
@@ -48,7 +58,8 @@ export async function resolvePersistentSessionCognitionContext(
       transcriptMessages: context.transcriptMessages,
       events: context.events,
       compactedPrefix: context.compactedPrefix,
-      currentInboundMessageId: input.inboundMessageId
+      currentInboundMessageId: input.inboundMessageId,
+      additionalExcludedMessageIds: input.additionalInboundMessageIds
     });
     return { active: true, historicalMessages: derived.historicalMessages, fallbackWarning: null };
   } catch (error) {

@@ -36,6 +36,8 @@ export type DispatchSalesAgentResponseInput = {
   humanOwnerActive: boolean;
   aiBlocked: boolean;
   finalMessage: string | null;
+  /** SALES-AGENT-R3-V1.8.1. Threaded straight through to dispatchGovernedSalesAgentMessage - see that type's own comment. */
+  checkInboundFreshness?: boolean;
 };
 
 export type DispatchSalesAgentResponseReason = SalesAgentRuntimeResponseDispatchReason;
@@ -93,7 +95,8 @@ export async function dispatchSalesAgentResponse(input: DispatchSalesAgentRespon
     inboundMessageId: input.inboundMessageId,
     currentTime: input.currentTime,
     humanOwnerActive: input.humanOwnerActive,
-    aiBlocked: input.aiBlocked
+    aiBlocked: input.aiBlocked,
+    checkInboundFreshness: input.checkInboundFreshness
   });
 
   const result: DispatchSalesAgentResponseResult = {

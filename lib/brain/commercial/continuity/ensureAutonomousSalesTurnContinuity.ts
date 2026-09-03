@@ -165,7 +165,17 @@ export async function ensureAutonomousSalesTurnContinuity(
     abortSignal: input.abortSignal,
     provider: input.provider,
     loadCustomer360: input.loadCustomer360,
-    customerSessionDependencies: input.customerSessionDependencies
+    customerSessionDependencies: input.customerSessionDependencies,
+    additionalInboundMessageIds: input.additionalInboundMessageIds,
+    checkInboundFreshnessBeforeDispatch: input.checkInboundFreshnessBeforeDispatch,
+    // Pre-existing gap, closed incidentally by this task: NativeAutonomousCycleInput
+    // already declares this DI seam (used by the R3/agent-tool-loop branches'
+    // real HTTP provider fallback), but this boundary never forwarded it, so
+    // no test could reach it through ensureAutonomousSalesTurnContinuity
+    // without also re-implementing this function's own continuity/
+    // disposition logic. Purely additive - undefined for every existing
+    // caller, identical to today.
+    agentLoopProvider: input.agentLoopProvider
   });
   const inboundMessageId = inboundMessageIdOf(input);
 
