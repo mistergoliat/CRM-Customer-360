@@ -1,12 +1,18 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test, { after } from "node:test";
-import { getPool, safeQueryRows } from "@/lib/db";
+import { getPool, queryRows, safeExecute, safeQueryRows } from "@/lib/db";
 import { processNativeWhatsAppInbound } from "@/lib/brain/native-whatsapp";
 import { upsertPendingTurn, runTurnSettleTick, claimPendingTurn } from "@/lib/brain/commercial/turn-settlement";
 import type { TurnSettlementRow } from "@/lib/brain/commercial/turn-settlement/types";
 import type { AgentLoopProvider, AgentLoopProviderRequest } from "@/lib/brain/commercial/agent-loop/agentLoopProviderTypes";
 import type { MetaTypingIndicatorRequest, MetaTypingIndicatorResponse } from "@/lib/brain/messaging/metaClient";
+import type { EnsureAutonomousSalesTurnContinuityInput, EnsureAutonomousSalesTurnContinuityResult } from "@/lib/brain/commercial/continuity/ensureAutonomousSalesTurnContinuity";
+import { createQuoteCapability } from "@/lib/brain/commercial/capability-gateway/createQuoteCapability";
+import { setCommercialLineItemsForOpportunity } from "@/lib/domains/commercial-line-items";
+import { getActiveCreatedQuoteForOpportunity } from "@/lib/domains/created-quote";
+import type { QuoteServicePort, QuoteServiceQuote, QuoteServiceResult } from "@/lib/domains/quote-service";
+import type { CatalogBatchItemInput, CatalogBatchItemResult, CatalogPort, CatalogProduct } from "@/lib/catalog";
 
 /**
  * SALES-AGENT-R3-V1.8.1. Real MariaDB (crm_test), fake LLM provider (no real
@@ -196,6 +202,173 @@ test("[T1/G1/G17] delay=0 (default) never creates a pending-turn row - cognition
 
   const rows = await safeQueryRows<TurnSettlementRow>("SELECT * FROM crm_inbound_turn_settlements WHERE wa_id = ?", [conversation.waId]);
   assert.equal(rows.ok && rows.rows.length, 0, "delay=0 must never allocate a pending-turn row (Section D rollback path)");
+});
+
+function freshWaId(): string {
+  // Digits-only (normalizeWhatsAppRecipientDigits rejects anything else) and
+  // never truncated below its random suffix - slicing the FIRST 15 chars of
+  // "5699" + Date.now() (13 digits) + a 0-999 suffix drops the suffix
+  // entirely and collapses the timestamp to ~100ms resolution, which
+  // collided for real between tests calling this back-to-back in the same
+  // run. Building it to fit within 15 chars up front keeps full entropy.
+  return `5699${String(Date.now()).slice(-8)}${Math.floor(Math.random() * 1000)}`;
+}
+
+const SETTLE_ENABLED_ENV = { BRAIN_R3_INBOUND_TURN_SETTLE_DELAY_MS: "1800", BRAIN_R3_INBOUND_TURN_SETTLE_MAX_MS: "5000" };
+
+async function countConversationMessages(providerMessageId: string): Promise<number> {
+  const result = await safeQueryRows<{ total: number }>(
+    "SELECT COUNT(*) AS total FROM conversation_message WHERE provider = 'meta' AND provider_message_id = ?",
+    [providerMessageId]
+  );
+  return result.ok ? Number(result.rows[0]?.total ?? 0) : -1;
+}
+
+async function countTurnSettlementRows(waId: string): Promise<number> {
+  const result = await safeQueryRows<{ total: number }>("SELECT COUNT(*) AS total FROM crm_inbound_turn_settlements WHERE wa_id = ?", [waId]);
+  return result.ok ? Number(result.rows[0]?.total ?? 0) : -1;
+}
+
+/**
+ * crm_test is a shared, never-reset database across the whole test run -
+ * runTurnSettleTick sweeps every DUE PENDING row in the table, not just the
+ * one the calling test cares about. Tests that assert against a PENDING row
+ * without ever consuming it via the worker (T2, T5/T6 below) must neutralize
+ * it once done, or a LATER test's own runTurnSettleTick call (often with a
+ * provider/ensureContinuity scoped to ITS OWN conversation) would pick this
+ * leftover row up too and run cognition against it unexpectedly.
+ */
+async function neutralizePendingTurn(waId: string): Promise<void> {
+  await getPool().execute("UPDATE crm_inbound_turn_settlements SET status = 'COMPLETED' WHERE wa_id = ? AND status = 'PENDING'", [waId]);
+}
+
+test("[T2/G1] settling enabled: canonical inbound + pending-turn creation commit atomically in the SAME transaction", async () => {
+  const waId = freshWaId();
+  const providerMessageId = `wamid.${randomUUID()}`;
+
+  await withEnv(SETTLE_ENABLED_ENV, async () => {
+    const result = await processNativeWhatsAppInbound({
+      providerMessageId,
+      phoneNumberId: "phone-turnsettle-e2e",
+      externalSenderId: waId,
+      senderPhone: waId,
+      senderName: "Cliente Atomic",
+      messageType: "text",
+      text: "hola atomic",
+      occurredAt: new Date().toISOString(),
+      rawPayload: {}
+    });
+    assert.equal(result.duplicate, false);
+  });
+
+  assert.equal(await countConversationMessages(providerMessageId), 1);
+  assert.equal(await countTurnSettlementRows(waId), 1, "the settlement row must exist in the same commit as the canonical inbound persist");
+  const turnRows = await safeQueryRows<TurnSettlementRow>("SELECT * FROM crm_inbound_turn_settlements WHERE wa_id = ?", [waId]);
+  assert.equal(turnRows.ok && turnRows.rows[0]?.status, "PENDING");
+
+  await neutralizePendingTurn(waId);
+});
+
+test("[T3/D] a failure between the inbound insert and the settlement upsert rolls back BOTH - no orphaned inbound", async () => {
+  const waId = freshWaId();
+  const providerMessageId = `wamid.${randomUUID()}`;
+
+  await withEnv(SETTLE_ENABLED_ENV, async () => {
+    await assert.rejects(
+      processNativeWhatsAppInbound(
+        {
+          providerMessageId,
+          phoneNumberId: "phone-turnsettle-e2e",
+          externalSenderId: waId,
+          senderPhone: waId,
+          senderName: "Cliente Crash",
+          messageType: "text",
+          text: "hola crash",
+          occurredAt: new Date().toISOString(),
+          rawPayload: {}
+        },
+        { upsertPendingTurnFn: async () => ({ ok: false, error: "simulated_crash_window" }) }
+      ),
+      /simulated_crash_window/
+    );
+  });
+
+  assert.equal(await countConversationMessages(providerMessageId), 0, "the canonical inbound must never be committed without durable settlement ownership (invariant I1)");
+  assert.equal(await countTurnSettlementRows(waId), 0);
+});
+
+test("[T4] duplicate webhook retry after a rolled-back attempt succeeds idempotently - exactly one canonical inbound, never treated as a duplicate of a half-committed row", async () => {
+  const waId = freshWaId();
+  const providerMessageId = `wamid.${randomUUID()}`;
+  const inboundPayload = {
+    providerMessageId,
+    phoneNumberId: "phone-turnsettle-e2e",
+    externalSenderId: waId,
+    senderPhone: waId,
+    senderName: "Cliente Retry",
+    messageType: "text",
+    text: "hola retry",
+    occurredAt: new Date().toISOString(),
+    rawPayload: {}
+  };
+
+  await withEnv(SETTLE_ENABLED_ENV, async () => {
+    await assert.rejects(
+      processNativeWhatsAppInbound(inboundPayload, { upsertPendingTurnFn: async () => ({ ok: false, error: "simulated_crash_window" }) }),
+      /simulated_crash_window/
+    );
+
+    const retried = await processNativeWhatsAppInbound(inboundPayload);
+    assert.equal(retried.duplicate, false, "the rolled-back attempt left no canonical row, so Meta's real retry of the same delivery must not be treated as a duplicate");
+  });
+
+  assert.equal(await countConversationMessages(providerMessageId), 1, "exactly one canonical inbound must exist after the retry, never two, never zero");
+  assert.equal(await countTurnSettlementRows(waId), 1);
+});
+
+test("[T5/T6/G4] two near-simultaneous fragments, through the real webhook path with the settlement write inside the inbound transaction, still converge to exactly one PENDING turn with the correct fragment count - no deadlock, no uniqueness regression", async () => {
+  const waId = freshWaId();
+  const first = `wamid.${randomUUID()}`;
+  const second = `wamid.${randomUUID()}`;
+
+  await withEnv(SETTLE_ENABLED_ENV, async () => {
+    const [resultA, resultB] = await Promise.all([
+      processNativeWhatsAppInbound({
+        providerMessageId: first,
+        phoneNumberId: "phone-turnsettle-e2e",
+        externalSenderId: waId,
+        senderPhone: waId,
+        senderName: "Cliente Concurrente",
+        messageType: "text",
+        text: "hola",
+        occurredAt: new Date().toISOString(),
+        rawPayload: {}
+      }),
+      processNativeWhatsAppInbound({
+        providerMessageId: second,
+        phoneNumberId: "phone-turnsettle-e2e",
+        externalSenderId: waId,
+        senderPhone: waId,
+        senderName: "Cliente Concurrente",
+        messageType: "text",
+        text: "como estas",
+        occurredAt: new Date().toISOString(),
+        rawPayload: {}
+      })
+    ]);
+    assert.equal(resultA.duplicate, false);
+    assert.equal(resultB.duplicate, false);
+    assert.equal(resultA.conversationId, resultB.conversationId, "both fragments must resolve to the same conversation");
+  });
+
+  assert.equal(await countConversationMessages(first), 1);
+  assert.equal(await countConversationMessages(second), 1);
+
+  const pendingRows = await safeQueryRows<TurnSettlementRow>("SELECT * FROM crm_inbound_turn_settlements WHERE wa_id = ? AND status = 'PENDING'", [waId]);
+  assert.equal(pendingRows.ok && pendingRows.rows.length, 1, "exactly one active PENDING turn per conversation, even under a real concurrent webhook race");
+  assert.equal(pendingRows.rows[0]!.fragment_count, 2);
+
+  await neutralizePendingTurn(waId);
 });
 
 test("[T3/G2/G3] three rapid fragments settle into one cognitive execution with joined content, in order, canonical messages untouched", async () => {
@@ -462,4 +635,211 @@ test("[T7/S] a worker that crashes right after claiming (before cognition ever r
   assert.equal(turnRow.status, "COMPLETED");
   const outboxCount = await outboxRowCountForWaId(conversation.waId);
   assert.equal(outboxCount, 1, "exactly one response must be dispatched for the recovered turn - never zero, never two");
+});
+
+/**
+ * SALES-AGENT-R3-V1.8.1a (Fix 2 / Section K/T8). Real create_quote capability
+ * (real assembleQuoteInput, real commercial_line_items/created_quote
+ * crm_request_facts rows) driven twice through the SAME durable
+ * turn-settlement crash/stale-reclaim mechanics [T7] already proves at the
+ * repository level - only the external Quote Service HTTP call is faked
+ * (same injection seam tests/commercial/createQuoteCapability.test.ts uses).
+ * Proves G6 end to end: the capability's own durable idempotency key
+ * (opportunityId + commercial_line_items.factId, both re-read fresh from
+ * durable state on every attempt - never a per-attempt random id) survives a
+ * real crash-before-completeTurn + stale-processing reclaim.
+ */
+async function seedQuoteCustomer(): Promise<number> {
+  const email = `v1-8-1a-${randomUUID()}@example.com`;
+  await queryRows("INSERT INTO master_customer (firstname, lastname, email, platform_origin) VALUES ('Jane', 'Doe', ?, 'hub')", [email]);
+  const rows = await queryRows<{ id: number }>("SELECT id FROM master_customer WHERE email = ? LIMIT 1", [email]);
+  return Number(rows[0].id);
+}
+
+async function seedQuoteOpportunity(waId: string, customerMasterId: number): Promise<number> {
+  const key = `v1-8-1a-mutation-reclaim-${randomUUID()}`;
+  await safeExecute(
+    `INSERT INTO crm_opportunities (opportunity_key, requirements_json, missing_requirements_json, product_interests_json, objections_json, signals_json, customer_master_id, wa_id)
+     VALUES (?, '{}', '[]', '[]', '[]', '[]', ?, ?)`,
+    [key, String(customerMasterId), waId]
+  );
+  const rows = await queryRows<{ id: number }>("SELECT id FROM crm_opportunities WHERE opportunity_key = ? LIMIT 1", [key]);
+  return rows[0].id;
+}
+
+function fakeQuoteProduct(): CatalogProduct {
+  return {
+    productId: "545",
+    name: "Barra Olimpica 20kg",
+    sku: "BAR-OLY-20",
+    shortDescription: null,
+    longDescription: null,
+    active: true,
+    selectedVariant: null,
+    variants: [],
+    price: { amount: 99990, currency: "CLP", taxIncluded: true, taxRate: 0.19, discountApplied: false },
+    availability: "in_stock",
+    stockQuantity: 5,
+    weightKg: 20,
+    provenance: { source: "catalog_service_http", retrievedAt: "2026-08-15T00:00:00.000Z", cached: false }
+  };
+}
+
+function fakeQuoteCatalogPort(): CatalogPort {
+  return {
+    async searchProducts() { throw new Error("not used"); },
+    async getProductDetails() { throw new Error("not used"); },
+    async batchGetProducts(input: { items: CatalogBatchItemInput[] }) {
+      return {
+        ok: true,
+        value: {
+          items: input.items.map((item): CatalogBatchItemResult => ({ ok: true, input: item, product: fakeQuoteProduct() })),
+          provenance: { source: "catalog_service_http", retrievedAt: "2026-08-15T00:00:00.000Z", cached: false }
+        }
+      };
+    },
+    async exploreCatalog() { throw new Error("not used"); },
+    async resolveProductIntent() { throw new Error("not used"); }
+  };
+}
+
+function fakeCreatedQuote(): QuoteServiceQuote {
+  return {
+    quoteId: "quote-v1-8-1a-1",
+    quoteNumber: "Q-V181A-0001",
+    opportunityId: "1",
+    customerId: "1",
+    conversationId: null,
+    actor: { type: "sales_agent", id: "native_agent_tool_loop" },
+    source: { system: "crm_customer_360", correlationId: null },
+    status: "draft",
+    currency: "CLP",
+    customerSnapshot: { name: "Jane Doe", businessName: null, email: "jane@example.com", phone: null, address: null, district: null, region: null },
+    items: [],
+    pricing: { subtotal: "99990", taxAmount: "18998", total: "118988" },
+    validUntil: "2026-08-20T00:00:00.000Z",
+    version: 1,
+    revision: { rootId: "quote-v1-8-1a-1", previousRevisionId: null, supersedesQuoteId: null, supersededByQuoteId: null },
+    issuedDocument: { available: false, contentHash: null, renderVersion: null, generatedAt: null, pdf: { documentRef: null, sha256: null }, html: { documentRef: null, sha256: null } },
+    timestamps: { createdAt: "2026-08-15T00:00:00.000Z", updatedAt: "2026-08-15T00:00:00.000Z", issuedAt: null, acceptedAt: null, paidAt: null, cancelledAt: null, expiredAt: null }
+  };
+}
+
+function unusedQuoteServicePortMethod(): never {
+  throw new Error("not used");
+}
+
+test("[T8/K/G6] mutation completes then the worker crashes before completeTurn() - stale reclaim resumes cognition but the mutation exists exactly once", async () => {
+  const conversation = await insertConversation();
+  const providerMessageId = `wamid.${randomUUID()}`;
+  const messageId = await insertInboundMessage(conversation.id, "cotizame la barra de 20kg", providerMessageId);
+  await settleFragments({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-e2e",
+    fragments: [{ messageId, providerMessageId }]
+  });
+
+  const customerMasterId = await seedQuoteCustomer();
+  const opportunityId = await seedQuoteOpportunity(conversation.waId, customerMasterId);
+  const lineItems = await setCommercialLineItemsForOpportunity({ opportunityId, items: [{ productId: "545", combinationId: null, quantity: 2 }] });
+  assert.equal(lineItems.ok, true);
+
+  let quoteServiceCallCount = 0;
+  const port: QuoteServicePort = {
+    async createQuote(): Promise<QuoteServiceResult<QuoteServiceQuote>> {
+      quoteServiceCallCount += 1;
+      return { ok: true, value: fakeCreatedQuote() };
+    },
+    updateDraft: unusedQuoteServicePortMethod,
+    issueQuote: unusedQuoteServicePortMethod,
+    sendQuoteEmail: unusedQuoteServicePortMethod,
+    getQuote: unusedQuoteServicePortMethod,
+    getQuoteByNumber: unusedQuoteServicePortMethod,
+    getQuoteDelivery: unusedQuoteServicePortMethod,
+    listQuoteDeliveries: unusedQuoteServicePortMethod
+  };
+  const capability = createQuoteCapability(
+    () => port,
+    () => ({ getCatalogPort: () => fakeQuoteCatalogPort(), now: () => new Date("2026-08-15T00:00:00.000Z") })
+  );
+
+  const harmlessCompletedResult: EnsureAutonomousSalesTurnContinuityResult = {
+    cycle: { ran: true, shadow: null, loop: null, bridge: null, warnings: [] },
+    disposition: {
+      terminalOutcome: "no_response_required",
+      commercialObjective: "none",
+      responseOwner: "none",
+      responsePlanned: false,
+      opportunityAdvanced: false,
+      nextBestActionDefined: false,
+      fallbackUsed: false,
+      followUpEligible: false,
+      followUpReason: null,
+      acknowledgementSender: null,
+      waitingFor: "none",
+      handoffCreated: false
+    }
+  };
+
+  let attempt = 0;
+  const ensureContinuityWithMutation = async (input: EnsureAutonomousSalesTurnContinuityInput): Promise<EnsureAutonomousSalesTurnContinuityResult> => {
+    if (input.conversationId !== conversation.id) {
+      // crm_test is a shared, never-reset database across the whole test
+      // run - runTurnSettleTick sweeps every due/stale row in the table, not
+      // just this test's own. A leftover row from an unrelated
+      // test/conversation must be let through harmlessly here, never touch
+      // this test's own attempt counter or mutation assertions.
+      return harmlessCompletedResult;
+    }
+    attempt += 1;
+    const outcome = await capability.execute({}, { correlationId: input.correlationId, opportunityId, conversationId: input.conversationId });
+    assert.equal(outcome.status, "completed", `attempt ${attempt} must complete the mutation`);
+    const outcomeStatus = (outcome.data as { status?: string } | null)?.status;
+    assert.ok(outcomeStatus === "created" || outcomeStatus === "reused", `attempt ${attempt} must actually create or reuse the quote, got status=${outcomeStatus}`);
+
+    if (attempt === 1) {
+      // Simulates the worker process dying AFTER the mutation durably
+      // completed (setCreatedQuoteForOpportunity already persisted the
+      // created-quote fact) but BEFORE processClaimedTurn ever reaches
+      // completeTurn() - the row is never marked terminal by this attempt.
+      throw new Error("simulated_crash_after_mutation_before_complete_turn");
+    }
+
+    return {
+      cycle: { ran: true, shadow: null, loop: null, bridge: null, warnings: [] },
+      disposition: {
+        terminalOutcome: "commercial_response_planned",
+        commercialObjective: "prepare_quote",
+        responseOwner: "ai",
+        responsePlanned: false,
+        opportunityAdvanced: true,
+        nextBestActionDefined: true,
+        fallbackUsed: false,
+        followUpEligible: false,
+        followUpReason: null,
+        acknowledgementSender: null,
+        waitingFor: "none",
+        handoffCreated: false
+      }
+    };
+  };
+
+  await runTurnSettleTick({ ensureContinuity: ensureContinuityWithMutation });
+
+  const preReclaimRow = await loadTurnRow(conversation.id);
+  assert.equal(preReclaimRow.status, "PROCESSING", "the crashed attempt must leave the row PROCESSING, never terminal");
+  await getPool().execute("UPDATE crm_inbound_turn_settlements SET updated_at = DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 999 SECOND) WHERE id = ?", [preReclaimRow.id]);
+
+  await runTurnSettleTick({ ensureContinuity: ensureContinuityWithMutation });
+
+  assert.equal(attempt, 2, "cognition must be re-attempted exactly once after the stale-processing reclaim");
+  assert.equal(quoteServiceCallCount, 1, "the external Quote Service must be called exactly once across both attempts - the reclaimed attempt reuses the durable quote (opportunityId + commercial_line_items.factId unchanged), never duplicates it");
+
+  const persistedQuote = await getActiveCreatedQuoteForOpportunity(opportunityId);
+  assert.ok(persistedQuote, "the quote created by the first (crashed) attempt must remain durable");
+  assert.equal(persistedQuote!.quoteId, "quote-v1-8-1a-1");
+
+  const turnRow = await loadTurnRow(conversation.id);
+  assert.equal(turnRow.status, "COMPLETED", "the settlement must eventually reach a terminal state despite the crash");
 });

@@ -180,6 +180,8 @@ type NativeActionRow = {
 export type NativeWhatsAppProcessDependencies = {
   productRepository?: SalesConsultativeProductRepository;
   commercialEventRecorder?: typeof recordCommercialEvent;
+  /** Test-only injection point (SALES-AGENT-R3-V1.8.1a) - same seam shape as commercialEventRecorder, used to deterministically prove the crash-window rollback (Fix 1/T3). Production never sets this. */
+  upsertPendingTurnFn?: typeof upsertPendingTurn;
 };
 
 type NativeCustomerRow = {
@@ -1054,6 +1056,12 @@ export async function processNativeWhatsAppInbound(input: {
     resolvedCustomer = null;
   }
 
+  // SALES-AGENT-R3-V1.8.1a (Fix 1). Computed before the transaction so the
+  // in-transaction branch below and the post-commit branch (Section E) agree
+  // on the same decision - never re-read mid-request, same discipline as
+  // config.ts's own "read-only, never mutated" contract.
+  const turnSettlementConfig = loadTurnSettlementConfig();
+
   const result = await withTransaction(async (connection) => {
     const conversation = await createOrUpdateNativeConversation(
       {
@@ -1127,6 +1135,36 @@ export async function processNativeWhatsAppInbound(input: {
       connection
     );
 
+    // SALES-AGENT-R3-V1.8.1a (Fix 1 / invariant I1). When turn settling is
+    // enabled, durable processing responsibility for this inbound is created
+    // in the SAME transaction as the canonical persist above - a crash
+    // between the two used to be possible (a committed inbound with no
+    // settlement row ever created). A failure here throws, rolling back the
+    // whole transaction (Section D outcome A): the next webhook retry of the
+    // same providerMessageId finds no canonical row (the dedupe check at the
+    // top of this function never ran against a half-committed inbound) and
+    // safely repeats the whole persist+settle attempt. delay=0 (Section E,
+    // the rollback path) never enters this branch at all - no row, no wait,
+    // byte-for-byte the pre-V1.8.1a transaction shape.
+    if (turnSettlementConfig.settleDelayMs > 0) {
+      const upserted = await (dependencies.upsertPendingTurnFn ?? upsertPendingTurn)(
+        {
+          conversationId: conversation.id,
+          waId: normalizedExternalId,
+          phoneNumberId: input.phoneNumberId,
+          inboundMessageId: Number(appendResult.messageId),
+          providerMessageId: input.providerMessageId,
+          correlationId,
+          settleDelayMs: turnSettlementConfig.settleDelayMs,
+          maxSettleMs: turnSettlementConfig.maxSettleMs
+        },
+        connection
+      );
+      if (!upserted.ok) {
+        throw new Error(`inbound_turn_settlement_upsert_failed:${upserted.error}`);
+      }
+    }
+
     return {
       duplicate: false as const,
       correlationId,
@@ -1184,11 +1222,13 @@ export async function processNativeWhatsAppInbound(input: {
   // contextual fallback when a customer-facing response was owed but never
   // delivered, and persists a terminal disposition for every turn.
   if (!result.duplicate && result.conversationId && result.conversationPublicId) {
-    // SALES-AGENT-R3-V1.8.1. BRAIN_R3_INBOUND_TURN_SETTLE_DELAY_MS=0 (the
-    // default) takes this exact branch, unchanged from every prior release -
-    // the rollback path (Section D): no pending-turn row, no setTimeout, no
-    // aggregation, no extra wait between persistence and cognition.
-    const turnSettlementConfig = loadTurnSettlementConfig();
+    // SALES-AGENT-R3-V1.8.1/V1.8.1a. BRAIN_R3_INBOUND_TURN_SETTLE_DELAY_MS=0
+    // (the default) takes this exact branch, unchanged from every prior
+    // release - the rollback path (Section D): no pending-turn row, no
+    // setTimeout, no aggregation, no extra wait between persistence and
+    // cognition. When settling is enabled, durable processing responsibility
+    // was already created atomically inside the transaction above (Fix 1) -
+    // there is nothing left to do here; the turn-settle worker owns it now.
     if (turnSettlementConfig.settleDelayMs <= 0) {
       try {
         await ensureAutonomousSalesTurnContinuity({
@@ -1204,30 +1244,6 @@ export async function processNativeWhatsAppInbound(input: {
         });
       } catch (error) {
         console.error("native_autonomous_cycle_failed", error instanceof Error ? error.message : String(error));
-      }
-    } else {
-      // Debounce path: persist-then-acknowledge (Section T) - cognition runs
-      // later, out of this request, once the turn-settlement worker
-      // (scripts/autonomous-turn-settle-worker.ts) observes the quiet/max
-      // window has closed. A failure here only ever drops this fragment's
-      // ability to extend/open its own pending-turn row - the fragment
-      // itself is already durably persisted above regardless.
-      try {
-        const upserted = await upsertPendingTurn({
-          conversationId: result.conversationId,
-          waId: normalizedExternalId,
-          phoneNumberId: input.phoneNumberId,
-          inboundMessageId: Number(result.messageId),
-          providerMessageId: input.providerMessageId,
-          correlationId: result.correlationId,
-          settleDelayMs: turnSettlementConfig.settleDelayMs,
-          maxSettleMs: turnSettlementConfig.maxSettleMs
-        });
-        if (!upserted.ok) {
-          console.error("inbound_turn_settlement_upsert_failed", upserted.error);
-        }
-      } catch (error) {
-        console.error("inbound_turn_settlement_upsert_failed", error instanceof Error ? error.message : String(error));
       }
     }
   }

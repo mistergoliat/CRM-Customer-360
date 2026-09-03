@@ -4,6 +4,7 @@
 // for every CAS, never affectedRows off safeQueryRows (see
 // [[db-conventions-and-pitfalls]]).
 
+import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 import { getPool, safeExecute, safeQueryRows, sanitizeDbError } from "@/lib/db";
 import { TURN_SETTLE_STALE_PROCESSING_LOCK_SECONDS } from "./config";
 import type { TurnSettlementRow, UpsertPendingTurnInput, UpsertPendingTurnResult } from "./types";
@@ -12,9 +13,8 @@ function isDuplicateKeyError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ER_DUP_ENTRY";
 }
 
-async function tryExtendPendingTurn(input: UpsertPendingTurnInput): Promise<boolean> {
-  const result = await safeExecute(
-    `UPDATE crm_inbound_turn_settlements
+async function tryExtendPendingTurn(input: UpsertPendingTurnInput, connection?: PoolConnection): Promise<boolean> {
+  const sql = `UPDATE crm_inbound_turn_settlements
        SET latest_inbound_message_id = ?,
            latest_inbound_provider_message_id = ?,
            fragment_count = fragment_count + 1,
@@ -22,16 +22,18 @@ async function tryExtendPendingTurn(input: UpsertPendingTurnInput): Promise<bool
            settle_after = LEAST(DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ? MICROSECOND), max_settle_at),
            last_correlation_id = ?,
            updated_at = CURRENT_TIMESTAMP(3)
-     WHERE conversation_id = ? AND status = 'PENDING'`,
-    [input.inboundMessageId, input.providerMessageId, input.settleDelayMs * 1000, input.correlationId, input.conversationId]
-  );
+     WHERE conversation_id = ? AND status = 'PENDING'`;
+  const params = [input.inboundMessageId, input.providerMessageId, input.settleDelayMs * 1000, input.correlationId, input.conversationId];
+  if (connection) {
+    const [header] = await connection.execute<ResultSetHeader>(sql, params);
+    return header.affectedRows > 0;
+  }
+  const result = await safeExecute(sql, params);
   return result.ok && result.affectedRows > 0;
 }
 
-async function tryInsertPendingTurn(input: UpsertPendingTurnInput): Promise<"inserted" | "duplicate"> {
-  try {
-    await getPool().execute(
-      `INSERT INTO crm_inbound_turn_settlements
+async function tryInsertPendingTurn(input: UpsertPendingTurnInput, connection?: PoolConnection): Promise<"inserted" | "duplicate"> {
+  const sql = `INSERT INTO crm_inbound_turn_settlements
          (conversation_id, wa_id, phone_number_id, first_inbound_message_id, latest_inbound_message_id,
           latest_inbound_provider_message_id, fragment_count, first_inbound_at, last_inbound_at,
           settle_after, max_settle_at, status, last_correlation_id)
@@ -39,19 +41,24 @@ async function tryInsertPendingTurn(input: UpsertPendingTurnInput): Promise<"ins
          (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3),
           DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ? MICROSECOND),
           DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ? MICROSECOND),
-          'PENDING', ?)`,
-      [
-        input.conversationId,
-        input.waId,
-        input.phoneNumberId,
-        input.inboundMessageId,
-        input.inboundMessageId,
-        input.providerMessageId,
-        input.settleDelayMs * 1000,
-        input.maxSettleMs * 1000,
-        input.correlationId
-      ]
-    );
+          'PENDING', ?)`;
+  const params = [
+    input.conversationId,
+    input.waId,
+    input.phoneNumberId,
+    input.inboundMessageId,
+    input.inboundMessageId,
+    input.providerMessageId,
+    input.settleDelayMs * 1000,
+    input.maxSettleMs * 1000,
+    input.correlationId
+  ];
+  try {
+    if (connection) {
+      await connection.execute(sql, params);
+    } else {
+      await getPool().execute(sql, params);
+    }
     return "inserted";
   } catch (error) {
     if (isDuplicateKeyError(error)) return "duplicate";
@@ -66,12 +73,19 @@ async function tryInsertPendingTurn(input: UpsertPendingTurnInput): Promise<"ins
  * delivery for the same conversation can make either branch lose a single
  * race, never more than that, so 3 attempts is generous headroom, not a
  * magic number tuned to a specific timing.
+ *
+ * SALES-AGENT-R3-V1.8.1a (Fix 1). Accepts an optional transaction connection
+ * so the webhook can create/extend this row in the SAME transaction as the
+ * canonical inbound persist (lib/brain/native-whatsapp/service.ts) - a
+ * committed inbound must never exist without durable processing
+ * responsibility. Standalone callers (tests, and delay=0 which never calls
+ * this at all) keep using the pool directly by omitting the connection.
  */
-export async function upsertPendingTurn(input: UpsertPendingTurnInput): Promise<UpsertPendingTurnResult> {
+export async function upsertPendingTurn(input: UpsertPendingTurnInput, connection?: PoolConnection): Promise<UpsertPendingTurnResult> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (await tryExtendPendingTurn(input)) return { ok: true, created: false };
+    if (await tryExtendPendingTurn(input, connection)) return { ok: true, created: false };
     try {
-      const outcome = await tryInsertPendingTurn(input);
+      const outcome = await tryInsertPendingTurn(input, connection);
       if (outcome === "inserted") return { ok: true, created: true };
       // "duplicate": a concurrent request won the insert race between our
       // failed UPDATE and this INSERT - loop back and extend its row instead.
