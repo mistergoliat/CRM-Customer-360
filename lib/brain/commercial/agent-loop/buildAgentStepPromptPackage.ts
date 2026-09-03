@@ -7,6 +7,7 @@ import type { PendingCatalogActionStep } from "./agentStepTypes";
 import { renderSalesAgentIdentityPrompt } from "./renderSalesAgentIdentityPrompt";
 import { describeStockDisclosure } from "./stockDisclosurePolicy";
 import type { AgentStepValidationReasonCode } from "./validateAgentStep";
+import { CONVERSATION_CONTINUITY_UNKNOWN, type ConversationContinuitySignal } from "./conversationContinuity";
 
 /**
  * LLM-R1-T04. What went wrong on the immediately preceding provider call
@@ -96,6 +97,14 @@ export type AgentLoopPromptInput = {
    * message (D3's own placement), never re-ordered here.
    */
   persistentSessionHistoricalMessages?: AgentLoopProviderMessage[] | null;
+  /**
+   * SALES-AGENT-R3-V1.8.1b (Objetivo C). Purely descriptive, never a
+   * cognitive workflow flag - see conversationContinuity.ts's own header.
+   * `null`/absent (a caller that predates this task, or a test) falls back
+   * to CONVERSATION_CONTINUITY_UNKNOWN ("conversation already active") -
+   * the safer default when truly nothing is known.
+   */
+  conversationContinuity?: ConversationContinuitySignal | null;
 };
 
 const RESPOND_JSON_INSTRUCTION = "Return exactly one JSON object matching AgentStep, nothing else, no markdown fence.";
@@ -293,6 +302,25 @@ const COMMERCIAL_CLOSING_RULE_LINES = [
   'When your reply presents more than one concrete product, close with exactly: "¿Quieres que te envíe el link de alguno de estos productos?" - always this neutral phrasing, never an attempt at grammatical gender agreement with a specific product name.',
   "Never add this closing offer when: a public link was already delivered this turn; the customer explicitly asked for the link (handled by the rule below instead); no concrete product was identified; your reply is a clarifying question; a tool failed or was blocked; you are handing off; you still need to ask the customer for a precision before recommending; or your reply is not a commercial product presentation.",
   "When the customer explicitly asks for or accepts the link: use get_product_details for that product. If publicLink.available is true, deliver the real canonical URL from publicLink.canonicalUrl. If it is not available, tell the customer no public link is available for that product right now - never invent a URL. Either way, never ask again whether they want the link, and never turn that reply into another question."
+];
+
+/**
+ * SALES-AGENT-R3-V1.8.1b (Objetivo C). Governs tone/framing only - never
+ * overrides the evidence/tool-usage rules or the AgentStep contract above.
+ * The customer-facing symptom this fixes: the model re-greeting and
+ * recapping already-known context on every turn of an already-active
+ * conversation, even though the real transcript (persistentSessionHistoricalMessages,
+ * or the legacy recentMessages fallback) already gives it perfect memory -
+ * a prompt-instruction gap, not a memory gap. Deliberately no hardcoded
+ * example phrases; the model decides the actual wording.
+ */
+const CONVERSATION_CONTINUITY_RULE_LINES = [
+  "The user payload's conversationContinuity field states whether real prior conversational turns already exist for this customer - never infer this from the wording of the current message alone.",
+  "Use a greeting only when conversationContinuity.isFirstConversationalTurn is true.",
+  "When conversationContinuity.isFirstConversationalTurn is false, do not greet the customer again, do not restart the conversation, and do not recap what is already known merely to reopen it.",
+  "If the customer sends a short greeting while conversationContinuity.isFirstConversationalTurn is false, acknowledge naturally and continue the existing conversation instead of responding as if it were new.",
+  "Do not ask again for facts already available in commercialContext or in the conversation history above - continue directly from that established context.",
+  "These continuity rules govern tone and framing only - they never override the evidence and tool-usage rules or the AgentStep contract above."
 ];
 
 /**
@@ -525,6 +553,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...CALCULATE_SHIPPING_FINALIZATION_RULE_LINES,
       ...STOCK_DISCLOSURE_RULE_LINES,
       ...COMMERCIAL_CLOSING_RULE_LINES,
+      ...CONVERSATION_CONTINUITY_RULE_LINES,
       ...PENDING_CATALOG_ACTION_RULE_LINES,
       ...MULTI_INTENT_PLAN_RULE_LINES,
       "You must never claim to have executed anything yourself - the platform executes tools, not you."
@@ -559,6 +588,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...CALCULATE_SHIPPING_RULE_LINES,
     ...STOCK_DISCLOSURE_RULE_LINES,
     ...COMMERCIAL_CLOSING_RULE_LINES,
+    ...CONVERSATION_CONTINUITY_RULE_LINES,
     ...PENDING_CATALOG_ACTION_RULE_LINES,
     "You must never claim to have executed anything yourself - the platform executes tools, not you.",
     INVALID_ARGUMENTS_RECOVERY_RULE_LINE,
@@ -655,6 +685,7 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
       commercialContext: input.commercialContextSummary,
       recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
       ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {}),
+      conversationContinuity: input.conversationContinuity ?? CONVERSATION_CONTINUITY_UNKNOWN,
       priorStepsThisTurn: input.priorSteps.map(summarizeObservation),
       question: "What is the single next AgentStep?"
     };
@@ -673,6 +704,7 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
     commercialContext: input.commercialContextSummary,
     recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
     ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {}),
+    conversationContinuity: input.conversationContinuity ?? CONVERSATION_CONTINUITY_UNKNOWN,
     priorStepsThisTurn: input.priorSteps.map(summarizeObservation),
     question: "What is the single next AgentStep?"
   };
