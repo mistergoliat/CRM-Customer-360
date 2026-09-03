@@ -3,7 +3,14 @@
 // states only - never a cognitive/business vocabulary (no intent/topic/
 // nextStep here, see the migration's own header comment).
 
-export const TURN_SETTLEMENT_STATUSES = ["PENDING", "PROCESSING", "COMPLETED", "SUPERSEDED"] as const;
+/**
+ * SALES-AGENT-R3-V1.8.1b-A. "ASSIMILATED" added: a sibling row whose entire
+ * inbound range was folded into a DIFFERENT row's live cognitive run (never
+ * ran its own cognition, never had its content discarded/stale - see
+ * migration 036's own comment for why neither COMPLETED nor SUPERSEDED is a
+ * truthful reuse).
+ */
+export const TURN_SETTLEMENT_STATUSES = ["PENDING", "PROCESSING", "COMPLETED", "SUPERSEDED", "ASSIMILATED"] as const;
 export type TurnSettlementStatus = (typeof TURN_SETTLEMENT_STATUSES)[number];
 
 export type TurnSettlementRow = {

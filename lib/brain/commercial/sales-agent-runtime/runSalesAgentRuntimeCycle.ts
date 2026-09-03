@@ -100,6 +100,20 @@ export type RunSalesAgentRuntimeCycleInput = {
    * terminal dispatcher, never read anywhere else in this file.
    */
   checkInboundFreshnessBeforeDispatch?: boolean;
+  /** SALES-AGENT-R3-V1.8.1b-A (Objetivo A). Resolved by the caller from BRAIN_R3_LIVE_TURN_ASSIMILATION_ENABLED - threaded to runSalesAgentRuntime unchanged. */
+  liveTurnAssimilationEnabled?: boolean;
+  /** SALES-AGENT-R3-V1.8.1b-A. Threaded to runSalesAgentRuntime unchanged - see RunAgentToolLoopInput's own comment. */
+  refreshCommercialContextSummary?: () => Promise<Record<string, unknown>>;
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A. Set only by the turn-settlement worker
+   * (row.id) - the settlement row THIS turn's own cognitive run owns, so its
+   * own PROCESSING->COMPLETED transition and any sibling settlement
+   * reconciliation can commit atomically with the dispatch transaction that
+   * consumed them (dispatchGovernedSalesAgentMessage.ts). null for every
+   * caller that isn't the turn-settlement worker (e.g. delay=0 direct
+   * dispatch has no settlement row at all).
+   */
+  selfSettlementId?: number | null;
 };
 
 /**
@@ -146,7 +160,7 @@ export type SalesAgentRuntimeCycleResult = {
  * seam does not need to build. Everything below is already loaded, for
  * free, on `snapshot`.
  */
-function buildMinimalCommercialContextSummary(
+export function buildMinimalCommercialContextSummary(
   snapshot: CommercialContextSnapshot,
   inboundMessageId: string,
   customerMessage: string,
@@ -355,7 +369,9 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     sessionStore: input.sessionStore,
     persistentSessionShadowEnabled: input.persistentSessionShadowEnabled,
     persistentSessionCognitionEnabled: input.persistentSessionCognitionEnabled,
-    additionalInboundMessageIds: input.additionalInboundMessageIds
+    additionalInboundMessageIds: input.additionalInboundMessageIds,
+    liveTurnAssimilationEnabled: input.liveTurnAssimilationEnabled,
+    refreshCommercialContextSummary: input.refreshCommercialContextSummary
   });
 
   if (runtime.status === "blocked") {
@@ -381,6 +397,17 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     llmCalls: []
   };
 
+  // SALES-AGENT-R3-V1.8.1b-A (Objetivo A). Present only when live
+  // assimilation was actually eligible AND the loop resolved a real anchor
+  // this turn - absent (undefined) for every flag-off turn, keeping that
+  // path byte-identical (no new transactional work inside
+  // dispatchGovernedSalesAgentMessage.ts gets exercised at all when this is
+  // undefined, not merely a harmless no-op value).
+  const liveAssimilation =
+    input.liveTurnAssimilationEnabled && runtime.finalAssimilatedInboundMessageId !== null
+      ? { finalAssimilatedInboundMessageId: runtime.finalAssimilatedInboundMessageId, selfSettlementId: input.selfSettlementId ?? null }
+      : null;
+
   // SALES-AGENT-R3-V1.6. Every terminal reason routes through the single
   // R3-native terminal dispatcher - no more old R1 response dispatcher call
   // site, no crm_agent_actions/autonomy-sandbox/execution-gate reachable from
@@ -398,7 +425,8 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
       aiBlocked,
       loop,
       commercialNeed: buildCommercialNeed(input.snapshot),
-      checkInboundFreshness: input.checkInboundFreshnessBeforeDispatch
+      checkInboundFreshness: input.checkInboundFreshnessBeforeDispatch,
+      liveAssimilation
     })
   );
 
@@ -483,7 +511,15 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
       effectiveTimeoutMs: effectiveModelConfiguration.timeoutMs,
       effectiveMaxAgentStepsPerTurn: effectiveLoopConfiguration.maxAgentStepsPerTurn,
       effectiveMaxToolCallsPerTurn: effectiveLoopConfiguration.maxToolCallsPerTurn,
-      pendingCatalogAction: persistedPendingCatalogAction ?? undefined
+      pendingCatalogAction: persistedPendingCatalogAction ?? undefined,
+      liveTurnAssimilation: liveAssimilation
+        ? {
+            finalAssimilatedInboundMessageId: liveAssimilation.finalAssimilatedInboundMessageId,
+            assimilatedInboundCount: runtime.assimilatedInboundMessageIds.length,
+            assimilationCycleCount: runtime.assimilationCycleCount,
+            invalidatedCandidateCount: runtime.invalidatedCandidateCount
+          }
+        : undefined
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown";

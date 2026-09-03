@@ -49,6 +49,20 @@ export type DispatchSalesAgentTerminalOutcomeInput = {
    * the customer with an unexplained ownership change.
    */
   checkInboundFreshness?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A. Threaded into the "responded" and fallback
+   * branches below (same scoping as checkInboundFreshness, and for the same
+   * reason - see that field's own comment). Deliberately NOT threaded into
+   * the hard-handoff branch: that dispatcher never calls
+   * dispatchGovernedSalesAgentMessage at all (its own narrowly-scoped
+   * transaction, dispatchSalesAgentHardHandoff.ts) - a sibling settlement
+   * left PENDING after an eligible handoff already resolves safely (zero
+   * duplicate cognitive run, zero duplicate customer message) via the
+   * pre-existing human_owner_active governance gate the next time it is
+   * claimed, just with a less precise COMPLETED status instead of
+   * ASSIMILATED - documented, not a correctness gap.
+   */
+  liveAssimilation?: { finalAssimilatedInboundMessageId: number; selfSettlementId: number | null } | null;
 };
 
 export type DispatchSalesAgentTerminalOutcomeResult = {
@@ -106,7 +120,7 @@ export async function dispatchSalesAgentTerminalOutcome(input: DispatchSalesAgen
   let outcome: DispatchSalesAgentTerminalOutcomeResult;
 
   if (input.loop.terminalReason === "responded") {
-    const r = await dispatchSalesAgentResponse({ ...common, finalMessage: input.loop.finalMessage, checkInboundFreshness: input.checkInboundFreshness });
+    const r = await dispatchSalesAgentResponse({ ...common, finalMessage: input.loop.finalMessage, checkInboundFreshness: input.checkInboundFreshness, liveAssimilation: input.liveAssimilation });
     outcome = {
       attempted: r.attempted,
       dispatchKind: "responded",
@@ -144,7 +158,8 @@ export async function dispatchSalesAgentTerminalOutcome(input: DispatchSalesAgen
         ...common,
         terminalReason: "handoff" as SalesAgentFallbackTerminalReason,
         commercialNeed: input.commercialNeed,
-        checkInboundFreshness: input.checkInboundFreshness
+        checkInboundFreshness: input.checkInboundFreshness,
+        liveAssimilation: input.liveAssimilation
       });
       outcome = {
         attempted: fb.attempted,
@@ -164,7 +179,8 @@ export async function dispatchSalesAgentTerminalOutcome(input: DispatchSalesAgen
       ...common,
       terminalReason: input.loop.terminalReason,
       commercialNeed: input.commercialNeed,
-      checkInboundFreshness: input.checkInboundFreshness
+      checkInboundFreshness: input.checkInboundFreshness,
+      liveAssimilation: input.liveAssimilation
     });
     outcome = {
       attempted: fb.attempted,

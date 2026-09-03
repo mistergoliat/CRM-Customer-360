@@ -665,6 +665,56 @@ test("[D5-G1] owner-only gating: eligible turn sends the persistent-shaped reque
   assert.ok(!ineligibleMessages.some((m) => m.role === "assistant"), "no real assistant-role history on the legacy path");
 });
 
+test("[V1.8.1b-C9] first-turn greeting: a conversation with no real prior history reports isFirstConversationalTurn=true", async () => {
+  const conversationId = await ensureTestConversation();
+
+  const sink: AgentLoopProviderRequest[] = [];
+  const result = await runSalesAgentRuntime(
+    runtimeInput({
+      event: baseEvent({ conversationId, messageText: "hola" }),
+      provider: recordingProvider([{ type: "respond", message: "Hola! En que puedo ayudarte?" }], sink),
+      sessionStore: createInMemoryAgentSessionStore(),
+      persistentSessionCognitionEnabled: true
+    })
+  );
+  assert.equal(result.status, "responded");
+
+  const finalUserMessage = sink[0].messages[sink[0].messages.length - 1];
+  const payload = JSON.parse(finalUserMessage.content) as { conversationContinuity: { isFirstConversationalTurn: boolean; hasPriorAssistantMessages: boolean; hasPriorCustomerMessages: boolean } };
+  assert.deepEqual(payload.conversationContinuity, {
+    isFirstConversationalTurn: true,
+    hasPriorAssistantMessages: false,
+    hasPriorCustomerMessages: false
+  });
+});
+
+test("[V1.8.1b-C10] active conversation: real prior history reports isFirstConversationalTurn=false", async () => {
+  const conversationId = await ensureTestConversation();
+  const base = Date.parse("2026-08-31T09:00:00.000Z");
+  const iso = (offsetMs: number) => new Date(base + offsetMs).toISOString().slice(0, 23).replace("T", " ");
+  await insertTestMessage(conversationId, "inbound", "quiero una barra olimpica de 20kg", iso(0));
+  await insertTestMessage(conversationId, "outbound", "tenemos la barra olimpica 20kg", iso(1000));
+
+  const sink: AgentLoopProviderRequest[] = [];
+  const result = await runSalesAgentRuntime(
+    runtimeInput({
+      event: baseEvent({ conversationId, messageText: "hola" }),
+      provider: recordingProvider([{ type: "respond", message: "Hola. Seguiamos viendo opciones." }], sink),
+      sessionStore: createInMemoryAgentSessionStore(),
+      persistentSessionCognitionEnabled: true
+    })
+  );
+  assert.equal(result.status, "responded");
+
+  const finalUserMessage = sink[0].messages[sink[0].messages.length - 1];
+  const payload = JSON.parse(finalUserMessage.content) as { conversationContinuity: { isFirstConversationalTurn: boolean; hasPriorAssistantMessages: boolean; hasPriorCustomerMessages: boolean } };
+  assert.deepEqual(payload.conversationContinuity, {
+    isFirstConversationalTurn: false,
+    hasPriorAssistantMessages: true,
+    hasPriorCustomerMessages: true
+  });
+});
+
 test("[D5-V] observability: an eligible turn persists a real persistent_session_cognition_applied event (active) or (inactive+reason) on fallback", async () => {
   const conversationId = await ensureTestConversation();
   const base = Date.parse("2026-08-31T09:00:00.000Z");
@@ -837,7 +887,13 @@ test("the result exposes only structured, bounded fields - no chain-of-thought",
       "status",
       "toolCalls",
       "readToolCalls",
-      "warnings"
+      "warnings",
+      // SALES-AGENT-R3-V1.8.1b-A (Objetivo A). Observational only, mirrors
+      // AgentLoopResult's own fields - see runAgentToolLoop.ts's own comment.
+      "finalAssimilatedInboundMessageId",
+      "assimilatedInboundMessageIds",
+      "assimilationCycleCount",
+      "invalidatedCandidateCount"
     ].sort()
   );
 });

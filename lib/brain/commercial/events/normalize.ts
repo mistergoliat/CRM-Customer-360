@@ -659,6 +659,8 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
   pendingCatalogAction?: AgentToolLoopCompletedRecordedPayload["pendingCatalogAction"];
   /** LLM-R1-T02. Optional - see AgentToolLoopCompletedRecordedPayload#llmMetrics. */
   llmMetrics?: AgentToolLoopCompletedRecordedPayload["llmMetrics"];
+  /** SALES-AGENT-R3-V1.8.1b-A. Optional - see AgentToolLoopCompletedRecordedPayload#liveTurnAssimilation. */
+  liveTurnAssimilation?: AgentToolLoopCompletedRecordedPayload["liveTurnAssimilation"];
   correlationId?: string | null;
   customerId?: string | number | null;
   conversationId?: string | number | null;
@@ -689,7 +691,8 @@ export function normalizeAgentToolLoopCompletedCommercialEvent(input: {
     effectiveMaxToolCallsPerTurn: input.effectiveMaxToolCallsPerTurn,
     ...(input.providerFailure ? { providerFailure: input.providerFailure } : {}),
     ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {}),
-    ...(input.llmMetrics ? { llmMetrics: input.llmMetrics } : {})
+    ...(input.llmMetrics ? { llmMetrics: input.llmMetrics } : {}),
+    ...(input.liveTurnAssimilation ? { liveTurnAssimilation: input.liveTurnAssimilation } : {})
   };
   return buildBaseEvent({
     eventType: "agent_tool_loop_completed",

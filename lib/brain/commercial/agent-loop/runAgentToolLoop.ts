@@ -7,6 +7,9 @@ import { executeReadTool } from "../read-tool-request/executeReadTool";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfiguration } from "../sales-agent-configuration";
 import { buildAgentStepPromptPackage, type AgentLoopPriorAttemptFailure, type AgentLoopToolDescription } from "./buildAgentStepPromptPackage";
+import type { ConversationContinuitySignal } from "./conversationContinuity";
+import { checkForNewInbound as defaultCheckForNewInbound } from "../turn-settlement/checkForNewInbound";
+import type { CheckForNewInboundResult } from "../turn-settlement/checkForNewInbound";
 import { buildToolObservation } from "./buildToolObservation";
 import { validateAgentStep } from "./validateAgentStep";
 import type { AgentLoopProvider, AgentLoopProviderMessage } from "./agentLoopProviderTypes";
@@ -131,6 +134,42 @@ export type RunAgentToolLoopInput = {
    * assembly this triggers. `null`/absent is the exact legacy path.
    */
   persistentSessionHistoricalMessages?: AgentLoopProviderMessage[] | null;
+  /**
+   * SALES-AGENT-R3-V1.8.1b (Objetivo C). Resolved once per turn by the
+   * caller (salesAgentRuntime.ts) - purely descriptive, never re-derived
+   * here, passed through unchanged to every buildAgentStepPromptPackage
+   * call this turn (gathering and finalization alike), same discipline as
+   * persistentSessionHistoricalMessages above.
+   */
+  conversationContinuity?: ConversationContinuitySignal | null;
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A (Objetivo A - live turn assimilation). Resolved
+   * by the caller from BRAIN_R3_LIVE_TURN_ASSIMILATION_ENABLED - never read
+   * from process.env here, same discipline as every other flag threaded into
+   * this loop. Default false/absent: every safe-boundary check below is a
+   * pure no-op, byte-identical control flow to before this task.
+   */
+  liveTurnAssimilationEnabled?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A. DI seam - real default queries
+   * conversation_message for anything newer than the current assimilated
+   * anchor (turn-settlement/checkForNewInbound.ts, the open-ended sibling of
+   * assembleTurnFragments.ts's closed-range query). Pure durable-truth read:
+   * no semantic interpretation, no LLM, no state mutation.
+   */
+  checkForNewInbound?: (input: { conversationId: number; afterMessageId: number }) => Promise<CheckForNewInboundResult>;
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A. DI seam for re-deriving fresh commercial truth
+   * (opportunity/needProfile/shippingDestination/commercialLineItems/
+   * recentMessages) after a durable business mutation and/or new customer
+   * input - see buildNativeCommercialContext.ts, the existing pure re-
+   * callable loader this closure is expected to wrap at the caller
+   * (runNativeAutonomousCycle.ts). Absent means assimilation still folds in
+   * new customer text but never refreshes commercialContextSummary (a valid,
+   * degraded-but-safe configuration, e.g. for a caller with no snapshot
+   * loader available).
+   */
+  refreshCommercialContextSummary?: () => Promise<Record<string, unknown>>;
 };
 
 /**
@@ -661,7 +700,21 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   const warnings: string[] = [];
 
   if (!input.provider) {
-    return { ran: false, terminalReason: "provider_unavailable", steps: [], toolExecutionCount: 0, finalMessage: null, handoffReason: null, warnings: ["provider_unavailable"], finalPendingCatalogAction: null, llmCalls: [] };
+    return {
+      ran: false,
+      terminalReason: "provider_unavailable",
+      steps: [],
+      toolExecutionCount: 0,
+      finalMessage: null,
+      handoffReason: null,
+      warnings: ["provider_unavailable"],
+      finalPendingCatalogAction: null,
+      llmCalls: [],
+      finalAssimilatedInboundMessageId: null,
+      assimilatedInboundMessageIds: [],
+      assimilationCycleCount: 0,
+      invalidatedCandidateCount: 0
+    };
   }
 
   const toolDescriptions = buildToolDescriptions();
@@ -691,6 +744,66 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     input.pendingCatalogAction?.candidateProducts?.length ? input.pendingCatalogAction : null;
   let recommendationPendingActionConsumed = false;
 
+  // SALES-AGENT-R3-V1.8.1b-A (Objetivo A). Local, mutable turn state - never
+  // touches input.customerMessage/input.commercialContextSummary themselves
+  // (every buildAgentStepPromptPackage call below reads these locals
+  // instead). assimilatedAnchorId starts at the claim-time anchor
+  // (input.inboundMessageId) and only ever advances forward - never inferred
+  // from text, never moved backward.
+  let customerMessage = input.customerMessage;
+  let commercialContextSummary = input.commercialContextSummary;
+  let assimilatedAnchorId: number | null = (() => {
+    if (!input.inboundMessageId) return null;
+    const parsed = Number(input.inboundMessageId);
+    return Number.isFinite(parsed) ? parsed : null;
+  })();
+  const assimilatedInboundMessageIds: number[] = [];
+  let assimilationCycleCount = 0;
+  let invalidatedCandidateCount = 0;
+
+  /**
+   * Shared safe-boundary helper - the ONLY place that reads new durable
+   * inbound and folds it in. Guarded on liveTurnAssimilationEnabled +
+   * conversationId + a real anchor, so when the flag is off (or no
+   * conversationId/anchor exists) this is always a zero-cost no-op and every
+   * call site below behaves exactly as before this task (byte-identical
+   * control flow, Test P). Returns true only when it actually found and
+   * folded in new inbound - a plain "checked, found nothing" call never
+   * returns true and never refreshes commercial context (no wasted re-fetch
+   * for a no-op check).
+   */
+  async function tryAssimilate(): Promise<boolean> {
+    if (!input.liveTurnAssimilationEnabled) return false;
+    if (!input.conversationId || assimilatedAnchorId === null) return false;
+
+    const checkFn = input.checkForNewInbound ?? defaultCheckForNewInbound;
+    const found = await checkFn({ conversationId: input.conversationId, afterMessageId: assimilatedAnchorId });
+    if (found.fragments.length === 0 || found.latestMessageId === null) return false;
+
+    // SALES-AGENT-R3-V1.8.1b-A (design decision 2). Identical join formula
+    // assembleTurnFragments.ts already uses for the initial turn's own
+    // fragment aggregation - reused, never a second convention. Because
+    // afterMessageId always equals the current assimilatedAnchorId and the
+    // anchor only ever advances, this incremental join is mathematically
+    // equivalent to one big assembleTurnFragments(originalFirst, finalAnchor)
+    // re-query - deterministic, no drift, no double-count.
+    const newText = found.fragments.map((fragment) => fragment.body.trim()).filter((body) => body.length > 0);
+    customerMessage = [customerMessage, ...newText].filter((part) => part.length > 0).join("\n");
+    assimilatedAnchorId = found.latestMessageId;
+    assimilatedInboundMessageIds.push(...found.fragments.map((fragment) => fragment.id));
+    assimilationCycleCount += 1;
+
+    if (input.refreshCommercialContextSummary) {
+      try {
+        commercialContextSummary = await input.refreshCommercialContextSummary();
+      } catch (error) {
+        warnings.push(`agent_loop_commercial_context_refresh_failed:${error instanceof Error ? error.message : "unknown"}`);
+      }
+    }
+
+    return true;
+  }
+
   const finalize = (terminalReason: AgentLoopTerminalReason, providerFailure?: AgentLoopProviderFailure | null): AgentLoopResult => ({
     ran: true,
     terminalReason,
@@ -701,7 +814,11 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     warnings,
     providerFailure: providerFailure ?? null,
     finalPendingCatalogAction: null,
-    llmCalls
+    llmCalls,
+    finalAssimilatedInboundMessageId: assimilatedAnchorId,
+    assimilatedInboundMessageIds,
+    assimilationCycleCount,
+    invalidatedCandidateCount
   });
 
   // ACS-R1-05.1-T02.7. Observability only - functional continuity comes
@@ -776,8 +893,39 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     }
     const finalPendingCatalogAction = modelPendingCatalogAction ?? recommendationPendingCatalogAction;
 
-    return { ran: true, terminalReason: "responded", steps, toolExecutionCount, finalMessage, handoffReason: null, warnings, finalPendingCatalogAction, llmCalls };
+    return {
+      ran: true,
+      terminalReason: "responded",
+      steps,
+      toolExecutionCount,
+      finalMessage,
+      handoffReason: null,
+      warnings,
+      finalPendingCatalogAction,
+      llmCalls,
+      finalAssimilatedInboundMessageId: assimilatedAnchorId,
+      assimilatedInboundMessageIds,
+      assimilationCycleCount,
+      invalidatedCandidateCount
+    };
   };
+
+  /** Same shape both phases' handoff branches return - kept as one closure so the new observational fields can never drift out of sync between them. */
+  const handoffResult = (reason: string): AgentLoopResult => ({
+    ran: true,
+    terminalReason: "handoff",
+    steps,
+    toolExecutionCount,
+    finalMessage: null,
+    handoffReason: reason,
+    warnings,
+    finalPendingCatalogAction: null,
+    llmCalls,
+    finalAssimilatedInboundMessageId: assimilatedAnchorId,
+    assimilatedInboundMessageIds,
+    assimilationCycleCount,
+    invalidatedCandidateCount
+  });
 
   // ---- Phase 1: gathering ----
   let decisionIndex = 0;
@@ -813,8 +961,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
 
     const promptPackage = buildAgentStepPromptPackage({
       currentTime: input.currentTime,
-      customerMessage: input.customerMessage,
-      commercialContextSummary: input.commercialContextSummary,
+      customerMessage,
+      commercialContextSummary,
       recentCatalogContext: input.recentCatalogContext ?? null,
       pendingCatalogAction: input.pendingCatalogAction ?? null,
       availableTools: toolDescriptions,
@@ -823,7 +971,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       phase: "gathering",
       identityConfiguration,
       priorAttemptFailure: gatheringPendingRepairSignal,
-      persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null
+      persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null,
+      conversationContinuity: input.conversationContinuity ?? null
     });
     // LLM-R1-T04. Consumed immediately - this exact signal is for this one
     // call only, never for whatever call happens next.
@@ -887,6 +1036,21 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
 
     const step = validation.step;
 
+    // SALES-AGENT-R3-V1.8.1b-A (Objetivo A, Boundary 1 - universal pre-action
+    // gate). Checked BEFORE any consequence of this step, for every step
+    // type alike - a mutating tool call can be based on stale intent even
+    // though it hasn't executed yet, so checking only after a tool returns
+    // (Boundary 2 below) is too late for that class of staleness. A discard
+    // here never pushes the step, never executes a tool, never returns a
+    // candidate as terminal, and never consumes decisionIndex/tool budget -
+    // it re-enters this same while loop with fresh customerMessage/
+    // commercialContextSummary, bounded only by the deadline check at the
+    // top of this loop (design decision 3 - no arbitrary round cap).
+    if (await tryAssimilate()) {
+      invalidatedCandidateCount += 1;
+      continue;
+    }
+
     if (step.type === "respond") {
       steps.push({ stepIndex: decisionIndex, step, governance: null, observation: null, phase: "gathering" });
       return respondedResult(step);
@@ -894,11 +1058,11 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
 
     if (step.type === "handoff") {
       steps.push({ stepIndex: decisionIndex, step, governance: null, observation: null, phase: "gathering" });
-      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings, finalPendingCatalogAction: null, llmCalls };
+      return handoffResult(step.reason);
     }
 
     const toolObservationsThisTurn = steps.map((record) => record.observation).filter((observation): observation is ToolObservation => observation !== null);
-    const result = await processUseToolStep(step, input.commercialContextSummary, executedCalls, gatewayContext, warnings, input.inboundMessageId ?? null, input.currentTime, ensureOpportunity, {
+    const result = await processUseToolStep(step, commercialContextSummary, executedCalls, gatewayContext, warnings, input.inboundMessageId ?? null, input.currentTime, ensureOpportunity, {
       recentCatalogContext: input.recentCatalogContext ?? null,
       toolObservationsThisTurn,
       activeRecommendationPendingAction: recommendationPendingActionConsumed ? null : activeRecommendationPendingAction
@@ -961,6 +1125,16 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       }
     }
 
+    // SALES-AGENT-R3-V1.8.1b-A (Objetivo A, Boundary 2 - post-tool). A
+    // genuinely different race window from Boundary 1 above: the customer
+    // may send a new message WHILE this tool's own HTTP/DB call was in
+    // flight (not before it started). The tool's own result stays as real
+    // evidence in `steps` either way - never erased - the next inference
+    // simply also sees whatever new customer input arrived meanwhile.
+    // Ignoring the return value on purpose: nothing to invalidate here, this
+    // step already executed and is already durable/pushed.
+    await tryAssimilate();
+
     decisionIndex += 1;
     // LLM-R1-T02. A new decision slot starts at attempt 0 again.
     gatheringAttemptIndex = 0;
@@ -975,7 +1149,20 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
    * the top of the very next attempt, never surviving past it.
    */
   let finalizationPendingRepairSignal: AgentLoopPriorAttemptFailure | null = null;
-  for (let attempt = 0; attempt < FINALIZATION_MAX_ATTEMPTS; attempt += 1) {
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A (design decision 3). Split from the loop's own
+   * exit condition - genuine format/structural repair retries (invalid
+   * AgentStep, invalid_response) stay capped at FINALIZATION_MAX_ATTEMPTS via
+   * this counter, exactly as before this task; a staleness discard
+   * (tryAssimilate() below) never increments it and never counts against
+   * this budget, since new customer input is not a format failure. The loop
+   * itself is now bounded only by the deadline check below (same discipline
+   * gathering already used) - never an assimilation round cap.
+   */
+  let formatRepairAttempt = 0;
+  /** Observability only - how many real provider calls finalization has made so far, never bounded, never reset. Distinct from formatRepairAttempt (the actual retry budget). */
+  let finalizationCallIndex = 0;
+  while (true) {
     if (Date.now() > deadline) {
       warnings.push("agent_loop_timeout");
       return finalize("timeout");
@@ -983,8 +1170,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
 
     const promptPackage = buildAgentStepPromptPackage({
       currentTime: input.currentTime,
-      customerMessage: input.customerMessage,
-      commercialContextSummary: input.commercialContextSummary,
+      customerMessage,
+      commercialContextSummary,
       recentCatalogContext: input.recentCatalogContext ?? null,
       pendingCatalogAction: input.pendingCatalogAction ?? null,
       availableTools: [],
@@ -993,20 +1180,24 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       phase: "finalization",
       identityConfiguration,
       priorAttemptFailure: finalizationPendingRepairSignal,
-      persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null
+      persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null,
+      conversationContinuity: input.conversationContinuity ?? null
     });
     // LLM-R1-T04. Consumed immediately - see the matching comment in gathering above.
     finalizationPendingRepairSignal = null;
 
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);
+    const finalizationAttempt = finalizationCallIndex;
+    finalizationCallIndex += 1;
+
     if (invoked.kind === "timeout") {
-      llmCalls.push(buildTimeoutInferenceRecord({ phase: "finalization", attempt, decisionIndex: null, elapsedMs: invoked.elapsedMs }));
+      llmCalls.push(buildTimeoutInferenceRecord({ phase: "finalization", attempt: finalizationAttempt, decisionIndex: null, elapsedMs: invoked.elapsedMs }));
       warnings.push("agent_loop_timeout");
       return finalize("timeout");
     }
     if (invoked.kind === "error") {
       const providerFailure = captureProviderFailure(input.provider, input.correlationId, invoked.error, invoked.elapsedMs);
-      llmCalls.push(buildFailureInferenceRecord({ phase: "finalization", attempt, decisionIndex: null, elapsedMs: invoked.elapsedMs, providerFailure }));
+      llmCalls.push(buildFailureInferenceRecord({ phase: "finalization", attempt: finalizationAttempt, decisionIndex: null, elapsedMs: invoked.elapsedMs, providerFailure }));
       warnings.push(`agent_loop_provider_error:${providerFailure.normalizedReason}`);
       // LLM-R1-T01. Same structural-recovery class as gathering above,
       // expressed here as "one more finalization attempt remains" instead of
@@ -1014,24 +1205,26 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       // budget). Any other normalizedReason keeps failing fast on this exact
       // attempt, unchanged from before this task - this branch only ever
       // widens what happens for "invalid_response", nothing else.
-      if (providerFailure.normalizedReason === "invalid_response" && attempt < FINALIZATION_MAX_ATTEMPTS - 1) {
+      if (providerFailure.normalizedReason === "invalid_response" && formatRepairAttempt < FINALIZATION_MAX_ATTEMPTS - 1) {
         // LLM-R1-T04. Guided repair for the one remaining attempt.
         finalizationPendingRepairSignal = { kind: "invalid_response" };
+        formatRepairAttempt += 1;
         warnings.push("agent_loop_structured_recovery_attempted:finalization");
         continue;
       }
       return finalize("provider_unavailable", providerFailure);
     }
 
-    llmCalls.push(buildSuccessInferenceRecord({ phase: "finalization", attempt, decisionIndex: null, elapsedMs: invoked.elapsedMs, metadata: invoked.metadata }));
+    llmCalls.push(buildSuccessInferenceRecord({ phase: "finalization", attempt: finalizationAttempt, decisionIndex: null, elapsedMs: invoked.elapsedMs, metadata: invoked.metadata }));
 
     const validation = validateAgentStep(invoked.rawOutput, FINALIZATION_ALLOWED_TYPES);
     if (validation.status === "invalid") {
       warnings.push(`agent_step_invalid:${validation.reason}`);
-      if (attempt < FINALIZATION_MAX_ATTEMPTS - 1) {
+      if (formatRepairAttempt < FINALIZATION_MAX_ATTEMPTS - 1) {
         // LLM-R1-T04. Guided repair: bounded reasonCode only, never the
         // free-text reason or the raw rawOutput that failed validation.
         finalizationPendingRepairSignal = { kind: "invalid_agent_step", reasonCode: validation.reasonCode };
+        formatRepairAttempt += 1;
         continue;
       }
       warnings.push("agent_loop_finalization_failed");
@@ -1039,16 +1232,25 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     }
 
     const step = validation.step;
+
+    // SALES-AGENT-R3-V1.8.1b-A (Objetivo A, Boundary 1 - universal pre-action
+    // gate). Same treatment as gathering's own Boundary 1 above - checked
+    // before the step is pushed or treated as terminal, for respond AND
+    // handoff alike (design decision 4: handoff is freshness-sensitive).
+    // Never consumes formatRepairAttempt - this is new information arriving,
+    // not a format failure.
+    if (await tryAssimilate()) {
+      invalidatedCandidateCount += 1;
+      continue;
+    }
+
     steps.push({ stepIndex: steps.length, step, governance: null, observation: null, phase: "finalization" });
 
     if (step.type === "respond") {
       return respondedResult(step);
     }
     if (step.type === "handoff") {
-      return { ran: true, terminalReason: "handoff", steps, toolExecutionCount, finalMessage: null, handoffReason: step.reason, warnings, finalPendingCatalogAction: null, llmCalls };
+      return handoffResult(step.reason);
     }
   }
-
-  // Unreachable (the loop above always returns), kept as a safe terminal state.
-  return finalize("invalid_output");
 }

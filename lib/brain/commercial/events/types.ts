@@ -423,6 +423,19 @@ export type AgentToolLoopCompletedRecordedPayload = {
   pendingCatalogAction?: AgentToolLoopPendingCatalogActionPayload | null;
   /** LLM-R1-T02. Present only when at least one LLM provider call was attempted this turn - absent when the loop never reached the provider at all (e.g. no provider configured). */
   llmMetrics?: AgentToolLoopLlmMetricsPayload | null;
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A (Objetivo A). Present only when live turn
+   * assimilation was enabled AND actually folded in new inbound this turn -
+   * absent for every flag-off turn and every turn where nothing new arrived,
+   * same "counts/ids only, no raw prompt text" discipline as every other
+   * field here. Enough to reconstruct a run without a new event taxonomy.
+   */
+  liveTurnAssimilation?: {
+    finalAssimilatedInboundMessageId: number;
+    assimilatedInboundCount: number;
+    assimilationCycleCount: number;
+    invalidatedCandidateCount: number;
+  } | null;
 };
 
 export interface CommercialEventV1 {

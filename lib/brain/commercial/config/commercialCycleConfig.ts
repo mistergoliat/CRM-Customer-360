@@ -400,6 +400,21 @@ export function buildSessionCompactionFeatureFlags(
   };
 }
 
+/**
+ * SALES-AGENT-R3-V1.8.1b-A (Objetivo A - live turn assimilation). Fail-closed
+ * (default false) - changes runAgentToolLoop's own terminal control flow (a
+ * `continue` instead of `return` at every respond/handoff/use_tool decision
+ * point), the highest-traffic code path in the whole R3 stack, so it gets its
+ * own independent kill switch rather than riding on
+ * BRAIN_R3_PERSISTENT_SESSION_COGNITION_ENABLED or the turn-settle delay flag.
+ * Objetivos B (claimPendingTurn's ownership guard) and C (conversational
+ * continuity) are NOT gated by this flag - both are already independent,
+ * already-shipped mechanisms this flag never touches.
+ */
+export function shouldEnableLiveTurnAssimilation(): boolean {
+  return readEnvFlag("BRAIN_R3_LIVE_TURN_ASSIMILATION_ENABLED", false);
+}
+
 export function buildLegacySalesConsultativeFeatureFlags(
   overrides?: Partial<CommercialLegacySalesConsultativeFeatureFlags>
 ): CommercialLegacySalesConsultativeFeatureFlags {

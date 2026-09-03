@@ -843,3 +843,151 @@ test("[T8/K/G6] mutation completes then the worker crashes before completeTurn()
   const turnRow = await loadTurnRow(conversation.id);
   assert.equal(turnRow.status, "COMPLETED", "the settlement must eventually reach a terminal state despite the crash");
 });
+
+/**
+ * SALES-AGENT-R3-V1.8.1b-A (Objetivo A - live turn assimilation). Full
+ * worker path, real DB, real BRAIN_R3_LIVE_TURN_ASSIMILATION_ENABLED flag,
+ * real (unmocked) checkForNewInbound/refreshCommercialContextSummary wiring
+ * through runNativeAutonomousCycle.ts - only the LLM itself is faked. Repo-
+ * level reconciliation mechanics and transactional atomicity are proven
+ * separately (tests/commercial/turnSettlementRepository.test.ts,
+ * tests/commercial/dispatchGovernedSalesAgentMessageLiveAssimilation.test.ts) -
+ * this test's job is proving the full chain is actually wired end to end.
+ */
+async function loadTurnRowByFirstInbound(conversationId: number, firstInboundMessageId: number): Promise<TurnSettlementRow> {
+  const result = await safeQueryRows<TurnSettlementRow>(
+    "SELECT * FROM crm_inbound_turn_settlements WHERE conversation_id = ? AND first_inbound_message_id = ? LIMIT 1",
+    [conversationId, firstInboundMessageId]
+  );
+  assert.ok(result.ok && result.rows[0]);
+  return result.rows[0];
+}
+
+/** Scripted provider that also runs an async hook right before each call returns, and records every request it received (mirrors tests/agent-loop/runAgentToolLoopLiveAssimilation.test.ts's own helper). */
+function assimilationE2eProvider(steps: Array<{ message: string; before?: () => Promise<void> }>): { provider: AgentLoopProvider; requests: AgentLoopProviderRequest[] } {
+  let callIndex = 0;
+  const requests: AgentLoopProviderRequest[] = [];
+  return {
+    requests,
+    provider: {
+      name: "assimilation-e2e-provider",
+      async invoke(request) {
+        requests.push(request);
+        const entry = steps[Math.min(callIndex, steps.length - 1)];
+        await entry.before?.();
+        callIndex += 1;
+        return {
+          rawOutput: { type: "respond", message: entry.message },
+          model: "fake-model",
+          inputTokens: 16,
+          outputTokens: 16,
+          providerRequestId: `fake-assim-${callIndex}`,
+          finishReason: "stop"
+        };
+      }
+    }
+  };
+}
+
+test("[live assimilation e2e] a fragment arriving mid-cognition is folded into the SAME run: sibling settlement reconciles atomically, continuity survives, no duplicate/stale dispatch", async () => {
+  const conversation = await insertConversation();
+  await insertInboundMessage(conversation.id, "hola, ya hemos hablado antes", `wamid.${randomUUID()}`);
+  await insertOutboundMessage(conversation.id, "hola! como puedo ayudarte");
+
+  const providerMessageId = `wamid.${randomUUID()}`;
+  const firstMessageId = await insertInboundMessage(conversation.id, "quiero cotizar una barra", providerMessageId);
+  await settleFragments({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-e2e",
+    fragments: [{ messageId: firstMessageId, providerMessageId }]
+  });
+
+  let assimilatedMessageId: number | null = null;
+  const { provider, requests } = assimilationE2eProvider([
+    {
+      message: "borrador (nunca debe llegar al cliente)",
+      before: async () => {
+        // Simulates the webhook persisting a real new fragment WHILE this
+        // turn is PROCESSING - real conversation_message row, real sibling
+        // crm_inbound_turn_settlements PENDING row, exactly as
+        // processNativeWhatsAppInbound would do.
+        assimilatedMessageId = await insertInboundMessage(conversation.id, "pero mejor mandala a concepcion", `wamid.${randomUUID()}`);
+        const upserted = await upsertPendingTurn({
+          conversationId: conversation.id,
+          waId: conversation.waId,
+          phoneNumberId: "phone-turnsettle-e2e",
+          inboundMessageId: assimilatedMessageId,
+          providerMessageId: `wamid.${assimilatedMessageId}`,
+          correlationId: `corr-${assimilatedMessageId}`,
+          settleDelayMs: 0,
+          maxSettleMs: 5000
+        });
+        assert.equal(upserted.ok, true);
+      }
+    },
+    { message: "listo, la cotizacion queda para envio a Concepcion" }
+  ]);
+
+  await withEnv({ ...r3PilotEnv(conversation.waId), BRAIN_R3_LIVE_TURN_ASSIMILATION_ENABLED: "true" }, async () => {
+    await runTurnSettleTick({ agentLoopProvider: provider });
+  });
+
+  assert.equal(requests.length, 2, "the stale draft must be discarded and cognition must continue in the SAME run, never a second independent execution");
+  const lastUserMessage = requests[1].messages[requests[1].messages.length - 1];
+  const secondPayload = JSON.parse(lastUserMessage.content) as {
+    customerMessage: string;
+    conversationContinuity: { isFirstConversationalTurn: boolean };
+  };
+  assert.match(secondPayload.customerMessage, /pero mejor mandala a concepcion/, "the second (accepted) inference must see the assimilated text");
+  assert.equal(
+    secondPayload.conversationContinuity.isFirstConversationalTurn,
+    false,
+    "an active conversation's continuity signal must survive assimilation - never reset mid-run, never a re-greeting trigger"
+  );
+
+  const outboxCount = await outboxRowCountForWaId(conversation.waId);
+  assert.equal(outboxCount, 1, "exactly one response must be dispatched - the discarded draft must never reach the outbox");
+
+  const rowA = await loadTurnRowByFirstInbound(conversation.id, firstMessageId);
+  assert.equal(rowA.status, "COMPLETED");
+  assert.ok(assimilatedMessageId !== null);
+  const rowB = await loadTurnRowByFirstInbound(conversation.id, assimilatedMessageId!);
+  assert.equal(rowB.status, "ASSIMILATED", "the sibling settlement must be reconciled atomically with the dispatch that consumed its content - never left PENDING to independently reprocess it");
+  assert.equal(rowB.superseded_by_message_id, assimilatedMessageId);
+});
+
+test("[live assimilation e2e - flag off] the exact same mid-cognition fragment is IGNORED by cognition when the flag is off - byte-identical to pre-A behavior, which means the PRE-EXISTING [T9] dispatch-time freshness check (unconditional, not gated by this flag) still suppresses the now-stale response", async () => {
+  const conversation = await insertConversation();
+  const providerMessageId = `wamid.${randomUUID()}`;
+  const firstMessageId = await insertInboundMessage(conversation.id, "quiero cotizar una barra", providerMessageId);
+  await settleFragments({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-e2e",
+    fragments: [{ messageId: firstMessageId, providerMessageId }]
+  });
+
+  let newerMessageId: number | null = null;
+  const { provider, requests } = assimilationE2eProvider([
+    {
+      message: "esta respuesta debe quedar obsoleta",
+      before: async () => {
+        newerMessageId = await insertInboundMessage(conversation.id, "mensaje que la cognicion nunca vio", `wamid.${randomUUID()}`);
+      }
+    },
+    { message: "nunca deberia llegar aqui - solo una llamada debe ocurrir" }
+  ]);
+
+  // BRAIN_R3_LIVE_TURN_ASSIMILATION_ENABLED intentionally omitted (defaults false).
+  await withEnv(r3PilotEnv(conversation.waId), async () => {
+    await runTurnSettleTick({ agentLoopProvider: provider });
+  });
+
+  assert.equal(requests.length, 1, "with the flag off, cognition must never re-check for new inbound and must never invalidate/retry a candidate - exactly the pre-A control flow");
+  const rowA = await loadTurnRowByFirstInbound(conversation.id, firstMessageId);
+  assert.equal(rowA.status, "SUPERSEDED", "unaffected by this flag: the pre-existing [T9] dispatch-time freshness check still catches the newer message and suppresses the now-stale response");
+  assert.equal(rowA.superseded_by_message_id, newerMessageId);
+  const outboxCount = await outboxRowCountForWaId(conversation.waId);
+  assert.equal(outboxCount, 0, "the stale response must never reach the outbox");
+});

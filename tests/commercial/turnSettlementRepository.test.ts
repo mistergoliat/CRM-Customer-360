@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test, { after } from "node:test";
-import { getPool, safeQueryRows } from "@/lib/db";
+import { getPool, safeQueryRows, withTransaction } from "@/lib/db";
 import {
   upsertPendingTurn,
   selectDuePendingTurns,
@@ -9,7 +9,8 @@ import {
   claimPendingTurn,
   reclaimStaleProcessingTurn,
   completeTurn,
-  supersedeTurn
+  supersedeTurn,
+  reconcileAssimilatedSiblings
 } from "@/lib/brain/commercial/turn-settlement/repository";
 import type { TurnSettlementRow } from "@/lib/brain/commercial/turn-settlement/types";
 
@@ -274,6 +275,137 @@ test("[claim/complete] claimPendingTurn is a one-time CAS; a second claim attemp
   assert.equal(await completeTurn(row!.id), false, "completing an already-COMPLETED row must be a no-op CAS, never a double-transition");
 });
 
+test("[B6] same-conversation concurrency: a PENDING row for a conversation that already has a PROCESSING row cannot be claimed", async () => {
+  const conversation = await insertConversation();
+  await upsertPendingTurn({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId: 1001,
+    providerMessageId: "wamid.1001",
+    correlationId: "corr-1001",
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  const firstRow = await loadPendingRowForConversation(conversation.id);
+  assert.ok(await claimPendingTurn(firstRow!.id), "the first row must claim normally");
+
+  // A new fragment for the SAME conversation opens its own PENDING row
+  // (unchanged upsertPendingTurn behavior - see the [claim/complete] test
+  // above), but it must never be claimable while its sibling is PROCESSING.
+  await upsertPendingTurn({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId: 1002,
+    providerMessageId: "wamid.1002",
+    correlationId: "corr-1002",
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  const secondRow = await loadPendingRowForConversation(conversation.id);
+  assert.ok(secondRow, "a second PENDING row must exist for the same conversation");
+
+  assert.equal(
+    await claimPendingTurn(secondRow!.id),
+    false,
+    "at most one active cognitive run per conversation - the second row must stay PENDING while the first is PROCESSING"
+  );
+
+  const secondAfter = await loadRow(secondRow!.id);
+  assert.equal(secondAfter.status, "PENDING", "a blocked claim must never partially transition the row");
+
+  // Once the first turn finishes, the second must become claimable again.
+  assert.ok(await completeTurn(firstRow!.id));
+  assert.equal(await claimPendingTurn(secondRow!.id), true, "the second row must be claimable once the conversation is free");
+
+  // crm_test is a shared, never-reset database - never leave a row
+  // PROCESSING forever, or a later test's own runTurnSettleTick call could
+  // sweep it up once it goes stale.
+  await completeTurn(secondRow!.id);
+});
+
+test("[B7] different conversations run in parallel: a PROCESSING row in conversation A never blocks a claim in conversation B", async () => {
+  const conversationA = await insertConversation();
+  const conversationB = await insertConversation();
+  await upsertPendingTurn({
+    conversationId: conversationA.id,
+    waId: conversationA.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId: 1101,
+    providerMessageId: "wamid.1101",
+    correlationId: "corr-1101",
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  await upsertPendingTurn({
+    conversationId: conversationB.id,
+    waId: conversationB.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId: 1102,
+    providerMessageId: "wamid.1102",
+    correlationId: "corr-1102",
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  const rowA = await loadPendingRowForConversation(conversationA.id);
+  const rowB = await loadPendingRowForConversation(conversationB.id);
+
+  assert.ok(await claimPendingTurn(rowA!.id), "conversation A must claim normally");
+  assert.ok(
+    await claimPendingTurn(rowB!.id),
+    "conversation B's claim must succeed while conversation A is PROCESSING - different conversations run in parallel, never a global lock"
+  );
+
+  await completeTurn(rowA!.id);
+  await completeTurn(rowB!.id);
+});
+
+test("[B8] crash recovery: a stale-reclaimed row keeps blocking its sibling until it reaches a terminal state", async () => {
+  const conversation = await insertConversation();
+  await upsertPendingTurn({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId: 1201,
+    providerMessageId: "wamid.1201",
+    correlationId: "corr-1201",
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  const firstRow = await loadPendingRowForConversation(conversation.id);
+  assert.ok(await claimPendingTurn(firstRow!.id));
+
+  // Simulate a crashed worker: backdate updated_at past the stale threshold
+  // (same technique [T7/G7] above uses).
+  await getPool().execute("UPDATE crm_inbound_turn_settlements SET updated_at = DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 999 SECOND) WHERE id = ?", [firstRow!.id]);
+
+  await upsertPendingTurn({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId: 1202,
+    providerMessageId: "wamid.1202",
+    correlationId: "corr-1202",
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  const secondRow = await loadPendingRowForConversation(conversation.id);
+  assert.ok(secondRow);
+  assert.equal(await claimPendingTurn(secondRow!.id), false, "a stale-but-still-PROCESSING row must still block its sibling before reclaim");
+
+  assert.equal(await reclaimStaleProcessingTurn(firstRow!.id), true, "the stale row must be reclaimable");
+  assert.equal(
+    await claimPendingTurn(secondRow!.id),
+    false,
+    "reclaiming the stale row only refreshes it (still PROCESSING) - it must keep blocking its sibling, never silently free the conversation"
+  );
+
+  assert.ok(await completeTurn(firstRow!.id), "the reclaimed row must still be completable exactly once");
+  assert.equal(await claimPendingTurn(secondRow!.id), true, "once the reclaimed row reaches a terminal state, the sibling must become claimable");
+  await completeTurn(secondRow!.id);
+});
+
 test("[supersede] supersedeTurn records the newer message id and the terminal status", async () => {
   const conversation = await insertConversation();
   await upsertPendingTurn({
@@ -347,4 +479,166 @@ test("[due detection] selectDuePendingTurns only returns rows whose settle_after
   await getPool().execute("UPDATE crm_inbound_turn_settlements SET settle_after = CURRENT_TIMESTAMP(3) WHERE id = ?", [row!.id]);
   const dueAfter = await selectDuePendingTurns(50);
   assert.ok(dueAfter.some((candidate) => candidate.id === row!.id), "a turn whose settle_after has passed must be selected as due");
+});
+
+/**
+ * SALES-AGENT-R3-V1.8.1b-A (Objetivo A - settlement responsibility
+ * reconciliation, Sections 14-15). reconcileAssimilatedSiblings is only ever
+ * meant to run inside dispatchGovernedSalesAgentMessage.ts's own open
+ * transaction (Section 23's atomicity invariant), but its own logic is
+ * repository-level and independent of that call site - tested here directly
+ * against a real transaction/connection, same discipline as every other
+ * repository test in this file.
+ */
+
+async function claimedRowFor(conversation: { id: number; waId: string }, inboundMessageId: number): Promise<TurnSettlementRow> {
+  await upsertPendingTurn({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId,
+    providerMessageId: `wamid.${inboundMessageId}`,
+    correlationId: `corr-${inboundMessageId}`,
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  const row = await loadPendingRowForConversation(conversation.id);
+  assert.ok(row, "expected a fresh PENDING row to claim");
+  assert.ok(await claimPendingTurn(row!.id));
+  return loadRow(row!.id);
+}
+
+test("[I1] reconcileAssimilatedSiblings: full coverage marks the sibling ASSIMILATED and records the covering anchor", async () => {
+  const conversation = await insertConversation();
+  const rowA = await claimedRowFor(conversation, 2001);
+
+  // Sibling B accumulates two fragments (2002, 2003) while A is PROCESSING -
+  // both fully consumed by A's own (simulated) live-assimilated run.
+  await upsertPendingTurn({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId: 2002,
+    providerMessageId: "wamid.2002",
+    correlationId: "corr-2002",
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  await upsertPendingTurn({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId: 2003,
+    providerMessageId: "wamid.2003",
+    correlationId: "corr-2003",
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  const rowB = await loadPendingRowForConversation(conversation.id);
+  assert.ok(rowB);
+  assert.equal(rowB!.first_inbound_message_id, 2002);
+  assert.equal(rowB!.latest_inbound_message_id, 2003);
+
+  await withTransaction(async (connection) => {
+    const result = await reconcileAssimilatedSiblings(connection, conversation.id, rowA.id, 2003);
+    assert.deepEqual(result.assimilatedIds, [rowB!.id]);
+    assert.deepEqual(result.advancedIds, []);
+  });
+
+  const reconciled = await loadRow(rowB!.id);
+  assert.equal(reconciled.status, "ASSIMILATED");
+  assert.equal(reconciled.superseded_by_message_id, 2003);
+
+  await completeTurn(rowA.id);
+});
+
+test("[I2] reconcileAssimilatedSiblings: partial coverage advances the sibling's lower bound and leaves it PENDING", async () => {
+  const conversation = await insertConversation();
+  const rowA = await claimedRowFor(conversation, 2101);
+
+  // Sibling B accumulates 2102, 2103, 2104 - only up through 2103 was
+  // actually assimilated by A's run; 2104 arrived and must remain this
+  // sibling's own responsibility.
+  for (const id of [2102, 2103, 2104]) {
+    await upsertPendingTurn({
+      conversationId: conversation.id,
+      waId: conversation.waId,
+      phoneNumberId: "phone-turnsettle-test",
+      inboundMessageId: id,
+      providerMessageId: `wamid.${id}`,
+      correlationId: `corr-${id}`,
+      settleDelayMs: 0,
+      maxSettleMs: 5000
+    });
+  }
+  const rowB = await loadPendingRowForConversation(conversation.id);
+  assert.ok(rowB);
+  assert.equal(rowB!.first_inbound_message_id, 2102);
+  assert.equal(rowB!.latest_inbound_message_id, 2104);
+
+  await withTransaction(async (connection) => {
+    const result = await reconcileAssimilatedSiblings(connection, conversation.id, rowA.id, 2103);
+    assert.deepEqual(result.assimilatedIds, []);
+    assert.deepEqual(result.advancedIds, [rowB!.id]);
+  });
+
+  const reconciled = await loadRow(rowB!.id);
+  assert.equal(reconciled.status, "PENDING", "a sibling with genuinely unconsumed content must never be marked terminal");
+  assert.equal(reconciled.first_inbound_message_id, 2104, "the lower bound must advance to exactly one past the assimilated anchor");
+  assert.equal(reconciled.latest_inbound_message_id, 2104, "the upper bound must never move - it reflects real durable inbound, never assimilation state");
+
+  await completeTurn(rowA.id);
+  await completeTurn(rowB!.id);
+});
+
+test("[I3] reconcileAssimilatedSiblings: no overlap leaves an unrelated-range sibling completely untouched", async () => {
+  const conversation = await insertConversation();
+  const rowA = await claimedRowFor(conversation, 2201);
+
+  // Sibling B's range starts AFTER the assimilated anchor - none of it was
+  // ever seen by A's run (the classic Section 16 race-window shape).
+  await upsertPendingTurn({
+    conversationId: conversation.id,
+    waId: conversation.waId,
+    phoneNumberId: "phone-turnsettle-test",
+    inboundMessageId: 2210,
+    providerMessageId: "wamid.2210",
+    correlationId: "corr-2210",
+    settleDelayMs: 0,
+    maxSettleMs: 5000
+  });
+  const rowB = await loadPendingRowForConversation(conversation.id);
+  assert.ok(rowB);
+
+  await withTransaction(async (connection) => {
+    const result = await reconcileAssimilatedSiblings(connection, conversation.id, rowA.id, 2203);
+    assert.deepEqual(result.assimilatedIds, []);
+    assert.deepEqual(result.advancedIds, []);
+  });
+
+  const untouched = await loadRow(rowB!.id);
+  assert.equal(untouched.status, "PENDING");
+  assert.equal(untouched.first_inbound_message_id, 2210);
+  assert.equal(untouched.latest_inbound_message_id, 2210);
+
+  await completeTurn(rowA.id);
+  await completeTurn(rowB!.id);
+});
+
+test("[I4] completeTurn accepts an in-transaction connection and stays idempotent whether called on the pool or the same connection again", async () => {
+  const conversation = await insertConversation();
+  const row = await claimedRowFor(conversation, 2301);
+
+  await withTransaction(async (connection) => {
+    const completed = await completeTurn(row.id, connection);
+    assert.equal(completed, true);
+  });
+
+  const reloaded = await loadRow(row.id);
+  assert.equal(reloaded.status, "COMPLETED");
+
+  // A later, separate call (mirroring runTurnSettleTick.ts's own unconditional
+  // post-dispatch call) on the pool must be a safe no-op, never an error and
+  // never a double-transition.
+  assert.equal(await completeTurn(row.id), false);
 });

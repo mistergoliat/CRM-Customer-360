@@ -38,6 +38,8 @@ export type DispatchSalesAgentFallbackInput = {
   commercialNeed: ContinuityFallbackContext;
   /** SALES-AGENT-R3-V1.8.1. Threaded straight through to dispatchGovernedSalesAgentMessage - see that type's own comment. */
   checkInboundFreshness?: boolean;
+  /** SALES-AGENT-R3-V1.8.1b-A. Threaded straight through to dispatchGovernedSalesAgentMessage - see that type's own comment. */
+  liveAssimilation?: { finalAssimilatedInboundMessageId: number; selfSettlementId: number | null } | null;
 };
 
 export type DispatchSalesAgentFallbackReason = SalesAgentRuntimeResponseDispatchReason;
@@ -106,6 +108,7 @@ export async function dispatchSalesAgentFallback(input: DispatchSalesAgentFallba
     currentTime: input.currentTime,
     humanOwnerActive: input.humanOwnerActive,
     aiBlocked: input.aiBlocked,
-    checkInboundFreshness: input.checkInboundFreshness
+    checkInboundFreshness: input.checkInboundFreshness,
+    liveAssimilation: input.liveAssimilation
   });
 }

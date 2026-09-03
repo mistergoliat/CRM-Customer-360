@@ -115,9 +115,38 @@ export async function selectStaleProcessingTurns(limit: number): Promise<TurnSet
   return result.ok ? result.rows : [];
 }
 
-/** Atomic compare-and-swap: only claims a row still PENDING (prevents a second concurrent poller/tick from double-running the same turn). */
+/**
+ * Atomic compare-and-swap: only claims a row still PENDING (prevents a
+ * second concurrent poller/tick from double-running the same turn).
+ *
+ * SALES-AGENT-R3-V1.8.1b (Objetivo B - conversation-scoped ownership). The
+ * NOT EXISTS guard additionally refuses the claim while ANY other row for
+ * the SAME conversation is already PROCESSING - without it, a fragment that
+ * arrives while a turn is mid-cognition opens its own new PENDING row
+ * (unchanged, see upsertPendingTurn's own comment) that a later tick could
+ * claim and run CONCURRENTLY with the still-in-flight turn for the same
+ * conversation. This is a pure narrowing of an existing CAS condition: it
+ * can only ever refuse a claim that was always a correctness bug (two
+ * simultaneous cognitive runs for one conversation), never one that was
+ * previously safe. A losing claim is not an error - the row stays PENDING
+ * and is retried on a later tick, once the conversation frees up (mirrors
+ * the pre-existing `if (!claimed) continue` idiom in runTurnSettleTick.ts).
+ * A DIFFERENT conversation's claim is entirely unaffected - the subquery is
+ * scoped by conversation_id.
+ */
 export async function claimPendingTurn(id: number): Promise<boolean> {
-  const result = await safeExecute(`UPDATE crm_inbound_turn_settlements SET status = 'PROCESSING', updated_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND status = 'PENDING'`, [id]);
+  const result = await safeExecute(
+    `UPDATE crm_inbound_turn_settlements t1
+        SET status = 'PROCESSING', updated_at = CURRENT_TIMESTAMP(3)
+      WHERE t1.id = ?
+        AND t1.status = 'PENDING'
+        AND NOT EXISTS (
+          SELECT 1 FROM crm_inbound_turn_settlements t2
+           WHERE t2.conversation_id = t1.conversation_id
+             AND t2.status = 'PROCESSING'
+        )`,
+    [id]
+  );
   return result.ok && result.affectedRows > 0;
 }
 
@@ -132,8 +161,24 @@ export async function reclaimStaleProcessingTurn(id: number): Promise<boolean> {
   return result.ok && result.affectedRows > 0;
 }
 
-export async function completeTurn(id: number): Promise<boolean> {
-  const result = await safeExecute(`UPDATE crm_inbound_turn_settlements SET status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND status = 'PROCESSING'`, [id]);
+/**
+ * SALES-AGENT-R3-V1.8.1b-A. Accepts an optional transaction connection, same
+ * precedent as upsertPendingTurn's own Fix 1 - so live assimilation's
+ * dispatch transaction (dispatchGovernedSalesAgentMessage.ts) can complete
+ * this row in the SAME commit as the outbox insert and sibling reconciliation
+ * below, instead of a separate, non-atomic call. The pre-existing standalone
+ * caller (runTurnSettleTick.ts's own unconditional post-dispatch call) keeps
+ * using the pool directly and stays a safe, idempotent no-op when the
+ * transaction already completed this row (affectedRows=0, WHERE no longer
+ * matches).
+ */
+export async function completeTurn(id: number, connection?: PoolConnection): Promise<boolean> {
+  const sql = `UPDATE crm_inbound_turn_settlements SET status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND status = 'PROCESSING'`;
+  if (connection) {
+    const [header] = await connection.execute<ResultSetHeader>(sql, [id]);
+    return header.affectedRows > 0;
+  }
+  const result = await safeExecute(sql, [id]);
   return result.ok && result.affectedRows > 0;
 }
 
@@ -143,4 +188,72 @@ export async function supersedeTurn(id: number, supersededByMessageId: number): 
     [supersededByMessageId, id]
   );
   return result.ok && result.affectedRows > 0;
+}
+
+type SiblingRow = { id: number; first_inbound_message_id: number; latest_inbound_message_id: number };
+
+/**
+ * SALES-AGENT-R3-V1.8.1b-A (Objetivo A - settlement responsibility
+ * reconciliation, Sections 14-15/23 of the task brief). MUST be called on a
+ * connection that is inside the same open transaction as the outbox insert
+ * that consumed this range (dispatchGovernedSalesAgentMessage.ts) - never
+ * standalone, never on the pool. A crash before that transaction commits
+ * rolls this back too (nothing reconciled); a crash after commits both
+ * together. See migration 036 and repository.ts's own module header for why
+ * ASSIMILATED is a distinct status from COMPLETED/SUPERSEDED.
+ *
+ * Only PENDING siblings are ever touched - Objetivo B's claimPendingTurn
+ * guard already guarantees no OTHER row for this conversation can be
+ * PROCESSING while selfSettlementId is (mutual exclusion), so a sibling seen
+ * here is always PENDING by construction; the WHERE clause enforces that
+ * invariant rather than assuming it silently.
+ *
+ * - Full coverage (sibling's entire range already <= finalAssimilatedAnchor):
+ *   status -> ASSIMILATED, superseded_by_message_id records the covering
+ *   anchor (reused column - see migration 036).
+ * - Partial coverage (sibling range straddles the anchor): first_inbound_message_id
+ *   advances to finalAssimilatedAnchor + 1, status stays PENDING - its own
+ *   future assembleTurnFragments call then only re-reads the genuinely
+ *   unconsumed tail, never reprocessing already-answered content.
+ * - No overlap at all (sibling's entire range is newer than the anchor):
+ *   untouched.
+ */
+export async function reconcileAssimilatedSiblings(
+  connection: PoolConnection,
+  conversationId: number,
+  selfSettlementId: number,
+  finalAssimilatedAnchor: number
+): Promise<{ assimilatedIds: number[]; advancedIds: number[] }> {
+  const [rows] = await connection.query(
+    `SELECT id, first_inbound_message_id, latest_inbound_message_id
+       FROM crm_inbound_turn_settlements
+      WHERE conversation_id = ? AND status = 'PENDING' AND id != ?
+      FOR UPDATE`,
+    [conversationId, selfSettlementId]
+  );
+
+  const assimilatedIds: number[] = [];
+  const advancedIds: number[] = [];
+
+  for (const row of rows as SiblingRow[]) {
+    if (row.latest_inbound_message_id <= finalAssimilatedAnchor) {
+      await connection.execute(
+        `UPDATE crm_inbound_turn_settlements
+            SET status = 'ASSIMILATED', superseded_by_message_id = ?, updated_at = CURRENT_TIMESTAMP(3)
+          WHERE id = ? AND status = 'PENDING'`,
+        [finalAssimilatedAnchor, row.id]
+      );
+      assimilatedIds.push(row.id);
+    } else if (row.first_inbound_message_id <= finalAssimilatedAnchor) {
+      await connection.execute(
+        `UPDATE crm_inbound_turn_settlements
+            SET first_inbound_message_id = ?, updated_at = CURRENT_TIMESTAMP(3)
+          WHERE id = ? AND status = 'PENDING'`,
+        [finalAssimilatedAnchor + 1, row.id]
+      );
+      advancedIds.push(row.id);
+    }
+  }
+
+  return { assimilatedIds, advancedIds };
 }

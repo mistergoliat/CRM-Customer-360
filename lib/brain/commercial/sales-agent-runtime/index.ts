@@ -4,7 +4,7 @@ export { runSalesAgentRuntime, SALES_AGENT_RUNTIME_STATUSES } from "./salesAgent
 export type { SalesAgentRuntimeInput, SalesAgentRuntimeResult, SalesAgentRuntimeStatus } from "./salesAgentRuntime";
 
 // SALES-AGENT-R3-V1.4. The routing seam's dispatch adapter.
-export { runSalesAgentRuntimeCycle } from "./runSalesAgentRuntimeCycle";
+export { runSalesAgentRuntimeCycle, buildMinimalCommercialContextSummary } from "./runSalesAgentRuntimeCycle";
 export type { RunSalesAgentRuntimeCycleInput, SalesAgentRuntimeCycleResult, SalesAgentRuntimeDispatchResult } from "./runSalesAgentRuntimeCycle";
 
 // SALES-AGENT-R3-V1.5. The R3-native response dispatcher for terminalReason

@@ -23,6 +23,7 @@ import {
   buildPersistentSessionShadowFeatureFlags,
   buildSessionCompactionFeatureFlags,
   shouldEnablePersistentSessionCognition,
+  shouldEnableLiveTurnAssimilation,
   readEnvFlag,
   shouldRouteToMultiIntentPlanner,
   shouldRouteToCommercialWork,
@@ -30,7 +31,7 @@ import {
 } from "../config/commercialCycleConfig";
 import { runNativeAgentToolLoopCycle, runNativeAgentToolLoopCycleConfigurationFailure } from "../agent-loop";
 import type { NativeAgentToolLoopCycleResult } from "../agent-loop";
-import { runSalesAgentRuntimeCycle } from "../sales-agent-runtime";
+import { runSalesAgentRuntimeCycle, buildMinimalCommercialContextSummary } from "../sales-agent-runtime";
 import type { SalesAgentRuntimeCycleResult } from "../sales-agent-runtime";
 import { createHttpAgentLoopProvider } from "../agent-loop/providers/httpAgentLoopProvider";
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
@@ -122,6 +123,13 @@ export type NativeAutonomousCycleInput = {
   additionalInboundMessageIds?: readonly string[] | null;
   /** SALES-AGENT-R3-V1.8.1. See dispatchGovernedSalesAgentMessage.ts's own comment. Same scope restriction as additionalInboundMessageIds above. */
   checkInboundFreshnessBeforeDispatch?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A. Set only by the turn-settlement worker
+   * (row.id) - see RunSalesAgentRuntimeCycleInput's own comment. Same scope
+   * restriction as additionalInboundMessageIds above (only ever threaded
+   * into the salesAgentRuntimeEnabled branch below).
+   */
+  selfSettlementId?: number | null;
 };
 
 /** ACS-R1-05-T06.2 (C2): the commercial need for this turn, read from already-loaded, persisted sources - never re-derived from free text, never invented. */
@@ -737,6 +745,25 @@ export async function runNativeAutonomousCycle(
     // Scoped to this one call site (not a global provider default) per the
     // hotfix's own scope guard - ATL's existing behavior is unchanged.
     const sessionCompactionFeatureFlags = buildSessionCompactionFeatureFlags();
+    const liveTurnAssimilationEnabled = shouldEnableLiveTurnAssimilation();
+    const inboundMessageIdForCycle = String(input.messageId ?? input.correlationId);
+    // SALES-AGENT-R3-V1.8.1b-A (Objetivo A - fresh commercial truth, Section
+    // 8). Re-calls the exact same pure, stateless loader used to build
+    // `snapshot` above, then re-runs the exact same reduction
+    // (buildMinimalCommercialContextSummary) already used for the initial
+    // call - no second commercial-context shape, no second loader. Only
+    // built/passed when the flag is on - runAgentToolLoop.ts's own
+    // tryAssimilate() never calls this at all otherwise (Test P: byte-
+    // identical when off).
+    const refreshCommercialContextSummary = liveTurnAssimilationEnabled
+      ? async () => {
+          const freshSnapshot = await buildNativeCommercialContext({
+            conversationPublicId: input.conversationPublicId,
+            currentTime: input.currentTime
+          });
+          return buildMinimalCommercialContextSummary(freshSnapshot, inboundMessageIdForCycle, input.messageText, input.additionalInboundMessageIds ?? []);
+        }
+      : undefined;
     const salesAgentRuntimeResult = await runSalesAgentRuntimeCycle({
       conversationId: input.conversationId,
       conversationPublicId: input.conversationPublicId,
@@ -744,7 +771,7 @@ export async function runNativeAutonomousCycle(
       waId: input.waId,
       phoneNumberId: input.phoneNumberId,
       messageId: input.messageId,
-      inboundMessageId: String(input.messageId ?? input.correlationId),
+      inboundMessageId: inboundMessageIdForCycle,
       correlationId: input.correlationId,
       currentTime: input.currentTime,
       customerMessage: input.messageText,
@@ -788,6 +815,9 @@ export async function runNativeAutonomousCycle(
       sessionCompactionMaxRawMessages: sessionCompactionFeatureFlags.maxRawMessages,
       sessionCompactionTargetRecentMessages: sessionCompactionFeatureFlags.targetRecentMessages,
       additionalInboundMessageIds: input.additionalInboundMessageIds,
+      liveTurnAssimilationEnabled,
+      refreshCommercialContextSummary,
+      selfSettlementId: input.selfSettlementId,
       checkInboundFreshnessBeforeDispatch: input.checkInboundFreshnessBeforeDispatch
     });
 

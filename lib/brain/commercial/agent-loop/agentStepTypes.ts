@@ -275,4 +275,26 @@ export type AgentLoopResult = {
   finalPendingCatalogAction?: PendingCatalogActionStep | null;
   /** LLM-R1-T02. One entry per real provider invocation this turn (success, structured recovery, schema retry, timeout, or terminal failure) - empty only when the loop never reached the provider at all (no provider configured). */
   llmCalls: AgentLoopInferenceRecord[];
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A (Objetivo A - live turn assimilation).
+   * Observational only, purely additive, and OPTIONAL - runAgentToolLoop.ts
+   * itself always populates all four (null/[]/0 whenever live assimilation
+   * is disabled or never actually folded in new inbound this turn); every
+   * OTHER AgentLoopResult-shaped literal in this codebase (adapters/shims in
+   * runNativeAgentToolLoopCycle.ts, runCommercialMultiIntentLoop.ts,
+   * runSalesAgentRuntimeCycle.ts's own dispatch shim, and every test fixture)
+   * legitimately never went through live assimilation and correctly omits
+   * them - never a required-field migration across unrelated runtimes.
+   * finalAssimilatedInboundMessageId is the anchor dispatch-time freshness/
+   * settlement-reconciliation must use INSTEAD OF the claim-time anchor once
+   * assimilation happened this turn - see runAgentToolLoop.ts's own
+   * tryAssimilate() and dispatchGovernedSalesAgentMessage.ts.
+   */
+  finalAssimilatedInboundMessageId?: number | null;
+  /** Every conversation_message id folded into this turn's customerMessage mid-run - must also be excluded from persistent-session history, same discipline as additionalInboundMessageIds. */
+  assimilatedInboundMessageIds?: number[];
+  /** How many times tryAssimilate() actually found and folded in new inbound (not how many times it was merely checked). */
+  assimilationCycleCount?: number;
+  /** How many respond/handoff/use_tool candidates were discarded as stale before being acted on - see the universal pre-action gate in runAgentToolLoop.ts. */
+  invalidatedCandidateCount?: number;
 };

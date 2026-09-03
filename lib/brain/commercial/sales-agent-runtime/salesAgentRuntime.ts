@@ -15,6 +15,7 @@ import type { AgentSessionStore } from "../agent-session/store";
 import { runPersistentSessionShadowComparison } from "../agent-session/runPersistentSessionShadow";
 import { extractLegacyRecentMessagesForShadow } from "../agent-session/persistentSessionShadowComparison";
 import { resolvePersistentSessionCognitionContext, stripRecentMessagesForPersistentSessionContext } from "../agent-session/resolvePersistentSessionCognitionContext";
+import { deriveConversationContinuityFromHistoricalMessages, deriveConversationContinuityFromLegacyContext } from "../agent-loop/conversationContinuity";
 import { recordPersistentSessionCognitionAppliedEvent } from "../events/service";
 import type { AgentToolLoopStepSummary } from "../events/types";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
@@ -99,6 +100,14 @@ export type SalesAgentRuntimeInput = {
    * (event.messageId) is already excluded by the pre-existing single-id path.
    */
   additionalInboundMessageIds?: readonly string[] | null;
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A (Objetivo A). Resolved by the caller from
+   * BRAIN_R3_LIVE_TURN_ASSIMILATION_ENABLED - never read from process.env
+   * here, same discipline as persistentSessionCognitionEnabled above.
+   */
+  liveTurnAssimilationEnabled?: boolean;
+  /** SALES-AGENT-R3-V1.8.1b-A. Threaded to runAgentToolLoop unchanged - see that type's own comment. */
+  refreshCommercialContextSummary?: () => Promise<Record<string, unknown>>;
 };
 
 export const SALES_AGENT_RUNTIME_STATUSES = ["responded", "blocked", "failed", "handoff"] as const;
@@ -122,6 +131,14 @@ export type SalesAgentRuntimeResult = {
   inputTokens: number | null;
   outputTokens: number | null;
   warnings: string[];
+  /** SALES-AGENT-R3-V1.8.1b-A. Mirrors AgentLoopResult's own field - null whenever no anchor existed (e.g. no inboundMessageId this turn) or the loop never ran. */
+  finalAssimilatedInboundMessageId: number | null;
+  /** Mirrors AgentLoopResult's own field - every conversation_message id folded into this turn's customerMessage mid-run. */
+  assimilatedInboundMessageIds: number[];
+  /** Mirrors AgentLoopResult's own field - how many times tryAssimilate() actually found and folded in new inbound. */
+  assimilationCycleCount: number;
+  /** Mirrors AgentLoopResult's own field - how many respond/handoff/use_tool candidates were discarded as stale. */
+  invalidatedCandidateCount: number;
 };
 
 /**
@@ -227,7 +244,11 @@ function blockedResult(reason: string, opportunityId: number | null): SalesAgent
     durationMs: 0,
     inputTokens: null,
     outputTokens: null,
-    warnings: []
+    warnings: [],
+    finalAssimilatedInboundMessageId: null,
+    assimilatedInboundMessageIds: [],
+    assimilationCycleCount: 0,
+    invalidatedCandidateCount: 0
   };
 }
 
@@ -245,7 +266,11 @@ function failedResult(reason: string, opportunityId: number | null): SalesAgentR
     durationMs: 0,
     inputTokens: null,
     outputTokens: null,
-    warnings: []
+    warnings: [],
+    finalAssimilatedInboundMessageId: null,
+    assimilatedInboundMessageIds: [],
+    assimilationCycleCount: 0,
+    invalidatedCandidateCount: 0
   };
 }
 
@@ -313,6 +338,14 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
   });
   if (persistentSessionCognition.fallbackWarning) preLoopWarnings.push(persistentSessionCognition.fallbackWarning);
 
+  // SALES-AGENT-R3-V1.8.1b (Objetivo C). Purely descriptive, derived fresh
+  // this turn from whichever history source is actually active - never a
+  // second read, never persisted. See conversationContinuity.ts's own header
+  // for why no special compaction case is needed.
+  const conversationContinuity = persistentSessionCognition.active
+    ? deriveConversationContinuityFromHistoricalMessages(persistentSessionCognition.historicalMessages)
+    : deriveConversationContinuityFromLegacyContext(input.commercialContextSummary ?? {});
+
   // D6 Section P observability - every turn where cognition is eligible
   // (the normal case since D6's default-true flag), never when the global
   // rollback flag is off.
@@ -351,7 +384,10 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     maxToolExecutions: input.maxToolExecutions,
     timeoutMs: input.timeoutMs,
     ensureOpportunity,
-    persistentSessionHistoricalMessages: persistentSessionCognition.active ? persistentSessionCognition.historicalMessages : null
+    persistentSessionHistoricalMessages: persistentSessionCognition.active ? persistentSessionCognition.historicalMessages : null,
+    conversationContinuity,
+    liveTurnAssimilationEnabled: input.liveTurnAssimilationEnabled,
+    refreshCommercialContextSummary: input.refreshCommercialContextSummary
   };
 
   // SALES-AGENT-R3-V1.8-D2. Durable BEFORE cognition starts - see
@@ -452,6 +488,10 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     durationMs,
     inputTokens,
     outputTokens,
-    warnings
+    warnings,
+    finalAssimilatedInboundMessageId: loop.finalAssimilatedInboundMessageId ?? null,
+    assimilatedInboundMessageIds: loop.assimilatedInboundMessageIds ?? [],
+    assimilationCycleCount: loop.assimilationCycleCount ?? 0,
+    invalidatedCandidateCount: loop.invalidatedCandidateCount ?? 0
   };
 }

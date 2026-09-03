@@ -168,6 +168,7 @@ export async function ensureAutonomousSalesTurnContinuity(
     customerSessionDependencies: input.customerSessionDependencies,
     additionalInboundMessageIds: input.additionalInboundMessageIds,
     checkInboundFreshnessBeforeDispatch: input.checkInboundFreshnessBeforeDispatch,
+    selfSettlementId: input.selfSettlementId,
     // Pre-existing gap, closed incidentally by this task: NativeAutonomousCycleInput
     // already declares this DI seam (used by the R3/agent-tool-loop branches'
     // real HTTP provider fallback), but this boundary never forwarded it, so

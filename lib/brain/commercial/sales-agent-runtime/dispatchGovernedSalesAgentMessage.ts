@@ -21,6 +21,7 @@ import { writeCanonicalOutboxMessage } from "../../messaging/canonicalOutboxWrit
 import { normalizeWaIdDigits } from "../autonomy-sandbox";
 import { isWaIdAuthorizedForPilot, loadAutonomousPilotAllowlist, loadAutonomousResponsesEnabled } from "../../runtime/autonomousRuntimeConfig";
 import type { SalesAgentRuntimeResponseDispatchReason } from "../events/types";
+import { completeTurn, reconcileAssimilatedSiblings } from "../turn-settlement/repository";
 
 export type DispatchGovernedSalesAgentMessageReason = SalesAgentRuntimeResponseDispatchReason;
 
@@ -54,6 +55,38 @@ export type DispatchGovernedSalesAgentMessageInput = {
    * during cognition (Section L - out of scope by design, not a gap).
    */
   checkInboundFreshness?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8.1b-A (Objetivo A). Opt-in only (undefined for every
+   * pre-existing caller). Two effects, both scoped to this SAME transaction
+   * as the outbox insert below:
+   *   1. recheckInboundFreshness compares against finalAssimilatedInboundMessageId
+   *      instead of inboundMessageId - the run's OWN assimilated anchor, not
+   *      the claim-time one, so already-assimilated input never reads as
+   *      "newer" here. inboundMessageId itself keeps governing the dedupe key/
+   *      sourceRequestId unchanged - identity of the settlement/turn stays
+   *      stable regardless of how far assimilation advanced.
+   *   2. When selfSettlementId is present and this message is actually about
+   *      to be dispatched (ownership + freshness both passed): completeTurn
+   *      and reconcileAssimilatedSiblings run on the SAME connection, inside
+   *      the SAME commit - never a separate, later, non-atomic step. A crash
+   *      at any point either rolls back all three (outbox insert, own-row
+   *      completion, sibling reconciliation) or commits all three together -
+   *      no crash window can leave a sibling PENDING with already-answered
+   *      content and no dedupe mechanism to catch a later duplicate
+   *      independent run over it (see repository.ts's own comment on
+   *      reconcileAssimilatedSiblings).
+   */
+  liveAssimilation?: { finalAssimilatedInboundMessageId: number; selfSettlementId: number | null } | null;
+  /**
+   * Test-only injection point; production callers never set this. Mirrors
+   * the exact precedent lib/brain/native-whatsapp/service.ts's own
+   * upsertPendingTurnFn already established for forcing a deterministic
+   * crash-window failure inside an open transaction without DB-level
+   * trickery - see tests/native/inboundTurnSettling.e2e.test.ts's own
+   * crash-boundary tests for this file's outbox-insert/settlement-
+   * reconciliation transaction.
+   */
+  simulateCrashAfterOutboxWriteFn?: () => never;
 };
 
 export type DispatchGovernedSalesAgentMessageResult = {
@@ -152,7 +185,8 @@ export async function dispatchGovernedSalesAgentMessage(input: DispatchGovernedS
       if (!ownership.ok) return skipped(ownership.reason);
 
       if (input.checkInboundFreshness) {
-        const freshness = await recheckInboundFreshness(connection, input.conversationId, input.inboundMessageId);
+        const freshnessAnchor = input.liveAssimilation ? String(input.liveAssimilation.finalAssimilatedInboundMessageId) : input.inboundMessageId;
+        const freshness = await recheckInboundFreshness(connection, input.conversationId, freshnessAnchor);
         if (freshness.stale) return skipped("superseded_by_newer_inbound");
       }
 
@@ -182,6 +216,30 @@ export async function dispatchGovernedSalesAgentMessage(input: DispatchGovernedS
         },
         connection
       );
+
+      // Test-only - see this field's own comment. Fires after the outbox
+      // insert but before completeTurn/reconcileAssimilatedSiblings below,
+      // so a real assertion can prove the outbox write ITSELF rolls back
+      // too, not just the two statements that happen to come later in
+      // program order.
+      input.simulateCrashAfterOutboxWriteFn?.();
+
+      // SALES-AGENT-R3-V1.8.1b-A. Same connection, same open transaction as
+      // the outbox insert above - see this input field's own comment for the
+      // atomicity invariant this closes. completeTurn is safe to call again
+      // even on a "duplicate" reprocess (idempotent WHERE status='PROCESSING'
+      // match), and reconcileAssimilatedSiblings is safe to re-evaluate
+      // against the same/an equivalent anchor (a sibling already ASSIMILATED
+      // simply no longer matches its own WHERE status='PENDING' guard).
+      if (input.liveAssimilation?.selfSettlementId != null) {
+        await completeTurn(input.liveAssimilation.selfSettlementId, connection);
+        await reconcileAssimilatedSiblings(
+          connection,
+          input.conversationId,
+          input.liveAssimilation.selfSettlementId,
+          input.liveAssimilation.finalAssimilatedInboundMessageId
+        );
+      }
 
       return {
         attempted: true,

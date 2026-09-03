@@ -139,7 +139,8 @@ async function processClaimedTurn(
     currentTime: new Date().toISOString(),
     additionalInboundMessageIds,
     checkInboundFreshnessBeforeDispatch: true,
-    agentLoopProvider
+    agentLoopProvider,
+    selfSettlementId: row.id
   });
 
   const wasSuperseded = Boolean(result.cycle.salesAgentRuntime?.dispatch.warnings.includes("superseded_by_newer_inbound"));
