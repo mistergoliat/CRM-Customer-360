@@ -1,5 +1,6 @@
 import { safeQueryRows } from "@/lib/db";
 import { MAX_RECOMMENDATIONS } from "./buildToolObservation";
+import { resolveCapabilitiesProducingEvidence } from "../capability-gateway/registry";
 
 export const RECENT_CATALOG_CONTEXT_SQL_CANDIDATE_LIMIT = 20;
 export const RECENT_CATALOG_CONTEXT_MAX_INTERACTIONS = 5;
@@ -87,8 +88,19 @@ function asOptionalText(value: unknown): string | undefined {
   return text ?? undefined;
 }
 
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. Derived from the registry's
+ * declared evidenceProduced=PRODUCT_IDENTITY (single source of truth,
+ * shared with resolveObservedRecommendationSourceProduct.ts/
+ * pendingCatalogAction.ts) instead of a third hand-written tool-name
+ * literal. Same 4-tool set as before this refactor (search_products,
+ * get_product_details, explore_catalog, recommend_catalog_products) -
+ * behavior-preserving.
+ */
+const CATALOG_EVIDENCE_TOOLS = resolveCapabilitiesProducingEvidence("PRODUCT_IDENTITY");
+
 function isCatalogTool(value: unknown): value is "search_products" | "get_product_details" | "explore_catalog" | "recommend_catalog_products" {
-  return value === "search_products" || value === "get_product_details" || value === "explore_catalog" || value === "recommend_catalog_products";
+  return typeof value === "string" && (CATALOG_EVIDENCE_TOOLS as readonly string[]).includes(value);
 }
 
 /**
@@ -164,6 +176,7 @@ function productsFromRecommendCatalogProducts(payload: Record<string, unknown>):
 }
 
 function buildExecutionQuery(windowStart: string, currentTime: string) {
+  const toolPlaceholders = CATALOG_EVIDENCE_TOOLS.map(() => "?").join(", ");
   return {
     sql: `
       SELECT
@@ -191,7 +204,7 @@ function buildExecutionQuery(windowStart: string, currentTime: string) {
         ) AS inbound_message_id
       FROM crm_capability_executions e
       WHERE e.conversation_id = ?
-        AND e.capability_name IN ('search_products', 'get_product_details', 'explore_catalog', 'recommend_catalog_products')
+        AND e.capability_name IN (${toolPlaceholders})
         AND e.execution_status = 'completed'
         AND e.response_summary_json IS NOT NULL
         AND e.completed_at >= ?
@@ -199,7 +212,9 @@ function buildExecutionQuery(windowStart: string, currentTime: string) {
       ORDER BY e.completed_at DESC, e.id DESC
       LIMIT ?
     `,
-    params: [windowStart, currentTime]
+    // Order matches the SQL text above: conversation_id, then the dynamic
+    // capability_name IN (...) list, then the completed_at bounds.
+    params: [...CATALOG_EVIDENCE_TOOLS, windowStart, currentTime]
   };
 }
 

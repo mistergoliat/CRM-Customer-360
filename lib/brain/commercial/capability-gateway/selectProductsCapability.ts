@@ -70,6 +70,9 @@ export function selectProductsCapability(): CapabilityGatewayDefinition<{ items:
     governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "low" },
     maxRetries: 0,
     inputSchema: SELECT_PRODUCTS_INPUT_SCHEMA,
+    evidenceRequired: ["PRODUCT_IDENTITY"],
+    evidenceProduced: ["COMMERCIAL_SELECTION_STATE"],
+    operationSemantics: "FULL_REPLACEMENT",
     async checkAvailability() {
       return { status: "available", reason: null };
     },

@@ -195,6 +195,22 @@ test("a non-completed live observation (failed/blocked/skipped) never contribute
   assert.deepEqual(result, { status: "blocked", reason: "source_product_not_observed" });
 });
 
+test("SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2: recommend_catalog_products is excluded from the registry-derived evidence source set even though it declares evidenceProduced: PRODUCT_IDENTITY (consumer-specific provenance policy, never a structural consequence of what it produces)", async () => {
+  const { resolveCapabilitiesProducingEvidence } = await import("@/lib/brain/commercial/capability-gateway/registry");
+  const registryProducers = resolveCapabilitiesProducingEvidence("PRODUCT_IDENTITY");
+  assert.ok(registryProducers.includes("recommend_catalog_products"), "sanity: the registry itself must still say recommend_catalog_products produces PRODUCT_IDENTITY");
+
+  // The exclusion lives in this module (RECOMMEND_CATALOG_PRODUCTS_EXCLUDED_AS_RECURSIVE_SOURCE),
+  // not in the registry - proven behaviorally: a recommend_catalog_products
+  // candidate never resolves as evidence for another recommend_catalog_products call.
+  const result = resolveObservedRecommendationSourceProduct({
+    requestedSourceProduct: { productId: 42 },
+    recentCatalogContext: null,
+    toolObservations: [{ tool: "recommend_catalog_products", status: "completed", data: { recommendations: [{ productId: "42", name: "X", rank: 1, score: 0.9, reasons: [] }] } }]
+  });
+  assert.deepEqual(result, { status: "blocked", reason: "source_product_not_observed" });
+});
+
 test("does not mutate the recentCatalogContext or toolObservations inputs", () => {
   const context = contextWith([{ productId: "100" }]);
   const frozenContext = JSON.parse(JSON.stringify(context));

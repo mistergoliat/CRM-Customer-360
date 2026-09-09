@@ -47,6 +47,36 @@ export type CapabilityAuthorityLevel = (typeof CAPABILITY_AUTHORITY_LEVELS)[numb
 export const CAPABILITY_RISK_CLASSES = ["low", "medium", "high"] as const;
 export type CapabilityRiskClass = (typeof CAPABILITY_RISK_CLASSES)[number];
 
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. What a capability's own
+ * completed output structurally contains, declared once instead of
+ * re-derived by each consumer as its own hand-maintained tool-name
+ * allowlist (see resolveObservedRecommendationSourceProduct.ts,
+ * pendingCatalogAction.ts#collectAllowedProductIds, recentCatalogContext.ts).
+ * This types WHAT a capability produced/needs, never WHETHER a specific
+ * consumer accepts it as evidence for its own purpose - a consumer may
+ * still apply a narrower, consumer-specific provenance rule on top (e.g.
+ * recommend_catalog_products produces PRODUCT_IDENTITY but is deliberately
+ * excluded as its own recursive source-product evidence).
+ */
+export const CAPABILITY_EVIDENCE_TYPES = [
+  "PRODUCT_IDENTITY",
+  "SEMANTIC_ELIGIBILITY",
+  "CURRENT_PRODUCT_DETAILS",
+  "COMMERCIAL_SELECTION_STATE",
+  "QUOTE_CREATED"
+] as const;
+export type CapabilityEvidenceType = (typeof CAPABILITY_EVIDENCE_TYPES)[number];
+
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. Only values with a real,
+ * distinct behavioral meaning a prompt sentence must state - never a
+ * restatement of governance.sideEffect ("READ" is deliberately not a
+ * member here).
+ */
+export const CAPABILITY_OPERATION_SEMANTICS = ["FULL_REPLACEMENT", "CREATE_SNAPSHOT"] as const;
+export type CapabilityOperationSemantics = (typeof CAPABILITY_OPERATION_SEMANTICS)[number];
+
 export type CapabilityGovernanceMetadata = {
   sideEffect: CapabilitySideEffect;
   authority: CapabilityAuthorityLevel;
@@ -118,6 +148,35 @@ export type CapabilityGatewayDefinition<TInput = Record<string, unknown>, TOutpu
    * runtime validator; this is what the model is told to aim for).
    */
   inputSchema?: Record<string, unknown>;
+  /**
+   * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. Declared evidence
+   * relation - see CapabilityEvidenceType. Optional and additive: every
+   * capability that omits both fields behaves exactly as before (no
+   * evidence relevance). Consumed by resolveObservedRecommendationSourceProduct.ts,
+   * pendingCatalogAction.ts#collectAllowedProductIds and
+   * recentCatalogContext.ts as the single declared source for "which
+   * capabilities produce/require this evidence" - never a second,
+   * independently-maintained tool-name list.
+   */
+  evidenceProduced?: CapabilityEvidenceType[];
+  evidenceRequired?: CapabilityEvidenceType[];
+  /**
+   * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. Boundary prose the model
+   * reasons over (never a routing rule the runtime executes) - rendered
+   * alongside `description` by buildAgentStepPromptPackage.ts's tool-line
+   * renderer when present. Optional: absent for every capability that has
+   * no proven, already-existing boundary to state this way (this task
+   * populates none - see the release doc).
+   */
+  useWhen?: string;
+  doNotUseWhen?: string;
+  /**
+   * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. When present, the tool-line
+   * renderer appends one fixed, capability-independent sentence for this
+   * class (see CapabilityOperationSemantics) instead of a capability author
+   * hand-writing it in `description` or a dedicated prompt-rule block.
+   */
+  operationSemantics?: CapabilityOperationSemantics;
   checkAvailability(context: CapabilityGatewayContext): Promise<CapabilityAvailabilityResult>;
   execute(input: TInput, context: CapabilityGatewayContext): Promise<CapabilityExecutionOutcome<TOutput>>;
   /**

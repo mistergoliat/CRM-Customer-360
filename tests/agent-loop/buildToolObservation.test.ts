@@ -157,6 +157,87 @@ test("search_products observation exposes at most five compact product results",
   assert.doesNotMatch(JSON.stringify(data), /price|shortDescription|publicLink|https?:\/\//);
 });
 
+// SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2 (real bug fix). T12's
+// resolved/clarification_required/no_match classification
+// (productIntent.resolution.status) previously never reached the model -
+// projectSearchProducts only ever emitted {query, items}. These three tests
+// cover section 20 acceptance case 6 (NO_MATCH must remain a successful
+// business outcome, never a technical failure) directly.
+function productIntentFixture(status: "resolved" | "clarification_required" | "no_match", overrides: Record<string, unknown> = {}) {
+  return {
+    query: { original: "banda", normalized: "banda" },
+    resolution: { status, confidence: status === "resolved" ? 0.95 : 0 },
+    candidates: [],
+    statistics: { retrieved: 0, eligible: 0, returned: 0 },
+    warnings: [],
+    provenance: { source: "catalog_service_http", retrievedAt: FIXED_TIME, cached: false },
+    ...overrides
+  };
+}
+
+test("search_products observation surfaces resolutionStatus=resolved", () => {
+  const observation = buildToolObservation("search_products", {
+    ...completed({
+      query: "banda",
+      items: [{ productId: "7", combinationId: "0", sku: "SKU-7", name: "Pack 4 Bandas", variantLabel: null, shortDescription: null, stockQuantity: 4, availability: "in_stock", matchType: "exact_name" }],
+      provenance: { source: "catalog_service_http", retrievedAt: FIXED_TIME, cached: false },
+      productIntent: productIntentFixture("resolved")
+    }),
+    capability: "search_products"
+  });
+
+  const data = observation.data as { resolutionStatus?: string; items: unknown[] };
+  assert.equal(data.resolutionStatus, "resolved");
+  assert.equal(observation.status, "completed");
+});
+
+test("search_products observation surfaces resolutionStatus=clarification_required", () => {
+  const observation = buildToolObservation("search_products", {
+    ...completed({
+      query: "mancuerna",
+      items: [],
+      provenance: { source: "catalog_service_http", retrievedAt: FIXED_TIME, cached: false },
+      productIntent: productIntentFixture("clarification_required")
+    }),
+    capability: "search_products"
+  });
+
+  const data = observation.data as { resolutionStatus?: string };
+  assert.equal(data.resolutionStatus, "clarification_required");
+  assert.equal(observation.status, "completed", "clarification_required is a successful business outcome, never a technical failure");
+});
+
+test("search_products observation surfaces resolutionStatus=no_match, and it remains a successful (completed) outcome, never a technical failure", () => {
+  const observation = buildToolObservation("search_products", {
+    ...completed({
+      query: "producto-inexistente-xyz",
+      items: [],
+      provenance: { source: "catalog_service_http", retrievedAt: FIXED_TIME, cached: false },
+      productIntent: productIntentFixture("no_match")
+    }),
+    capability: "search_products"
+  });
+
+  const data = observation.data as { resolutionStatus?: string; items: unknown[] };
+  assert.equal(data.resolutionStatus, "no_match");
+  assert.equal(data.items.length, 0);
+  assert.equal(observation.status, "completed", "no_match must remain a successful business outcome, never blocked/failed");
+});
+
+test("search_products observation omits resolutionStatus (never emits it as literal undefined) when productIntent is absent - backward compatible with older fixtures/data", () => {
+  const observation = buildToolObservation("search_products", {
+    ...completed({
+      query: "banda",
+      items: [{ productId: "7", name: "Pack 4 Bandas", availability: "in_stock", stockQuantity: 4 }],
+      provenance: { source: "catalog_service_http", retrievedAt: FIXED_TIME, cached: false }
+    }),
+    capability: "search_products"
+  });
+
+  const data = observation.data as Record<string, unknown>;
+  assert.equal("resolutionStatus" in data, false);
+});
+
 function exploreResult(overrides: Partial<CatalogExploreResult> = {}): CatalogExploreResult {
   return {
     scope: { availability: "available" },

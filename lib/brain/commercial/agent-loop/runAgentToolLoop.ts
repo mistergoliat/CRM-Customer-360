@@ -236,7 +236,14 @@ export type RunAgentToolLoopInput = {
 export function buildToolDescriptions(): AgentLoopToolDescription[] {
   return AGENT_LOOP_TOOL_POOL.map((name) => {
     const definition = resolveCapabilityGatewayDefinition(name);
-    return { name, description: definition?.description ?? name, inputSchema: definition?.inputSchema };
+    return {
+      name,
+      description: definition?.description ?? name,
+      inputSchema: definition?.inputSchema,
+      useWhen: definition?.useWhen,
+      doNotUseWhen: definition?.doNotUseWhen,
+      operationSemantics: definition?.operationSemantics
+    };
   });
 }
 

@@ -1,6 +1,7 @@
 import type { RecentCatalogContext } from "./recentCatalogContext";
 import type { ToolObservation } from "./agentStepTypes";
 import { RECOMMENDATION_SOURCE_PRODUCT_BLOCKED_REASONS, type RecommendationSourceProductBlockedReason } from "./agentStepTypes";
+import { resolveCapabilitiesProducingEvidence } from "../capability-gateway/registry";
 
 export type ObservedCatalogProductEvidence = { productId: string; combinationId?: string };
 
@@ -23,8 +24,22 @@ export type ResolveObservedRecommendationSourceProductResult =
  * itself is deliberately excluded: its own candidates never authorize another
  * recommend_catalog_products call (no recursive recommend -> recommend -> recommend
  * chains without an explicit, separately-justified decision - none exists yet).
+ *
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. The base set is now derived
+ * from the registry's declared evidenceProduced=PRODUCT_IDENTITY (single
+ * source of truth, shared with pendingCatalogAction.ts/recentCatalogContext.ts)
+ * rather than a fourth hand-written tool-name literal - but the anti-
+ * recursion exclusion above is a consumer-specific provenance policy, not a
+ * structural fact about what recommend_catalog_products produces, so it
+ * stays an explicit subtraction here, never derived from the registry. A
+ * future capability that also declares evidenceProduced: PRODUCT_IDENTITY
+ * is picked up automatically; this exclusion must be revisited by name only
+ * if a real recursive-recommend use case is ever justified.
  */
-const OBSERVED_EVIDENCE_SOURCE_TOOLS = new Set(["search_products", "get_product_details", "explore_catalog"]);
+const RECOMMEND_CATALOG_PRODUCTS_EXCLUDED_AS_RECURSIVE_SOURCE = new Set(["recommend_catalog_products"]);
+const OBSERVED_EVIDENCE_SOURCE_TOOLS = new Set(
+  resolveCapabilitiesProducingEvidence("PRODUCT_IDENTITY").filter((tool) => !RECOMMEND_CATALOG_PRODUCTS_EXCLUDED_AS_RECURSIVE_SOURCE.has(tool))
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

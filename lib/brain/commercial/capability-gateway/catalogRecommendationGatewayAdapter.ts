@@ -249,6 +249,13 @@ export function recommendCatalogProductsCapability(getCapability: () => CatalogR
       "Recommend catalog products related to an already-identified source product. Requires sourceProduct.productId and, optionally, sourceProduct.combinationId - it does not search from free text (use search_products or explore_catalog for that), and should be used after search_products or get_product_details already identified a productId. Works without an identified customer. Set explicitRepurchaseRequested to true only when the customer expresses current intent to buy that same product again. excludedProducts lists products to exclude from the current recommendations. The result is a set of candidates, not confirmed commercial facts - use get_product_details before presenting price, stock, or a link for any recommended product.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: RECOMMEND_CATALOG_PRODUCTS_INPUT_SCHEMA,
+    // SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. Structurally produces
+    // PRODUCT_IDENTITY like the other three catalog discovery tools - this
+    // does NOT make its own candidates valid recursive sourceProduct
+    // evidence for another recommend_catalog_products call; that
+    // consumer-specific exclusion stays explicit in
+    // resolveObservedRecommendationSourceProduct.ts (see its own comment).
+    evidenceProduced: ["PRODUCT_IDENTITY"],
     // Preference per task section 14: avoid duplicated recommendation calls;
     // T10B5 makes exactly one physical HTTP call per invocation and owns no
     // retry of its own, T10B7 does not retry either.

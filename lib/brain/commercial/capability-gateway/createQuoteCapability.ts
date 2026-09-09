@@ -77,6 +77,8 @@ export function createQuoteCapability(
     governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "medium" },
     maxRetries: 0,
     inputSchema: CREATE_QUOTE_INPUT_SCHEMA,
+    evidenceProduced: ["QUOTE_CREATED"],
+    operationSemantics: "CREATE_SNAPSHOT",
     async checkAvailability() {
       if (!getQuoteServicePort()) {
         return { status: "unavailable", reason: "quote_service_not_configured" };

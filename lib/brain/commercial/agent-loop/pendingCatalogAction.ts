@@ -1,8 +1,21 @@
 import { safeQueryRows } from "@/lib/db";
 import type { PendingCatalogActionCandidateProduct, PendingCatalogActionStep, ToolObservation } from "./agentStepTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
+import { resolveCapabilitiesProducingEvidence } from "../capability-gateway/registry";
 
 const MAX_CANDIDATE_PRODUCT_IDS = 20;
+
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. Unlike
+ * resolveObservedRecommendationSourceProduct.ts, this consumer's own policy
+ * (CP-R1-T10B8D) treats recommend_catalog_products candidates as legitimate
+ * pendingCatalogAction evidence - so this is the registry-declared
+ * PRODUCT_IDENTITY producer set with no subtraction, kept as its own named
+ * constant (not re-derived inline) so the intent - "every tool this
+ * consumer accepts" - reads the same way the exclusion in
+ * resolveObservedRecommendationSourceProduct.ts does.
+ */
+const PENDING_CATALOG_ACTION_EVIDENCE_TOOLS = new Set(resolveCapabilitiesProducingEvidence("PRODUCT_IDENTITY"));
 
 export type PendingCatalogActionLoadResult = {
   pendingCatalogAction: PendingCatalogActionStep | null;
@@ -161,7 +174,7 @@ export function collectAllowedProductIds(input: {
   }
 
   for (const observation of input.toolObservations ?? []) {
-    if (!observation || observation.status !== "completed") continue;
+    if (!observation || observation.status !== "completed" || !PENDING_CATALOG_ACTION_EVIDENCE_TOOLS.has(observation.tool)) continue;
     const data = observation.data;
     if (!data || typeof data !== "object" || Array.isArray(data)) continue;
     const record = data as Record<string, unknown>;

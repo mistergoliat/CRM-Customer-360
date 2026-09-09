@@ -15,7 +15,7 @@ import type {
   ProductIntentCandidate,
   ProductIntentResolutionResult
 } from "@/lib/catalog";
-import type { CapabilityGatewayContext, CapabilityGatewayDefinition, CapabilityGovernanceMetadata } from "./types";
+import type { CapabilityEvidenceType, CapabilityGatewayContext, CapabilityGatewayDefinition, CapabilityGovernanceMetadata } from "./types";
 import { CUSTOMER_IDENTITY_CAPABILITY_DEFINITIONS } from "./customerIdentityCapabilities";
 import { companyKnowledgeCapability } from "./companyKnowledgeCapability";
 import { getSharedCatalogRecommendationCapability, recommendCatalogProductsCapability } from "./catalogRecommendationGatewayAdapter";
@@ -127,6 +127,7 @@ function searchProductsCapability(getPort: () => CatalogPort | null): Capability
     description: "Search the real product catalog by free text via the catalog microservice (T12 product intent resolution: resolved/clarification_required/no_match).",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: SEARCH_PRODUCTS_INPUT_SCHEMA,
+    evidenceProduced: ["PRODUCT_IDENTITY"],
     maxRetries: 1,
     async checkAvailability() {
       if (catalogUnavailable(getPort())) {
@@ -185,6 +186,7 @@ function getProductDetailsCapability(getPort: () => CatalogPort | null): Capabil
     description: "Read verified details (price, stock, variants) for one product via the catalog microservice.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: GET_PRODUCT_DETAILS_INPUT_SCHEMA,
+    evidenceProduced: ["PRODUCT_IDENTITY", "CURRENT_PRODUCT_DETAILS"],
     maxRetries: 1,
     async checkAvailability() {
       if (catalogUnavailable(getPort())) {
@@ -388,6 +390,7 @@ function exploreCatalogCapability(getPort: () => CatalogPort | null): Capability
       "Find extremes (cheapest/most expensive), top-N, rankings, or filtered/sorted views of the catalog by price, stock, or name - with optional filters by category, product type, price range, availability or text - via the catalog microservice. Not for open-ended semantic product discovery (use search_products) and not for expanding one already-identified product (use get_product_details).",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: EXPLORE_CATALOG_INPUT_SCHEMA,
+    evidenceProduced: ["PRODUCT_IDENTITY"],
     maxRetries: 1,
     async checkAvailability() {
       if (catalogUnavailable(getPort())) {
@@ -566,4 +569,19 @@ export function resolveCapabilityGatewayDefinition(capability: string): Capabili
  */
 export function resolveCapabilityGovernance(capability: string): CapabilityGovernanceMetadata | null {
   return CAPABILITIES_BY_NAME.get(capability)?.governance ?? null;
+}
+
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. The single declared source
+ * for "which registered capabilities structurally produce this evidence
+ * type" - replaces what used to be 2-3 independently hand-synced tool-name
+ * allowlists (resolveObservedRecommendationSourceProduct.ts,
+ * pendingCatalogAction.ts#collectAllowedProductIds, recentCatalogContext.ts).
+ * This is a structural fact about a capability's output shape, never a
+ * consumer-specific acceptance policy - a caller that needs a narrower,
+ * consumer-specific exclusion (e.g. anti-recursive recommend evidence)
+ * still applies its own filter on top of this result, explicitly.
+ */
+export function resolveCapabilitiesProducingEvidence(evidenceType: CapabilityEvidenceType): string[] {
+  return CAPABILITY_GATEWAY_REGISTRY.filter((definition) => definition.evidenceProduced?.includes(evidenceType)).map((definition) => definition.capability);
 }

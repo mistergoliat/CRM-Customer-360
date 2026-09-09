@@ -650,13 +650,23 @@ test("[LLM-R1-T03 Caso 5] gathering system/user prompt lengths are unchanged fro
   // the pre-existing exclusion-list line - see buildAgentStepPromptPackage.ts's
   // own comment above COMMERCIAL_CLOSING_RULE_LINES. Same delta in both
   // phases because that array is spread verbatim into both branches.
+  // SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2 (later): -210 chars,
+  // gathering-only - SELECT_PRODUCTS_RULE_LINES' former full-replace
+  // sentence ("Each select_products call must include the customer's
+  // complete desired selection... it replaces the entire previous
+  // selection.") was never in SELECT_PRODUCTS_FINALIZATION_RULE_LINES to
+  // begin with (finalization unaffected); it is now generated once,
+  // per-tool, from the registry's select_products
+  // operationSemantics: "FULL_REPLACEMENT" instead - see renderToolLine's
+  // OPERATION_SEMANTICS_SENTENCES. This fixture's availableTools does not
+  // include select_products, so that generated sentence never renders here.
   const { messages } = buildAgentStepPromptPackage({
     ...baseInput,
     phase: "gathering",
     identityConfiguration: pesasChileConfig(),
     availableTools: [{ name: "explore_catalog", description: "d" }]
   });
-  assert.equal(messages[0].content.length, 23731, "gathering systemPrompt.length must match the post-verified-link-autonomy measurement");
+  assert.equal(messages[0].content.length, 23521, "gathering systemPrompt.length must match the post-TR-B1-B2 measurement");
   // SALES-AGENT-R3-V1.8.1b (later): +126 chars - the new conversationContinuity
   // field (CONVERSATION_CONTINUITY_UNKNOWN, baseInput sets none) added to the
   // user payload alongside customerMessage/commercialContext/etc.
@@ -689,7 +699,7 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt stays meaningfully smaller 
     messages[0].content.length < gathering.messages[0].content.length,
     `finalization systemPrompt.length (${messages[0].content.length}) must be less than gathering's (${gathering.messages[0].content.length})`
   );
-  assert.equal(messages[0].content.length, 20420, "finalization systemPrompt.length must match the post-verified-link-autonomy measurement");
+  assert.equal(messages[0].content.length, 20420, "finalization systemPrompt.length must match the post-verified-link-autonomy measurement (unaffected by TR-B1-B2, see the gathering-only note above)");
   // SALES-AGENT-R3-V1.8.1b (later): +126 chars, same conversationContinuity
   // field addition the Caso 5 comment above explains - identical delta in
   // both phases (the user-payload shape is shared by gathering/finalization).
@@ -717,8 +727,11 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt stays meaningfully smaller 
 // Verified-link autonomy rule (later): both +883 chars, same
 // COMMERCIAL_CLOSING_RULE_LINES addition the T03 Caso 5 comment above
 // explains - identical delta in both phases.
+// SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2 (later): gathering -210 chars,
+// finalization unchanged - same select_products full-replace consolidation
+// the Caso 5 length test comment above explains.
 const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 20420;
-const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 23731;
+const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 23521;
 
 test("[LLM-R1-T04 Caso 1] a normal call (no priorAttemptFailure) is byte-identical to before this task - no repair instruction present", () => {
   for (const phase of ["gathering", "finalization"] as const) {
@@ -1452,4 +1465,80 @@ test("[C1-CaseC] mid-turn correction: the second customer message stays later in
   assert.ok(secondIndex > firstIndex, "the correction must appear later in the provider sequence");
   assert.equal(messages[secondIndex].role, "user");
   assert.equal(secondIndex, messages.length - 1, "the correction arrived after the one and only step, so it is the newest message");
+});
+
+// ---------------------------------------------------------------------------
+// SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2: useWhen/doNotUseWhen/
+// operationSemantics tool-line rendering. All additive/optional - a tool
+// description with none of these fields renders byte-identically to before
+// this task (already covered by the golden-length tests above, which use a
+// plain {name, description} fixture).
+// ---------------------------------------------------------------------------
+
+test("[TR-B1-B2] a tool description with operationSemantics: FULL_REPLACEMENT renders the generated full-replacement sentence exactly once", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [{ name: "select_products", description: "Records the selection.", operationSemantics: "FULL_REPLACEMENT" }]
+  });
+  const system = messages[0].content;
+  const sentence = "This call's arguments must represent the complete desired state after the operation, never only what changed - it replaces the entire previous state, it is not a delta or merge.";
+  const occurrences = system.split(sentence).length - 1;
+  assert.equal(occurrences, 1, "the full-replacement semantics sentence must appear exactly once, never duplicated with the old SELECT_PRODUCTS_RULE_LINES sentence it replaced");
+  // The old, now-removed hand-written sentence must never reappear.
+  assert.doesNotMatch(system, /Each select_products call must include the customer's complete desired selection/);
+});
+
+test("[TR-B1-B2] a tool description with operationSemantics: CREATE_SNAPSHOT renders the generated snapshot sentence", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [{ name: "create_quote", description: "Creates a quote.", operationSemantics: "CREATE_SNAPSHOT" }]
+  });
+  const system = messages[0].content;
+  assert.match(system, /This call creates a new snapshot from current backend state; it is not a delta or merge operation\./);
+});
+
+test("[TR-B1-B2] a tool description with no operationSemantics never renders either generated sentence", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [{ name: "explore_catalog", description: "d" }]
+  });
+  const system = messages[0].content;
+  assert.doesNotMatch(system, /it replaces the entire previous state/);
+  assert.doesNotMatch(system, /creates a new snapshot from current backend state/);
+});
+
+test("[TR-B1-B2] useWhen/doNotUseWhen render as boundary prose on the tool line when present, absent otherwise", () => {
+  const withBoundaries = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [{ name: "search_products_by_semantics", description: "d", useWhen: "the customer describes a functional need with no named product", doNotUseWhen: "the customer names a concrete, identifiable product" }]
+  });
+  const systemWith = withBoundaries.messages[0].content;
+  assert.match(systemWith, /Use when: the customer describes a functional need with no named product\./);
+  assert.match(systemWith, /Do not use when: the customer names a concrete, identifiable product\./);
+
+  const without = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    availableTools: [{ name: "explore_catalog", description: "d" }]
+  });
+  assert.doesNotMatch(without.messages[0].content, /Use when:/);
+  assert.doesNotMatch(without.messages[0].content, /Do not use when:/);
+});
+
+test("[TR-B1-B2] select_products' real registry definition (via buildToolDescriptions) declares operationSemantics: FULL_REPLACEMENT end to end", async () => {
+  const { buildToolDescriptions } = await import("@/lib/brain/commercial/agent-loop/runAgentToolLoop");
+  const descriptions = buildToolDescriptions();
+  const selectProducts = descriptions.find((tool) => tool.name === "select_products");
+  assert.equal(selectProducts?.operationSemantics, "FULL_REPLACEMENT");
+  const createQuote = descriptions.find((tool) => tool.name === "create_quote");
+  assert.equal(createQuote?.operationSemantics, "CREATE_SNAPSHOT");
 });

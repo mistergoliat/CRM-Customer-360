@@ -1,4 +1,5 @@
 import type { SalesAgentPromptConfiguration } from "../sales-agent-configuration";
+import type { CapabilityOperationSemantics } from "../capability-gateway/types";
 import { AGENT_STEP_TYPES } from "./agentStepTypes";
 import type { AgentLoopStepRecord } from "./agentStepTypes";
 import type { AgentLoopProviderMessage } from "./agentLoopProviderTypes";
@@ -40,6 +41,16 @@ export type AgentLoopToolDescription = {
    * {orderBy, orderDirection} instead of {sort:{by, direction}}).
    */
   inputSchema?: Record<string, unknown>;
+  /**
+   * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. Sourced from
+   * CapabilityGatewayDefinition.useWhen/doNotUseWhen/operationSemantics
+   * (runAgentToolLoop.ts#buildToolDescriptions) - rendered by renderToolLine
+   * below when present, absent otherwise (byte-identical to before this
+   * task for every capability that declares none of them).
+   */
+  useWhen?: string;
+  doNotUseWhen?: string;
+  operationSemantics?: CapabilityOperationSemantics;
 };
 
 export type AgentLoopPromptInput = {
@@ -401,11 +412,19 @@ const SHIPPING_DESTINATION_FINALIZATION_RULE_LINES = SHIPPING_DESTINATION_RULE_L
  * gate) is the only enforcement that every productId/combinationId was
  * actually observed; the model must still only ever supply ids it really
  * saw via search_products/get_product_details/explore_catalog.
+ *
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. The full-replace call
+ * semantics sentence that used to live here (index 2, verbatim: "Each
+ * select_products call must include the customer's complete desired
+ * selection... it replaces the entire previous selection.") is now
+ * generated once from the registry's select_products
+ * `operationSemantics: "FULL_REPLACEMENT"` (see renderToolLine's
+ * OPERATION_SEMANTICS_SENTENCES) - consolidated here instead of stated
+ * twice, per the same fact this task found stated four separate ways.
  */
 const SELECT_PRODUCTS_RULE_LINES = [
   "Use select_products only once the customer has confirmed which product(s) they want to buy and in what quantity - not merely while discussing, comparing, or recommending options.",
   "Every item's productId (and combinationId, when the customer means one specific variant) must be one already observed this conversation via search_products, get_product_details, or explore_catalog - never invent one, and never use a recommend_catalog_products candidate that was not separately observed by one of those three tools.",
-  "Each select_products call must include the customer's complete desired selection (every product and quantity they want), never only the items being added or changed - it replaces the entire previous selection.",
   "If commercialContext.commercialLineItems already reflects what the customer wants and nothing changed this turn, reuse it silently - do not call select_products again for the same selection.",
   "If a select_products observation has status \"blocked\", the referenced product was not actually observed this conversation - use search_products or get_product_details to observe the real product first, then retry with that exact productId/combinationId.",
   "quantity must be a whole number greater than zero - ask the customer to clarify an unclear or non-numeric quantity instead of guessing one.",
@@ -426,20 +445,22 @@ const SELECT_PRODUCTS_RULE_LINES = [
 ];
 
 /**
- * LLM-R1-T03. Finalization drops the first 4 lines above (when to call
- * select_products, evidence for its arguments, full-replace call semantics,
- * reuse-silently-instead-of-recalling - all impossible/moot once no tool
- * call can be made this turn). The remaining lines stay actionable via
- * `respond` itself: acknowledging a "blocked" selection honestly instead of
- * implying it succeeded, asking a clarifying question for an unclear
- * quantity rather than guessing, and (LLM-R1-T08C) never narrating a
- * selection/quantity/order as done without the same evidence gathering
+ * LLM-R1-T03. Finalization drops the first 3 lines above (when to call
+ * select_products, evidence for its arguments, reuse-silently-instead-of-
+ * recalling - all impossible/moot once no tool call can be made this turn;
+ * full-replace call semantics is no longer one of these lines at all, see
+ * the comment above - it is generated only alongside the tool listing,
+ * which finalization never renders). The remaining lines stay actionable
+ * via `respond` itself: acknowledging a "blocked" selection honestly
+ * instead of implying it succeeded, asking a clarifying question for an
+ * unclear quantity rather than guessing, and (LLM-R1-T08C) never narrating
+ * a selection/quantity/order as done without the same evidence gathering
  * requires - this last one is the finalization guard: since no tool is
  * available here, the only compliant response when the evidence is missing
  * is a truthful "not done yet", never a fabricated success. A contiguous
  * suffix of SELECT_PRODUCTS_RULE_LINES (never a duplicated copy).
  */
-const SELECT_PRODUCTS_FINALIZATION_RULE_LINES = SELECT_PRODUCTS_RULE_LINES.slice(4);
+const SELECT_PRODUCTS_FINALIZATION_RULE_LINES = SELECT_PRODUCTS_RULE_LINES.slice(3);
 
 /**
  * CRM-R1-T13E.2. calculate_shipping takes no arguments - destination,
@@ -523,15 +544,37 @@ function buildLoopContractLines(phase: "gathering" | "finalization", stepsRemain
 }
 
 /**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. One fixed, capability-
+ * independent sentence per operationSemantics class - generalizes what
+ * used to be a hand-written prose sentence per capability (e.g.
+ * select_products' own former SELECT_PRODUCTS_RULE_LINES full-replace
+ * line, now generated here instead and never duplicated). Deliberately no
+ * "READ" entry - governance.sideEffect already states that, and this map
+ * only exists for classes with real behavioral meaning beyond it.
+ */
+const OPERATION_SEMANTICS_SENTENCES: Record<CapabilityOperationSemantics, string> = {
+  FULL_REPLACEMENT: "This call's arguments must represent the complete desired state after the operation, never only what changed - it replaces the entire previous state, it is not a delta or merge.",
+  CREATE_SNAPSHOT: "This call creates a new snapshot from current backend state; it is not a delta or merge operation."
+};
+
+/**
  * ACS-R1-05.1-T02.6.1. Renders the tool's canonical inputSchema (sourced from
  * CapabilityGatewayDefinition.inputSchema, never redefined here) verbatim as
  * JSON, so the model sees the exact required argument shape instead of only
  * a free-text description. Absent for a tool with no declared schema (falls
  * back to description-only, previous behavior).
+ *
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. useWhen/doNotUseWhen/
+ * operationSemantics are appended the same way - present only for a
+ * capability that declares them, byte-identical to before this task for
+ * every capability that does not.
  */
 function renderToolLine(tool: AgentLoopToolDescription): string {
   const schemaText = tool.inputSchema ? ` Arguments must satisfy exactly this JSON Schema (no properties beyond what it lists): ${JSON.stringify(tool.inputSchema)}` : "";
-  return `- ${tool.name}: ${tool.description}${schemaText}`;
+  const useWhenText = tool.useWhen ? ` Use when: ${tool.useWhen}.` : "";
+  const doNotUseWhenText = tool.doNotUseWhen ? ` Do not use when: ${tool.doNotUseWhen}.` : "";
+  const operationSemanticsText = tool.operationSemantics ? ` ${OPERATION_SEMANTICS_SENTENCES[tool.operationSemantics]}` : "";
+  return `- ${tool.name}: ${tool.description}${schemaText}${useWhenText}${doNotUseWhenText}${operationSemanticsText}`;
 }
 
 /**

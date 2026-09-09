@@ -1,6 +1,7 @@
 import type { CapabilityGatewayResult } from "../capability-gateway/types";
 import { SHIPPING_CALCULATION_STALE_ERROR_CODE } from "@/lib/domains/selected-shipping-option";
 import type { CatalogExploreResult, CatalogProduct, CatalogSearchResult } from "@/lib/catalog";
+import type { SearchProductsCapabilityData } from "../capability-gateway/registry";
 import type { CompanyKnowledgeSearchResult } from "../capability-gateway/companyKnowledgeCapability";
 import type { SearchProductsV2Personalization, SearchProductsV2Recommendation, SearchProductsV2Warning } from "@/lib/catalog/search-products-v2/types";
 import type { BuildSearchProductsV2RequestSkipReason } from "../recommendation-context/searchProductsV2RequestTypes";
@@ -17,11 +18,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2 (real bug fix). T12's own
+ * resolved/clarification_required/no_match classification
+ * (SearchProductsCapabilityData.productIntent.resolution.status) previously
+ * never reached the model - a genuine no_match and a resolved-with-zero-
+ * candidates result were indistinguishable once items happened to be empty
+ * either way. Surfaced here as `resolutionStatus`, omitted (never `undefined`)
+ * when the capability's data does not carry a productIntent (e.g. a test
+ * fixture built before this task) - this is additive, never a required
+ * field. NO_MATCH stays a Gateway `status: "completed"` outcome (unchanged),
+ * never reprojected as a technical failure.
+ */
 function projectSearchProducts(data: unknown) {
   if (!isRecord(data)) return { items: [] };
-  const result = data as CatalogSearchResult;
+  const result = data as CatalogSearchResult & Partial<Pick<SearchProductsCapabilityData, "productIntent">>;
+  const resolutionStatus = result.productIntent?.resolution?.status;
   return {
     query: result.query,
+    ...(resolutionStatus ? { resolutionStatus } : {}),
     items: (result.items ?? []).slice(0, MAX_SEARCH_ITEMS).map((item) => ({
       productId: item.productId,
       name: item.name,
