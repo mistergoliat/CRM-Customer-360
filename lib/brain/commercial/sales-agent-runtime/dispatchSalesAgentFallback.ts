@@ -80,7 +80,20 @@ function mapTerminalReasonToFallbackClass(terminalReason: SalesAgentFallbackTerm
       return "model_unavailable";
     case "max_steps_exceeded":
     case "handoff":
+    // SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Same fallback
+    // vocabulary as the legacy budget-exhaustion case above - a turn that
+    // hit the catastrophic emergency ceiling is conceptually the same
+    // "needs another look before continuing" situation the customer already
+    // sees for max_steps_exceeded/handoff, never a fabricated new message.
+    case "emergency_limit_exceeded":
       return "max_steps_exceeded";
+    // A cancelled/no_progress turn is a technical stop, not a content
+    // problem - same bucket as timeout/provider_unavailable and
+    // invalid_model_result respectively.
+    case "cancelled":
+      return "model_unavailable";
+    case "no_progress":
+      return "invalid_model_result";
   }
 }
 

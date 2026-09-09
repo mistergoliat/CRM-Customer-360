@@ -238,7 +238,12 @@ export type AgentToolLoopTerminalReason =
   | "max_steps_exceeded"
   | "invalid_output"
   | "provider_unavailable"
-  | "timeout";
+  | "timeout"
+  // SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Only ever produced
+  // under BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED - see agent-loop/agentStepTypes.ts#AgentLoopTerminalReason.
+  | "cancelled"
+  | "no_progress"
+  | "emergency_limit_exceeded";
 
 // ACS-R1-05.1-T02.1 (post-smoke fix, point 8). Bounded, structural summary
 // per step - never raw tool arguments, never observation data/PII. Mirrors
@@ -435,6 +440,23 @@ export type AgentToolLoopCompletedRecordedPayload = {
     assimilatedInboundCount: number;
     assimilationCycleCount: number;
     invalidatedCandidateCount: number;
+  } | null;
+  /**
+   * SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Present only when
+   * open-turn mode (BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED) actually ran this
+   * turn - same "counts only, no raw prompt text" discipline as every other
+   * field here. decisionCount/toolExecutionCount/assimilationCycleCount/
+   * invalidatedCandidateCount above are unchanged and still populated the
+   * same way regardless of this field's presence.
+   */
+  openTurnExecution?: {
+    acceptedStepCount: number;
+    providerCallCount: number;
+    readToolExecutionCount: number;
+    mutationToolExecutionCount: number;
+    noProgressCycleCount: number;
+    terminalCheckpointContinueCount: number;
+    emergencyCeilingReached: boolean;
   } | null;
 };
 

@@ -142,10 +142,31 @@ export const GET_PRODUCT_DETAILS_PENDING_CATALOG_BLOCKED_REASON = "product_not_i
 export const AGENT_LOOP_TERMINAL_REASONS = [
   "responded",
   "handoff",
+  /**
+   * SALES-AGENT-R3-V1.8.2-A audit finding: dead code from runAgentToolLoop.ts's
+   * own perspective - the loop itself never constructs this value (budget
+   * exhaustion has always silently fallen through to the finalization phase
+   * instead). Kept only for downstream backward compatibility (existing
+   * exhaustive mappings/tests reference it). Under open-turn mode
+   * (BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED), the conceptually equivalent
+   * "stopped due to a budget ceiling" case is `emergency_limit_exceeded`
+   * (a catastrophic-guard ceiling, never the normal expected turn length) -
+   * this legacy value is not restored, not repurposed.
+   */
   "max_steps_exceeded",
   "invalid_output",
   "provider_unavailable",
-  "timeout"
+  "timeout",
+  // SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Only ever
+  // constructed under BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED - see
+  // runAgentToolLoop.ts's own cancellation/progress-guard/emergency-ceiling
+  // checks. Flag-off behavior never produces these.
+  /** External AbortSignal fired - distinct from a genuine wall-clock deadline timeout. */
+  "cancelled",
+  /** The deterministic no-progress guard fired: N consecutive cognitive/tool cycles produced no new evidence, no new user input, and no durable state advancement. */
+  "no_progress",
+  /** The catastrophic emergency ceiling (never the normal expected turn budget) was reached. */
+  "emergency_limit_exceeded"
 ] as const;
 export type AgentLoopTerminalReason = (typeof AGENT_LOOP_TERMINAL_REASONS)[number];
 
@@ -297,4 +318,26 @@ export type AgentLoopResult = {
   assimilationCycleCount?: number;
   /** How many respond/handoff/use_tool candidates were discarded as stale before being acted on - see the universal pre-action gate in runAgentToolLoop.ts. */
   invalidatedCandidateCount?: number;
+  /**
+   * SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Whether this turn
+   * ran under open-turn semantics - always populated by runAgentToolLoop.ts
+   * itself (true/false, never omitted from that function's own return
+   * points), same "always populate the fields this exact function owns"
+   * discipline as finalAssimilatedInboundMessageId etc. above. Every OTHER
+   * AgentLoopResult-shaped literal in this codebase legitimately never went
+   * through this loop and correctly omits it.
+   */
+  openTurnExecutionEnabled?: boolean;
+  /** One accepted provider inference (respond/handoff/use_tool, whether or not the tool it requested executed) - format-repair retries and assimilation-discarded candidates are NOT accepted steps and never counted here. */
+  acceptedStepCount?: number;
+  /** Every real provider invocation this turn, including format-repair retries and timeouts - distinct from acceptedStepCount, mirrors llmCalls.length. */
+  providerCallCount?: number;
+  readToolExecutionCount?: number;
+  mutationToolExecutionCount?: number;
+  /** Cumulative count of no-progress increments this turn (repeated-equivalent-evidence tool calls plus checkpoint-declined candidates) - never reset, unlike the live streak that actually drives the guard. */
+  noProgressCycleCount?: number;
+  /** How many times the terminal checkpoint declined a respond/handoff candidate and sent the turn back for another cognitive cycle. */
+  terminalCheckpointContinueCount?: number;
+  /** True only when the catastrophic emergency ceiling (never the normal expected turn budget) was actually reached this turn. */
+  emergencyCeilingReached?: boolean;
 };

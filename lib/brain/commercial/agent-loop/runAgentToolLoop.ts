@@ -20,6 +20,16 @@ import { classifyAgentLoopProviderFailure, logAgentLoopProviderFailure } from ".
 import { buildPendingCatalogActionFromRecommendation, collectAllowedProductIds, matchesPendingCatalogActionCandidate, normalizePendingCatalogActionForEvidence } from "./pendingCatalogAction";
 import { resolveObservedRecommendationSourceProduct } from "./resolveObservedRecommendationSourceProduct";
 import { checkUnbackedCommercialMutationClaim } from "./commercialMutationClaims";
+import { evaluateTurnStoppingCheckpoint } from "./turnStoppingCheckpoint";
+import {
+  createOpenTurnProgressState,
+  recordAcceptedStep,
+  recordAssimilationProgress,
+  recordProviderCall,
+  recordTerminalCheckpointContinue,
+  recordToolExecution,
+  isNoProgressGuardTriggered
+} from "./openTurnProgress";
 import { buildCommercialActionRequestFromAtlStep } from "../commercial-action-request/atlAdapter";
 import { executeCommercialActionRequest } from "../commercial-action-request/executeCommercialActionRequest";
 import { ensureCommercialActionOpportunity } from "../commercial-action-request/ensureCommercialActionOpportunity";
@@ -89,6 +99,27 @@ export const DEFAULT_TIMEOUT_MS = 20000;
 /** One initial attempt + one format retry - see dispatchAgentLoopResponse.ts for the fallback this feeds when both fail. */
 const FINALIZATION_MAX_ATTEMPTS = 2;
 const FINALIZATION_ALLOWED_TYPES = ["respond", "handoff"] as const;
+
+/**
+ * SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Catastrophic-guard
+ * ceilings only, never the normal expected turn budget under open-turn mode
+ * (BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED) - the deadline and the no-progress
+ * guard are the PRIMARY governors of a productive turn; these exist purely
+ * to bound a pathological one that somehow keeps making "progress" (new
+ * fingerprints, new assimilated input) forever. Deliberately generous
+ * relative to the legacy 3/2 ceiling - conservative pilot values, not tuned
+ * production limits. Never read when the flag is off - flag-off behavior
+ * keeps using maxDecisions/maxToolExecutions exactly as before this task.
+ */
+export const OPEN_TURN_EMERGENCY_MAX_ACCEPTED_STEPS = 24;
+export const OPEN_TURN_EMERGENCY_MAX_TOOL_EXECUTIONS = 20;
+/**
+ * How many consecutive no-progress cognitive/tool cycles are tolerated
+ * before the turn is terminated safely. Deliberately not 1 or 2 - a single
+ * dead end, or one materially different recovery attempt, must never trip
+ * this; only a genuine, repeated, evidence-free loop should.
+ */
+export const OPEN_TURN_NO_PROGRESS_THRESHOLD = 4;
 /**
  * LLM-R1-T08D, Parte 5 (Commercial Mutation Execution Guard). Fixed, honest,
  * backend-authored fallback - never invents that anything was persisted,
@@ -170,6 +201,20 @@ export type RunAgentToolLoopInput = {
    * loader available).
    */
   refreshCommercialContextSummary?: () => Promise<Record<string, unknown>>;
+  /**
+   * SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Resolved by the
+   * caller from BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED - never read from
+   * process.env here, same discipline as liveTurnAssimilationEnabled above.
+   * Default false/absent: every open-turn check below (gathering's
+   * continuation condition, the terminal checkpoint, progress tracking) is a
+   * pure no-op or falls back to the exact legacy 3/2-bounded control flow -
+   * byte-identical to before this task. When true: the gathering phase's
+   * continuation condition switches from the fixed maxDecisions/
+   * maxToolExecutions ceiling to cancellation/deadline/progress-guard/
+   * emergency-ceiling governance, and every respond/handoff candidate (both
+   * phases) passes through the terminal checkpoint before being accepted.
+   */
+  openTurnExecutionEnabled?: boolean;
 };
 
 /**
@@ -698,6 +743,11 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   const ensureOpportunity = input.ensureOpportunity ?? ensureCommercialActionOpportunity;
   const deadline = Date.now() + timeoutMs;
   const warnings: string[] = [];
+  // SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). See this input
+  // field's own comment - false/absent reproduces the exact legacy 3/2
+  // control flow everywhere below.
+  const openTurnExecutionEnabled = input.openTurnExecutionEnabled === true;
+  const progress = createOpenTurnProgressState();
 
   if (!input.provider) {
     return {
@@ -713,7 +763,15 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       finalAssimilatedInboundMessageId: null,
       assimilatedInboundMessageIds: [],
       assimilationCycleCount: 0,
-      invalidatedCandidateCount: 0
+      invalidatedCandidateCount: 0,
+      openTurnExecutionEnabled: input.openTurnExecutionEnabled === true,
+      acceptedStepCount: 0,
+      providerCallCount: 0,
+      readToolExecutionCount: 0,
+      mutationToolExecutionCount: 0,
+      noProgressCycleCount: 0,
+      terminalCheckpointContinueCount: 0,
+      emergencyCeilingReached: false
     };
   }
 
@@ -818,7 +876,15 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     finalAssimilatedInboundMessageId: assimilatedAnchorId,
     assimilatedInboundMessageIds,
     assimilationCycleCount,
-    invalidatedCandidateCount
+    invalidatedCandidateCount,
+    openTurnExecutionEnabled,
+    acceptedStepCount: progress.acceptedStepCount,
+    providerCallCount: progress.providerCallCount,
+    readToolExecutionCount: progress.readToolExecutionCount,
+    mutationToolExecutionCount: progress.mutationToolExecutionCount,
+    noProgressCycleCount: progress.noProgressCycleCount,
+    terminalCheckpointContinueCount: progress.terminalCheckpointContinueCount,
+    emergencyCeilingReached: progress.emergencyCeilingReached
   });
 
   // ACS-R1-05.1-T02.7. Observability only - functional continuity comes
@@ -906,7 +972,15 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       finalAssimilatedInboundMessageId: assimilatedAnchorId,
       assimilatedInboundMessageIds,
       assimilationCycleCount,
-      invalidatedCandidateCount
+      invalidatedCandidateCount,
+      openTurnExecutionEnabled,
+      acceptedStepCount: progress.acceptedStepCount,
+      providerCallCount: progress.providerCallCount,
+      readToolExecutionCount: progress.readToolExecutionCount,
+      mutationToolExecutionCount: progress.mutationToolExecutionCount,
+      noProgressCycleCount: progress.noProgressCycleCount,
+      terminalCheckpointContinueCount: progress.terminalCheckpointContinueCount,
+      emergencyCeilingReached: progress.emergencyCeilingReached
     };
   };
 
@@ -924,7 +998,15 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     finalAssimilatedInboundMessageId: assimilatedAnchorId,
     assimilatedInboundMessageIds,
     assimilationCycleCount,
-    invalidatedCandidateCount
+    invalidatedCandidateCount,
+    openTurnExecutionEnabled,
+    acceptedStepCount: progress.acceptedStepCount,
+    providerCallCount: progress.providerCallCount,
+    readToolExecutionCount: progress.readToolExecutionCount,
+    mutationToolExecutionCount: progress.mutationToolExecutionCount,
+    noProgressCycleCount: progress.noProgressCycleCount,
+    terminalCheckpointContinueCount: progress.terminalCheckpointContinueCount,
+    emergencyCeilingReached: progress.emergencyCeilingReached
   });
 
   // ---- Phase 1: gathering ----
@@ -953,7 +1035,23 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
    * all leave it null again.
    */
   let gatheringPendingRepairSignal: AgentLoopPriorAttemptFailure | null = null;
-  while (decisionIndex < maxDecisions && toolExecutionCount < maxToolExecutions) {
+  // SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Open-turn mode
+  // replaces the fixed maxDecisions/maxToolExecutions ceiling with
+  // cancellation/emergency-ceiling governance here (deadline stays checked
+  // right below, in BOTH modes, unconditionally - it is never removed).
+  // Flag-off: byte-identical to the pre-existing condition.
+  while (openTurnExecutionEnabled ? true : decisionIndex < maxDecisions && toolExecutionCount < maxToolExecutions) {
+    if (openTurnExecutionEnabled) {
+      if (input.abortSignal?.aborted) {
+        warnings.push("agent_loop_open_turn_cancelled");
+        return finalize("cancelled");
+      }
+      if (progress.acceptedStepCount >= OPEN_TURN_EMERGENCY_MAX_ACCEPTED_STEPS || toolExecutionCount >= OPEN_TURN_EMERGENCY_MAX_TOOL_EXECUTIONS) {
+        progress.emergencyCeilingReached = true;
+        warnings.push("agent_loop_open_turn_emergency_ceiling_reached");
+        return finalize("emergency_limit_exceeded");
+      }
+    }
     if (Date.now() > deadline) {
       warnings.push("agent_loop_timeout");
       return finalize("timeout");
@@ -984,6 +1082,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     // and the counter always advances exactly once per real provider call.
     const gatheringCallAttempt = gatheringAttemptIndex;
     gatheringAttemptIndex += 1;
+    recordProviderCall(progress);
 
     if (invoked.kind === "timeout") {
       llmCalls.push(buildTimeoutInferenceRecord({ phase: "gathering", attempt: gatheringCallAttempt, decisionIndex, elapsedMs: invoked.elapsedMs }));
@@ -1048,17 +1147,46 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     // top of this loop (design decision 3 - no arbitrary round cap).
     if (await tryAssimilate()) {
       invalidatedCandidateCount += 1;
+      if (openTurnExecutionEnabled) recordAssimilationProgress(progress);
       continue;
     }
 
-    if (step.type === "respond") {
+    // SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Under the flag,
+    // `respond`/`handoff` are only a PROPOSED natural stop - the terminal
+    // checkpoint decides whether the turn is structurally quiescent enough
+    // to actually accept it. Flag-off: unchanged, unconditionally terminal,
+    // same two branches as before this task.
+    if (step.type === "respond" || step.type === "handoff") {
+      if (openTurnExecutionEnabled) {
+        recordAcceptedStep(progress);
+        const unbackedExecutionClaim =
+          step.type === "respond"
+            ? checkUnbackedCommercialMutationClaim({ terminalReason: "responded", finalMessage: step.message, steps }).unbacked
+            : false;
+        const checkpoint = evaluateTurnStoppingCheckpoint({
+          candidateStepType: step.type,
+          unbackedExecutionClaim,
+          // Always false in this loop's sequential architecture - see this
+          // field's own comment in turnStoppingCheckpoint.ts.
+          hasUnreasonedToolObservation: false,
+          cancelled: Boolean(input.abortSignal?.aborted),
+          deadlineExceeded: Date.now() > deadline
+        });
+        if (checkpoint.decision === "continue") {
+          recordTerminalCheckpointContinue(progress);
+          warnings.push(`agent_loop_open_turn_checkpoint_continue:${checkpoint.reason}`);
+          if (isNoProgressGuardTriggered(progress, OPEN_TURN_NO_PROGRESS_THRESHOLD)) {
+            warnings.push("agent_loop_open_turn_no_progress");
+            return finalize("no_progress");
+          }
+          // Discarded, exactly like a stale candidate: never pushed to
+          // steps, never treated as terminal - the turn re-enters this same
+          // loop for a fresh decision.
+          continue;
+        }
+      }
       steps.push({ stepIndex: decisionIndex, step, governance: null, observation: null, phase: "gathering" });
-      return respondedResult(step);
-    }
-
-    if (step.type === "handoff") {
-      steps.push({ stepIndex: decisionIndex, step, governance: null, observation: null, phase: "gathering" });
-      return handoffResult(step.reason);
+      return step.type === "respond" ? respondedResult(step) : handoffResult(step.reason);
     }
 
     const toolObservationsThisTurn = steps.map((record) => record.observation).filter((observation): observation is ToolObservation => observation !== null);
@@ -1069,6 +1197,19 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     });
     if (result.executed) toolExecutionCount += 1;
     steps.push({ stepIndex: decisionIndex, step: result.step, governance: result.governance, observation: result.observation, phase: "gathering" });
+    if (openTurnExecutionEnabled) {
+      recordAcceptedStep(progress);
+      recordToolExecution(progress, {
+        tool: result.step.tool,
+        toolClass: resolveAgentCapabilityExposure(result.step.tool) === "COMMERCIAL_ACTION" ? "mutation" : "read",
+        observation: result.observation,
+        executed: result.executed
+      });
+      if (isNoProgressGuardTriggered(progress, OPEN_TURN_NO_PROGRESS_THRESHOLD)) {
+        warnings.push("agent_loop_open_turn_no_progress");
+        return finalize("no_progress");
+      }
+    }
     const terminalFailure = getPendingCatalogActionTerminalFailure({
       step: result.step,
       observation: result.observation,
@@ -1131,9 +1272,13 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     // flight (not before it started). The tool's own result stays as real
     // evidence in `steps` either way - never erased - the next inference
     // simply also sees whatever new customer input arrived meanwhile.
-    // Ignoring the return value on purpose: nothing to invalidate here, this
-    // step already executed and is already durable/pushed.
-    await tryAssimilate();
+    // Ignoring the return value for legacy control-flow purposes: nothing to
+    // invalidate here, this step already executed and is already
+    // durable/pushed. Open-turn mode still records it as progress (new
+    // durable input arriving IS progress, task Section 11) without changing
+    // control flow.
+    const assimilatedPostTool = await tryAssimilate();
+    if (openTurnExecutionEnabled && assimilatedPostTool) recordAssimilationProgress(progress);
 
     decisionIndex += 1;
     // LLM-R1-T02. A new decision slot starts at attempt 0 again.
@@ -1163,6 +1308,24 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   /** Observability only - how many real provider calls finalization has made so far, never bounded, never reset. Distinct from formatRepairAttempt (the actual retry budget). */
   let finalizationCallIndex = 0;
   while (true) {
+    // SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Finalization is
+    // reached under open-turn mode ONLY via genuine format-repair exhaustion
+    // in gathering (never via budget exhaustion - see the gathering loop's
+    // own condition above) - "malformed structured output / forced safe
+    // terminal formatting / provider response repair" only, per task Section
+    // 9. Still needs its own cancellation/emergency guard: a checkpoint
+    // "continue" below re-enters this same loop and must stay bounded.
+    if (openTurnExecutionEnabled) {
+      if (input.abortSignal?.aborted) {
+        warnings.push("agent_loop_open_turn_cancelled");
+        return finalize("cancelled");
+      }
+      if (progress.acceptedStepCount >= OPEN_TURN_EMERGENCY_MAX_ACCEPTED_STEPS || toolExecutionCount >= OPEN_TURN_EMERGENCY_MAX_TOOL_EXECUTIONS) {
+        progress.emergencyCeilingReached = true;
+        warnings.push("agent_loop_open_turn_emergency_ceiling_reached");
+        return finalize("emergency_limit_exceeded");
+      }
+    }
     if (Date.now() > deadline) {
       warnings.push("agent_loop_timeout");
       return finalize("timeout");
@@ -1189,6 +1352,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);
     const finalizationAttempt = finalizationCallIndex;
     finalizationCallIndex += 1;
+    recordProviderCall(progress);
 
     if (invoked.kind === "timeout") {
       llmCalls.push(buildTimeoutInferenceRecord({ phase: "finalization", attempt: finalizationAttempt, decisionIndex: null, elapsedMs: invoked.elapsedMs }));
@@ -1241,16 +1405,42 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     // not a format failure.
     if (await tryAssimilate()) {
       invalidatedCandidateCount += 1;
+      if (openTurnExecutionEnabled) recordAssimilationProgress(progress);
       continue;
     }
 
-    steps.push({ stepIndex: steps.length, step, governance: null, observation: null, phase: "finalization" });
+    // SALES-AGENT-R3-V1.8.2-B. Same terminal-checkpoint treatment as
+    // gathering's own respond/handoff branch above - see that block's
+    // comment. `step.type` is always "respond"/"handoff" here at runtime
+    // (FINALIZATION_ALLOWED_TYPES), the guard below only narrows the static
+    // type to match.
+    if (step.type === "respond" || step.type === "handoff") {
+      if (openTurnExecutionEnabled) {
+        recordAcceptedStep(progress);
+        const unbackedExecutionClaim =
+          step.type === "respond"
+            ? checkUnbackedCommercialMutationClaim({ terminalReason: "responded", finalMessage: step.message, steps }).unbacked
+            : false;
+        const checkpoint = evaluateTurnStoppingCheckpoint({
+          candidateStepType: step.type,
+          unbackedExecutionClaim,
+          hasUnreasonedToolObservation: false,
+          cancelled: Boolean(input.abortSignal?.aborted),
+          deadlineExceeded: Date.now() > deadline
+        });
+        if (checkpoint.decision === "continue") {
+          recordTerminalCheckpointContinue(progress);
+          warnings.push(`agent_loop_open_turn_checkpoint_continue:${checkpoint.reason}`);
+          if (isNoProgressGuardTriggered(progress, OPEN_TURN_NO_PROGRESS_THRESHOLD)) {
+            warnings.push("agent_loop_open_turn_no_progress");
+            return finalize("no_progress");
+          }
+          continue;
+        }
+      }
 
-    if (step.type === "respond") {
-      return respondedResult(step);
-    }
-    if (step.type === "handoff") {
-      return handoffResult(step.reason);
+      steps.push({ stepIndex: steps.length, step, governance: null, observation: null, phase: "finalization" });
+      return step.type === "respond" ? respondedResult(step) : handoffResult(step.reason);
     }
   }
 }

@@ -114,6 +114,8 @@ export type RunSalesAgentRuntimeCycleInput = {
    * dispatch has no settlement row at all).
    */
   selfSettlementId?: number | null;
+  /** SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Resolved by the caller from BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED - threaded to runSalesAgentRuntime unchanged. */
+  openTurnExecutionEnabled?: boolean;
 };
 
 /**
@@ -283,7 +285,13 @@ function buildCommercialNeed(snapshot: CommercialContextSnapshot): ContinuityFal
 const FAILURE_REASON_TO_TERMINAL_REASON: Record<string, AgentLoopTerminalReason> = {
   timeout: "timeout",
   invalid_output: "invalid_output",
-  max_steps_exceeded: "max_steps_exceeded"
+  max_steps_exceeded: "max_steps_exceeded",
+  // SALES-AGENT-R3-V1.8.2-B. Open-turn-only reasons - round-trip verbatim
+  // (never collapse to the "provider_unavailable" catch-all below) so
+  // dispatchSalesAgentTerminalOutcome sees the real reason.
+  cancelled: "cancelled",
+  no_progress: "no_progress",
+  emergency_limit_exceeded: "emergency_limit_exceeded"
 };
 
 /**
@@ -371,7 +379,8 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     persistentSessionCognitionEnabled: input.persistentSessionCognitionEnabled,
     additionalInboundMessageIds: input.additionalInboundMessageIds,
     liveTurnAssimilationEnabled: input.liveTurnAssimilationEnabled,
-    refreshCommercialContextSummary: input.refreshCommercialContextSummary
+    refreshCommercialContextSummary: input.refreshCommercialContextSummary,
+    openTurnExecutionEnabled: input.openTurnExecutionEnabled
   });
 
   if (runtime.status === "blocked") {
@@ -518,6 +527,22 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
             assimilatedInboundCount: runtime.assimilatedInboundMessageIds.length,
             assimilationCycleCount: runtime.assimilationCycleCount,
             invalidatedCandidateCount: runtime.invalidatedCandidateCount
+          }
+        : undefined,
+      // SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Present only
+      // when open-turn mode actually ran this turn - absent (never a
+      // fabricated all-zero object) for every flag-off turn, same
+      // "present only when it actually applied" discipline as
+      // liveTurnAssimilation above.
+      openTurnExecution: runtime.openTurnExecutionEnabled
+        ? {
+            acceptedStepCount: runtime.acceptedStepCount,
+            providerCallCount: runtime.providerCallCount,
+            readToolExecutionCount: runtime.readToolExecutionCount,
+            mutationToolExecutionCount: runtime.mutationToolExecutionCount,
+            noProgressCycleCount: runtime.noProgressCycleCount,
+            terminalCheckpointContinueCount: runtime.terminalCheckpointContinueCount,
+            emergencyCeilingReached: runtime.emergencyCeilingReached
           }
         : undefined
     });

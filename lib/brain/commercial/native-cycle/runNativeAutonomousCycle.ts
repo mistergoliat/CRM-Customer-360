@@ -24,6 +24,7 @@ import {
   buildSessionCompactionFeatureFlags,
   shouldEnablePersistentSessionCognition,
   shouldEnableLiveTurnAssimilation,
+  shouldEnableOpenTurnExecution,
   readEnvFlag,
   shouldRouteToMultiIntentPlanner,
   shouldRouteToCommercialWork,
@@ -746,6 +747,7 @@ export async function runNativeAutonomousCycle(
     // hotfix's own scope guard - ATL's existing behavior is unchanged.
     const sessionCompactionFeatureFlags = buildSessionCompactionFeatureFlags();
     const liveTurnAssimilationEnabled = shouldEnableLiveTurnAssimilation();
+    const openTurnExecutionEnabled = shouldEnableOpenTurnExecution();
     const inboundMessageIdForCycle = String(input.messageId ?? input.correlationId);
     // SALES-AGENT-R3-V1.8.1b-A (Objetivo A - fresh commercial truth, Section
     // 8). Re-calls the exact same pure, stateless loader used to build
@@ -818,7 +820,8 @@ export async function runNativeAutonomousCycle(
       liveTurnAssimilationEnabled,
       refreshCommercialContextSummary,
       selfSettlementId: input.selfSettlementId,
-      checkInboundFreshnessBeforeDispatch: input.checkInboundFreshnessBeforeDispatch
+      checkInboundFreshnessBeforeDispatch: input.checkInboundFreshnessBeforeDispatch,
+      openTurnExecutionEnabled
     });
 
     const commercialNeed: NativeAutonomousCycleCommercialNeed = {

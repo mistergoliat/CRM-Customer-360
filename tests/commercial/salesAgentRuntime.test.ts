@@ -893,7 +893,17 @@ test("the result exposes only structured, bounded fields - no chain-of-thought",
       "finalAssimilatedInboundMessageId",
       "assimilatedInboundMessageIds",
       "assimilationCycleCount",
-      "invalidatedCandidateCount"
+      "invalidatedCandidateCount",
+      // SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Observational
+      // only, mirrors AgentLoopResult's own open-turn fields.
+      "openTurnExecutionEnabled",
+      "acceptedStepCount",
+      "providerCallCount",
+      "readToolExecutionCount",
+      "mutationToolExecutionCount",
+      "noProgressCycleCount",
+      "terminalCheckpointContinueCount",
+      "emergencyCeilingReached"
     ].sort()
   );
 });

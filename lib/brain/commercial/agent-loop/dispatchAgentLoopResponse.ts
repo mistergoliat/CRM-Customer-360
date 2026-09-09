@@ -33,7 +33,18 @@ function mapTerminalReasonToFallbackClass(terminalReason: AgentLoopResult["termi
     case "timeout":
       return "model_unavailable";
     case "max_steps_exceeded":
+    // SALES-AGENT-R3-V1.8.2-B. This dispatcher is not wired to open-turn
+    // mode today (that flag is only threaded through the R3 SalesAgentRuntime
+    // call chain - see runNativeAutonomousCycle.ts), so these branches are
+    // unreachable in practice here; added only to keep this switch
+    // exhaustive over the shared AgentLoopTerminalReason union. Same mapping
+    // as dispatchSalesAgentFallback.ts's own equivalent switch.
+    case "emergency_limit_exceeded":
       return "max_steps_exceeded";
+    case "cancelled":
+      return "model_unavailable";
+    case "no_progress":
+      return "invalid_model_result";
   }
 }
 

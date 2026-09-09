@@ -415,6 +415,21 @@ export function shouldEnableLiveTurnAssimilation(): boolean {
   return readEnvFlag("BRAIN_R3_LIVE_TURN_ASSIMILATION_ENABLED", false);
 }
 
+/**
+ * SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Fail-closed (default
+ * false) - changes runAgentToolLoop's own turn-continuation/terminal-
+ * acceptance semantics (fixed 3/2 ceiling -> deadline/progress-guard/
+ * emergency-ceiling governance, `respond`/`handoff` unconditionally terminal
+ * -> gated by the terminal checkpoint), the same highest-traffic code path
+ * shouldEnableLiveTurnAssimilation above governs - gets its own independent
+ * kill switch for the same reason. Pilot stays scoped to whatever allowlist
+ * already gates SalesAgentRuntime (shouldRouteToSalesAgentRuntime's
+ * BRAIN_SALES_AGENT_RUNTIME_WA_IDS) - this flag adds no allowlist of its own.
+ */
+export function shouldEnableOpenTurnExecution(): boolean {
+  return readEnvFlag("BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED", false);
+}
+
 export function buildLegacySalesConsultativeFeatureFlags(
   overrides?: Partial<CommercialLegacySalesConsultativeFeatureFlags>
 ): CommercialLegacySalesConsultativeFeatureFlags {

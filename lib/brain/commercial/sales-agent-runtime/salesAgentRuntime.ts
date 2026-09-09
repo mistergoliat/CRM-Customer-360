@@ -108,6 +108,8 @@ export type SalesAgentRuntimeInput = {
   liveTurnAssimilationEnabled?: boolean;
   /** SALES-AGENT-R3-V1.8.1b-A. Threaded to runAgentToolLoop unchanged - see that type's own comment. */
   refreshCommercialContextSummary?: () => Promise<Record<string, unknown>>;
+  /** SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Resolved by the caller from BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED - threaded to runAgentToolLoop unchanged. */
+  openTurnExecutionEnabled?: boolean;
 };
 
 export const SALES_AGENT_RUNTIME_STATUSES = ["responded", "blocked", "failed", "handoff"] as const;
@@ -139,6 +141,15 @@ export type SalesAgentRuntimeResult = {
   assimilationCycleCount: number;
   /** Mirrors AgentLoopResult's own field - how many respond/handoff/use_tool candidates were discarded as stale. */
   invalidatedCandidateCount: number;
+  /** SALES-AGENT-R3-V1.8.2-B. Mirrors AgentLoopResult's own open-turn observability fields - see that type's own comments. */
+  openTurnExecutionEnabled: boolean;
+  acceptedStepCount: number;
+  providerCallCount: number;
+  readToolExecutionCount: number;
+  mutationToolExecutionCount: number;
+  noProgressCycleCount: number;
+  terminalCheckpointContinueCount: number;
+  emergencyCeilingReached: boolean;
 };
 
 /**
@@ -248,7 +259,15 @@ function blockedResult(reason: string, opportunityId: number | null): SalesAgent
     finalAssimilatedInboundMessageId: null,
     assimilatedInboundMessageIds: [],
     assimilationCycleCount: 0,
-    invalidatedCandidateCount: 0
+    invalidatedCandidateCount: 0,
+    openTurnExecutionEnabled: false,
+    acceptedStepCount: 0,
+    providerCallCount: 0,
+    readToolExecutionCount: 0,
+    mutationToolExecutionCount: 0,
+    noProgressCycleCount: 0,
+    terminalCheckpointContinueCount: 0,
+    emergencyCeilingReached: false
   };
 }
 
@@ -270,7 +289,15 @@ function failedResult(reason: string, opportunityId: number | null): SalesAgentR
     finalAssimilatedInboundMessageId: null,
     assimilatedInboundMessageIds: [],
     assimilationCycleCount: 0,
-    invalidatedCandidateCount: 0
+    invalidatedCandidateCount: 0,
+    openTurnExecutionEnabled: false,
+    acceptedStepCount: 0,
+    providerCallCount: 0,
+    readToolExecutionCount: 0,
+    mutationToolExecutionCount: 0,
+    noProgressCycleCount: 0,
+    terminalCheckpointContinueCount: 0,
+    emergencyCeilingReached: false
   };
 }
 
@@ -280,7 +307,14 @@ const TERMINAL_REASON_TO_STATUS: Record<AgentLoopTerminalReason, SalesAgentRunti
   max_steps_exceeded: "failed",
   invalid_output: "failed",
   provider_unavailable: "failed",
-  timeout: "failed"
+  timeout: "failed",
+  // SALES-AGENT-R3-V1.8.2-B. Open-turn-only reasons - same "failed" bucket
+  // as every other non-responded/non-handoff technical stop above; the
+  // fallback dispatcher (dispatchSalesAgentFallback.ts) distinguishes the
+  // actual customer-facing copy from `reason`, never from `status`.
+  cancelled: "failed",
+  no_progress: "failed",
+  emergency_limit_exceeded: "failed"
 };
 
 export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promise<SalesAgentRuntimeResult> {
@@ -387,7 +421,8 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     persistentSessionHistoricalMessages: persistentSessionCognition.active ? persistentSessionCognition.historicalMessages : null,
     conversationContinuity,
     liveTurnAssimilationEnabled: input.liveTurnAssimilationEnabled,
-    refreshCommercialContextSummary: input.refreshCommercialContextSummary
+    refreshCommercialContextSummary: input.refreshCommercialContextSummary,
+    openTurnExecutionEnabled: input.openTurnExecutionEnabled
   };
 
   // SALES-AGENT-R3-V1.8-D2. Durable BEFORE cognition starts - see
@@ -492,6 +527,14 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     finalAssimilatedInboundMessageId: loop.finalAssimilatedInboundMessageId ?? null,
     assimilatedInboundMessageIds: loop.assimilatedInboundMessageIds ?? [],
     assimilationCycleCount: loop.assimilationCycleCount ?? 0,
-    invalidatedCandidateCount: loop.invalidatedCandidateCount ?? 0
+    invalidatedCandidateCount: loop.invalidatedCandidateCount ?? 0,
+    openTurnExecutionEnabled: loop.openTurnExecutionEnabled ?? false,
+    acceptedStepCount: loop.acceptedStepCount ?? 0,
+    providerCallCount: loop.providerCallCount ?? 0,
+    readToolExecutionCount: loop.readToolExecutionCount ?? 0,
+    mutationToolExecutionCount: loop.mutationToolExecutionCount ?? 0,
+    noProgressCycleCount: loop.noProgressCycleCount ?? 0,
+    terminalCheckpointContinueCount: loop.terminalCheckpointContinueCount ?? 0,
+    emergencyCeilingReached: loop.emergencyCeilingReached ?? false
   };
 }
