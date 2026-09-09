@@ -8,6 +8,7 @@ import { renderSalesAgentIdentityPrompt } from "./renderSalesAgentIdentityPrompt
 import { describeStockDisclosure } from "./stockDisclosurePolicy";
 import type { AgentStepValidationReasonCode } from "./validateAgentStep";
 import { CONVERSATION_CONTINUITY_UNKNOWN, type ConversationContinuitySignal } from "./conversationContinuity";
+import { buildHarnessAlignedMessages, type AgentStepPromptProjectionMetadata, type CustomerMessageFragment } from "./harnessAlignedMessageProjection";
 
 /**
  * LLM-R1-T04. What went wrong on the immediately preceding provider call
@@ -105,6 +106,22 @@ export type AgentLoopPromptInput = {
    * the safer default when truly nothing is known.
    */
   conversationContinuity?: ConversationContinuitySignal | null;
+  /**
+   * SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Resolved
+   * by the caller (runAgentToolLoop.ts) from
+   * BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED - never read from
+   * process.env here, same discipline as every other BRAIN_R3_* flag
+   * threaded into this loop. Default false/absent: this function's output is
+   * byte-identical to before this task - see harnessAlignedMessageProjection.ts
+   * for the mega-envelope replacement this flag switches to.
+   */
+  harnessAlignedMessageModelEnabled?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8.2-C1. Only meaningful when harnessAlignedMessageModelEnabled
+   * is true; ignored otherwise. Absent/empty falls back to a single fragment
+   * built from customerMessage - see buildAgentStepPromptPackage() below.
+   */
+  customerMessageFragments?: CustomerMessageFragment[] | null;
 };
 
 const RESPOND_JSON_INSTRUCTION = "Return exactly one JSON object matching AgentStep, nothing else, no markdown fence.";
@@ -605,6 +622,11 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
   ];
 }
 
+/** SALES-AGENT-R3-V1.8.2-C1. Uniform observability shape for both legacy_envelope return points below - never populated with tool/assimilation counts, since those are folded (unobservable) into priorStepsThisTurn/customerMessage under this mode. */
+function legacyEnvelopeProjection(messageCount: number): AgentStepPromptProjectionMetadata {
+  return { mode: "legacy_envelope", messageCount, toolObservationCount: 0, assimilatedUserMessageCount: 0 };
+}
+
 function summarizeObservation(record: AgentLoopStepRecord) {
   const step = record.step;
   return {
@@ -661,7 +683,7 @@ function buildPriorAttemptFailureLines(priorAttemptFailure: AgentLoopPriorAttemp
  * the `user` message (unchanged shape) - layers 0-4 compose the `system`
  * message.
  */
-export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { messages: AgentLoopProviderMessage[] } {
+export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { messages: AgentLoopProviderMessage[]; projection: AgentStepPromptProjectionMetadata } {
   const phase = input.phase ?? "gathering";
 
   const systemInstructions = [
@@ -671,6 +693,30 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
     renderSalesAgentIdentityPrompt(input.identityConfiguration),
     IMMUTABLE_CONFIGURATION_BOUNDARY_LINE
   ].join("\n");
+
+  // SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Entirely
+  // separate branch, checked before the legacy/persistent branches below -
+  // none of that existing code is touched, so flag-off output is byte-
+  // identical to before this task. Subsumes the persistent-vs-legacy
+  // distinction (historicalMessages is simply [] for a turn with no
+  // persistent session) rather than duplicating a third hybrid shape.
+  if (input.harnessAlignedMessageModelEnabled) {
+    const fragments: CustomerMessageFragment[] =
+      input.customerMessageFragments && input.customerMessageFragments.length > 0
+        ? input.customerMessageFragments
+        : [{ id: null, text: input.customerMessage, afterStepCount: 0 }];
+    return buildHarnessAlignedMessages({
+      systemInstructions,
+      currentTime: input.currentTime,
+      commercialContextSummary: input.commercialContextSummary,
+      recentCatalogContext: input.recentCatalogContext,
+      pendingCatalogAction: input.pendingCatalogAction,
+      conversationContinuity: input.conversationContinuity,
+      historicalMessages: input.persistentSessionHistoricalMessages ?? [],
+      customerMessageFragments: fragments,
+      priorSteps: input.priorSteps
+    });
+  }
 
   // SALES-AGENT-R3-V1.8-D5.2. Persistent-session path - task brief Section B's
   // target shape: (1-2) the same stable+identity system message built above,
@@ -697,13 +743,12 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
       priorStepsThisTurn: input.priorSteps.map(summarizeObservation),
       question: "What is the single next AgentStep?"
     };
-    return {
-      messages: [
-        { role: "system", content: systemInstructions },
-        ...input.persistentSessionHistoricalMessages,
-        { role: "user", content: JSON.stringify(currentTurnPayload) }
-      ]
-    };
+    const messages: AgentLoopProviderMessage[] = [
+      { role: "system", content: systemInstructions },
+      ...input.persistentSessionHistoricalMessages,
+      { role: "user", content: JSON.stringify(currentTurnPayload) }
+    ];
+    return { messages, projection: legacyEnvelopeProjection(messages.length) };
   }
 
   const userPayload = {
@@ -717,10 +762,9 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
     question: "What is the single next AgentStep?"
   };
 
-  return {
-    messages: [
-      { role: "system", content: systemInstructions },
-      { role: "user", content: JSON.stringify(userPayload) }
-    ]
-  };
+  const messages: AgentLoopProviderMessage[] = [
+    { role: "system", content: systemInstructions },
+    { role: "user", content: JSON.stringify(userPayload) }
+  ];
+  return { messages, projection: legacyEnvelopeProjection(messages.length) };
 }

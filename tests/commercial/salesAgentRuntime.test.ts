@@ -903,7 +903,14 @@ test("the result exposes only structured, bounded fields - no chain-of-thought",
       "mutationToolExecutionCount",
       "noProgressCycleCount",
       "terminalCheckpointContinueCount",
-      "emergencyCeilingReached"
+      "emergencyCeilingReached",
+      // SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing).
+      // Observational only, mirrors AgentLoopResult's own message-projection
+      // fields - a mode enum and bounded counts, never the prompt itself.
+      "messageModelMode",
+      "projectedMessageCount",
+      "projectedToolObservationCount",
+      "projectedAssimilatedUserMessageCount"
     ].sort()
   );
 });

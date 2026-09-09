@@ -7,6 +7,7 @@ import { executeReadTool } from "../read-tool-request/executeReadTool";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfiguration } from "../sales-agent-configuration";
 import { buildAgentStepPromptPackage, type AgentLoopPriorAttemptFailure, type AgentLoopToolDescription } from "./buildAgentStepPromptPackage";
+import type { AgentStepPromptProjectionMetadata, CustomerMessageFragment } from "./harnessAlignedMessageProjection";
 import type { ConversationContinuitySignal } from "./conversationContinuity";
 import { checkForNewInbound as defaultCheckForNewInbound } from "../turn-settlement/checkForNewInbound";
 import type { CheckForNewInboundResult } from "../turn-settlement/checkForNewInbound";
@@ -215,6 +216,15 @@ export type RunAgentToolLoopInput = {
    * phases) passes through the terminal checkpoint before being accepted.
    */
   openTurnExecutionEnabled?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Resolved
+   * by the caller from BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED - never
+   * read from process.env here, same discipline as liveTurnAssimilationEnabled/
+   * openTurnExecutionEnabled above. Default false/absent: every prompt build
+   * this turn keeps using the exact legacy/persistent mega-envelope shape,
+   * byte-identical to before this task - see buildAgentStepPromptPackage.ts.
+   */
+  harnessAlignedMessageModelEnabled?: boolean;
 };
 
 /**
@@ -771,7 +781,11 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       mutationToolExecutionCount: 0,
       noProgressCycleCount: 0,
       terminalCheckpointContinueCount: 0,
-      emergencyCeilingReached: false
+      emergencyCeilingReached: false,
+      messageModelMode: input.harnessAlignedMessageModelEnabled ? "harness_aligned" : "legacy_envelope",
+      projectedMessageCount: 0,
+      projectedToolObservationCount: 0,
+      projectedAssimilatedUserMessageCount: 0
     };
   }
 
@@ -819,6 +833,25 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   let assimilationCycleCount = 0;
   let invalidatedCandidateCount = 0;
 
+  // SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Maintained
+  // ALONGSIDE the legacy `customerMessage` string above, never instead of it -
+  // the legacy join is left completely unconditional so the flag-off path's
+  // data is untouched. Only ever read by buildAgentStepPromptPackage.ts when
+  // harnessAlignedMessageModelEnabled is true. `afterStepCount` is
+  // `steps.length` at the moment each fragment was discovered - since both
+  // this array and `steps` only ever grow by append, that fully determines
+  // causal interleaving order (see harnessAlignedMessageProjection.ts) without
+  // needing a database timestamp.
+  const harnessAlignedMessageModelEnabled = input.harnessAlignedMessageModelEnabled === true;
+  const customerMessageFragments: CustomerMessageFragment[] = [{ id: assimilatedAnchorId, text: input.customerMessage, afterStepCount: 0 }];
+  /** The most recent prompt build's projection metadata this turn - observability only, read by every return path below. */
+  let latestProjection: AgentStepPromptProjectionMetadata = {
+    mode: harnessAlignedMessageModelEnabled ? "harness_aligned" : "legacy_envelope",
+    messageCount: 0,
+    toolObservationCount: 0,
+    assimilatedUserMessageCount: 0
+  };
+
   /**
    * Shared safe-boundary helper - the ONLY place that reads new durable
    * inbound and folds it in. Guarded on liveTurnAssimilationEnabled +
@@ -847,6 +880,17 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     // re-query - deterministic, no drift, no double-count.
     const newText = found.fragments.map((fragment) => fragment.body.trim()).filter((body) => body.length > 0);
     customerMessage = [customerMessage, ...newText].filter((part) => part.length > 0).join("\n");
+    // SALES-AGENT-R3-V1.8.2-C1. Same non-empty-after-trim filter as the
+    // legacy join above (so both representations agree on which fragments
+    // count) - each surviving fragment becomes its own discrete entry
+    // instead of being folded into one string, stamped with the causal
+    // insertion point (steps.length right now).
+    if (harnessAlignedMessageModelEnabled) {
+      for (const fragment of found.fragments) {
+        const text = fragment.body.trim();
+        if (text.length > 0) customerMessageFragments.push({ id: fragment.id, text, afterStepCount: steps.length });
+      }
+    }
     assimilatedAnchorId = found.latestMessageId;
     assimilatedInboundMessageIds.push(...found.fragments.map((fragment) => fragment.id));
     assimilationCycleCount += 1;
@@ -884,7 +928,11 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     mutationToolExecutionCount: progress.mutationToolExecutionCount,
     noProgressCycleCount: progress.noProgressCycleCount,
     terminalCheckpointContinueCount: progress.terminalCheckpointContinueCount,
-    emergencyCeilingReached: progress.emergencyCeilingReached
+    emergencyCeilingReached: progress.emergencyCeilingReached,
+    messageModelMode: latestProjection.mode,
+    projectedMessageCount: latestProjection.messageCount,
+    projectedToolObservationCount: latestProjection.toolObservationCount,
+    projectedAssimilatedUserMessageCount: latestProjection.assimilatedUserMessageCount
   });
 
   // ACS-R1-05.1-T02.7. Observability only - functional continuity comes
@@ -980,7 +1028,11 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       mutationToolExecutionCount: progress.mutationToolExecutionCount,
       noProgressCycleCount: progress.noProgressCycleCount,
       terminalCheckpointContinueCount: progress.terminalCheckpointContinueCount,
-      emergencyCeilingReached: progress.emergencyCeilingReached
+      emergencyCeilingReached: progress.emergencyCeilingReached,
+      messageModelMode: latestProjection.mode,
+      projectedMessageCount: latestProjection.messageCount,
+      projectedToolObservationCount: latestProjection.toolObservationCount,
+      projectedAssimilatedUserMessageCount: latestProjection.assimilatedUserMessageCount
     };
   };
 
@@ -1006,7 +1058,11 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     mutationToolExecutionCount: progress.mutationToolExecutionCount,
     noProgressCycleCount: progress.noProgressCycleCount,
     terminalCheckpointContinueCount: progress.terminalCheckpointContinueCount,
-    emergencyCeilingReached: progress.emergencyCeilingReached
+    emergencyCeilingReached: progress.emergencyCeilingReached,
+    messageModelMode: latestProjection.mode,
+    projectedMessageCount: latestProjection.messageCount,
+    projectedToolObservationCount: latestProjection.toolObservationCount,
+    projectedAssimilatedUserMessageCount: latestProjection.assimilatedUserMessageCount
   });
 
   // ---- Phase 1: gathering ----
@@ -1070,11 +1126,14 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       identityConfiguration,
       priorAttemptFailure: gatheringPendingRepairSignal,
       persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null,
-      conversationContinuity: input.conversationContinuity ?? null
+      conversationContinuity: input.conversationContinuity ?? null,
+      harnessAlignedMessageModelEnabled,
+      customerMessageFragments
     });
     // LLM-R1-T04. Consumed immediately - this exact signal is for this one
     // call only, never for whatever call happens next.
     gatheringPendingRepairSignal = null;
+    latestProjection = promptPackage.projection;
 
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);
     // LLM-R1-T02. Captured once, before branching, so every branch below
@@ -1344,10 +1403,13 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       identityConfiguration,
       priorAttemptFailure: finalizationPendingRepairSignal,
       persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null,
-      conversationContinuity: input.conversationContinuity ?? null
+      conversationContinuity: input.conversationContinuity ?? null,
+      harnessAlignedMessageModelEnabled,
+      customerMessageFragments
     });
     // LLM-R1-T04. Consumed immediately - see the matching comment in gathering above.
     finalizationPendingRepairSignal = null;
+    latestProjection = promptPackage.projection;
 
     const invoked = await invokeProviderWithDeadline(input.provider, promptPackage.messages, input.correlationId, deadline, input.abortSignal);
     const finalizationAttempt = finalizationCallIndex;

@@ -116,6 +116,8 @@ export type RunSalesAgentRuntimeCycleInput = {
   selfSettlementId?: number | null;
   /** SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Resolved by the caller from BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED - threaded to runSalesAgentRuntime unchanged. */
   openTurnExecutionEnabled?: boolean;
+  /** SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Resolved by the caller from BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED - threaded to runSalesAgentRuntime unchanged. */
+  harnessAlignedMessageModelEnabled?: boolean;
 };
 
 /**
@@ -380,7 +382,8 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     additionalInboundMessageIds: input.additionalInboundMessageIds,
     liveTurnAssimilationEnabled: input.liveTurnAssimilationEnabled,
     refreshCommercialContextSummary: input.refreshCommercialContextSummary,
-    openTurnExecutionEnabled: input.openTurnExecutionEnabled
+    openTurnExecutionEnabled: input.openTurnExecutionEnabled,
+    harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled
   });
 
   if (runtime.status === "blocked") {

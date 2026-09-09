@@ -110,6 +110,8 @@ export type SalesAgentRuntimeInput = {
   refreshCommercialContextSummary?: () => Promise<Record<string, unknown>>;
   /** SALES-AGENT-R3-V1.8.2-B (Open Turn Execution Core). Resolved by the caller from BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED - threaded to runAgentToolLoop unchanged. */
   openTurnExecutionEnabled?: boolean;
+  /** SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Resolved by the caller from BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED - threaded to runAgentToolLoop unchanged. */
+  harnessAlignedMessageModelEnabled?: boolean;
 };
 
 export const SALES_AGENT_RUNTIME_STATUSES = ["responded", "blocked", "failed", "handoff"] as const;
@@ -150,6 +152,11 @@ export type SalesAgentRuntimeResult = {
   noProgressCycleCount: number;
   terminalCheckpointContinueCount: number;
   emergencyCeilingReached: boolean;
+  /** SALES-AGENT-R3-V1.8.2-C1. Mirrors AgentLoopResult's own message-projection observability fields - see that type's own comments. */
+  messageModelMode: "legacy_envelope" | "harness_aligned";
+  projectedMessageCount: number;
+  projectedToolObservationCount: number;
+  projectedAssimilatedUserMessageCount: number;
 };
 
 /**
@@ -267,7 +274,11 @@ function blockedResult(reason: string, opportunityId: number | null): SalesAgent
     mutationToolExecutionCount: 0,
     noProgressCycleCount: 0,
     terminalCheckpointContinueCount: 0,
-    emergencyCeilingReached: false
+    emergencyCeilingReached: false,
+    messageModelMode: "legacy_envelope",
+    projectedMessageCount: 0,
+    projectedToolObservationCount: 0,
+    projectedAssimilatedUserMessageCount: 0
   };
 }
 
@@ -297,7 +308,11 @@ function failedResult(reason: string, opportunityId: number | null): SalesAgentR
     mutationToolExecutionCount: 0,
     noProgressCycleCount: 0,
     terminalCheckpointContinueCount: 0,
-    emergencyCeilingReached: false
+    emergencyCeilingReached: false,
+    messageModelMode: "legacy_envelope",
+    projectedMessageCount: 0,
+    projectedToolObservationCount: 0,
+    projectedAssimilatedUserMessageCount: 0
   };
 }
 
@@ -422,7 +437,8 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     conversationContinuity,
     liveTurnAssimilationEnabled: input.liveTurnAssimilationEnabled,
     refreshCommercialContextSummary: input.refreshCommercialContextSummary,
-    openTurnExecutionEnabled: input.openTurnExecutionEnabled
+    openTurnExecutionEnabled: input.openTurnExecutionEnabled,
+    harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled
   };
 
   // SALES-AGENT-R3-V1.8-D2. Durable BEFORE cognition starts - see
@@ -535,6 +551,10 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     mutationToolExecutionCount: loop.mutationToolExecutionCount ?? 0,
     noProgressCycleCount: loop.noProgressCycleCount ?? 0,
     terminalCheckpointContinueCount: loop.terminalCheckpointContinueCount ?? 0,
-    emergencyCeilingReached: loop.emergencyCeilingReached ?? false
+    emergencyCeilingReached: loop.emergencyCeilingReached ?? false,
+    messageModelMode: loop.messageModelMode ?? "legacy_envelope",
+    projectedMessageCount: loop.projectedMessageCount ?? 0,
+    projectedToolObservationCount: loop.projectedToolObservationCount ?? 0,
+    projectedAssimilatedUserMessageCount: loop.projectedAssimilatedUserMessageCount ?? 0
   };
 }

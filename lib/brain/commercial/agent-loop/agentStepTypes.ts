@@ -340,4 +340,21 @@ export type AgentLoopResult = {
   terminalCheckpointContinueCount?: number;
   /** True only when the catastrophic emergency ceiling (never the normal expected turn budget) was actually reached this turn. */
   emergencyCeilingReached?: boolean;
+  /**
+   * SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Which
+   * cognitive projection buildAgentStepPromptPackage.ts used on the most
+   * recent prompt build this turn - "legacy_envelope" (the pre-existing
+   * mega-JSON user message, with or without persistent-session history) or
+   * "harness_aligned" (BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED).
+   * Always populated by runAgentToolLoop.ts itself, same "always populate the
+   * fields this exact function owns" discipline as openTurnExecutionEnabled
+   * above. Never the prompt/messages themselves - counts and an enum only.
+   */
+  messageModelMode?: "legacy_envelope" | "harness_aligned";
+  /** Total AgentLoopProviderMessage count in the most recent prompt build this turn. */
+  projectedMessageCount?: number;
+  /** How many tool-observation messages the most recent prompt build projected (0 under legacy_envelope, which folds them into priorStepsThisTurn instead). */
+  projectedToolObservationCount?: number;
+  /** How many mid-turn assimilated inbound fragments the most recent prompt build projected as their own discrete user message (0 under legacy_envelope). */
+  projectedAssimilatedUserMessageCount?: number;
 };

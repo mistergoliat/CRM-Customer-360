@@ -430,6 +430,23 @@ export function shouldEnableOpenTurnExecution(): boolean {
   return readEnvFlag("BRAIN_R3_OPEN_TURN_EXECUTION_ENABLED", false);
 }
 
+/**
+ * SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Fail-closed
+ * (default false) - switches buildAgentStepPromptPackage.ts's cognitive
+ * projection from the legacy single-JSON `user` mega-envelope to a causally-
+ * ordered sequence of discrete system/user/assistant messages (see
+ * harnessAlignedMessageProjection.ts). Changes prompt shape only - never
+ * Open Turn/Live Turn Assimilation/settlement/Capability Gateway semantics -
+ * but still gets its own independent kill switch, same reasoning as
+ * shouldEnableLiveTurnAssimilation/shouldEnableOpenTurnExecution above: this
+ * is the highest-traffic code path in the R3 stack. Pilot stays scoped to
+ * whatever allowlist already gates SalesAgentRuntime - this flag adds no
+ * allowlist of its own.
+ */
+export function shouldEnableHarnessAlignedMessageModel(): boolean {
+  return readEnvFlag("BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED", false);
+}
+
 export function buildLegacySalesConsultativeFeatureFlags(
   overrides?: Partial<CommercialLegacySalesConsultativeFeatureFlags>
 ): CommercialLegacySalesConsultativeFeatureFlags {

@@ -1142,3 +1142,314 @@ test("[D5-L] a stale historical price and the fresh authoritative price both rea
   const context = JSON.parse(contextMessage!.content) as { commercialContext: { commercialLineItems: { items: Array<{ unitPrice: number }> } } };
   assert.equal(context.commercialContext.commercialLineItems.items[0].unitPrice, 32990, "the fresh authoritative price is unaffected by the historical text");
 });
+
+// ---------------------------------------------------------------------------
+// SALES-AGENT-R3-V1.8.2-C1 - Harness-Aligned Message Sequencing
+// (BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED). Replaces the mega-JSON
+// user envelope with a causally-ordered sequence of discrete messages:
+// system(stable) / system(dynamic runtime context) / real history / raw
+// customer message / assistant-AgentStep+tool-observation pairs / newly
+// assimilated inbound as its own message. Loop-level integration tests
+// (fragment tracking across tryAssimilate(), Open Turn composition) live in
+// tests/agent-loop/harnessAlignedMessageSequencing.test.ts instead - this
+// pure function needs no loop machinery for the representation itself.
+// ---------------------------------------------------------------------------
+
+test("[C1-T1] flag off (explicit false) is byte-identical to flag omitted - legacy mega-envelope preserved exactly", () => {
+  const withFlagFalse = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig(), harnessAlignedMessageModelEnabled: false });
+  const withoutFlag = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig() });
+  assert.deepEqual(withFlagFalse, withoutFlag);
+  assert.equal(withoutFlag.projection.mode, "legacy_envelope");
+});
+
+test("[C1-T2] flag on: the current customer message is its own native user message with raw text, no JSON wrapper", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "todo en kg",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true
+  });
+  const lastMessage = messages[messages.length - 1];
+  assert.equal(lastMessage.role, "user");
+  assert.equal(lastMessage.content, "todo en kg");
+});
+
+test("[C1-T3] flag on: the customer message contains no runtime/business metadata - not JSON, no known field names", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "todo en kg",
+    commercialContextSummary: { opportunityStatus: "open" },
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true
+  });
+  const customerTurnMessage = messages.find((m) => m.content === "todo en kg");
+  assert.ok(customerTurnMessage);
+  assert.throws(() => JSON.parse(customerTurnMessage!.content), "the raw customer message must not itself be a JSON payload");
+  for (const key of ["commercialContext", "recentCatalogContext", "pendingCatalogAction", "conversationContinuity", "priorStepsThisTurn", "currentTime", "question"]) {
+    assert.ok(!customerTurnMessage!.content.includes(key), `customer message must never contain "${key}"`);
+  }
+});
+
+test("[C1-T4/T13] flag on: historical transcript is spliced verbatim, in original order, unmodified", () => {
+  const historicalMessages = [
+    { role: "user" as const, content: "necesito una barra olimpica de 20kg" },
+    { role: "assistant" as const, content: "tenemos la barra olimpica 20kg" }
+  ];
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "todo en kg",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    persistentSessionHistoricalMessages: historicalMessages
+  });
+  assert.deepEqual(messages.slice(2, 4), historicalMessages);
+});
+
+test("[C1-T5] flag on: dynamic runtime context is its own system message, clearly labeled as non-customer-authored", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    commercialContextSummary: { opportunityStatus: "open" },
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true
+  });
+  const dynamicContextMessage = messages[1];
+  assert.equal(dynamicContextMessage.role, "system");
+  assert.match(dynamicContextMessage.content, /not authored by the customer/i);
+  assert.ok(dynamicContextMessage.content.includes('"opportunityStatus":"open"'));
+});
+
+test("[C1-T6] flag on: one accepted tool step becomes an assistant AgentStep message plus a separate tool-observation user message", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "busco una kettlebell",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    priorSteps: [
+      {
+        stepIndex: 0,
+        phase: "gathering",
+        governance: "authorized",
+        step: { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+        observation: { tool: "search_products", status: "completed", data: { results: [] } }
+      }
+    ]
+  });
+  assert.deepEqual(
+    messages.map((m) => m.role),
+    ["system", "system", "user", "assistant", "user"]
+  );
+  const stepMessage = JSON.parse(messages[3].content) as { type: string; tool: string; arguments: Record<string, unknown> };
+  assert.deepEqual(stepMessage, { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } });
+  assert.match(messages[4].content, /^\[TOOL RESULT: search_products\]/);
+  assert.ok(messages[4].content.includes('"status":"completed"'));
+});
+
+test("[C1-T7] flag on: two tool steps preserve exact causal order - assistant/user alternating, never reordered", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "busco una kettlebell y despues el link",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    priorSteps: [
+      {
+        stepIndex: 0,
+        phase: "gathering",
+        governance: "authorized",
+        step: { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+        observation: { tool: "search_products", status: "completed", data: { results: [{ productId: "501" }] } }
+      },
+      {
+        stepIndex: 1,
+        phase: "gathering",
+        governance: "authorized",
+        step: { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
+        observation: { tool: "get_product_details", status: "completed", data: { productId: "501" } }
+      }
+    ]
+  });
+  assert.deepEqual(
+    messages.map((m) => m.role),
+    ["system", "system", "user", "assistant", "user", "assistant", "user"]
+  );
+  assert.match(messages[4].content, /^\[TOOL RESULT: search_products\]/);
+  assert.match(messages[6].content, /^\[TOOL RESULT: get_product_details\]/);
+  const secondStep = JSON.parse(messages[5].content) as { tool: string };
+  assert.equal(secondStep.tool, "get_product_details");
+});
+
+test("[C1-T8] flag on: priorStepsThisTurn is never also duplicated inside a mega-envelope-style message", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    priorSteps: [
+      {
+        stepIndex: 0,
+        phase: "gathering",
+        governance: "authorized",
+        step: { type: "use_tool", tool: "search_products", arguments: { query: "kettlebell" } },
+        observation: { tool: "search_products", status: "completed", data: { results: [] } }
+      }
+    ]
+  });
+  for (const message of messages) {
+    assert.ok(!message.content.includes("priorStepsThisTurn"), "priorStepsThisTurn must never appear under the new projection");
+  }
+});
+
+test("[C1-T9] flag on: gathering repair (priorAttemptFailure) keeps the new projection shape", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "todo en kg",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    priorAttemptFailure: { kind: "invalid_response" }
+  });
+  assert.match(messages[0].content, /previous response was structurally invalid or empty/i);
+  assert.equal(messages[messages.length - 1].role, "user");
+  assert.equal(messages[messages.length - 1].content, "todo en kg");
+});
+
+test("[C1-T10] flag on: finalization keeps the new projection shape, no tools offered", () => {
+  const { messages, projection } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    customerMessage: "todo en kg",
+    availableTools: [],
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true
+  });
+  assert.equal(projection.mode, "harness_aligned");
+  assert.equal(messages[messages.length - 1].content, "todo en kg");
+  assert.match(messages[0].content, /no more tools are available/i);
+});
+
+test("[C1-T11] D5.1-B06 regression does not return: zero-history turn start is [system, system, user], never bare [..., user, user]", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "el envio es a San Bernardo",
+    commercialContextSummary: { shippingDestination: null },
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    persistentSessionHistoricalMessages: []
+  });
+  assert.deepEqual(
+    messages.map((m) => m.role),
+    ["system", "system", "user"]
+  );
+  for (let i = 1; i < messages.length; i++) {
+    assert.ok(
+      !(messages[i].role === "user" && messages[i - 1].role === "user"),
+      "bare consecutive user/user adjacency must never occur on a fresh turn - this is the exact D5.1-B06 regression shape"
+    );
+  }
+});
+
+test("[C1-T12] flag on: first-turn (no persistent session at all) still produces a valid, usable message sequence", () => {
+  const { messages, projection } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "hola, buscando pesas",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true
+  });
+  assert.deepEqual(
+    messages.map((m) => m.role),
+    ["system", "system", "user"]
+  );
+  assert.equal(messages[2].content, "hola, buscando pesas");
+  assert.equal(projection.messageCount, 3);
+  assert.equal(projection.toolObservationCount, 0);
+  assert.equal(projection.assimilatedUserMessageCount, 0);
+});
+
+test("[C1] the fixed control question is absent under the new flag - redundant with the existing loop contract", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true
+  });
+  for (const message of messages) {
+    assert.ok(!message.content.includes("What is the single next AgentStep?"));
+  }
+});
+
+test("[C1-CaseA] history + short follow-up: 'todo en kg' is isolated as the final human-authored message before the causal trace", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "todo en kg",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    persistentSessionHistoricalMessages: [
+      { role: "user", content: "Quiero mancuernas de 10, 15 y 20 kg" },
+      { role: "assistant", content: "Perfecto, ¿en que unidad las prefieres, kg o lb?" }
+    ]
+  });
+  const lastMessage = messages[messages.length - 1];
+  assert.equal(lastMessage.role, "user");
+  assert.equal(lastMessage.content, "todo en kg");
+  assert.ok(!lastMessage.content.includes("Quiero mancuernas"), "the current message must never be merged with the historical one");
+});
+
+test("[C1-CaseB] established conversation: provider receives a natural continuation transcript, conversationContinuity is not embedded in the customer's text", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "y el envio?",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    conversationContinuity: { isFirstConversationalTurn: false, hasPriorAssistantMessages: true, hasPriorCustomerMessages: true },
+    persistentSessionHistoricalMessages: [
+      { role: "user", content: "necesito una barra olimpica" },
+      { role: "assistant", content: "tenemos la barra olimpica 20kg" }
+    ]
+  });
+  assert.deepEqual(
+    messages.map((m) => m.role),
+    ["system", "system", "user", "assistant", "user"]
+  );
+  const lastMessage = messages[messages.length - 1];
+  assert.equal(lastMessage.content, "y el envio?");
+  assert.ok(!lastMessage.content.includes("isFirstConversationalTurn"), "conversationContinuity must live in dynamic context, never the customer's own message");
+  assert.ok(messages[1].content.includes("isFirstConversationalTurn"), "conversationContinuity must be present in the dynamic runtime context message");
+});
+
+test("[C1-CaseC] mid-turn correction: the second customer message stays later in sequence and remains a distinct user-authored message", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "quiero 10, 15 y 20 kg",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    customerMessageFragments: [
+      { id: 100, text: "quiero 10, 15 y 20 kg", afterStepCount: 0 },
+      { id: 101, text: "olvida las de 20", afterStepCount: 1 }
+    ],
+    priorSteps: [
+      {
+        stepIndex: 0,
+        phase: "gathering",
+        governance: "authorized",
+        step: { type: "use_tool", tool: "search_products", arguments: { query: "mancuernas" } },
+        observation: { tool: "search_products", status: "completed", data: { results: [] } }
+      }
+    ]
+  });
+  const firstIndex = messages.findIndex((m) => m.content === "quiero 10, 15 y 20 kg");
+  const secondIndex = messages.findIndex((m) => m.content === "olvida las de 20");
+  assert.ok(firstIndex >= 0 && secondIndex >= 0);
+  assert.ok(secondIndex > firstIndex, "the correction must appear later in the provider sequence");
+  assert.equal(messages[secondIndex].role, "user");
+  assert.equal(secondIndex, messages.length - 1, "the correction arrived after the one and only step, so it is the newest message");
+});
