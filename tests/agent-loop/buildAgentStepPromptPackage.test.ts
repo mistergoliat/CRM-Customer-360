@@ -426,7 +426,7 @@ test("[PR27] commercial closing rule (multiple products) always uses the fixed n
 test("[PR28] the commercial closing offer is explicitly withheld for every listed exception (publicLink availability is deliberately not one of them - see PR29)", () => {
   const { messages } = buildAgentStepPromptPackage({ ...baseInput, identityConfiguration: pesasChileConfig() });
   const system = messages[0].content;
-  assert.match(system, /a public link was already delivered this turn/);
+  assert.match(system, /a public link was already delivered or already verified this turn/);
   assert.match(system, /the customer explicitly asked for the link \(handled by the rule below instead\)/);
   assert.match(system, /no concrete product was identified/);
   assert.match(system, /your reply is a clarifying question/);
@@ -451,6 +451,25 @@ test("[PR30] stock disclosure and commercial closing rules are present in finali
   const system = messages[0].content;
   assert.match(system, /Never state the customer's stock as a raw number once it is 20 or more/);
   assert.match(system, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
+});
+
+test("verified-link autonomy: an already-verified product link is delivered directly, skipping the ask-first closing question, in both phases", () => {
+  for (const phase of ["gathering", "finalization"] as const) {
+    const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase, identityConfiguration: pesasChileConfig(), availableTools: phase === "gathering" ? [{ name: "explore_catalog", description: "d" }] : [] });
+    const system = messages[0].content;
+    assert.match(
+      system,
+      /include the verified canonical link directly in this same reply instead of asking whether they want it - do not create a separate turn solely to ask permission to send a public product URL/
+    );
+    assert.match(system, /skip the closing-question rules below for that product/);
+    assert.match(
+      system,
+      /Ask a clarifying question instead of recommending or sending a link only when missing information genuinely prevents a useful recommendation, or when the product's identity or link evidence is not yet certain enough/
+    );
+    assert.match(system, /never merely to ask permission for an already-justified read-only action/);
+    // The existing exclusion list now also covers "already verified", not only "already delivered" - same list, one clause extended.
+    assert.match(system, /a public link was already delivered or already verified this turn/);
+  }
 });
 
 // --- ACS-R1-05.1-T02.7: pendingCatalogAction continuity ---
@@ -555,7 +574,7 @@ test("[LLM-R1-T03 Caso 3] finalization still contains COMMERCIAL_CLOSING_RULE_LI
   const system = messages[0].content;
   assert.match(system, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
   assert.match(system, /close with exactly: "¿Quieres que te envíe el link de alguno de estos productos\?"/);
-  assert.match(system, /Never add this closing offer when: a public link was already delivered this turn/);
+  assert.match(system, /Never add this closing offer when: a public link was already delivered or already verified this turn/);
 });
 
 test("[LLM-R1-T03 Caso 4] finalization still contains the pendingCatalogAction rules needed to compose the response", () => {
@@ -624,13 +643,20 @@ test("[LLM-R1-T03 Caso 5] gathering system/user prompt lengths are unchanged fro
   // no-re-greeting guidance - see
   // docs/releases/SALES-AGENT-R3-V1.8.1B-A-LIVE-TURN-ASSIMILATION-DESIGN.md
   // Section 11.
+  // Verified-link autonomy rule (later): +883 chars in both phases - two new
+  // COMMERCIAL_CLOSING_RULE_LINES entries (skip the ask-first closing
+  // question and deliver the link directly once identity/link are already
+  // verified this turn via get_product_details) plus one clause added to
+  // the pre-existing exclusion-list line - see buildAgentStepPromptPackage.ts's
+  // own comment above COMMERCIAL_CLOSING_RULE_LINES. Same delta in both
+  // phases because that array is spread verbatim into both branches.
   const { messages } = buildAgentStepPromptPackage({
     ...baseInput,
     phase: "gathering",
     identityConfiguration: pesasChileConfig(),
     availableTools: [{ name: "explore_catalog", description: "d" }]
   });
-  assert.equal(messages[0].content.length, 22848, "gathering systemPrompt.length must match the post-V1.8.1b measurement");
+  assert.equal(messages[0].content.length, 23731, "gathering systemPrompt.length must match the post-verified-link-autonomy measurement");
   // SALES-AGENT-R3-V1.8.1b (later): +126 chars - the new conversationContinuity
   // field (CONVERSATION_CONTINUITY_UNKNOWN, baseInput sets none) added to the
   // user payload alongside customerMessage/commercialContext/etc.
@@ -663,7 +689,7 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt stays meaningfully smaller 
     messages[0].content.length < gathering.messages[0].content.length,
     `finalization systemPrompt.length (${messages[0].content.length}) must be less than gathering's (${gathering.messages[0].content.length})`
   );
-  assert.equal(messages[0].content.length, 19537, "finalization systemPrompt.length must match the post-V1.8.1b measurement");
+  assert.equal(messages[0].content.length, 20420, "finalization systemPrompt.length must match the post-verified-link-autonomy measurement");
   // SALES-AGENT-R3-V1.8.1b (later): +126 chars, same conversationContinuity
   // field addition the Caso 5 comment above explains - identical delta in
   // both phases (the user-payload shape is shared by gathering/finalization).
@@ -688,8 +714,11 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt stays meaningfully smaller 
 // SALES-AGENT-R3-V1.8.1b (later): both +967 chars, same
 // CONVERSATION_CONTINUITY_RULE_LINES addition the T03 Caso 5 comment above
 // explains - identical delta in both phases.
-const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 19537;
-const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 22848;
+// Verified-link autonomy rule (later): both +883 chars, same
+// COMMERCIAL_CLOSING_RULE_LINES addition the T03 Caso 5 comment above
+// explains - identical delta in both phases.
+const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 20420;
+const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 23731;
 
 test("[LLM-R1-T04 Caso 1] a normal call (no priorAttemptFailure) is byte-identical to before this task - no repair instruction present", () => {
   for (const phase of ["gathering", "finalization"] as const) {

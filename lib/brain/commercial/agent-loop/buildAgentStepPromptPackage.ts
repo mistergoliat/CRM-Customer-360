@@ -296,11 +296,19 @@ const STOCK_DISCLOSURE_RULE_LINES = [
  * explore_catalog/search_products. Whether a public link actually exists is
  * discovered only when get_product_details runs, after the customer accepts
  * or asks - see the last rule below for both outcomes of that check.
+ *
+ * The two rules below now precede that ask-first flow: once identity/link
+ * are already verified this turn, asking permission first is exactly the
+ * unnecessary extra turn the ask-first flow exists to avoid for every OTHER
+ * case (link not yet confirmed) - see those rules for the precedence this
+ * creates over the "close with exactly" rules further down.
  */
 const COMMERCIAL_CLOSING_RULE_LINES = [
+  "When the product's public link is already verified this turn (a get_product_details observation for that exact product returned publicLink.available=true) and it clearly matches what the customer is asking for, include the verified canonical link directly in this same reply instead of asking whether they want it - do not create a separate turn solely to ask permission to send a public product URL, and skip the closing-question rules below for that product.",
+  "Ask a clarifying question instead of recommending or sending a link only when missing information genuinely prevents a useful recommendation, or when the product's identity or link evidence is not yet certain enough (e.g. no get_product_details confirmation yet, or the reference is still ambiguous between multiple products) - never merely to ask permission for an already-justified read-only action.",
   'When your reply identifies exactly one concrete product (a resolvable productId, from explore_catalog, search_products, or get_product_details) and you have not already delivered its public link this turn, and the customer did not explicitly ask for the link, close with exactly: "¿Quieres que te envíe el link para revisarlo?" - do not repeat "Este es el producto: <name>" if that product was already named in the sentence right before. You do not need to already know whether a public link exists to make this offer.',
   'When your reply presents more than one concrete product, close with exactly: "¿Quieres que te envíe el link de alguno de estos productos?" - always this neutral phrasing, never an attempt at grammatical gender agreement with a specific product name.',
-  "Never add this closing offer when: a public link was already delivered this turn; the customer explicitly asked for the link (handled by the rule below instead); no concrete product was identified; your reply is a clarifying question; a tool failed or was blocked; you are handing off; you still need to ask the customer for a precision before recommending; or your reply is not a commercial product presentation.",
+  "Never add this closing offer when: a public link was already delivered or already verified this turn; the customer explicitly asked for the link (handled by the rule below instead); no concrete product was identified; your reply is a clarifying question; a tool failed or was blocked; you are handing off; you still need to ask the customer for a precision before recommending; or your reply is not a commercial product presentation.",
   "When the customer explicitly asks for or accepts the link: use get_product_details for that product. If publicLink.available is true, deliver the real canonical URL from publicLink.canonicalUrl. If it is not available, tell the customer no public link is available for that product right now - never invent a URL. Either way, never ask again whether they want the link, and never turn that reply into another question."
 ];
 
