@@ -43,6 +43,53 @@ function uniqueConversationId() {
   return conversationSeq;
 }
 
+/**
+ * TR-B3 hotfix. crm_capability_executions.conversation_id carries a real FK
+ * onto conversation(id) - a synthetic uniqueConversationId() satisfies every
+ * other test in this file (they never write a crm_capability_executions row
+ * keyed by conversation_id directly), but the TR-B3 pre-Gateway rejection
+ * row does, so this one test needs a genuinely durable conversation row to
+ * insert against.
+ */
+async function seedDurableConversation(): Promise<number> {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const channelAccountId = `tr-b3-account-${suffix}`;
+  const externalContactId = `tr-b3-contact-${suffix}`;
+
+  await queryRows(
+    `INSERT INTO conversation (
+      public_id,
+      channel,
+      provider,
+      channel_account_id,
+      external_contact_id
+    ) VALUES (
+      UUID(),
+      'whatsapp',
+      'meta',
+      ?,
+      ?
+    )`,
+    [channelAccountId, externalContactId]
+  );
+
+  const rows = await queryRows<{ id: number }>(
+    `SELECT id
+     FROM conversation
+     WHERE channel = 'whatsapp'
+       AND channel_account_id = ?
+       AND external_contact_id = ?
+     LIMIT 1`,
+    [channelAccountId, externalContactId]
+  );
+
+  if (!rows[0]) {
+    throw new Error("tr_b3_seed_conversation_failed");
+  }
+
+  return rows[0].id;
+}
+
 let correlationSeq = Date.now();
 /** SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B3. Unique per test so crm_capability_executions rows can be queried back without colliding with baseInput's shared "corr-1". */
 function uniqueCorrelationId() {
@@ -3197,7 +3244,7 @@ test("[R3-V1.2] a second turn on the same conversation reuses the opportunity cr
 
 test("[R3-V1.2] opportunity unavailable blocks the CommercialActionRequest before the Gateway - never a fabricated no_active_opportunity denial", async () => {
   catalogUp(1);
-  const conversationId = uniqueConversationId();
+  const conversationId = await seedDurableConversation();
   const provider = createFakeAgentLoopProvider({
     script: [
       { type: "use_tool", tool: "get_product_details", arguments: { productId: "501" } },
