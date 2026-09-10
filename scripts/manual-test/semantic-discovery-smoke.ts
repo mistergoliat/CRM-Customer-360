@@ -58,7 +58,7 @@ async function main() {
     process.exitCode = 1;
   } else {
     console.log(`getTrainingSemanticsRegistry OK in ${trainingLatencyMs}ms - registryVersion=${trainingRegistry.value.registryVersion}`);
-    console.log(`  exerciseCapabilities(${trainingRegistry.value.exerciseCapabilities.length})=${trainingRegistry.value.exerciseCapabilities.slice(0, 5).join(",")}`);
+    console.log(`  exerciseCapabilities(${trainingRegistry.value.exerciseCapabilities.length})=${trainingRegistry.value.exerciseCapabilities.slice(0, 5).map((definition) => definition.code).join(",")}`);
     console.log(`  bodyRegions(${trainingRegistry.value.bodyRegions.length})=${trainingRegistry.value.bodyRegions.slice(0, 10).join(",")}`);
     console.log(`  muscleGroups(${trainingRegistry.value.muscleGroups.length})=${trainingRegistry.value.muscleGroups.slice(0, 10).join(",")}`);
   }

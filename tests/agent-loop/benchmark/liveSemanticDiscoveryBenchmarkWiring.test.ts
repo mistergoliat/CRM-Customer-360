@@ -16,22 +16,29 @@ import type { CatalogPort, CatalogPortResult, CatalogProductSemanticsRegistry, C
  */
 function fakeCatalogPort(): CatalogPort {
   const productRegistry: CatalogProductSemanticsRegistry = {
-    ontologyVersion: "v3",
+    schemaVersion: "1",
+    ontologyVersion: "commercial-product-ontology-v3",
     ontologyHash: "a".repeat(64),
+    status: "PUBLISHED",
     axes: [
-      { axis: "PRODUCT_FAMILY", values: [{ code: "JAULA", label: "Jaula", description: "Jaula de entrenamiento", residual: false }] },
-      { axis: "DISCIPLINE", values: [{ code: "STRENGTH", label: "Fuerza", description: "Entrenamiento de fuerza", residual: false }] },
-      { axis: "USE_CONTEXT", values: [{ code: "HOME_GYM", label: "Gimnasio en casa", description: "Uso domestico", residual: false }] }
+      { axis: "PRODUCT_FAMILY", values: [{ code: "JAULA", labelEs: "Jaula", definition: "Jaula de entrenamiento", status: "ACTIVE", residual: false }] },
+      { axis: "DISCIPLINE", values: [{ code: "STRENGTH", labelEs: "Fuerza", definition: "Entrenamiento de fuerza", status: "ACTIVE", residual: false }] },
+      { axis: "USE_CONTEXT", values: [{ code: "HOME_GYM", labelEs: "Gimnasio en casa", definition: "Uso domestico", status: "ACTIVE", residual: false }] }
     ]
   };
   const trainingRegistry: CatalogTrainingSemanticsRegistry = {
-    registryVersion: "v2",
+    schemaVersion: "2",
+    registryVersion: "training-semantic-registry-v2",
     registryHash: "b".repeat(64),
+    status: "PUBLISHED",
     exerciseCapabilities: [],
     trainingFunctions: [],
     bodyRegions: ["LOWER_BODY"],
     muscleGroups: [],
-    trainingPatterns: []
+    trainingPatterns: [],
+    exerciseDerivedRelations: [],
+    familyTrainingFunctionDerivations: [],
+    semanticBoundaries: { exerciseCapability: "EXERCISE_CAPABILITY", trainingFunction: "TRAINING_FUNCTION", deadlift: { dedicatedMachine: "DEADLIFT_MACHINE", deadliftJack: "DEADLIFT_JACK", barbell: "BARBELL_DEADLIFT", familyDerived: true }, squat: { forbiddenGenericCode: "SQUAT", explicitCapabilities: [], genericEquipmentPolicy: "EXPLICIT_ONLY" } }
   };
   return {
     async searchProducts() {

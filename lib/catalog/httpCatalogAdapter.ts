@@ -13,7 +13,12 @@ import {
   CATALOG_EXPLORE_SORT_FIELDS,
   CATALOG_EXPLORE_STOCK_SCOPES,
   CATALOG_SEMANTIC_DISCOVERY_AXES,
+  CATALOG_PRODUCT_SEMANTICS_ONTOLOGY_VERSION,
+  CATALOG_PRODUCT_SEMANTICS_SCHEMA_VERSION,
+  CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION,
   CATALOG_SEMANTIC_DISCOVERY_PRODUCT_AXES,
+  CATALOG_TRAINING_SEMANTICS_REGISTRY_VERSION,
+  CATALOG_TRAINING_SEMANTICS_SCHEMA_VERSION,
   type CatalogAttribute,
   type CatalogAvailabilityStatus,
   type CatalogBatchItemInput,
@@ -42,15 +47,24 @@ import {
   type CatalogSearchResult,
   type CatalogSearchResultItem,
   type CatalogSemanticDiscoveryAxis,
+  type CatalogSemanticDiscoveryEvidence,
   type CatalogSemanticDiscoveryInput,
   type CatalogSemanticDiscoveryLineage,
   type CatalogSemanticDiscoveryMatchedRequirement,
+  type CatalogSemanticDiscoveryProductTag,
   type CatalogSemanticDiscoveryProductAxis,
   type CatalogSemanticDiscoveryProductFact,
+  type CatalogSemanticDiscoverySemanticAssignment,
+  type CatalogSemanticDiscoveryExerciseCapabilityAssignment,
   type CatalogSemanticDiscoveryResult,
   type CatalogSemanticDiscoveryResultItem,
   type CatalogSemanticDiscoveryTrainingFact,
   type CatalogSemanticRegistryValue,
+  type CatalogTrainingSemanticExerciseCapability,
+  type CatalogTrainingSemanticExerciseDerivedRelation,
+  type CatalogTrainingSemanticFamilyTrainingFunctionDerivation,
+  type CatalogTrainingSemanticFunction,
+  type CatalogTrainingSemanticBoundaries,
   type CatalogTrainingSemanticsRegistry,
   type ProductIntentCandidate,
   type ProductIntentCandidateProduct,
@@ -163,17 +177,18 @@ function parsePublicLink(value: unknown): ProductPublicLink | undefined {
   };
 }
 
-function sanitizeErrorMessage(message: string): string {
+function sanitizeErrorMessage(message: string, secret?: string): string {
   // Defence in depth: the adapter never interpolates the API key into an
   // error, but strip anything header-shaped just in case a provider echoes
   // request context back in a message.
-  return message
+  const withoutConfiguredSecret = secret && secret.length > 0 ? message.split(secret).join("[redacted]") : message;
+  return withoutConfiguredSecret
     .replace(/x-api-key['":\s]*[^\s,;"']+/gi, "x-api-key=[redacted]")
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]");
 }
 
-function catalogError(code: CatalogPortErrorCode, message: string, retryable: boolean, providerErrorCode?: string | null, correlationId?: string | null): CatalogPortError {
-  return { code, message: sanitizeErrorMessage(message), retryable, providerErrorCode: providerErrorCode ?? null, correlationId: correlationId ?? null };
+function catalogError(code: CatalogPortErrorCode, message: string, retryable: boolean, providerErrorCode?: string | null, correlationId?: string | null, secret?: string): CatalogPortError {
+  return { code, message: sanitizeErrorMessage(message, secret), retryable, providerErrorCode: providerErrorCode === undefined || providerErrorCode === null ? null : sanitizeErrorMessage(providerErrorCode, secret), correlationId: correlationId ?? null };
 }
 
 function mapProviderErrorCode(providerCode: string | undefined, httpStatus: number): { code: CatalogPortErrorCode; retryable: boolean } {
@@ -225,10 +240,9 @@ function mapProviderErrorCode(providerCode: string | undefined, httpStatus: numb
     // POST /v1/products/semantic-discovery/query and the GET .../registry
     // endpoints (SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4) use their own
     // UPPER_SNAKE vocabulary, confirmed against MS-pesaschile-catalog-service's
-    // src/shared/errors.ts. *_SNAPSHOT_MISMATCH only occurs when a request
-    // carries `expectedSnapshots` - this adapter never sends that field, so
-    // these are mapped defensively (retryable: a fresh query without a stale
-    // pin succeeds) rather than treated as unreachable.
+    // src/shared/errors.ts. *_SNAPSHOT_MISMATCH occurs when an explicitly
+    // supplied `expectedSnapshots` pin is stale; it is mapped defensively as
+    // retryable so the caller can refresh its authority before retrying.
     case "INVALID_SEMANTIC_DISCOVERY_REQUEST":
       return { code: "invalid_input", retryable: false };
     case "PRODUCT_SEMANTICS_UNAVAILABLE":
@@ -239,6 +253,8 @@ function mapProviderErrorCode(providerCode: string | undefined, httpStatus: numb
     default:
       if (httpStatus >= 500) return { code: "unavailable", retryable: true };
       if (httpStatus === 401 || httpStatus === 403) return { code: "unauthorized", retryable: false };
+      if (httpStatus === 400) return { code: "invalid_input", retryable: false };
+      if (httpStatus === 409) return { code: "unavailable", retryable: true };
       if (httpStatus === 404) return { code: "not_found", retryable: false };
       if (httpStatus === 429) return { code: "rate_limited", retryable: true };
       return { code: "invalid_response", retryable: false };
@@ -730,6 +746,7 @@ function parseProductSemanticsResponse(payload: unknown, retrievedAt: string): C
 
 const SEMANTIC_DISCOVERY_AXIS_SET: ReadonlySet<string> = new Set(CATALOG_SEMANTIC_DISCOVERY_AXES);
 const SEMANTIC_DISCOVERY_PRODUCT_AXIS_SET: ReadonlySet<string> = new Set(CATALOG_SEMANTIC_DISCOVERY_PRODUCT_AXES);
+const SEMANTIC_DISCOVERY_SOURCE_SET: ReadonlySet<string> = new Set(["PRODUCT_SEMANTICS", "TRAINING_SEMANTICS"]);
 
 function asStringArray(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
@@ -741,6 +758,27 @@ function asStringArray(value: unknown): string[] | null {
   return items;
 }
 
+function isSha256Hex(value: string): boolean {
+  return /^[a-f0-9]{64}$/u.test(value);
+}
+
+function parseSemanticDiscoveryRequirement(value: unknown): CatalogSemanticDiscoveryInput["requirements"][number] | null {
+  if (!isRecord(value)) return null;
+  const axis = parseSemanticDiscoveryAxis(value.axis);
+  const codes = asStringArray(value.codes);
+  if (axis === null || codes === null || codes.length === 0 || codes.length > 24) return null;
+  if (codes.some((code) => code.trim().length === 0)) return null;
+  if (value.mode !== undefined && value.mode !== "required" && value.mode !== "preferred") return null;
+  if (value.match !== undefined && value.match !== "any" && value.match !== "all") return null;
+  if (value.mode === undefined || value.match === undefined) return null;
+  return {
+    axis,
+    codes,
+    mode: value.mode,
+    match: value.match
+  };
+}
+
 function parseSemanticDiscoveryAxis(value: unknown): CatalogSemanticDiscoveryAxis | null {
   return typeof value === "string" && SEMANTIC_DISCOVERY_AXIS_SET.has(value) ? (value as CatalogSemanticDiscoveryAxis) : null;
 }
@@ -750,64 +788,126 @@ function parseSemanticDiscoveryMatchedRequirement(value: unknown): CatalogSemant
   const axis = parseSemanticDiscoveryAxis(value.axis);
   const requestedCodes = asStringArray(value.requestedCodes);
   const matchedCodes = asStringArray(value.matchedCodes);
+  const source = typeof value.source === "string" && SEMANTIC_DISCOVERY_SOURCE_SET.has(value.source) ? value.source : null;
   const mode = value.mode;
   const match = value.match;
-  if (axis === null || requestedCodes === null || matchedCodes === null) return null;
+  if (axis === null || requestedCodes === null || matchedCodes === null || source === null) return null;
   if (mode !== "required" && mode !== "preferred") return null;
   if (match !== "any" && match !== "all") return null;
-  return { axis, requestedCodes, matchedCodes, mode, match };
+  const relationTypes = value.relationTypes === undefined ? undefined : asStringArray(value.relationTypes);
+  const confidenceLevels = value.confidenceLevels === undefined ? undefined : asStringArray(value.confidenceLevels);
+  const reason = value.reason === undefined ? undefined : asString(value.reason);
+  if (relationTypes === null || confidenceLevels === null || reason === null) return null;
+  return {
+    axis,
+    requestedCodes,
+    matchedCodes,
+    source: source as CatalogSemanticDiscoveryMatchedRequirement["source"],
+    mode,
+    match,
+    ...(relationTypes !== undefined ? { relationTypes } : {}),
+    ...(confidenceLevels !== undefined ? { confidenceLevels } : {}),
+    ...(reason !== undefined ? { reason } : {})
+  };
 }
 
-/** Reads only `code` off an ontology-tag-shaped object ({code, confidence, ...}) - confidence/other audit fields are not carried into this compact projection. */
-function parseSemanticTagCodes(value: unknown): string[] | null {
+/** Retains the stable code/confidence pair while excluding uncontracted classifier internals. */
+function parseSemanticTags(value: unknown): CatalogSemanticDiscoveryProductTag[] | null {
   if (!Array.isArray(value)) return null;
-  const codes: string[] = [];
+  const tags: CatalogSemanticDiscoveryProductTag[] = [];
   for (const entry of value) {
-    const code = isRecord(entry) ? asString(entry.code) : null;
-    if (code === null) return null;
-    codes.push(code);
+    if (!isRecord(entry)) return null;
+    const code = asString(entry.code);
+    const confidence = asString(entry.confidence);
+    if (code === null || code.trim().length === 0 || confidence === null || confidence.trim().length === 0) return null;
+    tags.push({ code, confidence });
   }
-  return codes;
+  return tags;
+}
+
+function parseSemanticDiscoveryEvidence(value: unknown): CatalogSemanticDiscoveryEvidence[] | null {
+  if (!Array.isArray(value)) return null;
+  const evidence: CatalogSemanticDiscoveryEvidence[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) return null;
+    const kind = asString(entry.kind);
+    if (kind === null || kind.trim().length === 0) return null;
+    const parsed: CatalogSemanticDiscoveryEvidence = { kind };
+    for (const key of ["sourceId", "matchedText", "ruleId", "note"] as const) {
+      if (entry[key] !== undefined) {
+        const valueForKey = asString(entry[key]);
+        if (valueForKey === null) return null;
+        parsed[key] = valueForKey;
+      }
+    }
+    evidence.push(parsed);
+  }
+  return evidence;
+}
+
+function parseSemanticDiscoveryAssignment(value: unknown, exerciseCapability: boolean): CatalogSemanticDiscoverySemanticAssignment | CatalogSemanticDiscoveryExerciseCapabilityAssignment | null {
+  if (!isRecord(value)) return null;
+  const code = asString(value.code);
+  const relationType = asString(value.relationType);
+  if (code === null || code.trim().length === 0 || relationType === null || relationType.trim().length === 0) return null;
+  const classificationConfidence = value.classificationConfidence === undefined ? undefined : asString(value.classificationConfidence);
+  const evidence = value.evidence === undefined ? undefined : parseSemanticDiscoveryEvidence(value.evidence);
+  if (evidence === null || (exerciseCapability && (classificationConfidence === null || classificationConfidence === undefined || classificationConfidence.trim().length === 0))) return null;
+  return {
+    code,
+    relationType,
+    ...(evidence !== undefined ? { evidence } : {}),
+    ...(exerciseCapability ? { classificationConfidence } : {})
+  };
 }
 
 function parseSemanticDiscoveryProductFact(value: unknown): CatalogSemanticDiscoveryProductFact | null {
   if (value === null) return null;
   if (!isRecord(value)) return null;
+  const productId = asNumber(value.productId);
   const classificationStatus = asString(value.classificationStatus);
-  if (classificationStatus === null) return null;
-  const primaryProductFamily = value.primaryProductFamily === null ? null : isRecord(value.primaryProductFamily) ? asString(value.primaryProductFamily.code) : null;
-  if (value.primaryProductFamily !== null && primaryProductFamily === null) return null;
-  const secondaryProductFamilies = parseSemanticTagCodes(value.secondaryProductFamilies);
-  const disciplines = parseSemanticTagCodes(value.disciplines);
-  const useContexts = parseSemanticTagCodes(value.useContexts);
+  if (productId === null || !Number.isInteger(productId) || productId < 1 || classificationStatus === null || classificationStatus.trim().length === 0) return null;
+  const primaryProductFamilyRaw = value.primaryProductFamily;
+  const primaryProductFamily = primaryProductFamilyRaw === null ? null : parseSemanticTags([primaryProductFamilyRaw])?.[0] ?? null;
+  if (primaryProductFamilyRaw !== null && primaryProductFamily === null) return null;
+  const secondaryProductFamilies = parseSemanticTags(value.secondaryProductFamilies);
+  const disciplines = parseSemanticTags(value.disciplines);
+  const useContexts = parseSemanticTags(value.useContexts);
   if (secondaryProductFamilies === null || disciplines === null || useContexts === null) return null;
-  return { classificationStatus, primaryProductFamily, secondaryProductFamilies, disciplines, useContexts };
+  const ontologyVersion = asString(value.ontologyVersion);
+  const ontologyHash = asString(value.ontologyHash);
+  const classifierVersion = asString(value.classifierVersion);
+  if (ontologyVersion === null || ontologyVersion.trim().length === 0 || ontologyHash === null || !isSha256Hex(ontologyHash) || classifierVersion === null || classifierVersion.trim().length === 0) return null;
+  return { productId: String(productId), classificationStatus, primaryProductFamily, secondaryProductFamilies, disciplines, useContexts, ontologyVersion, ontologyHash, classifierVersion };
 }
 
 function parseSemanticDiscoveryTrainingFact(value: unknown): CatalogSemanticDiscoveryTrainingFact | null {
   if (value === null) return null;
   if (!isRecord(value)) return null;
+  const productId = asNumber(value.productId);
   const resolutionState = asString(value.resolutionState);
   const coverageStatus = asString(value.coverageStatus);
-  if (resolutionState === null || coverageStatus === null) return null;
-  const exerciseCapabilities = parseSemanticTagCodes(value.exerciseCapabilities);
-  const trainingFunctions = parseSemanticTagCodes(value.trainingFunctions);
-  if (exerciseCapabilities === null || trainingFunctions === null) return null;
+  if (productId === null || !Number.isInteger(productId) || productId < 1 || resolutionState === null || resolutionState.trim().length === 0 || coverageStatus === null || coverageStatus.trim().length === 0) return null;
+  if (!Array.isArray(value.exerciseCapabilities) || !Array.isArray(value.trainingFunctions)) return null;
+  const exerciseCapabilities = value.exerciseCapabilities.map((entry) => parseSemanticDiscoveryAssignment(entry, true));
+  const trainingFunctions = value.trainingFunctions.map((entry) => parseSemanticDiscoveryAssignment(entry, false));
+  if (exerciseCapabilities.some((entry) => entry === null) || trainingFunctions.some((entry) => entry === null)) return null;
   const derived = isRecord(value.derived) ? value.derived : null;
   const bodyRegions = derived ? asStringArray(derived.bodyRegions) : null;
   const primaryMuscleGroups = derived ? asStringArray(derived.primaryMuscleGroups) : null;
   const secondaryMuscleGroups = derived ? asStringArray(derived.secondaryMuscleGroups) : null;
   const trainingPatterns = derived ? asStringArray(derived.trainingPatterns) : null;
   if (bodyRegions === null || primaryMuscleGroups === null || secondaryMuscleGroups === null || trainingPatterns === null) return null;
-  return { resolutionState, coverageStatus, exerciseCapabilities, trainingFunctions, bodyRegions, primaryMuscleGroups, secondaryMuscleGroups, trainingPatterns };
+  return { productId: String(productId), resolutionState, coverageStatus, exerciseCapabilities: exerciseCapabilities as CatalogSemanticDiscoveryExerciseCapabilityAssignment[], trainingFunctions: trainingFunctions as CatalogSemanticDiscoverySemanticAssignment[], bodyRegions, primaryMuscleGroups, secondaryMuscleGroups, trainingPatterns };
 }
 
 function parseSemanticDiscoveryResultItem(value: unknown): CatalogSemanticDiscoveryResultItem | null {
   if (!isRecord(value)) return null;
   const productId = asNumber(value.productId);
-  if (productId === null || !Array.isArray(value.matchedRequirements)) return null;
+  if (productId === null || !Number.isInteger(productId) || productId < 1 || !Array.isArray(value.matchedRequirements)) return null;
   const matchedRequirements = value.matchedRequirements.map(parseSemanticDiscoveryMatchedRequirement);
   if (matchedRequirements.some((entry) => entry === null)) return null;
+  if (!("productSemantics" in value) || !("trainingSemantics" in value)) return null;
   if (value.productSemantics !== null && !isRecord(value.productSemantics)) return null;
   if (value.trainingSemantics !== null && !isRecord(value.trainingSemantics)) return null;
   const productSemantics = value.productSemantics === null ? null : parseSemanticDiscoveryProductFact(value.productSemantics);
@@ -826,35 +926,47 @@ function parseSemanticDiscoveryLineage(value: unknown): CatalogSemanticDiscovery
   if (!isRecord(value)) return null;
   const productSemanticsRaw = value.productSemantics;
   const trainingSemanticsRaw = value.trainingSemantics;
+  if (!("productSemantics" in value) || !("trainingSemantics" in value)) return null;
   let productSemantics: CatalogSemanticDiscoveryLineage["productSemantics"] = null;
   if (productSemanticsRaw !== null) {
     if (!isRecord(productSemanticsRaw)) return null;
     const snapshotId = asString(productSemanticsRaw.snapshotId);
+    const semanticChecksum = asString(productSemanticsRaw.semanticChecksum);
     const ontologyVersion = asString(productSemanticsRaw.ontologyVersion);
     const ontologyHash = asString(productSemanticsRaw.ontologyHash);
-    if (snapshotId === null || ontologyVersion === null || ontologyHash === null) return null;
-    productSemantics = { snapshotId, ontologyVersion, ontologyHash };
+    const classifierVersion = asString(productSemanticsRaw.classifierVersion);
+    if (snapshotId === null || semanticChecksum === null || !isSha256Hex(semanticChecksum) || ontologyVersion === null || ontologyVersion.trim().length === 0 || ontologyHash === null || !isSha256Hex(ontologyHash) || classifierVersion === null || classifierVersion.trim().length === 0) return null;
+    productSemantics = { snapshotId, semanticChecksum, ontologyVersion, ontologyHash, classifierVersion };
   }
   let trainingSemantics: CatalogSemanticDiscoveryLineage["trainingSemantics"] = null;
   if (trainingSemanticsRaw !== null) {
     if (!isRecord(trainingSemanticsRaw)) return null;
     const snapshotId = asString(trainingSemanticsRaw.snapshotId);
+    const semanticChecksum = asString(trainingSemanticsRaw.semanticChecksum);
     const registryVersion = asString(trainingSemanticsRaw.registryVersion);
     const registryHash = asString(trainingSemanticsRaw.registryHash);
-    if (snapshotId === null || registryVersion === null || registryHash === null) return null;
-    trainingSemantics = { snapshotId, registryVersion, registryHash };
+    const classifierVersion = asString(trainingSemanticsRaw.classifierVersion);
+    const rulesHash = asString(trainingSemanticsRaw.rulesHash);
+    if (snapshotId === null || semanticChecksum === null || !isSha256Hex(semanticChecksum) || registryVersion === null || registryVersion.trim().length === 0 || registryHash === null || !isSha256Hex(registryHash) || classifierVersion === null || classifierVersion.trim().length === 0 || rulesHash === null || !isSha256Hex(rulesHash)) return null;
+    trainingSemantics = { snapshotId, semanticChecksum, registryVersion, registryHash, classifierVersion, rulesHash };
   }
   return { productSemantics, trainingSemantics };
 }
 
 function parseSemanticDiscoveryResponse(payload: unknown, retrievedAt: string): CatalogSemanticDiscoveryResult | null {
-  if (!isRecord(payload) || !Array.isArray(payload.results)) return null;
+  if (!isRecord(payload) || payload.schemaVersion !== CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION || !Array.isArray(payload.results)) return null;
   const lineage = parseSemanticDiscoveryLineage(payload.lineage);
   const totalMatches = asNumber(payload.totalMatches);
-  if (lineage === null || totalMatches === null || typeof payload.truncated !== "boolean") return null;
+  if (lineage === null || totalMatches === null || !Number.isInteger(totalMatches) || totalMatches < 0 || typeof payload.truncated !== "boolean") return null;
+  if (!isRecord(payload.query) || !Array.isArray(payload.query.requirements) || !isRecord(payload.query.options)) return null;
+  const queryRequirements = payload.query.requirements.map(parseSemanticDiscoveryRequirement);
+  const queryLimit = asNumber(payload.query.options.limit);
+  if (queryRequirements.some((entry) => entry === null) || queryLimit === null || !Number.isInteger(queryLimit) || queryLimit < 1 || queryLimit > 100) return null;
   const results = payload.results.map(parseSemanticDiscoveryResultItem);
   if (results.some((entry) => entry === null)) return null;
   return {
+    schemaVersion: CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION,
+    query: { requirements: queryRequirements as CatalogSemanticDiscoveryResult["query"]["requirements"], options: { limit: queryLimit } },
     results: results as CatalogSemanticDiscoveryResultItem[],
     totalMatches,
     truncated: payload.truncated,
@@ -868,54 +980,130 @@ function parseProductRegistryValue(value: unknown): CatalogSemanticRegistryValue
   const code = asString(value.code);
   const label = asString(value.labelEs);
   const description = asString(value.definition);
-  if (code === null || label === null || description === null || typeof value.residual !== "boolean") return null;
-  return { code, label, description, residual: value.residual };
+  const status = asString(value.status);
+  if (code === null || code.trim().length === 0 || label === null || description === null || status === null || (status !== "ACTIVE" && status !== "RESIDUAL") || typeof value.residual !== "boolean") return null;
+  return { code, labelEs: label, definition: description, status, residual: value.residual };
 }
 
 function parseProductSemanticsRegistryResponse(payload: unknown): CatalogProductSemanticsRegistry | null {
-  if (!isRecord(payload) || !Array.isArray(payload.axes)) return null;
+  if (!isRecord(payload) || payload.schemaVersion !== CATALOG_PRODUCT_SEMANTICS_SCHEMA_VERSION || payload.status !== "PUBLISHED" || !Array.isArray(payload.axes)) return null;
   const ontologyVersion = asString(payload.ontologyVersion);
   const ontologyHash = asString(payload.ontologyHash);
-  if (ontologyVersion === null || ontologyHash === null) return null;
+  if (ontologyVersion !== CATALOG_PRODUCT_SEMANTICS_ONTOLOGY_VERSION || ontologyHash === null || !isSha256Hex(ontologyHash) || payload.axes.length !== CATALOG_SEMANTIC_DISCOVERY_PRODUCT_AXES.length) return null;
 
   const axes: CatalogProductSemanticsRegistry["axes"] = [];
+  const seenAxes = new Set<string>();
   for (const entry of payload.axes) {
     if (!isRecord(entry)) return null;
     const axis = asString(entry.axis);
     if (axis === null || !SEMANTIC_DISCOVERY_PRODUCT_AXIS_SET.has(axis) || !Array.isArray(entry.values)) return null;
+    if (seenAxes.has(axis)) return null;
+    seenAxes.add(axis);
     const values = entry.values.map(parseProductRegistryValue);
     if (values.some((value) => value === null)) return null;
     axes.push({ axis: axis as CatalogSemanticDiscoveryProductAxis, values: values as CatalogSemanticRegistryValue[] });
   }
-  return { ontologyVersion, ontologyHash, axes };
+  if (seenAxes.size !== CATALOG_SEMANTIC_DISCOVERY_PRODUCT_AXES.length) return null;
+  return { schemaVersion: CATALOG_PRODUCT_SEMANTICS_SCHEMA_VERSION, ontologyVersion, ontologyHash, status: "PUBLISHED", axes };
+}
+
+function parseTrainingRegistryDefinition(value: unknown, exerciseCapability: boolean): CatalogTrainingSemanticExerciseCapability | CatalogTrainingSemanticFunction | null {
+  if (!isRecord(value)) return null;
+  const code = asString(value.code);
+  const canonicalName = asString(value.canonicalName);
+  const description = asString(value.description);
+  const status = asString(value.status);
+  if (code === null || code.trim().length === 0 || canonicalName === null || description === null || status === null || status.trim().length === 0) return null;
+  if (exerciseCapability) {
+    const derivedBodyRegions = asStringArray(value.derivedBodyRegions);
+    const primaryMuscleGroups = asStringArray(value.primaryMuscleGroups);
+    const secondaryMuscleGroups = asStringArray(value.secondaryMuscleGroups);
+    const trainingPatterns = asStringArray(value.trainingPatterns);
+    if (derivedBodyRegions === null || primaryMuscleGroups === null || secondaryMuscleGroups === null || trainingPatterns === null) return null;
+    return { code, canonicalName, description, status, derivedBodyRegions, primaryMuscleGroups, secondaryMuscleGroups, trainingPatterns };
+  }
+  const allowedRelationTypes = asStringArray(value.allowedRelationTypes);
+  const allowedEvidenceKinds = asStringArray(value.allowedEvidenceKinds);
+  if (allowedRelationTypes === null || allowedEvidenceKinds === null) return null;
+  return { code, canonicalName, description, status, allowedRelationTypes, allowedEvidenceKinds };
+}
+
+function parseTrainingDerivedRelation(value: unknown): CatalogTrainingSemanticExerciseDerivedRelation | null {
+  if (!isRecord(value)) return null;
+  const capabilityCode = asString(value.capabilityCode);
+  const bodyRegions = asStringArray(value.bodyRegions);
+  const primaryMuscleGroups = asStringArray(value.primaryMuscleGroups);
+  const secondaryMuscleGroups = asStringArray(value.secondaryMuscleGroups);
+  const trainingPatterns = asStringArray(value.trainingPatterns);
+  if (capabilityCode === null || capabilityCode.trim().length === 0 || bodyRegions === null || primaryMuscleGroups === null || secondaryMuscleGroups === null || trainingPatterns === null) return null;
+  return { capabilityCode, bodyRegions, primaryMuscleGroups, secondaryMuscleGroups, trainingPatterns };
+}
+
+function parseTrainingFamilyDerivation(value: unknown): CatalogTrainingSemanticFamilyTrainingFunctionDerivation | null {
+  if (!isRecord(value)) return null;
+  const productFamily = asString(value.productFamily);
+  const trainingFunctionCode = asString(value.trainingFunctionCode);
+  const relationType = asString(value.relationType);
+  const evidenceKind = asString(value.evidenceKind);
+  const status = asString(value.status);
+  const rationale = asString(value.rationale);
+  if (productFamily === null || trainingFunctionCode === null || relationType === null || evidenceKind === null || status === null || rationale === null) return null;
+  return { productFamily, trainingFunctionCode, relationType, evidenceKind, status, rationale };
+}
+
+function parseTrainingSemanticBoundaries(value: unknown): CatalogTrainingSemanticBoundaries | null {
+  if (!isRecord(value)) return null;
+  const exerciseCapability = asString(value.exerciseCapability);
+  const trainingFunction = asString(value.trainingFunction);
+  const deadlift = isRecord(value.deadlift) ? value.deadlift : null;
+  const squat = isRecord(value.squat) ? value.squat : null;
+  if (exerciseCapability === null || trainingFunction === null || deadlift === null || squat === null) return null;
+  const dedicatedMachine = asString(deadlift.dedicatedMachine);
+  const deadliftJack = asString(deadlift.deadliftJack);
+  const barbell = asString(deadlift.barbell);
+  const forbiddenGenericCode = asString(squat.forbiddenGenericCode);
+  const explicitCapabilities = asStringArray(squat.explicitCapabilities);
+  const genericEquipmentPolicy = asString(squat.genericEquipmentPolicy);
+  if (dedicatedMachine === null || deadliftJack === null || barbell === null || typeof deadlift.familyDerived !== "boolean" || forbiddenGenericCode === null || explicitCapabilities === null || genericEquipmentPolicy === null) return null;
+  return {
+    exerciseCapability,
+    trainingFunction,
+    deadlift: { dedicatedMachine, deadliftJack, barbell, familyDerived: deadlift.familyDerived },
+    squat: { forbiddenGenericCode, explicitCapabilities, genericEquipmentPolicy }
+  };
 }
 
 function parseTrainingSemanticsRegistryResponse(payload: unknown): CatalogTrainingSemanticsRegistry | null {
-  if (!isRecord(payload)) return null;
+  if (!isRecord(payload) || payload.schemaVersion !== CATALOG_TRAINING_SEMANTICS_SCHEMA_VERSION || payload.registryVersion !== CATALOG_TRAINING_SEMANTICS_REGISTRY_VERSION || payload.status !== "PUBLISHED") return null;
   const registryVersion = asString(payload.registryVersion);
   const registryHash = asString(payload.registryHash);
-  if (registryVersion === null || registryHash === null) return null;
-  if (!Array.isArray(payload.exerciseCapabilities) || !Array.isArray(payload.trainingFunctions)) return null;
-
-  const exerciseCapabilities: string[] = [];
-  for (const entry of payload.exerciseCapabilities) {
-    const code = isRecord(entry) ? asString(entry.code) : null;
-    if (code === null) return null;
-    exerciseCapabilities.push(code);
-  }
-  const trainingFunctions: string[] = [];
-  for (const entry of payload.trainingFunctions) {
-    const code = isRecord(entry) ? asString(entry.code) : null;
-    if (code === null) return null;
-    trainingFunctions.push(code);
-  }
-
+  if (registryVersion === null || registryHash === null || !isSha256Hex(registryHash)) return null;
+  if (!Array.isArray(payload.exerciseCapabilities) || !Array.isArray(payload.trainingFunctions) || !Array.isArray(payload.exerciseDerivedRelations) || !Array.isArray(payload.familyTrainingFunctionDerivations)) return null;
+  const exerciseCapabilities = payload.exerciseCapabilities.map((entry) => parseTrainingRegistryDefinition(entry, true));
+  const trainingFunctions = payload.trainingFunctions.map((entry) => parseTrainingRegistryDefinition(entry, false));
+  const exerciseDerivedRelations = payload.exerciseDerivedRelations.map(parseTrainingDerivedRelation);
+  const familyTrainingFunctionDerivations = payload.familyTrainingFunctionDerivations.map(parseTrainingFamilyDerivation);
+  if (exerciseCapabilities.some((entry) => entry === null) || trainingFunctions.some((entry) => entry === null) || exerciseDerivedRelations.some((entry) => entry === null) || familyTrainingFunctionDerivations.some((entry) => entry === null)) return null;
   const bodyRegions = asStringArray(payload.bodyRegions);
   const muscleGroups = asStringArray(payload.muscleGroups);
   const trainingPatterns = asStringArray(payload.trainingPatterns);
   if (bodyRegions === null || muscleGroups === null || trainingPatterns === null) return null;
-
-  return { registryVersion, registryHash, exerciseCapabilities, trainingFunctions, bodyRegions, muscleGroups, trainingPatterns };
+  const semanticBoundaries = parseTrainingSemanticBoundaries(payload.semanticBoundaries);
+  if (semanticBoundaries === null) return null;
+  return {
+    schemaVersion: CATALOG_TRAINING_SEMANTICS_SCHEMA_VERSION,
+    registryVersion,
+    registryHash,
+    status: "PUBLISHED",
+    exerciseCapabilities: exerciseCapabilities as CatalogTrainingSemanticExerciseCapability[],
+    trainingFunctions: trainingFunctions as CatalogTrainingSemanticFunction[],
+    bodyRegions,
+    muscleGroups,
+    trainingPatterns,
+    exerciseDerivedRelations: exerciseDerivedRelations as CatalogTrainingSemanticExerciseDerivedRelation[],
+    familyTrainingFunctionDerivations: familyTrainingFunctionDerivations as CatalogTrainingSemanticFamilyTrainingFunctionDerivation[],
+    semanticBoundaries
+  };
 }
 
 async function fetchJson(
@@ -971,13 +1159,13 @@ async function requestOnce<T>(
   const retrievedAt = new Date().toISOString();
 
   if ("networkError" in result) {
-    return { ok: false, error: catalogError("timeout", "Catalog service request timed out or the network failed.", true, null, context.correlationId) };
+    return { ok: false, error: catalogError("timeout", "Catalog service request timed out or the network failed.", true, null, context.correlationId, config.apiKey) };
   }
 
   if (result.status >= 200 && result.status < 300) {
     const parsed = parse(result.body, retrievedAt);
     if (parsed === null) {
-      return { ok: false, error: catalogError("invalid_response", "Catalog service returned an unexpected payload shape.", false, null, context.correlationId) };
+      return { ok: false, error: catalogError("invalid_response", "Catalog service returned an unexpected payload shape.", false, null, context.correlationId, config.apiKey) };
     }
     return { ok: true, value: parsed };
   }
@@ -986,7 +1174,7 @@ async function requestOnce<T>(
   const providerErrorCode = errorBody ? asString(errorBody.code) ?? undefined : undefined;
   const message = errorBody ? asString(errorBody.message) ?? `HTTP ${result.status}` : `HTTP ${result.status}`;
   const mapped = mapProviderErrorCode(providerErrorCode, result.status);
-  return { ok: false, error: catalogError(mapped.code, message, mapped.retryable, providerErrorCode ?? null, context.correlationId) };
+  return { ok: false, error: catalogError(mapped.code, message, mapped.retryable, providerErrorCode ?? null, context.correlationId, config.apiKey) };
 }
 
 /**
@@ -1042,7 +1230,7 @@ export function createHttpCatalogAdapter(config: HttpCatalogAdapterConfig): Cata
     },
     async querySemanticDiscovery(input: CatalogSemanticDiscoveryInput, context) {
       const body: Record<string, unknown> = {
-        schemaVersion: 1,
+        schemaVersion: input.schemaVersion ?? CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION,
         requirements: input.requirements.map((requirement) => ({
           axis: requirement.axis,
           codes: requirement.codes,
@@ -1051,6 +1239,7 @@ export function createHttpCatalogAdapter(config: HttpCatalogAdapterConfig): Cata
         })),
         options: input.limit !== undefined ? { limit: input.limit } : {}
       };
+      if (input.expectedSnapshots !== undefined) body.expectedSnapshots = input.expectedSnapshots;
       return requestOnce(config, "/v1/products/semantic-discovery/query", context, parseSemanticDiscoveryResponse, { method: "POST", body });
     },
     async getProductSemanticsRegistry(context) {

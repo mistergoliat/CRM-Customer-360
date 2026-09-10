@@ -17,35 +17,44 @@ import type {
 
 function productRegistry(): CatalogProductSemanticsRegistry {
   return {
-    ontologyVersion: "v3",
+    schemaVersion: "1",
+    ontologyVersion: "commercial-product-ontology-v3",
     ontologyHash: "a".repeat(64),
+    status: "PUBLISHED",
     axes: [
-      { axis: "PRODUCT_FAMILY", values: [{ code: "JAULA", label: "Jaula", description: "Jaula de entrenamiento", residual: false }] },
-      { axis: "DISCIPLINE", values: [{ code: "STRENGTH", label: "Fuerza", description: "Entrenamiento de fuerza", residual: false }] },
-      { axis: "USE_CONTEXT", values: [{ code: "HOME_GYM", label: "Gimnasio en casa", description: "Uso domestico", residual: false }] }
+      { axis: "PRODUCT_FAMILY", values: [{ code: "JAULA", labelEs: "Jaula", definition: "Jaula de entrenamiento", status: "ACTIVE", residual: false }] },
+      { axis: "DISCIPLINE", values: [{ code: "STRENGTH", labelEs: "Fuerza", definition: "Entrenamiento de fuerza", status: "ACTIVE", residual: false }] },
+      { axis: "USE_CONTEXT", values: [{ code: "HOME_GYM", labelEs: "Gimnasio en casa", definition: "Uso domestico", status: "ACTIVE", residual: false }] }
     ]
   };
 }
 
 function trainingRegistry(): CatalogTrainingSemanticsRegistry {
   return {
-    registryVersion: "v2",
+    schemaVersion: "2",
+    registryVersion: "training-semantic-registry-v2",
     registryHash: "b".repeat(64),
-    exerciseCapabilities: ["SQUAT"],
-    trainingFunctions: ["PRIMARY_STRENGTH"],
+    status: "PUBLISHED",
+    exerciseCapabilities: [{ code: "SQUAT", canonicalName: "Squat", description: "Sentadilla", status: "ACTIVE", derivedBodyRegions: ["LOWER_BODY"], primaryMuscleGroups: ["QUADRICEPS"], secondaryMuscleGroups: [], trainingPatterns: ["SQUAT_PATTERN"] }],
+    trainingFunctions: [{ code: "PRIMARY_STRENGTH", canonicalName: "Primary strength", description: "Fuerza primaria", status: "ACTIVE", allowedRelationTypes: ["DIRECT"], allowedEvidenceKinds: ["PRODUCT_FAMILY"] }],
     bodyRegions: ["LOWER_BODY"],
     muscleGroups: ["QUADRICEPS"],
-    trainingPatterns: ["SQUAT_PATTERN"]
+    trainingPatterns: ["SQUAT_PATTERN"],
+    exerciseDerivedRelations: [{ capabilityCode: "SQUAT", bodyRegions: ["LOWER_BODY"], primaryMuscleGroups: ["QUADRICEPS"], secondaryMuscleGroups: [], trainingPatterns: ["SQUAT_PATTERN"] }],
+    familyTrainingFunctionDerivations: [{ productFamily: "JAULA", trainingFunctionCode: "PRIMARY_STRENGTH", relationType: "FAMILY_DERIVED", evidenceKind: "FAMILY_DERIVATION", status: "ACTIVE", rationale: "Fixture" }],
+    semanticBoundaries: { exerciseCapability: "EXERCISE_CAPABILITY", trainingFunction: "TRAINING_FUNCTION", deadlift: { dedicatedMachine: "DEADLIFT_MACHINE", deadliftJack: "DEADLIFT_JACK", barbell: "BARBELL_DEADLIFT", familyDerived: true }, squat: { forbiddenGenericCode: "SQUAT", explicitCapabilities: ["SQUAT"], genericEquipmentPolicy: "EXPLICIT_ONLY" } }
   };
 }
 
 function semanticDiscoveryResult(overrides: Partial<CatalogSemanticDiscoveryResult> = {}): CatalogSemanticDiscoveryResult {
   return {
+    schemaVersion: 1,
+    query: { requirements: [{ axis: "PRODUCT_FAMILY", codes: ["JAULA"], mode: "required", match: "any" }], options: { limit: 20 } },
     results: [
       {
         productId: "1532",
-        matchedRequirements: [{ axis: "PRODUCT_FAMILY", requestedCodes: ["JAULA"], matchedCodes: ["JAULA"], mode: "required", match: "any" }],
-        productSemantics: { classificationStatus: "CLASSIFIED", primaryProductFamily: "JAULA", secondaryProductFamilies: [], disciplines: [], useContexts: [] },
+        matchedRequirements: [{ axis: "PRODUCT_FAMILY", requestedCodes: ["JAULA"], matchedCodes: ["JAULA"], source: "PRODUCT_SEMANTICS", mode: "required", match: "any", reason: "required_match" }],
+        productSemantics: { productId: "1532", classificationStatus: "CLASSIFIED", primaryProductFamily: { code: "JAULA", confidence: "EXPLICIT" }, secondaryProductFamilies: [], disciplines: [], useContexts: [], ontologyVersion: "commercial-product-ontology-v3", ontologyHash: "a".repeat(64), classifierVersion: "product-classifier-v1" },
         trainingSemantics: null
       }
     ],
@@ -136,6 +145,53 @@ test("execute() rejects structurally malformed input as invalid_argument before 
   assert.equal(unknownAxis.errorCode, "invalid_argument");
 
   assert.equal(called, false);
+});
+
+test("execute() rejects decimal/out-of-range limits, unknown properties, invalid schema versions, and malformed snapshot pins", async () => {
+  let called = false;
+  const port = fakePort({
+    async querySemanticDiscovery() {
+      called = true;
+      return { ok: true, value: semanticDiscoveryResult() };
+    }
+  });
+  const capability = searchProductsBySemanticsCapability(() => port);
+  const base = { requirements: [{ axis: "PRODUCT_FAMILY", codes: ["JAULA"], mode: "required", match: "any" }] };
+  const invalidInputs: Record<string, unknown>[] = [
+    { ...base, limit: 20.7 },
+    { ...base, limit: 0 },
+    { ...base, limit: 101 },
+    { ...base, unexpectedControl: true },
+    { ...base, requirements: [{ ...base.requirements[0], extraControl: true }] },
+    { ...base, schemaVersion: 2 },
+    { ...base, expectedSnapshots: { productSemanticSnapshotId: "not-a-snapshot" } },
+    { ...base, expectedSnapshots: { unknownSnapshot: "sha256:" + "a".repeat(64) } }
+  ];
+  for (const input of invalidInputs) {
+    const result = await capability.execute(input, { correlationId: "c" });
+    assert.equal(result.status, "invalid_arguments");
+    assert.equal(result.errorCode, "invalid_argument");
+    assert.equal(result.retryable, false);
+  }
+  assert.equal(called, false);
+});
+
+test("execute() forwards explicitly validated schemaVersion and expectedSnapshots without translating semantic codes", async () => {
+  let captured: CatalogSemanticDiscoveryInput | undefined;
+  const port = fakePort({
+    async querySemanticDiscovery(input: CatalogSemanticDiscoveryInput) {
+      captured = input;
+      return { ok: true, value: semanticDiscoveryResult() };
+    }
+  });
+  const capability = searchProductsBySemanticsCapability(() => port);
+  await capability.execute({
+    schemaVersion: 1,
+    expectedSnapshots: { productSemanticSnapshotId: "sha256:" + "a".repeat(64) },
+    requirements: [{ axis: "PRODUCT_FAMILY", codes: ["JAULA"], mode: "required", match: "any" }]
+  }, { correlationId: "c" });
+  assert.deepEqual(captured?.expectedSnapshots, { productSemanticSnapshotId: "sha256:" + "a".repeat(64) });
+  assert.equal(captured?.schemaVersion, 1);
 });
 
 test("execute() rejects an unknown canonical code as invalid_code, listing only the bad code", async () => {
@@ -282,22 +338,29 @@ test("[TR-B4.1] projectSemanticVocabulary renders the training registry as axis/
 
 test("[TR-B4.1] projectSemanticVocabulary only ever surfaces real upstream codes - no independent hardcoded ontology exists", () => {
   const customProduct: CatalogProductSemanticsRegistry = {
+    schemaVersion: "1",
     ontologyVersion: "v99",
     ontologyHash: "z".repeat(64),
+    status: "PUBLISHED",
     axes: [
-      { axis: "PRODUCT_FAMILY", values: [{ code: "TOTALLY_MADE_UP_CODE_XYZ", label: "Custom", description: "Custom fixture value", residual: false }] },
+      { axis: "PRODUCT_FAMILY", values: [{ code: "TOTALLY_MADE_UP_CODE_XYZ", labelEs: "Custom", definition: "Custom fixture value", status: "ACTIVE", residual: false }] },
       { axis: "DISCIPLINE", values: [] },
       { axis: "USE_CONTEXT", values: [] }
     ]
   };
   const customTraining: CatalogTrainingSemanticsRegistry = {
+    schemaVersion: "2",
     registryVersion: "v99",
     registryHash: "y".repeat(64),
+    status: "PUBLISHED",
     exerciseCapabilities: [],
     trainingFunctions: [],
     bodyRegions: ["ANOTHER_MADE_UP_REGION"],
     muscleGroups: [],
-    trainingPatterns: []
+    trainingPatterns: [],
+    exerciseDerivedRelations: [],
+    familyTrainingFunctionDerivations: [],
+    semanticBoundaries: { exerciseCapability: "EXERCISE_CAPABILITY", trainingFunction: "TRAINING_FUNCTION", deadlift: { dedicatedMachine: "DEADLIFT_MACHINE", deadliftJack: "DEADLIFT_JACK", barbell: "BARBELL_DEADLIFT", familyDerived: true }, squat: { forbiddenGenericCode: "SQUAT", explicitCapabilities: [], genericEquipmentPolicy: "EXPLICIT_ONLY" } }
   };
   const vocabulary = projectSemanticVocabulary(customProduct, customTraining);
   const productFamily = vocabulary.axes.find((entry) => entry.axis === "PRODUCT_FAMILY");
@@ -377,7 +440,7 @@ test("[TR-B4.1] resetSearchProductsBySemanticsRegistryForTests forces a refresh 
   currentProductRegistry = {
     ...currentProductRegistry,
     axes: currentProductRegistry.axes.map((entry) =>
-      entry.axis === "PRODUCT_FAMILY" ? { ...entry, values: [{ code: "NUEVO_CODIGO", label: "Nuevo", description: "Recien publicado", residual: false }] } : entry
+      entry.axis === "PRODUCT_FAMILY" ? { ...entry, values: [{ code: "NUEVO_CODIGO", labelEs: "Nuevo", definition: "Recien publicado", status: "ACTIVE", residual: false }] } : entry
     )
   };
 

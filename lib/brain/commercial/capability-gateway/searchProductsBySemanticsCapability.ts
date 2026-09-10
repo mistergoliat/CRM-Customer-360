@@ -13,10 +13,11 @@ import type {
   CatalogPort,
   CatalogProductSemanticsRegistry,
   CatalogSemanticDiscoveryAxis,
+  CatalogSemanticDiscoveryExpectedSnapshots,
   CatalogSemanticDiscoveryRequirement,
   CatalogTrainingSemanticsRegistry
 } from "@/lib/catalog";
-import { CATALOG_SEMANTIC_DISCOVERY_AXES, CATALOG_SEMANTIC_DISCOVERY_MATCHES, CATALOG_SEMANTIC_DISCOVERY_MODES } from "@/lib/catalog";
+import { CATALOG_SEMANTIC_DISCOVERY_AXES, CATALOG_SEMANTIC_DISCOVERY_MATCHES, CATALOG_SEMANTIC_DISCOVERY_MODES, CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION } from "@/lib/catalog";
 import type { CapabilityExecutionOutcome, CapabilityGatewayContext, CapabilityGatewayDefinition } from "./types";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
@@ -44,7 +45,16 @@ export const SEARCH_PRODUCTS_BY_SEMANTICS_INPUT_SCHEMA = {
         }
       }
     },
-    limit: { type: "integer", minimum: 1, maximum: 100 }
+    limit: { type: "integer", minimum: 1, maximum: 100 },
+    schemaVersion: { type: "integer", enum: [CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION] },
+    expectedSnapshots: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        productSemanticSnapshotId: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+        trainingSemanticSnapshotId: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" }
+      }
+    }
   }
 } as const;
 
@@ -55,25 +65,45 @@ const DO_NOT_USE_WHEN =
 
 type RawRequirement = { axis?: unknown; codes?: unknown; mode?: unknown; match?: unknown };
 
-type StructuralValidationResult = { ok: true; requirements: CatalogSemanticDiscoveryRequirement[]; limit?: number } | { ok: false };
+type StructuralValidationResult = {
+  ok: true;
+  requirements: CatalogSemanticDiscoveryRequirement[];
+  limit?: number;
+  schemaVersion?: typeof CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION;
+  expectedSnapshots?: CatalogSemanticDiscoveryExpectedSnapshots;
+} | { ok: false };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const AXIS_SET: ReadonlySet<string> = new Set(CATALOG_SEMANTIC_DISCOVERY_AXES);
+const REQUEST_KEYS = ["requirements", "limit", "schemaVersion", "expectedSnapshots"] as const;
+const REQUIREMENT_KEYS = ["axis", "codes", "mode", "match"] as const;
+const EXPECTED_SNAPSHOT_KEYS = ["productSemanticSnapshotId", "trainingSemanticSnapshotId"] as const;
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function isSnapshotId(value: unknown): value is string {
+  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
+}
 
 /**
  * CRM-side DTO/validation boundary (task section 2/8): structural shape
  * only, never canonical-code validity - that is checked separately against
  * the cached registry (validateCodesAgainstRegistry below), never here.
  */
-function validateStructure(input: Record<string, unknown>): StructuralValidationResult {
+function validateStructure(input: unknown): StructuralValidationResult {
+  if (!isRecord(input)) return { ok: false };
+  if (!hasOnlyKeys(input, REQUEST_KEYS)) return { ok: false };
   if (!Array.isArray(input.requirements) || input.requirements.length === 0 || input.requirements.length > MAX_REQUIREMENTS) return { ok: false };
 
   const requirements: CatalogSemanticDiscoveryRequirement[] = [];
   for (const rawEntry of input.requirements) {
     if (!isRecord(rawEntry)) return { ok: false };
+    if (!hasOnlyKeys(rawEntry, REQUIREMENT_KEYS)) return { ok: false };
     const raw = rawEntry as RawRequirement;
     if (typeof raw.axis !== "string" || !AXIS_SET.has(raw.axis)) return { ok: false };
     if (!Array.isArray(raw.codes) || raw.codes.length === 0 || raw.codes.length > MAX_CODES_PER_REQUIREMENT) return { ok: false };
@@ -90,11 +120,30 @@ function validateStructure(input: Record<string, unknown>): StructuralValidation
 
   let limit: number | undefined;
   if (input.limit !== undefined) {
-    if (typeof input.limit !== "number" || !Number.isFinite(input.limit) || input.limit < 1 || input.limit > 100) return { ok: false };
-    limit = Math.trunc(input.limit);
+    if (typeof input.limit !== "number" || !Number.isFinite(input.limit) || !Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) return { ok: false };
+    limit = input.limit;
   }
 
-  return { ok: true, requirements, limit };
+  let schemaVersion: typeof CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION | undefined;
+  if (input.schemaVersion !== undefined) {
+    if (input.schemaVersion !== CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION) return { ok: false };
+    schemaVersion = CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION;
+  }
+
+  let expectedSnapshots: CatalogSemanticDiscoveryExpectedSnapshots | undefined;
+  if (input.expectedSnapshots !== undefined) {
+    if (!isRecord(input.expectedSnapshots) || !hasOnlyKeys(input.expectedSnapshots, EXPECTED_SNAPSHOT_KEYS)) return { ok: false };
+    const productSemanticSnapshotId = input.expectedSnapshots.productSemanticSnapshotId;
+    const trainingSemanticSnapshotId = input.expectedSnapshots.trainingSemanticSnapshotId;
+    if (productSemanticSnapshotId !== undefined && !isSnapshotId(productSemanticSnapshotId)) return { ok: false };
+    if (trainingSemanticSnapshotId !== undefined && !isSnapshotId(trainingSemanticSnapshotId)) return { ok: false };
+    expectedSnapshots = {
+      ...(productSemanticSnapshotId !== undefined ? { productSemanticSnapshotId } : {}),
+      ...(trainingSemanticSnapshotId !== undefined ? { trainingSemanticSnapshotId } : {})
+    };
+  }
+
+  return { ok: true, requirements, limit, ...(schemaVersion !== undefined ? { schemaVersion } : {}), ...(expectedSnapshots !== undefined ? { expectedSnapshots } : {}) };
 }
 
 type RegistryIndex = ReadonlyMap<CatalogSemanticDiscoveryAxis, ReadonlySet<string>>;
@@ -119,8 +168,8 @@ function buildRegistryIndex(product: CatalogProductSemanticsRegistry, training: 
   for (const axisEntry of product.axes) {
     index.set(axisEntry.axis, new Set(axisEntry.values.map((value) => value.code)));
   }
-  index.set("EXERCISE_CAPABILITY", new Set(training.exerciseCapabilities));
-  index.set("TRAINING_FUNCTION", new Set(training.trainingFunctions));
+  index.set("EXERCISE_CAPABILITY", new Set(training.exerciseCapabilities.map((definition) => definition.code)));
+  index.set("TRAINING_FUNCTION", new Set(training.trainingFunctions.map((definition) => definition.code)));
   index.set("BODY_REGION", new Set(training.bodyRegions));
   index.set("MUSCLE_GROUP", new Set(training.muscleGroups));
   index.set("TRAINING_PATTERN", new Set(training.trainingPatterns));
@@ -170,10 +219,10 @@ export type SemanticVocabulary = { axes: SemanticVocabularyAxisEntry[] };
 export function projectSemanticVocabulary(product: CatalogProductSemanticsRegistry, training: CatalogTrainingSemanticsRegistry): SemanticVocabulary {
   const axes: SemanticVocabularyAxisEntry[] = product.axes.map((entry) => ({
     axis: entry.axis,
-    codes: entry.values.map((value) => ({ code: value.code, label: value.label, description: value.description }))
+    codes: entry.values.map((value) => ({ code: value.code, label: value.labelEs, description: value.definition }))
   }));
-  axes.push({ axis: "EXERCISE_CAPABILITY", codes: training.exerciseCapabilities.map((code) => ({ code })) });
-  axes.push({ axis: "TRAINING_FUNCTION", codes: training.trainingFunctions.map((code) => ({ code })) });
+  axes.push({ axis: "EXERCISE_CAPABILITY", codes: training.exerciseCapabilities.map((definition) => ({ code: definition.code })) });
+  axes.push({ axis: "TRAINING_FUNCTION", codes: training.trainingFunctions.map((definition) => ({ code: definition.code })) });
   axes.push({ axis: "BODY_REGION", codes: training.bodyRegions.map((code) => ({ code })) });
   axes.push({ axis: "MUSCLE_GROUP", codes: training.muscleGroups.map((code) => ({ code })) });
   axes.push({ axis: "TRAINING_PATTERN", codes: training.trainingPatterns.map((code) => ({ code })) });
@@ -289,7 +338,12 @@ export function searchProductsBySemanticsCapability(
       const query = port.querySemanticDiscovery;
       if (!query) return registryUnavailable();
       const result = await query(
-        { requirements: structural.requirements, ...(structural.limit !== undefined ? { limit: structural.limit } : {}) },
+        {
+          requirements: structural.requirements,
+          ...(structural.limit !== undefined ? { limit: structural.limit } : {}),
+          ...(structural.schemaVersion !== undefined ? { schemaVersion: structural.schemaVersion } : {}),
+          ...(structural.expectedSnapshots !== undefined ? { expectedSnapshots: structural.expectedSnapshots } : {})
+        },
         { correlationId: context.correlationId }
       );
       if (!result.ok) return mapCatalogErrorToOutcome(result.error);

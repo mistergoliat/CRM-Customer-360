@@ -351,9 +351,17 @@ export type CatalogProductSemantics = {
  * GET /v1/products/training-semantics/registry -
  * src/application/catalog/semantic-discovery/contracts.ts). `relations` (an
  * upstream-optional DIRECT/SUPPORTED/FAMILY_DERIVED refinement for the
- * training axes) is deliberately not exposed here - nothing in this task's
- * request/response boundary needs it, and CRM never sends it upstream.
+ * training axes) remains outside the request model because CRM does not
+ * currently require relation filtering. Response evidence is retained where
+ * the service publishes it so later Agent observation projection can compact
+ * it without losing lineage or match diagnostics at this boundary.
  */
+export const CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION = 1 as const;
+export const CATALOG_PRODUCT_SEMANTICS_SCHEMA_VERSION = "1" as const;
+export const CATALOG_PRODUCT_SEMANTICS_ONTOLOGY_VERSION = "commercial-product-ontology-v3" as const;
+export const CATALOG_TRAINING_SEMANTICS_SCHEMA_VERSION = "2" as const;
+export const CATALOG_TRAINING_SEMANTICS_REGISTRY_VERSION = "training-semantic-registry-v2" as const;
+
 export const CATALOG_SEMANTIC_DISCOVERY_PRODUCT_AXES = ["PRODUCT_FAMILY", "DISCIPLINE", "USE_CONTEXT"] as const;
 export const CATALOG_SEMANTIC_DISCOVERY_TRAINING_AXES = [
   "EXERCISE_CAPABILITY",
@@ -373,6 +381,11 @@ export type CatalogSemanticDiscoveryMode = (typeof CATALOG_SEMANTIC_DISCOVERY_MO
 export const CATALOG_SEMANTIC_DISCOVERY_MATCHES = ["any", "all"] as const;
 export type CatalogSemanticDiscoveryMatch = (typeof CATALOG_SEMANTIC_DISCOVERY_MATCHES)[number];
 
+export type CatalogSemanticDiscoveryExpectedSnapshots = {
+  productSemanticSnapshotId?: string;
+  trainingSemanticSnapshotId?: string;
+};
+
 export type CatalogSemanticDiscoveryRequirement = {
   axis: CatalogSemanticDiscoveryAxis;
   codes: string[];
@@ -383,31 +396,67 @@ export type CatalogSemanticDiscoveryRequirement = {
 export type CatalogSemanticDiscoveryInput = {
   requirements: CatalogSemanticDiscoveryRequirement[];
   limit?: number;
+  schemaVersion?: typeof CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION;
+  expectedSnapshots?: CatalogSemanticDiscoveryExpectedSnapshots;
 };
+
+export type CatalogSemanticDiscoverySource = "PRODUCT_SEMANTICS" | "TRAINING_SEMANTICS";
 
 export type CatalogSemanticDiscoveryMatchedRequirement = {
   axis: CatalogSemanticDiscoveryAxis;
   requestedCodes: string[];
   matchedCodes: string[];
+  source: CatalogSemanticDiscoverySource;
   mode: CatalogSemanticDiscoveryMode;
   match: CatalogSemanticDiscoveryMatch;
+  relationTypes?: string[];
+  confidenceLevels?: string[];
+  reason?: string;
 };
 
-/** Compact projection of the upstream product-semantics fact - classifier internals (ontologyHash/classifierVersion/snapshotId) stay in `lineage`, never repeated per result item. */
+export type CatalogSemanticDiscoveryEvidence = {
+  kind: string;
+  sourceId?: string;
+  matchedText?: string;
+  ruleId?: string;
+  note?: string;
+};
+
+export type CatalogSemanticDiscoverySemanticAssignment = {
+  code: string;
+  relationType: string;
+  evidence?: CatalogSemanticDiscoveryEvidence[];
+};
+
+export type CatalogSemanticDiscoveryExerciseCapabilityAssignment = CatalogSemanticDiscoverySemanticAssignment & {
+  classificationConfidence: string;
+};
+
+export type CatalogSemanticDiscoveryProductTag = {
+  code: string;
+  confidence: string;
+};
+
+/** Stable product fact projection; response-level lineage remains separate. */
 export type CatalogSemanticDiscoveryProductFact = {
+  productId: string;
   classificationStatus: string;
-  primaryProductFamily: string | null;
-  secondaryProductFamilies: string[];
-  disciplines: string[];
-  useContexts: string[];
+  primaryProductFamily: CatalogSemanticDiscoveryProductTag | null;
+  secondaryProductFamilies: CatalogSemanticDiscoveryProductTag[];
+  disciplines: CatalogSemanticDiscoveryProductTag[];
+  useContexts: CatalogSemanticDiscoveryProductTag[];
+  ontologyVersion: string;
+  ontologyHash: string;
+  classifierVersion: string;
 };
 
-/** Compact projection of the upstream training-semantics fact - `derived` is already the upstream's own denormalized view, kept verbatim (codes only). */
+/** Stable training fact projection including the service's evidence-bearing assignments and derived codes. */
 export type CatalogSemanticDiscoveryTrainingFact = {
+  productId: string;
   resolutionState: string;
   coverageStatus: string;
-  exerciseCapabilities: string[];
-  trainingFunctions: string[];
+  exerciseCapabilities: CatalogSemanticDiscoveryExerciseCapabilityAssignment[];
+  trainingFunctions: CatalogSemanticDiscoverySemanticAssignment[];
   bodyRegions: string[];
   primaryMuscleGroups: string[];
   secondaryMuscleGroups: string[];
@@ -422,11 +471,29 @@ export type CatalogSemanticDiscoveryResultItem = {
 };
 
 export type CatalogSemanticDiscoveryLineage = {
-  productSemantics: { snapshotId: string; ontologyVersion: string; ontologyHash: string } | null;
-  trainingSemantics: { snapshotId: string; registryVersion: string; registryHash: string } | null;
+  productSemantics: {
+    snapshotId: string;
+    semanticChecksum: string;
+    ontologyVersion: string;
+    ontologyHash: string;
+    classifierVersion: string;
+  } | null;
+  trainingSemantics: {
+    snapshotId: string;
+    semanticChecksum: string;
+    registryVersion: string;
+    registryHash: string;
+    classifierVersion: string;
+    rulesHash: string;
+  } | null;
 };
 
 export type CatalogSemanticDiscoveryResult = {
+  schemaVersion: typeof CATALOG_SEMANTIC_DISCOVERY_SCHEMA_VERSION;
+  query: {
+    requirements: CatalogSemanticDiscoveryRequirement[];
+    options: { limit: number };
+  };
   results: CatalogSemanticDiscoveryResultItem[];
   totalMatches: number;
   truncated: boolean;
@@ -434,34 +501,91 @@ export type CatalogSemanticDiscoveryResult = {
   provenance: CatalogProvenance;
 };
 
-/** Compact projection of one registry entry - CRM never carries `status`/`residual` beyond deciding whether to expose a value as still-current (see filtering in the capability layer). */
+export type CatalogSemanticRegistryStatus = string;
+
+/** Intentional registry value projection; status is retained for compatibility/governance. */
 export type CatalogSemanticRegistryValue = {
   code: string;
-  label: string;
-  description: string;
+  labelEs: string;
+  definition: string;
+  status: CatalogSemanticRegistryStatus;
   residual: boolean;
 };
 
 export type CatalogProductSemanticsRegistry = {
+  schemaVersion: string;
   ontologyVersion: string;
   ontologyHash: string;
+  status: CatalogSemanticRegistryStatus;
   axes: { axis: CatalogSemanticDiscoveryProductAxis; values: CatalogSemanticRegistryValue[] }[];
 };
 
-/**
- * Training axes have no upstream label/definition (bodyRegions/muscleGroups/
- * trainingPatterns are already plain code strings at the source;
- * exerciseCapabilities/trainingFunctions carry only `code`/`status`) - codes
- * only, matching what the upstream registry actually provides.
- */
+export type CatalogTrainingSemanticExerciseCapability = {
+  code: string;
+  canonicalName: string;
+  description: string;
+  status: CatalogSemanticRegistryStatus;
+  derivedBodyRegions: string[];
+  primaryMuscleGroups: string[];
+  secondaryMuscleGroups: string[];
+  trainingPatterns: string[];
+};
+
+export type CatalogTrainingSemanticFunction = {
+  code: string;
+  canonicalName: string;
+  description: string;
+  status: CatalogSemanticRegistryStatus;
+  allowedRelationTypes: string[];
+  allowedEvidenceKinds: string[];
+};
+
+export type CatalogTrainingSemanticExerciseDerivedRelation = {
+  capabilityCode: string;
+  bodyRegions: string[];
+  primaryMuscleGroups: string[];
+  secondaryMuscleGroups: string[];
+  trainingPatterns: string[];
+};
+
+export type CatalogTrainingSemanticFamilyTrainingFunctionDerivation = {
+  productFamily: string;
+  trainingFunctionCode: string;
+  relationType: string;
+  evidenceKind: string;
+  status: CatalogSemanticRegistryStatus;
+  rationale: string;
+};
+
+export type CatalogTrainingSemanticBoundaries = {
+  exerciseCapability: string;
+  trainingFunction: string;
+  deadlift: {
+    dedicatedMachine: string;
+    deadliftJack: string;
+    barbell: string;
+    familyDerived: boolean;
+  };
+  squat: {
+    forbiddenGenericCode: string;
+    explicitCapabilities: string[];
+    genericEquipmentPolicy: string;
+  };
+};
+
 export type CatalogTrainingSemanticsRegistry = {
+  schemaVersion: string;
   registryVersion: string;
   registryHash: string;
-  exerciseCapabilities: string[];
-  trainingFunctions: string[];
+  status: CatalogSemanticRegistryStatus;
+  exerciseCapabilities: CatalogTrainingSemanticExerciseCapability[];
+  trainingFunctions: CatalogTrainingSemanticFunction[];
   bodyRegions: string[];
   muscleGroups: string[];
   trainingPatterns: string[];
+  exerciseDerivedRelations: CatalogTrainingSemanticExerciseDerivedRelation[];
+  familyTrainingFunctionDerivations: CatalogTrainingSemanticFamilyTrainingFunctionDerivation[];
+  semanticBoundaries: CatalogTrainingSemanticBoundaries;
 };
 
 export const CATALOG_PORT_ERROR_CODES = [
@@ -552,8 +676,8 @@ export type CatalogPort = {
    * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: real service contract (POST
    * /v1/products/semantic-discovery/query). Optional, same discipline as
    * getProductSemantics - existing CatalogPort test doubles that only need
-   * commercial data are unaffected. Never sends `expectedSnapshots` (no
-   * cross-call snapshot pinning in this adapter) - see httpCatalogAdapter.ts.
+   * commercial data are unaffected. Optional snapshot pins are forwarded only
+   * when explicitly supplied by the caller; the adapter never invents them.
    */
   querySemanticDiscovery?(
     input: CatalogSemanticDiscoveryInput,
