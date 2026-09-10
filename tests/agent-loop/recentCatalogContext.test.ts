@@ -196,11 +196,17 @@ test("query applies conversation, window and candidate limit without joining crm
   // dynamic placeholder list bound via params (derived from the registry's
   // evidenceProduced=PRODUCT_IDENTITY), not a hardcoded SQL literal - see
   // recentCatalogContext.ts's buildExecutionQuery.
-  assert.match(captured.sql, /e\.capability_name IN \(\?, \?, \?, \?\)/);
+  assert.match(captured.sql, /e\.capability_name IN \(\?, \?, \?, \?, \?\)/);
   assert.match(captured.sql, /e\.execution_status = 'completed'/);
   assert.match(captured.sql, /e\.completed_at >= \?/);
   assert.equal(captured.params[0], 99);
-  assert.deepEqual(new Set(captured.params.slice(1, 5)), new Set(["search_products", "get_product_details", "explore_catalog", "recommend_catalog_products"]));
+  // SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4 added search_products_by_semantics
+  // as a fifth registry-declared PRODUCT_IDENTITY producer - same dynamic
+  // derivation, one more placeholder, no hardcoded SQL literal changed.
+  assert.deepEqual(
+    new Set(captured.params.slice(1, 6)),
+    new Set(["search_products", "get_product_details", "explore_catalog", "recommend_catalog_products", "search_products_by_semantics"])
+  );
   assert.equal(captured.params.at(-1), RECENT_CATALOG_CONTEXT_SQL_CANDIDATE_LIMIT);
   assert.doesNotMatch(captured.sql, /JOIN\s+crm_agent_actions/i);
 });

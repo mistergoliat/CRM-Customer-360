@@ -110,6 +110,12 @@ function collectCatalogCandidates(recentCatalogContext: RecentCatalogContext | n
   const seen = new Set<string>();
   for (const interaction of recentCatalogContext?.interactions ?? []) {
     for (const product of interaction.products) {
+      // SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: search_products_by_semantics
+      // evidence carries no commercial product name (semantic eligibility
+      // only) - this legacy multi-intent resolver requires one, so such an
+      // entry is skipped here rather than fabricated. Every other producer
+      // still always sets name.
+      if (product.name === undefined) continue;
       const combinationId = normalizeCombinationId(product.combinationId);
       const key = `${product.productId}:${combinationId ?? ""}`;
       if (seen.has(key)) continue;

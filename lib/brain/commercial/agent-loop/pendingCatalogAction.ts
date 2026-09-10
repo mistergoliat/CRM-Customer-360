@@ -199,6 +199,18 @@ export function collectAllowedProductIds(input: {
       addAllowedProductId(allowed, seen, record.productId);
     }
 
+    // SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: same treatment as
+    // search_products/explore_catalog above - a semantic discovery result is
+    // legitimate evidence for a pendingCatalogAction, never a semantic
+    // PendingCatalogAction of its own (task section 13).
+    if (observation.tool === "search_products_by_semantics" && Array.isArray(record.results)) {
+      for (const item of record.results) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+        addAllowedProductId(allowed, seen, (item as Record<string, unknown>).productId);
+      }
+      continue;
+    }
+
     // CP-R1-T10B8D: recommend_catalog_products candidates are legitimate
     // evidence for a pendingCatalogAction the model offers this same turn
     // (e.g. "quieres el link de alguno de estos productos recomendados?") -

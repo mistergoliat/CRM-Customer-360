@@ -243,7 +243,7 @@ function buildCustomerProfileComparisonCandidates(input: {
         candidates.set(key, {
           productId,
           productAttributeId: typeof productAttributeId === "number" && Number.isSafeInteger(productAttributeId) && productAttributeId >= 0 ? productAttributeId : null,
-          name: product.name
+          name: product.name ?? null
         });
       }
     }

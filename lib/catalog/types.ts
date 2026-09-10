@@ -344,6 +344,126 @@ export type CatalogProductSemantics = {
   provenance: CatalogProvenance;
 };
 
+/**
+ * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4. Real upstream contract confirmed
+ * against mistergoliat/MS-pesaschile-catalog-service (POST
+ * /v1/products/semantic-discovery/query, GET /v1/products/semantics/registry,
+ * GET /v1/products/training-semantics/registry -
+ * src/application/catalog/semantic-discovery/contracts.ts). `relations` (an
+ * upstream-optional DIRECT/SUPPORTED/FAMILY_DERIVED refinement for the
+ * training axes) is deliberately not exposed here - nothing in this task's
+ * request/response boundary needs it, and CRM never sends it upstream.
+ */
+export const CATALOG_SEMANTIC_DISCOVERY_PRODUCT_AXES = ["PRODUCT_FAMILY", "DISCIPLINE", "USE_CONTEXT"] as const;
+export const CATALOG_SEMANTIC_DISCOVERY_TRAINING_AXES = [
+  "EXERCISE_CAPABILITY",
+  "TRAINING_FUNCTION",
+  "BODY_REGION",
+  "MUSCLE_GROUP",
+  "TRAINING_PATTERN"
+] as const;
+export const CATALOG_SEMANTIC_DISCOVERY_AXES = [...CATALOG_SEMANTIC_DISCOVERY_PRODUCT_AXES, ...CATALOG_SEMANTIC_DISCOVERY_TRAINING_AXES] as const;
+export type CatalogSemanticDiscoveryProductAxis = (typeof CATALOG_SEMANTIC_DISCOVERY_PRODUCT_AXES)[number];
+export type CatalogSemanticDiscoveryTrainingAxis = (typeof CATALOG_SEMANTIC_DISCOVERY_TRAINING_AXES)[number];
+export type CatalogSemanticDiscoveryAxis = (typeof CATALOG_SEMANTIC_DISCOVERY_AXES)[number];
+
+export const CATALOG_SEMANTIC_DISCOVERY_MODES = ["required", "preferred"] as const;
+export type CatalogSemanticDiscoveryMode = (typeof CATALOG_SEMANTIC_DISCOVERY_MODES)[number];
+
+export const CATALOG_SEMANTIC_DISCOVERY_MATCHES = ["any", "all"] as const;
+export type CatalogSemanticDiscoveryMatch = (typeof CATALOG_SEMANTIC_DISCOVERY_MATCHES)[number];
+
+export type CatalogSemanticDiscoveryRequirement = {
+  axis: CatalogSemanticDiscoveryAxis;
+  codes: string[];
+  mode: CatalogSemanticDiscoveryMode;
+  match: CatalogSemanticDiscoveryMatch;
+};
+
+export type CatalogSemanticDiscoveryInput = {
+  requirements: CatalogSemanticDiscoveryRequirement[];
+  limit?: number;
+};
+
+export type CatalogSemanticDiscoveryMatchedRequirement = {
+  axis: CatalogSemanticDiscoveryAxis;
+  requestedCodes: string[];
+  matchedCodes: string[];
+  mode: CatalogSemanticDiscoveryMode;
+  match: CatalogSemanticDiscoveryMatch;
+};
+
+/** Compact projection of the upstream product-semantics fact - classifier internals (ontologyHash/classifierVersion/snapshotId) stay in `lineage`, never repeated per result item. */
+export type CatalogSemanticDiscoveryProductFact = {
+  classificationStatus: string;
+  primaryProductFamily: string | null;
+  secondaryProductFamilies: string[];
+  disciplines: string[];
+  useContexts: string[];
+};
+
+/** Compact projection of the upstream training-semantics fact - `derived` is already the upstream's own denormalized view, kept verbatim (codes only). */
+export type CatalogSemanticDiscoveryTrainingFact = {
+  resolutionState: string;
+  coverageStatus: string;
+  exerciseCapabilities: string[];
+  trainingFunctions: string[];
+  bodyRegions: string[];
+  primaryMuscleGroups: string[];
+  secondaryMuscleGroups: string[];
+  trainingPatterns: string[];
+};
+
+export type CatalogSemanticDiscoveryResultItem = {
+  productId: string;
+  matchedRequirements: CatalogSemanticDiscoveryMatchedRequirement[];
+  productSemantics: CatalogSemanticDiscoveryProductFact | null;
+  trainingSemantics: CatalogSemanticDiscoveryTrainingFact | null;
+};
+
+export type CatalogSemanticDiscoveryLineage = {
+  productSemantics: { snapshotId: string; ontologyVersion: string; ontologyHash: string } | null;
+  trainingSemantics: { snapshotId: string; registryVersion: string; registryHash: string } | null;
+};
+
+export type CatalogSemanticDiscoveryResult = {
+  results: CatalogSemanticDiscoveryResultItem[];
+  totalMatches: number;
+  truncated: boolean;
+  lineage: CatalogSemanticDiscoveryLineage;
+  provenance: CatalogProvenance;
+};
+
+/** Compact projection of one registry entry - CRM never carries `status`/`residual` beyond deciding whether to expose a value as still-current (see filtering in the capability layer). */
+export type CatalogSemanticRegistryValue = {
+  code: string;
+  label: string;
+  description: string;
+  residual: boolean;
+};
+
+export type CatalogProductSemanticsRegistry = {
+  ontologyVersion: string;
+  ontologyHash: string;
+  axes: { axis: CatalogSemanticDiscoveryProductAxis; values: CatalogSemanticRegistryValue[] }[];
+};
+
+/**
+ * Training axes have no upstream label/definition (bodyRegions/muscleGroups/
+ * trainingPatterns are already plain code strings at the source;
+ * exerciseCapabilities/trainingFunctions carry only `code`/`status`) - codes
+ * only, matching what the upstream registry actually provides.
+ */
+export type CatalogTrainingSemanticsRegistry = {
+  registryVersion: string;
+  registryHash: string;
+  exerciseCapabilities: string[];
+  trainingFunctions: string[];
+  bodyRegions: string[];
+  muscleGroups: string[];
+  trainingPatterns: string[];
+};
+
 export const CATALOG_PORT_ERROR_CODES = [
   "invalid_input",
   "unauthorized",
@@ -428,6 +548,21 @@ export type CatalogPort = {
     input: { productId: string },
     context: CatalogRequestContext
   ): Promise<CatalogPortResult<CatalogProductSemantics | null>>;
+  /**
+   * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: real service contract (POST
+   * /v1/products/semantic-discovery/query). Optional, same discipline as
+   * getProductSemantics - existing CatalogPort test doubles that only need
+   * commercial data are unaffected. Never sends `expectedSnapshots` (no
+   * cross-call snapshot pinning in this adapter) - see httpCatalogAdapter.ts.
+   */
+  querySemanticDiscovery?(
+    input: CatalogSemanticDiscoveryInput,
+    context: CatalogRequestContext
+  ): Promise<CatalogPortResult<CatalogSemanticDiscoveryResult>>;
+  /** SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: real service contract (GET /v1/products/semantics/registry). */
+  getProductSemanticsRegistry?(context: CatalogRequestContext): Promise<CatalogPortResult<CatalogProductSemanticsRegistry>>;
+  /** SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: real service contract (GET /v1/products/training-semantics/registry). */
+  getTrainingSemanticsRegistry?(context: CatalogRequestContext): Promise<CatalogPortResult<CatalogTrainingSemanticsRegistry>>;
 };
 
 export const CATALOG_ADAPTER_CONTRACT_VERSION = "catalog-service.v1" as const;

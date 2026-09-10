@@ -34,6 +34,7 @@ import type { AgentLoopProviderMessage } from "./agentLoopProviderTypes";
 import type { AgentLoopStepRecord, AgentStep, PendingCatalogActionStep } from "./agentStepTypes";
 import type { RecentCatalogContext } from "./recentCatalogContext";
 import { CONVERSATION_CONTINUITY_UNKNOWN, type ConversationContinuitySignal } from "./conversationContinuity";
+import type { SemanticVocabulary } from "../capability-gateway/searchProductsBySemanticsCapability";
 
 /**
  * One customer-authored fragment of this turn's own input - the original
@@ -65,13 +66,19 @@ function buildDynamicContextMessage(input: {
   recentCatalogContext?: RecentCatalogContext | null;
   pendingCatalogAction?: PendingCatalogActionStep | null;
   conversationContinuity?: ConversationContinuitySignal | null;
+  semanticVocabulary?: SemanticVocabulary | null;
 }): AgentLoopProviderMessage {
   const payload = {
     currentTime: input.currentTime,
     commercialContext: input.commercialContextSummary,
     recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
     ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {}),
-    conversationContinuity: input.conversationContinuity ?? CONVERSATION_CONTINUITY_UNKNOWN
+    conversationContinuity: input.conversationContinuity ?? CONVERSATION_CONTINUITY_UNKNOWN,
+    // SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4.1. Backend-owned current
+    // capability vocabulary (never conversation history, never a workflow
+    // state) - omitted (never `null` literal) when unavailable this turn, so
+    // a caller/test predating this task produces a byte-identical payload.
+    ...(input.semanticVocabulary ? { semanticVocabulary: input.semanticVocabulary } : {})
   };
   return { role: "system", content: RUNTIME_CONTEXT_LABEL + JSON.stringify(payload) };
 }
@@ -131,6 +138,8 @@ export type BuildHarnessAlignedMessagesInput = {
   /** Resolved by the caller (buildAgentStepPromptPackage.ts) - always at least one fragment (the turn's original customer message). */
   customerMessageFragments: readonly CustomerMessageFragment[];
   priorSteps: readonly AgentLoopStepRecord[];
+  /** SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4.1. See buildDynamicContextMessage's own comment - `null`/absent means no vocabulary this turn. */
+  semanticVocabulary?: SemanticVocabulary | null;
 };
 
 export function buildHarnessAlignedMessages(input: BuildHarnessAlignedMessagesInput): {

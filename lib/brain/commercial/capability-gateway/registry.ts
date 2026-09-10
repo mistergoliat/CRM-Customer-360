@@ -26,6 +26,7 @@ import { selectShippingOptionCapability } from "./selectShippingOptionCapability
 import { createQuoteCapability } from "./createQuoteCapability";
 import { getCustomerPurchaseHistoryCapability } from "./getCustomerPurchaseHistoryCapability";
 import { getCustomerRecommendationSignalCapability } from "./getCustomerRecommendationSignalCapability";
+import { searchProductsBySemanticsCapability } from "./searchProductsBySemanticsCapability";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -495,6 +496,12 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   getProductDetailsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   batchGetProductsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   exploreCatalogCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
+  // SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: canonical Product/Training
+  // Semantic discovery (real service contract: POST
+  // /v1/products/semantic-discovery/query) via a new CatalogPort method -
+  // distinct from search_products (nominal/product-level resolution) and
+  // explore_catalog (ranking/filter/order). See searchProductsBySemanticsCapability.ts.
+  searchProductsBySemanticsCapability(getSharedCatalogPort) as CapabilityGatewayDefinition,
   // ACS-R1-05.1-T02.1. Lexical fixture search, no external service - see
   // companyKnowledgeCapability.ts. Non-productive fixture content until the
   // business supplies verified copy (companyKnowledgeFixtures.ts).

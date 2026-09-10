@@ -1,5 +1,7 @@
+import { createCatalogPort } from "@/lib/catalog";
 import { executeGovernedCapability } from "../capability-gateway/executeCapability";
 import { resolveCapabilityGatewayDefinition } from "../capability-gateway/registry";
+import { getSemanticVocabularyForPrompt, type SemanticVocabulary } from "../capability-gateway/searchProductsBySemanticsCapability";
 import type { CapabilityGatewayContext, CapabilityGatewayResult } from "../capability-gateway/types";
 import { resolveAgentCapabilityExposure } from "../agent-capability-exposure/types";
 import { buildReadToolRequestFromAtlStep } from "../read-tool-request/atlAdapter";
@@ -85,6 +87,7 @@ export const AGENT_LOOP_TOOL_POOL = [
   "get_product_details",
   "search_company_knowledge",
   "explore_catalog",
+  "search_products_by_semantics",
   "recommend_catalog_products",
   "set_shipping_destination",
   "select_products",
@@ -850,6 +853,22 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   // causal interleaving order (see harnessAlignedMessageProjection.ts) without
   // needing a database timestamp.
   const harnessAlignedMessageModelEnabled = input.harnessAlignedMessageModelEnabled === true;
+  /**
+   * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4.1. Resolved once per turn, reused
+   * for every prompt build this turn (gathering + finalization) - same
+   * resolve-once-reuse discipline as recentCatalogContext/pendingCatalogAction
+   * (both threaded through input, resolved by the caller instead - this one
+   * is resolved here because it reads the search_products_by_semantics
+   * capability's own per-process registry cache, not turn-scoped DB state).
+   * Only fetched under harness-aligned mode (this task's scope - the legacy
+   * envelope keeps its exact pre-existing shape, byte-identical, no new I/O).
+   * getSemanticVocabularyForPrompt never throws - a missing/unconfigured
+   * catalog port or any transport/parse failure degrades to `null` (no
+   * vocabulary this turn; existing invalid_code repair remains the fallback).
+   */
+  const semanticVocabulary: SemanticVocabulary | null = harnessAlignedMessageModelEnabled
+    ? await getSemanticVocabularyForPrompt(createCatalogPort(), input.correlationId)
+    : null;
   const customerMessageFragments: CustomerMessageFragment[] = [{ id: assimilatedAnchorId, text: input.customerMessage, afterStepCount: 0 }];
   /** The most recent prompt build's projection metadata this turn - observability only, read by every return path below. */
   let latestProjection: AgentStepPromptProjectionMetadata = {
@@ -1135,7 +1154,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null,
       conversationContinuity: input.conversationContinuity ?? null,
       harnessAlignedMessageModelEnabled,
-      customerMessageFragments
+      customerMessageFragments,
+      semanticVocabulary
     });
     // LLM-R1-T04. Consumed immediately - this exact signal is for this one
     // call only, never for whatever call happens next.
@@ -1412,7 +1432,8 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null,
       conversationContinuity: input.conversationContinuity ?? null,
       harnessAlignedMessageModelEnabled,
-      customerMessageFragments
+      customerMessageFragments,
+      semanticVocabulary
     });
     // LLM-R1-T04. Consumed immediately - see the matching comment in gathering above.
     finalizationPendingRepairSignal = null;

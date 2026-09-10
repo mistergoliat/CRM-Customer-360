@@ -25,6 +25,10 @@ export const AGENT_CAPABILITY_EXPOSURE_CLASSIFICATION: Record<string, AgentCapab
   explore_catalog: "READ_TOOL",
   search_company_knowledge: "READ_TOOL",
   recommend_catalog_products: "READ_TOOL",
+  // SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: read-only Catalog semantic
+  // discovery, governance.sideEffect=read_only, no durable write of its own -
+  // see searchProductsBySemanticsCapability.ts.
+  search_products_by_semantics: "READ_TOOL",
   // calculate_shipping: real audit (A04 Phase 8) confirms execute() persists
   // nothing of its own - shipping_destination/commercial_line_items are
   // already durable via set_shipping_destination/select_products; it only

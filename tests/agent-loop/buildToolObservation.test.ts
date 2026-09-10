@@ -385,3 +385,82 @@ test("select_shipping_option: a non-staleness invalid_arguments (e.g. out-of-ran
   });
   assert.deepEqual(observation, { tool: "select_shipping_option", status: "blocked", errorCode: "shipping_option_index_out_of_range" });
 });
+
+test("SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: search_products_by_semantics matched observation preserves outcome/results/totalMatches/truncated", () => {
+  const observation = buildToolObservation(
+    "search_products_by_semantics",
+    completed({
+      outcome: "matched",
+      results: [{ productId: "1532", matchedRequirements: [{ axis: "PRODUCT_FAMILY", requestedCodes: ["JAULA"], matchedCodes: ["JAULA"], mode: "required", match: "any" }], productSemantics: null, trainingSemantics: null }],
+      totalMatches: 1,
+      truncated: false
+    })
+  );
+  assert.deepEqual(observation, {
+    tool: "search_products_by_semantics",
+    status: "completed",
+    data: {
+      outcome: "matched",
+      results: [{ productId: "1532", matchedRequirements: [{ axis: "PRODUCT_FAMILY", requestedCodes: ["JAULA"], matchedCodes: ["JAULA"], mode: "required", match: "any" }], productSemantics: null, trainingSemantics: null }],
+      totalMatches: 1,
+      truncated: false
+    }
+  });
+});
+
+test("SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: a NO_MATCH result stays a completed (successful) observation, never blocked/failed", () => {
+  const observation = buildToolObservation("search_products_by_semantics", completed({ outcome: "no_match", results: [], totalMatches: 0, truncated: false }));
+  assert.deepEqual(observation, { tool: "search_products_by_semantics", status: "completed", data: { outcome: "no_match", results: [], totalMatches: 0, truncated: false } });
+});
+
+test("SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: results are capped at 10 and truncated is forced true when the live projection cuts further than the capability already reported", () => {
+  const manyResults = Array.from({ length: 15 }, (_, index) => ({ productId: String(index + 1), matchedRequirements: [], productSemantics: null, trainingSemantics: null }));
+  const observation = buildToolObservation("search_products_by_semantics", completed({ outcome: "matched", results: manyResults, totalMatches: 15, truncated: false }));
+  const data = (observation as { data: { results: unknown[]; truncated: boolean } }).data;
+  assert.equal(data.results.length, 10);
+  assert.equal(data.truncated, true);
+});
+
+test("SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: an invalid_code failure is a typed, repairable blocked observation carrying the specific bad codes", () => {
+  const result: CapabilityGatewayResult<Record<string, unknown>> = {
+    capability: "search_products_by_semantics",
+    version: "capability-gateway.v1",
+    availability: "available",
+    status: "invalid_arguments",
+    data: { invalidRequirements: [{ axis: "PRODUCT_FAMILY", codes: ["UNKNOWN_CODE"] }] },
+    errorCode: "invalid_code",
+    retryable: false,
+    evidence: [],
+    warnings: [],
+    retryCount: 0,
+    startedAt: FIXED_TIME,
+    completedAt: FIXED_TIME,
+    executionPublicId: "capability-exec-test"
+  };
+  const observation = buildToolObservation("search_products_by_semantics", result);
+  assert.deepEqual(observation, {
+    tool: "search_products_by_semantics",
+    status: "blocked",
+    errorCode: "invalid_code",
+    data: { invalidRequirements: [{ axis: "PRODUCT_FAMILY", codes: ["UNKNOWN_CODE"] }] }
+  });
+});
+
+test("SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: a technical failure (e.g. registry_mismatch) falls back to the generic blocked/failed mapping", () => {
+  const registryMismatch: CapabilityGatewayResult<Record<string, unknown>> = {
+    capability: "search_products_by_semantics",
+    version: "capability-gateway.v1",
+    availability: "available",
+    status: "temporarily_blocked",
+    data: null,
+    errorCode: "registry_mismatch",
+    retryable: true,
+    evidence: [],
+    warnings: [],
+    retryCount: 0,
+    startedAt: FIXED_TIME,
+    completedAt: FIXED_TIME,
+    executionPublicId: "capability-exec-test"
+  };
+  assert.deepEqual(buildToolObservation("search_products_by_semantics", registryMismatch), { tool: "search_products_by_semantics", status: "failed", errorCode: "registry_mismatch" });
+});

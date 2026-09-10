@@ -222,3 +222,38 @@ test("does not mutate the recentCatalogContext or toolObservations inputs", () =
   assert.deepEqual(context, frozenContext);
   assert.deepEqual(observations, frozenObservations);
 });
+
+test("SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: resolves when the productId was observed via search_products_by_semantics (recentCatalogContext, no name required)", () => {
+  const context: RecentCatalogContext = {
+    interactions: [
+      {
+        inboundMessageId: "msg-1",
+        completedAt: "2026-08-05T14:00:00.000Z",
+        sourceTool: "search_products_by_semantics",
+        products: [{ position: 1, productId: "1532" }]
+      }
+    ]
+  };
+  const result = resolveObservedRecommendationSourceProduct({ requestedSourceProduct: { productId: 1532 }, recentCatalogContext: context });
+  assert.deepEqual(result, { status: "resolved", product: { productId: "1532" } });
+});
+
+test("SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: resolves when the productId was observed via search_products_by_semantics (live toolObservations, this turn)", () => {
+  const observations: ToolObservation[] = [
+    { tool: "search_products_by_semantics", status: "completed", data: { outcome: "matched", results: [{ productId: "1532", matchedRequirements: [], productSemantics: null, trainingSemantics: null }], totalMatches: 1, truncated: false } }
+  ];
+  const result = resolveObservedRecommendationSourceProduct({ requestedSourceProduct: { productId: 1532 }, recentCatalogContext: null, toolObservations: observations });
+  assert.deepEqual(result, { status: "resolved", product: { productId: "1532" } });
+});
+
+test("SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: search_products_by_semantics is a registry-declared PRODUCT_IDENTITY producer with no consumer-specific exclusion here (unlike recommend_catalog_products)", async () => {
+  const { resolveCapabilitiesProducingEvidence } = await import("@/lib/brain/commercial/capability-gateway/registry");
+  const registryProducers = resolveCapabilitiesProducingEvidence("PRODUCT_IDENTITY");
+  assert.ok(registryProducers.includes("search_products_by_semantics"));
+  const result = resolveObservedRecommendationSourceProduct({
+    requestedSourceProduct: { productId: 1532 },
+    recentCatalogContext: null,
+    toolObservations: [{ tool: "search_products_by_semantics", status: "completed", data: { outcome: "matched", results: [{ productId: "1532" }], totalMatches: 1, truncated: false } }]
+  });
+  assert.equal(result.status, "resolved");
+});

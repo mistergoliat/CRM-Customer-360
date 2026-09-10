@@ -100,6 +100,44 @@ function projectExploreCatalog(data: unknown) {
   };
 }
 
+/** SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: exported so recentCatalogContext.ts can slice search_products_by_semantics history at the exact same count the model observed live - same discipline as MAX_RECOMMENDATIONS above. */
+export const MAX_SEMANTIC_DISCOVERY_RESULTS = 10;
+
+/**
+ * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4. NO_MATCH is a valid domain result
+ * (task section 3/20) - `outcome`/`results`/`totalMatches`/`truncated` are
+ * always present, `results` is simply empty. Never re-derives matching -
+ * `data` is already the capability's own compact projection (see
+ * searchProductsBySemanticsCapability.ts); this only re-caps `results` in
+ * case a future capability change ever widens the limit beyond what the
+ * model should see per turn.
+ */
+function projectSearchProductsBySemantics(data: unknown) {
+  if (!isRecord(data)) return null;
+  const fullResults = Array.isArray(data.results) ? data.results : [];
+  const results = fullResults.slice(0, MAX_SEMANTIC_DISCOVERY_RESULTS);
+  return {
+    outcome: data.outcome,
+    results,
+    totalMatches: data.totalMatches,
+    truncated: results.length < fullResults.length ? true : data.truncated
+  };
+}
+
+/**
+ * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4 (task section 8/9). A stale/unknown
+ * canonical code is a typed, repairable observation - never a generic
+ * `{status:"blocked", errorCode:"invalid_code"}` with the specific bad codes
+ * silently dropped. `invalidRequirements` is the capability's own already-safe
+ * data (axis + the specific unrecognized codes, never the full requirement or
+ * any classifier/registry internal) - passed through as-is.
+ */
+function projectSearchProductsBySemanticsInvalidCode(result: CapabilityGatewayResult, warnings: { warnings?: string[] }): ToolObservation {
+  const data = isRecord(result.data) ? result.data : null;
+  const invalidRequirements = Array.isArray(data?.invalidRequirements) ? data.invalidRequirements : [];
+  return { tool: "search_products_by_semantics", status: "blocked", errorCode: "invalid_code", data: { invalidRequirements }, ...warnings };
+}
+
 /**
  * CRM-R1-T13D. The capability's own `data` is already the small, bounded
  * shape agreed for this tool (status/destination/input/reason) - passed
@@ -339,6 +377,10 @@ export function buildToolObservation(tool: string, result: CapabilityGatewayResu
     return projectSelectShippingOptionStale(result, warnings);
   }
 
+  if (tool === "search_products_by_semantics" && result.status === "invalid_arguments" && result.errorCode === "invalid_code") {
+    return projectSearchProductsBySemanticsInvalidCode(result, warnings);
+  }
+
   if (result.status === "completed") {
     const data =
       tool === "search_products"
@@ -349,17 +391,19 @@ export function buildToolObservation(tool: string, result: CapabilityGatewayResu
             ? projectCompanyKnowledge(result.data)
             : tool === "explore_catalog"
               ? projectExploreCatalog(result.data)
-              : tool === "set_shipping_destination"
-                ? projectSetShippingDestination(result.data)
-                : tool === "select_products"
-                  ? projectSelectProducts(result.data)
-                  : tool === "calculate_shipping"
-                    ? projectCalculateShipping(result.data)
-                    : tool === "select_shipping_option"
-                      ? projectSelectShippingOption(result.data)
-                      : tool === "create_quote"
-                        ? projectCreateQuote(result.data)
-                        : null;
+              : tool === "search_products_by_semantics"
+                ? projectSearchProductsBySemantics(result.data)
+                : tool === "set_shipping_destination"
+                  ? projectSetShippingDestination(result.data)
+                  : tool === "select_products"
+                    ? projectSelectProducts(result.data)
+                    : tool === "calculate_shipping"
+                      ? projectCalculateShipping(result.data)
+                      : tool === "select_shipping_option"
+                        ? projectSelectShippingOption(result.data)
+                        : tool === "create_quote"
+                          ? projectCreateQuote(result.data)
+                          : null;
     return { tool, status: "completed", data, ...warnings };
   }
 

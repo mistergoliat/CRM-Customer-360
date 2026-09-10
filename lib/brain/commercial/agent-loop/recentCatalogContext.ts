@@ -1,5 +1,5 @@
 import { safeQueryRows } from "@/lib/db";
-import { MAX_RECOMMENDATIONS } from "./buildToolObservation";
+import { MAX_RECOMMENDATIONS, MAX_SEMANTIC_DISCOVERY_RESULTS } from "./buildToolObservation";
 import { resolveCapabilitiesProducingEvidence } from "../capability-gateway/registry";
 
 export const RECENT_CATALOG_CONTEXT_SQL_CANDIDATE_LIMIT = 20;
@@ -11,7 +11,13 @@ export type RecentCatalogContextProduct = {
   position?: number;
   productId: string;
   combinationId?: string;
-  name: string;
+  /**
+   * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: optional because
+   * search_products_by_semantics results carry no commercial product name
+   * (semantic eligibility only, never CURRENT_PRODUCT_DETAILS) - every other
+   * producer still always sets this.
+   */
+  name?: string;
   variantLabel?: string | null;
 };
 
@@ -28,7 +34,7 @@ export type RecentCatalogContext = {
      * can cite a recommended product as observed evidence, same as any other
      * catalog tool.
      */
-    sourceTool: "search_products" | "get_product_details" | "explore_catalog" | "recommend_catalog_products";
+    sourceTool: "search_products" | "get_product_details" | "explore_catalog" | "recommend_catalog_products" | "search_products_by_semantics";
     products: RecentCatalogContextProduct[];
   }>;
 };
@@ -99,7 +105,9 @@ function asOptionalText(value: unknown): string | undefined {
  */
 const CATALOG_EVIDENCE_TOOLS = resolveCapabilitiesProducingEvidence("PRODUCT_IDENTITY");
 
-function isCatalogTool(value: unknown): value is "search_products" | "get_product_details" | "explore_catalog" | "recommend_catalog_products" {
+function isCatalogTool(
+  value: unknown
+): value is "search_products" | "get_product_details" | "explore_catalog" | "recommend_catalog_products" | "search_products_by_semantics" {
   return typeof value === "string" && (CATALOG_EVIDENCE_TOOLS as readonly string[]).includes(value);
 }
 
@@ -153,6 +161,26 @@ function productsFromSearchProducts(payload: Record<string, unknown>): RecentCat
 function productsFromProductDetails(payload: Record<string, unknown>): RecentCatalogContextProduct[] {
   const product = normalizeProductCandidate({ value: payload, includePosition: false });
   return product ? [product] : [];
+}
+
+/**
+ * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4. `results[].productId` only -
+ * search_products_by_semantics produces PRODUCT_IDENTITY/SEMANTIC_ELIGIBILITY,
+ * never a commercial product name (that requires CURRENT_PRODUCT_DETAILS from
+ * get_product_details), so this evidence carries no `name` at all - never a
+ * synthesized placeholder. Never reuses normalizeProductCandidate, which
+ * requires a name and would silently drop every candidate.
+ */
+function productsFromSearchProductsBySemantics(payload: Record<string, unknown>): RecentCatalogContextProduct[] {
+  const results = Array.isArray(payload.results) ? payload.results.slice(0, MAX_SEMANTIC_DISCOVERY_RESULTS) : [];
+  const products: RecentCatalogContextProduct[] = [];
+  for (const [index, entry] of results.entries()) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const productId = asText((entry as Record<string, unknown>).productId);
+    if (!productId) continue;
+    products.push({ position: index + 1, productId });
+  }
+  return products;
 }
 
 /**
@@ -270,7 +298,9 @@ export async function loadRecentCatalogContext(input: LoadRecentCatalogContextIn
         ? productsFromProductDetails(payload)
         : sourceTool === "recommend_catalog_products"
           ? productsFromRecommendCatalogProducts(payload)
-          : productsFromSearchProducts(payload);
+          : sourceTool === "search_products_by_semantics"
+            ? productsFromSearchProductsBySemantics(payload)
+            : productsFromSearchProducts(payload);
     if (rawProducts.length === 0) {
       warnings.push("recent_catalog_context_no_valid_products");
       continue;

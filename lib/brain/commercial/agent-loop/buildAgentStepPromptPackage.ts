@@ -10,6 +10,7 @@ import { describeStockDisclosure } from "./stockDisclosurePolicy";
 import type { AgentStepValidationReasonCode } from "./validateAgentStep";
 import { CONVERSATION_CONTINUITY_UNKNOWN, type ConversationContinuitySignal } from "./conversationContinuity";
 import { buildHarnessAlignedMessages, type AgentStepPromptProjectionMetadata, type CustomerMessageFragment } from "./harnessAlignedMessageProjection";
+import type { SemanticVocabulary } from "../capability-gateway/searchProductsBySemanticsCapability";
 
 /**
  * LLM-R1-T04. What went wrong on the immediately preceding provider call
@@ -133,6 +134,18 @@ export type AgentLoopPromptInput = {
    * built from customerMessage - see buildAgentStepPromptPackage() below.
    */
   customerMessageFragments?: CustomerMessageFragment[] | null;
+  /**
+   * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4.1. The current canonical Product/
+   * Training Semantics vocabulary (axis/code/label/description only - never
+   * classifier internals) - resolved by the caller (runAgentToolLoop.ts) from
+   * the search_products_by_semantics capability's own per-process registry
+   * cache, never fetched here. Only rendered when
+   * harnessAlignedMessageModelEnabled is true - see harnessAlignedMessageProjection.ts's
+   * dynamic runtime context message. `null`/absent means no vocabulary this
+   * turn (catalog unconfigured, registry not yet loaded, or legacy mode) -
+   * never blocks the turn, never a required field.
+   */
+  semanticVocabulary?: SemanticVocabulary | null;
 };
 
 const RESPOND_JSON_INSTRUCTION = "Return exactly one JSON object matching AgentStep, nothing else, no markdown fence.";
@@ -757,7 +770,8 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
       conversationContinuity: input.conversationContinuity,
       historicalMessages: input.persistentSessionHistoricalMessages ?? [],
       customerMessageFragments: fragments,
-      priorSteps: input.priorSteps
+      priorSteps: input.priorSteps,
+      semanticVocabulary: input.semanticVocabulary
     });
   }
 

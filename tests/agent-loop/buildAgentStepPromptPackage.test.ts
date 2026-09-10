@@ -1542,3 +1542,95 @@ test("[TR-B1-B2] select_products' real registry definition (via buildToolDescrip
   const createQuote = descriptions.find((tool) => tool.name === "create_quote");
   assert.equal(createQuote?.operationSemantics, "CREATE_SNAPSHOT");
 });
+
+// ---------------------------------------------------------------------------
+// SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4.1 - Canonical Semantic Vocabulary
+// Projection. semanticVocabulary is resolved by the caller (runAgentToolLoop.ts)
+// and passed in as a plain value - this pure function only needs to render it
+// into the existing dynamic runtime context (harness-aligned mode only).
+// ---------------------------------------------------------------------------
+
+const sampleSemanticVocabulary = {
+  axes: [
+    { axis: "PRODUCT_FAMILY" as const, codes: [{ code: "JAULA", label: "Jaula", description: "Jaula de entrenamiento" }] },
+    { axis: "BODY_REGION" as const, codes: [{ code: "LOWER_BODY" }] }
+  ]
+};
+
+test("[TR-B4.1] flag on: semanticVocabulary reaches the dynamic runtime context system message", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    semanticVocabulary: sampleSemanticVocabulary
+  });
+  const dynamicContextMessage = messages[1];
+  assert.equal(dynamicContextMessage.role, "system");
+  const payload = JSON.parse(dynamicContextMessage.content.slice(dynamicContextMessage.content.indexOf("{"))) as { semanticVocabulary?: unknown };
+  assert.deepEqual(payload.semanticVocabulary, sampleSemanticVocabulary);
+});
+
+test("[TR-B4.1] flag on, semanticVocabulary absent: the runtime context payload never carries a null/undefined placeholder key", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true
+  });
+  const dynamicContextMessage = messages[1];
+  assert.ok(!dynamicContextMessage.content.includes("semanticVocabulary"));
+});
+
+test("[TR-B4.1] flag on: semanticVocabulary never reaches the raw current user message", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "quiero algo para piernas en casa",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    semanticVocabulary: sampleSemanticVocabulary
+  });
+  const lastMessage = messages[messages.length - 1];
+  assert.equal(lastMessage.role, "user");
+  assert.equal(lastMessage.content, "quiero algo para piernas en casa");
+  assert.ok(!lastMessage.content.includes("JAULA"));
+});
+
+test("[TR-B4.1] flag on: adding semanticVocabulary does not change message count, roles, or order - only the dynamic context message's own JSON payload gains one key", () => {
+  const without = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true
+  });
+  const withVocabulary = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    harnessAlignedMessageModelEnabled: true,
+    semanticVocabulary: sampleSemanticVocabulary
+  });
+  assert.equal(withVocabulary.messages.length, without.messages.length);
+  assert.deepEqual(
+    withVocabulary.messages.map((m) => m.role),
+    without.messages.map((m) => m.role)
+  );
+  // Every message is identical except the dynamic context system message (index 1).
+  for (let i = 0; i < without.messages.length; i++) {
+    if (i === 1) continue;
+    assert.deepEqual(withVocabulary.messages[i], without.messages[i]);
+  }
+  assert.notEqual(withVocabulary.messages[1].content, without.messages[1].content);
+});
+
+test("[TR-B4.1] flag off: semanticVocabulary is ignored entirely - legacy mega-envelope is byte-identical with or without it", () => {
+  const withoutVocabulary = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig() });
+  const withVocabulary = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    semanticVocabulary: sampleSemanticVocabulary
+  });
+  assert.deepEqual(withVocabulary, withoutVocabulary);
+});

@@ -93,6 +93,14 @@ function collectLiveEvidence(toolObservations: Array<ToolObservation | null | un
     if (observation.tool === "get_product_details" && typeof data.productId === "string") {
       evidence.push({ productId: data.productId });
     }
+    // SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4: same shape discipline as
+    // search_products/explore_catalog above - productId-only, this-turn live
+    // evidence (see buildToolObservation.ts#projectSearchProductsBySemantics).
+    if (observation.tool === "search_products_by_semantics" && Array.isArray(data.results)) {
+      for (const item of data.results) {
+        if (isRecord(item) && typeof item.productId === "string") evidence.push({ productId: item.productId });
+      }
+    }
   }
   return evidence;
 }
