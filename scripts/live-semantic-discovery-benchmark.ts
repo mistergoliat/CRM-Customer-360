@@ -1,36 +1,43 @@
 /**
- * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B5. Bounded live-DeepSeek acceptance
- * for search_products_by_semantics tool selection / canonicalization /
- * post-tool reasoning, run through the REAL harness-aligned prompt-building
- * code (buildAgentStepPromptPackage.ts + buildToolDescriptions() from the
- * real Capability Gateway registry) and a REAL DeepSeek call
- * (createLiveBenchmarkProvider, same helper live-r2-semantic-variants-benchmark.ts
- * and live-c09-benchmark.ts already use) - never a scripted/mocked provider.
+ * SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B5/TR-B5.1. Bounded live-DeepSeek
+ * acceptance for search_products_by_semantics tool selection /
+ * canonicalization / post-tool reasoning, run through the REAL
+ * harness-aligned prompt-building code (buildAgentStepPromptPackage.ts +
+ * buildToolDescriptions() from the real Capability Gateway registry) and a
+ * REAL DeepSeek call (createLiveBenchmarkProvider, same helper
+ * live-r2-semantic-variants-benchmark.ts and live-c09-benchmark.ts already
+ * use) - never a scripted/mocked provider.
  *
- * Explicit, documented scope reduction (see the release doc for the full
- * rationale): the real Catalog Service (CATALOG_SERVICE_BASE_URL=127.0.0.1:4010)
- * and MariaDB are NOT reachable from this implementation session - same
- * vantage-point limitation documented across every prior task in this
- * release (confirmed here via scripts/manual-test/catalog-service-smoke.ts:
- * real timeout, not a guess). This script therefore:
- *   - Never calls runAgentToolLoop() (which would need both DB and Catalog).
- *   - Uses the REAL tool registry/schemas/useWhen/doNotUseWhen (buildToolDescriptions()) -
- *     these are code, not data, and are fully reachable.
- *   - Runs with semanticVocabulary ABSENT (the registry itself is
- *     unreachable) - this is the ONE deviation from full production fidelity,
- *     called out on every case's output line, never silently omitted.
+ * TR-B5.1: resolves the real semantic vocabulary through the exact same
+ * production path runAgentToolLoop.ts uses (createCatalogPort() ->
+ * getSemanticVocabularyForPrompt() -> projected SemanticVocabulary), once per
+ * run, reused for every case - never a fabricated/parallel vocabulary. This
+ * requires a reachable Catalog Service (CATALOG_SERVICE_BASE_URL/
+ * CATALOG_SERVICE_API_KEY configured, registry endpoints reachable) - the
+ * script fails closed (see main()) rather than falling back to a null/absent
+ * vocabulary, since a benchmark run without the real vocabulary would not be
+ * testing production fidelity.
+ *
+ * This script still:
+ *   - Never calls runAgentToolLoop() (which would also need DB access for
+ *     turn/session state) - only the prompt-building + provider-call slice.
+ *   - Uses the REAL tool registry/schemas/useWhen/doNotUseWhen (buildToolDescriptions()).
  *   - Simulates tool OBSERVATIONS (NO_MATCH / invalid_code) using the exact
  *     shape buildToolObservation.ts's own real projection functions produce -
  *     never invented ad hoc - to test post-tool reasoning without requiring a
- *     live catalog round trip.
+ *     live catalog round trip for those specific cases.
  *
- * Usage (requires a real, funded DeepSeek key - never runs in CI):
+ * Usage (requires a real, funded DeepSeek key AND a reachable Catalog
+ * Service - never runs in CI):
  *   BENCHMARK_LIVE_LLM_ENABLED=true npx tsx scripts/live-semantic-discovery-benchmark.ts
  */
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { resolveLiveBenchmarkProviderConfig, createLiveBenchmarkProvider } from "../lib/brain/commercial/agent-loop/benchmark/liveProvider";
 import { buildAgentStepPromptPackage } from "../lib/brain/commercial/agent-loop/buildAgentStepPromptPackage";
 import { buildToolDescriptions } from "../lib/brain/commercial/agent-loop/runAgentToolLoop";
+import { getSemanticVocabularyForPrompt, type SemanticVocabulary } from "../lib/brain/commercial/capability-gateway/searchProductsBySemanticsCapability";
+import { createCatalogPort } from "../lib/catalog";
 import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT } from "../lib/brain/commercial/sales-agent-configuration";
 import { validateAgentStep } from "../lib/brain/commercial/agent-loop/validateAgentStep";
 import type { AgentLoopStepRecord } from "../lib/brain/commercial/agent-loop/agentStepTypes";
@@ -52,7 +59,10 @@ type CaseResult = {
 
 const results: CaseResult[] = [];
 
-async function askAgentStep(input: { label: string; customerMessage: string; priorSteps?: AgentLoopStepRecord[] }, provider: AgentLoopProvider): Promise<CaseResult> {
+export async function askAgentStep(
+  input: { label: string; customerMessage: string; priorSteps?: AgentLoopStepRecord[]; semanticVocabulary: SemanticVocabulary },
+  provider: AgentLoopProvider
+): Promise<CaseResult> {
   const availableTools = buildToolDescriptions();
   const priorSteps = input.priorSteps ?? [];
   const { messages } = buildAgentStepPromptPackage({
@@ -67,9 +77,9 @@ async function askAgentStep(input: { label: string; customerMessage: string; pri
     phase: "gathering",
     identityConfiguration: SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
     harnessAlignedMessageModelEnabled: true,
-    // Deliberately absent: the real Catalog Service registry is unreachable
-    // from this session (see file header) - never a fabricated vocabulary.
-    semanticVocabulary: null
+    // TR-B5.1: the real production-projected vocabulary, resolved once in
+    // main() and reused for every case - see file header.
+    semanticVocabulary: input.semanticVocabulary
   });
 
   const correlationId = randomUUID();
@@ -100,7 +110,7 @@ async function askAgentStep(input: { label: string; customerMessage: string; pri
 function printResult(result: CaseResult) {
   console.log(`\n=== ${result.label} ===`);
   console.log(`customerMessage: "${result.customerMessage}"`);
-  console.log(`elapsedMs=${result.elapsedMs} inputTokens=${result.inputTokens ?? "n/a"} outputTokens=${result.outputTokens ?? "n/a"} outcome=${result.outcome}`);
+  console.log(`elapsedMs=${result.elapsedMs} inputTokens=${result.inputTokens ?? "n/a"} outputTokens=${result.outputTokens ?? "n/a"} outcome=${result.outcome} semanticVocabulary=PRESENT`);
   if (result.outcome === "use_tool") {
     console.log(`tool=${result.tool}`);
     console.log(`arguments=${result.argumentsJson}`);
@@ -140,8 +150,27 @@ async function main() {
   // budgets unless required to reproduce the current production configuration").
   const provider = createLiveBenchmarkProvider({ ...resolution.config, thinking: "disabled" });
 
+  // TR-B5.1: same production path as runAgentToolLoop.ts (createCatalogPort()
+  // -> getSemanticVocabularyForPrompt()), resolved once and reused for every
+  // case below - never a second/independent fetch, never a fabricated
+  // vocabulary. Fails closed: a benchmark run without the real vocabulary
+  // would not be testing production fidelity, so it never silently falls
+  // back to null here (unlike the production call site, which degrades to
+  // null by design for a normal customer turn).
+  const catalogPort = createCatalogPort();
+  const semanticVocabulary = await getSemanticVocabularyForPrompt(catalogPort, randomUUID());
+  if (!semanticVocabulary) {
+    console.error(
+      "semanticVocabulary: ABSENT - could not resolve the real Catalog Service registry " +
+        "(CATALOG_SERVICE_BASE_URL/CATALOG_SERVICE_API_KEY unset, or the registry endpoints are unreachable/unavailable). " +
+        "Refusing to run this benchmark without the real production vocabulary."
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const serializedBytes = Buffer.byteLength(JSON.stringify(semanticVocabulary), "utf8");
   console.log(`Live Semantic Discovery benchmark - model=${resolution.config.model} temperature=${resolution.config.temperature}`);
-  console.log("semanticVocabulary: ABSENT this run (Catalog Service registry unreachable from this session - see file header)");
+  console.log(`semanticVocabulary: PRESENT axes=${semanticVocabulary.axes.length} serializedBytes=${serializedBytes}`);
 
   // Section 4 - live cases A-E (single-shot tool-selection/canonicalization)
   const cases: Array<{ label: string; message: string }> = [
@@ -152,7 +181,7 @@ async function main() {
     { label: "CASE_E_estructura_barra", message: "quiero una estructura para apoyar la barra" }
   ];
   for (const testCase of cases) {
-    const result = await askAgentStep({ label: testCase.label, customerMessage: testCase.message }, provider);
+    const result = await askAgentStep({ label: testCase.label, customerMessage: testCase.message, semanticVocabulary }, provider);
     results.push(result);
     printResult(result);
   }
@@ -167,7 +196,10 @@ async function main() {
       observation: syntheticSemanticDiscoveryObservation([{ axis: "BODY_REGION", codes: ["LOWER_BODY"], mode: "required", match: "any" }], "no_match")
     }
   ];
-  const noMatchResult = await askAgentStep({ label: "CASE_NO_MATCH", customerMessage: "quiero algo para entrenar piernas en mi casa", priorSteps: noMatchPriorSteps }, provider);
+  const noMatchResult = await askAgentStep(
+    { label: "CASE_NO_MATCH", customerMessage: "quiero algo para entrenar piernas en mi casa", priorSteps: noMatchPriorSteps, semanticVocabulary },
+    provider
+  );
   results.push(noMatchResult);
   printResult(noMatchResult);
 
@@ -181,7 +213,10 @@ async function main() {
       observation: syntheticSemanticDiscoveryObservation([{ axis: "BODY_REGION", codes: ["PIERNA_INVENTADA_XYZ"], mode: "required", match: "any" }], "invalid_code")
     }
   ];
-  const invalidCodeResult = await askAgentStep({ label: "CASE_INVALID_CODE_REPAIR", customerMessage: "quiero algo para entrenar piernas en mi casa", priorSteps: invalidCodePriorSteps }, provider);
+  const invalidCodeResult = await askAgentStep(
+    { label: "CASE_INVALID_CODE_REPAIR", customerMessage: "quiero algo para entrenar piernas en mi casa", priorSteps: invalidCodePriorSteps, semanticVocabulary },
+    provider
+  );
   results.push(invalidCodeResult);
   printResult(invalidCodeResult);
 
@@ -193,7 +228,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error("Live semantic discovery benchmark crashed unexpectedly:", error);
-  process.exitCode = 1;
-});
+// Runs main() only when executed directly (`npx tsx scripts/live-semantic-discovery-benchmark.ts`),
+// never as a side effect of importing askAgentStep() for the DB-free wiring test.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch((error) => {
+    console.error("Live semantic discovery benchmark crashed unexpectedly:", error);
+    process.exitCode = 1;
+  });
+}
