@@ -1,5 +1,6 @@
 import { createCatalogPort } from "@/lib/catalog";
 import { executeGovernedCapability } from "../capability-gateway/executeCapability";
+import { insertCapabilityExecution } from "../capability-gateway/repository";
 import { resolveCapabilityGatewayDefinition } from "../capability-gateway/registry";
 import { getSemanticVocabularyForPrompt, type SemanticVocabulary } from "../capability-gateway/searchProductsBySemanticsCapability";
 import type { CapabilityGatewayContext, CapabilityGatewayResult } from "../capability-gateway/types";
@@ -497,6 +498,67 @@ function collectNonRecommendationEvidenceProductIds(input: { recentCatalogContex
 }
 
 /**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B3. Durable audit row for a tool
+ * call processUseToolStep itself rejects before executeGovernedCapability is
+ * ever called (dedupe/evidence/pending-catalog/exposure/opportunity-
+ * resolution - see this function's call sites below). Mirrors
+ * executeCapability.ts's own "rejected before real work" rows
+ * (capability_not_registered/identity-gate-denied) in the exact same table,
+ * with the one status (`not_executed`) no CapabilityGatewayResult can ever
+ * produce - so a human or consumer reading crm_capability_executions can
+ * always tell "never reached the Gateway" apart from "reached the Gateway
+ * and was denied/failed there", never by inferring it from errorCode alone.
+ *
+ * Best-effort only, matching every other AgentSessionStore/
+ * crm_capability_executions writer in this loop (read-tool-request/
+ * commercial-action-request sessionEvents.ts, executeCapability.ts itself):
+ * a persistence failure is folded into this turn's own `warnings` channel
+ * (the same internal-only observability channel every other technical
+ * signal in this loop already uses) and never thrown, never changes the
+ * ToolObservation the model already received or any retry/budget
+ * accounting - the ONLY difference a rejection produces is this extra,
+ * possibly-missing durable row.
+ */
+async function recordPreGatewayToolRejection(
+  tool: string,
+  effectiveArguments: Record<string, unknown>,
+  gatewayContext: CapabilityGatewayContext,
+  errorCode: string,
+  warnings: string[]
+): Promise<void> {
+  const definition = resolveCapabilityGatewayDefinition(tool);
+  const at = new Date().toISOString();
+  try {
+    const requestSummary = definition?.buildRequestSummary ? definition.buildRequestSummary(effectiveArguments, gatewayContext) : effectiveArguments;
+    const persisted = await insertCapabilityExecution({
+      correlationId: gatewayContext.correlationId,
+      capabilityName: tool,
+      capabilityVersion: definition?.version ?? "unregistered",
+      availabilityStatus: "denied",
+      executionStatus: "not_executed",
+      retryCount: 0,
+      retryable: false,
+      errorCode,
+      requestSummary,
+      responseSummary: null,
+      evidence: [],
+      opportunityId: typeof gatewayContext.opportunityId === "number" ? gatewayContext.opportunityId : null,
+      conversationId: gatewayContext.conversationId ?? null,
+      decisionId: gatewayContext.decisionId ?? null,
+      actionId: gatewayContext.actionId ?? null,
+      requestId: gatewayContext.requestId ?? null,
+      startedAt: at,
+      completedAt: at
+    });
+    if (!persisted.ok) {
+      warnings.push(`agent_loop_pre_gateway_observability_write_failed:${tool}:${persisted.error ?? "unknown"}`);
+    }
+  } catch (error) {
+    warnings.push(`agent_loop_pre_gateway_observability_write_failed:${tool}:${error instanceof Error ? error.message : "unknown"}`);
+  }
+}
+
+/**
  * Runs one governed use_tool decision: dedup, registry/authorization check,
  * execution, observation. Shared by the gathering and finalization phases
  * would be overkill (finalization never allows use_tool), so this is called
@@ -524,11 +586,13 @@ async function processUseToolStep(
 
   if (!AGENT_LOOP_TOOL_POOL.includes(step.tool as AgentLoopToolName) || !resolveCapabilityGatewayDefinition(step.tool)) {
     warnings.push(`agent_loop_tool_blocked_unregistered:${step.tool}`);
+    await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, "capability_not_registered", warnings);
     return { step: enrichedStep, governance: "blocked_unregistered", observation: { tool: step.tool, status: "blocked", errorCode: "capability_not_registered" }, executed: false };
   }
 
   if (executedCalls.has(dedupeKey)) {
     warnings.push(`agent_loop_tool_blocked_duplicate:${step.tool}`);
+    await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, "duplicate_tool_call", warnings);
     return { step: enrichedStep, governance: "blocked_duplicate", observation: { tool: step.tool, status: "blocked", errorCode: "duplicate_tool_call" }, executed: false };
   }
 
@@ -547,6 +611,7 @@ async function processUseToolStep(
     });
     if (evidence.status === "blocked") {
       warnings.push(`agent_loop_tool_blocked_evidence:${step.tool}:${evidence.reason}`);
+      await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, evidence.reason, warnings);
       return { step: enrichedStep, governance: "authorized", observation: { tool: step.tool, status: "blocked", errorCode: evidence.reason }, executed: false };
     }
   }
@@ -581,6 +646,7 @@ async function processUseToolStep(
       });
       if (evidence.status === "blocked") {
         warnings.push(`agent_loop_tool_blocked_evidence:${step.tool}:${evidence.reason}`);
+        await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, evidence.reason, warnings);
         return { step: enrichedStep, governance: "authorized", observation: { tool: step.tool, status: "blocked", errorCode: evidence.reason }, executed: false };
       }
     }
@@ -611,6 +677,7 @@ async function processUseToolStep(
         : false;
       if (!observedElsewhere) {
         warnings.push(`agent_loop_tool_blocked_pending_catalog:${step.tool}`);
+        await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, GET_PRODUCT_DETAILS_PENDING_CATALOG_BLOCKED_REASON, warnings);
         return {
           step: enrichedStep,
           governance: "authorized",
@@ -636,6 +703,7 @@ async function processUseToolStep(
   const exposure = resolveAgentCapabilityExposure(step.tool);
   if (exposure === "NOT_AGENT_EXPOSED") {
     warnings.push(`agent_loop_tool_blocked_not_exposed:${step.tool}`);
+    await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, "capability_not_agent_exposed", warnings);
     return {
       step: enrichedStep,
       governance: "blocked_not_exposed",
@@ -675,6 +743,7 @@ async function processUseToolStep(
       // any real attempt (invalid_arguments, duplicate, unregistered,
       // evidence-blocked) is free of budget cost.
       warnings.push(`agent_loop_opportunity_unavailable:${step.tool}:${ensuredOpportunity.reason}`);
+      await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, "opportunity_unavailable", warnings);
       return {
         step: enrichedStep,
         governance: "authorized",

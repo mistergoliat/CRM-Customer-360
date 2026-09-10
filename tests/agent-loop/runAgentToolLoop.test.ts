@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { after, before } from "node:test";
-import { getPool } from "@/lib/db";
+import { getPool, queryRows } from "@/lib/db";
 import { AGENT_LOOP_TOOL_POOL, runAgentToolLoop } from "@/lib/brain/commercial/agent-loop/runAgentToolLoop";
 import { createFakeAgentLoopProvider } from "@/lib/brain/commercial/agent-loop/providers/fakeAgentLoopProvider";
 import type { AgentLoopProvider } from "@/lib/brain/commercial/agent-loop/agentLoopProviderTypes";
@@ -41,6 +41,21 @@ let conversationSeq = Date.now();
 function uniqueConversationId() {
   conversationSeq += 1;
   return conversationSeq;
+}
+
+let correlationSeq = Date.now();
+/** SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B3. Unique per test so crm_capability_executions rows can be queried back without colliding with baseInput's shared "corr-1". */
+function uniqueCorrelationId() {
+  correlationSeq += 1;
+  return `corr-tr-b3-${correlationSeq}`;
+}
+
+/** TR-B3. Mirrors tests/commercial/capabilityGateway.test.ts's own loadExecutionRow helper. */
+async function loadPreGatewayRejectionRows(correlationId: string) {
+  return queryRows<Record<string, unknown>>(
+    "SELECT * FROM crm_capability_executions WHERE correlation_id = ? ORDER BY id ASC",
+    [correlationId]
+  );
 }
 
 async function countOpportunitiesForConversation(conversationId: number) {
@@ -792,12 +807,23 @@ test("F - tool invalida: platform blocks an unregistered tool, agent replans wit
     ]
   });
 
-  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Cierra la compra ahora.", commercialContextSummary: {}, provider });
+  const correlationId = uniqueCorrelationId();
+  const result = await runAgentToolLoop({ ...baseInput, correlationId, customerMessage: "Cierra la compra ahora.", commercialContextSummary: {}, provider });
 
   assert.equal(result.steps[0].governance, "blocked_unregistered");
   assert.equal(result.steps[0].observation?.status, "blocked");
   assert.equal(result.toolExecutionCount, 0);
   assert.equal(result.terminalReason, "responded");
+
+  // TR-B3. An unregistered tool never even has a real capability version -
+  // the durable row says so honestly ("unregistered"), same convention
+  // executeCapability.ts's own capability_not_registered branch already uses.
+  const rows = await loadPreGatewayRejectionRows(correlationId);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].capability_name, "create_checkout_link");
+  assert.equal(rows[0].capability_version, "unregistered");
+  assert.equal(rows[0].execution_status, "not_executed");
+  assert.equal(rows[0].error_code, "capability_not_registered");
 });
 
 test("G - loop repetido: duplicate tool+arguments is deduplicated, never executed twice", async () => {
@@ -810,11 +836,23 @@ test("G - loop repetido: duplicate tool+arguments is deduplicated, never execute
     ]
   });
 
-  const result = await runAgentToolLoop({ ...baseInput, customerMessage: "Busco una jaula.", commercialContextSummary: {}, provider });
+  const correlationId = uniqueCorrelationId();
+  const result = await runAgentToolLoop({ ...baseInput, correlationId, customerMessage: "Busco una jaula.", commercialContextSummary: {}, provider });
 
   assert.equal(result.steps[1].governance, "blocked_duplicate");
   assert.equal(result.toolExecutionCount, 1);
   assert.equal(result.terminalReason, "responded");
+
+  // TR-B3. The allowed first call reaches the Gateway exactly as before (one
+  // real, completed row) and the duplicate pre-Gateway rejection gets its
+  // own distinct, unambiguous row - never a fabricated second "completed".
+  const rows = await loadPreGatewayRejectionRows(correlationId);
+  assert.equal(rows.length, 2, "one real Gateway execution plus one pre-Gateway rejection row");
+  const completedRows = rows.filter((row) => row.execution_status === "completed");
+  const notExecutedRows = rows.filter((row) => row.execution_status === "not_executed");
+  assert.equal(completedRows.length, 1, "the allowed call must still reach the Gateway and complete exactly once");
+  assert.equal(notExecutedRows.length, 1, "the duplicate must never be reported as a real (Gateway-reached) execution");
+  assert.equal(notExecutedRows[0].error_code, "duplicate_tool_call");
 });
 
 test("G2 - loop repetido con argumentos en distinto orden de claves: sigue siendo deduplicado", async () => {
@@ -1653,7 +1691,7 @@ test("I0 - el pool conserva las tools previas mas explore_catalog/set_shipping_d
 
 // --- CRM-R1-T13E.2: select_products evidence gate ---
 
-test("select_products: an item never observed this conversation is blocked before the capability ever runs (no persistence attempted)", async () => {
+test("select_products: an item never observed this conversation is blocked before the capability ever runs, and never reaches select_products' own execute()", async () => {
   const provider = createFakeAgentLoopProvider({
     script: [
       { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "999", quantity: 1 }] } },
@@ -1661,8 +1699,10 @@ test("select_products: an item never observed this conversation is blocked befor
     ]
   });
 
+  const correlationId = uniqueCorrelationId();
   const result = await runAgentToolLoop({
     ...baseInput,
+    correlationId,
     customerMessage: "quiero 1 del producto 999",
     commercialContextSummary: {},
     // Present but empty, so the gate reports the precise "not observed"
@@ -1675,6 +1715,86 @@ test("select_products: an item never observed this conversation is blocked befor
   const observation = result.steps.find((step) => step.step.type === "use_tool")?.observation;
   assert.equal(observation?.status, "blocked");
   assert.equal(observation?.errorCode, "source_product_not_observed");
+
+  // TR-B3. The evidence-gate rejection is now durably observable: a
+  // crm_capability_executions row exists, distinct in kind from a real
+  // select_products execution (not_executed, never "completed"/"denied").
+  const rows = await loadPreGatewayRejectionRows(correlationId);
+  assert.equal(rows.length, 1, "exactly one durable row for the one blocked call - no capability was actually executed");
+  assert.equal(rows[0].capability_name, "select_products");
+  assert.equal(rows[0].execution_status, "not_executed");
+  assert.equal(rows[0].error_code, "source_product_not_observed");
+  assert.equal(rows[0].availability_status, "denied");
+});
+
+test("recommend_catalog_products: an unobserved sourceProduct is blocked before the capability ever runs, and is durably audited as pre-Gateway", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "recommend_catalog_products", arguments: { sourceProduct: { productId: 999 } } },
+      { type: "respond", message: "No pude confirmar ese producto." }
+    ]
+  });
+
+  const correlationId = uniqueCorrelationId();
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    correlationId,
+    customerMessage: "recomiendame algo parecido al producto 999",
+    commercialContextSummary: {},
+    recentCatalogContext: { interactions: [] },
+    provider
+  });
+
+  assert.equal(result.toolExecutionCount, 0, "a call blocked by the evidence gate must never reach the Gateway/count toward the tool budget");
+  const observation = result.steps.find((step) => step.step.type === "use_tool")?.observation;
+  assert.equal(observation?.status, "blocked");
+  assert.equal(observation?.errorCode, "source_product_not_observed");
+
+  const rows = await loadPreGatewayRejectionRows(correlationId);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].capability_name, "recommend_catalog_products");
+  assert.equal(rows[0].execution_status, "not_executed");
+  assert.equal(rows[0].error_code, "source_product_not_observed");
+});
+
+test("TR-B3: a pre-Gateway rejection's own durable-record write failure never changes the ToolObservation, budget accounting or terminal reason (best-effort, fail-open)", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      { type: "use_tool", tool: "select_products", arguments: { items: [{ productId: "999", quantity: 1 }] } },
+      { type: "respond", message: "No pude confirmar ese producto." }
+    ]
+  });
+
+  const correlationId = uniqueCorrelationId();
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    correlationId,
+    // A nonexistent opportunityId violates crm_capability_executions' own FK
+    // (fk_crm_capability_executions_opportunity), deterministically forcing
+    // the durable write below to fail without needing to break DB
+    // reachability itself - a real DB, a real rejected INSERT.
+    opportunityId: 999999999,
+    customerMessage: "quiero 1 del producto 999",
+    commercialContextSummary: {},
+    recentCatalogContext: { interactions: [] },
+    provider
+  });
+
+  // Byte-identical to the "no observability" test above: same status, same
+  // errorCode, same budget accounting, same terminal reason - the ONLY
+  // difference this test produces is that no durable row exists.
+  assert.equal(result.toolExecutionCount, 0);
+  const observation = result.steps.find((step) => step.step.type === "use_tool")?.observation;
+  assert.equal(observation?.status, "blocked");
+  assert.equal(observation?.errorCode, "source_product_not_observed");
+  assert.equal(result.terminalReason, "responded");
+
+  const rows = await loadPreGatewayRejectionRows(correlationId);
+  assert.equal(rows.length, 0, "the FK violation must have prevented the row from ever being persisted");
+  assert.ok(
+    result.warnings.some((warning) => warning.startsWith("agent_loop_pre_gateway_observability_write_failed:select_products:")),
+    "the persistence failure must still be logged through the turn's existing warnings channel"
+  );
 });
 
 test("select_products: an item observed via search_products this conversation clears the evidence gate and reaches the Gateway", async () => {
@@ -2512,8 +2632,10 @@ test("get_product_details continuity: a non-candidate product with no other evid
     ]
   });
 
+  const correlationId = uniqueCorrelationId();
   const result = await runAgentToolLoop({
     ...baseInput,
+    correlationId,
     customerMessage: "dame el detalle de otro",
     commercialContextSummary: {},
     pendingCatalogAction: { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501" }] },
@@ -2525,6 +2647,13 @@ test("get_product_details continuity: a non-candidate product with no other evid
   const observation = result.steps.find((step) => step.step.type === "use_tool")?.observation;
   assert.equal(observation?.status, "blocked");
   assert.equal(observation?.errorCode, "product_not_in_pending_catalog_candidates");
+
+  // TR-B3. pendingCatalogAction-gated pre-Gateway rejection is durably audited too.
+  const rows = await loadPreGatewayRejectionRows(correlationId);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].capability_name, "get_product_details");
+  assert.equal(rows[0].execution_status, "not_executed");
+  assert.equal(rows[0].error_code, "product_not_in_pending_catalog_candidates");
   assert.deepEqual(result.finalPendingCatalogAction, { actionType: "send_product_link", candidateProductIds: ["501"], candidateProducts: [{ productId: "501" }] });
 });
 
@@ -3077,8 +3206,10 @@ test("[R3-V1.2] opportunity unavailable blocks the CommercialActionRequest befor
     ]
   });
 
+  const correlationId = uniqueCorrelationId();
   const result = await runAgentToolLoop({
     ...baseInput,
+    correlationId,
     conversationId,
     ensureOpportunity: async () => ({ ok: false, reason: "simulated_infrastructure_failure" }),
     customerMessage: "quiero esa",
@@ -3092,6 +3223,18 @@ test("[R3-V1.2] opportunity unavailable blocks the CommercialActionRequest befor
   assert.notEqual(selectStep?.observation?.errorCode, "no_active_opportunity", "an infrastructure failure must never be reported as the real business denial code");
   assert.ok(result.warnings.some((warning) => warning.startsWith("agent_loop_opportunity_unavailable:select_products:")));
   assert.equal(await countOpportunitiesForConversation(conversationId), 0, "a request that never reached executeCommercialActionRequest must never have created anything either");
+
+  // TR-B3. Never reaching executeCommercialActionRequest/the Gateway means
+  // select_products gets a not_executed row too (never fabricated as a real
+  // "denied" execution), while the earlier get_product_details read (a
+  // READ_TOOL, unaffected by opportunity resolution) still completes and
+  // gets its own ordinary, real row.
+  const rows = await loadPreGatewayRejectionRows(correlationId);
+  const selectRow = rows.find((row) => row.capability_name === "select_products");
+  const detailsRow = rows.find((row) => row.capability_name === "get_product_details");
+  assert.equal(selectRow?.execution_status, "not_executed");
+  assert.equal(selectRow?.error_code, "opportunity_unavailable");
+  assert.equal(detailsRow?.execution_status, "completed");
 });
 
 test("[R3-V1.2] CREATE_QUOTE: lazy resolution still creates a durable opportunity, but the identity gate - not opportunity resolution - denies the mutation at LEVEL_0", async () => {

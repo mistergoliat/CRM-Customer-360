@@ -12,7 +12,17 @@ export type InsertCapabilityExecutionInput = {
   capabilityName: string;
   capabilityVersion: string;
   availabilityStatus: CapabilityAvailabilityStatus;
-  executionStatus: CapabilityGatewayExecutionStatus;
+  /**
+   * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B3. "not_executed" is additive to
+   * CapabilityGatewayExecutionStatus (never added to that shared runtime
+   * union itself - see its own comment) - the one legal value a row can
+   * carry that no CapabilityGatewayResult ever produces, reserved for a
+   * capability call rejected before it ever reached executeGovernedCapability
+   * (runAgentToolLoop.ts#processUseToolStep's own pre-Gateway checks). Every
+   * other value keeps meaning exactly what it already means: the call
+   * reached the Gateway.
+   */
+  executionStatus: CapabilityGatewayExecutionStatus | "not_executed";
   retryCount: number;
   retryable: boolean;
   errorCode: string | null;
