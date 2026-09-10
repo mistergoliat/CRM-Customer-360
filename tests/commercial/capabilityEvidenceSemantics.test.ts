@@ -60,9 +60,12 @@ test("every registered capability that does not declare evidence/operation-seman
 // is the single declared source consumed by resolveObservedRecommendationSourceProduct.ts/
 // pendingCatalogAction.ts/recentCatalogContext.ts.
 
-test("resolveCapabilitiesProducingEvidence('PRODUCT_IDENTITY') returns exactly the 4 catalog discovery capabilities, including recommend_catalog_products", () => {
+test("resolveCapabilitiesProducingEvidence('PRODUCT_IDENTITY') returns exactly the 5 catalog discovery capabilities, including recommend_catalog_products and search_products_by_semantics", () => {
   const producers = resolveCapabilitiesProducingEvidence("PRODUCT_IDENTITY");
-  assert.deepEqual(new Set(producers), new Set(["search_products", "get_product_details", "explore_catalog", "recommend_catalog_products"]));
+  assert.deepEqual(
+    new Set(producers),
+    new Set(["search_products", "get_product_details", "explore_catalog", "recommend_catalog_products", "search_products_by_semantics"])
+  );
 });
 
 test("resolveCapabilitiesProducingEvidence('COMMERCIAL_SELECTION_STATE') returns exactly select_products", () => {
@@ -73,8 +76,8 @@ test("resolveCapabilitiesProducingEvidence('QUOTE_CREATED') returns exactly crea
   assert.deepEqual(resolveCapabilitiesProducingEvidence("QUOTE_CREATED"), ["create_quote"]);
 });
 
-test("resolveCapabilitiesProducingEvidence('SEMANTIC_ELIGIBILITY') returns an empty list today (no registered capability declares it - greenfield per the A0 audit)", () => {
-  assert.deepEqual(resolveCapabilitiesProducingEvidence("SEMANTIC_ELIGIBILITY"), []);
+test("resolveCapabilitiesProducingEvidence('SEMANTIC_ELIGIBILITY') returns exactly search_products_by_semantics (TR-B4's producer)", () => {
+  assert.deepEqual(resolveCapabilitiesProducingEvidence("SEMANTIC_ELIGIBILITY"), ["search_products_by_semantics"]);
 });
 
 test("declaring evidenceProduced/evidenceRequired never changes governance, inputSchema, or execute() - additive fields only", () => {
