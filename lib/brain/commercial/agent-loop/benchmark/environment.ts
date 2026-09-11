@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { getPool } from "@/lib/db";
 import { resetCapabilityGatewayCatalogPortForTests } from "../../capability-gateway/registry";
 import { resetCalculateShippingCatalogPortForTests, setCalculateShippingCarrierServiceForTests, resetCalculateShippingCarrierServiceForTests } from "../../capability-gateway/calculateShippingCapability";
 import { setCommuneResolverForTests, resetCommuneResolverForTests } from "../../capability-gateway/shippingDestinationCapability";
@@ -239,6 +241,60 @@ export async function seedBenchmarkSelection(opportunityId: number, items: Array
   if (!result.ok) {
     throw new Error(`benchmark fixture setup: failed to seed commercial line items for opportunity ${opportunityId} (status=${result.status})`);
   }
+}
+
+function uniqueBenchmarkToken(label: string): string {
+  return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+export type DurableBenchmarkConversation = { id: number; waId: string };
+
+/**
+ * R3 Stable Agent Acceptance Harness V1 FIX1. Real, durable conversation/
+ * master_customer/opportunity rows for benchmark environments that need an
+ * FK-legal identity (e.g. a real crm_capability_executions row, which FKs to
+ * crm_opportunities(id)/conversation(id) - migration 022). Originally written
+ * for SALES-AGENT-R2-A07.5's setupR2BenchmarkEnvironment
+ * (work/benchmark/environment.ts); moved down here, unchanged, so both R2's
+ * wrapper and the R3 golden-corpus wrapper (r3StableAgentV1/environment.ts)
+ * call the exact same insert logic instead of each keeping its own copy.
+ * Deliberately NOT wired into the base setupBenchmarkEnvironment() below:
+ * that function is also used by the legacy C01-C12 corpus
+ * (tests/agent-loop/benchmark/offlineHarnessEndToEnd.test.ts), which
+ * intentionally runs against DB_NAME=main_management and would break if this
+ * module started requiring crm_test unconditionally.
+ */
+export async function seedDurableBenchmarkConversation(): Promise<DurableBenchmarkConversation> {
+  const waId = uniqueBenchmarkToken("wa");
+  const [result] = await getPool().execute(
+    `INSERT INTO conversation (
+      public_id, channel, provider, channel_account_id, external_contact_id,
+      status, owner_type, ai_enabled, human_owner_active
+    ) VALUES (?, 'whatsapp', 'meta', ?, ?, 'open', 'ai_sdr', 1, 0)`,
+    [randomUUID(), uniqueBenchmarkToken("phone"), waId]
+  );
+  return { id: Number((result as { insertId: number }).insertId), waId };
+}
+
+export async function seedDurableBenchmarkMasterCustomer(): Promise<number> {
+  const email = `${uniqueBenchmarkToken("benchmark-fixture")}@example.invalid`;
+  const [result] = await getPool().execute(
+    `INSERT INTO master_customer (firstname, lastname, email, platform_origin) VALUES ('Benchmark', 'Fixture', ?, 'hub')`,
+    [email]
+  );
+  return Number((result as { insertId: number }).insertId);
+}
+
+export async function seedDurableBenchmarkOpportunity(input: { waId: string; masterCustomerId: number }): Promise<number> {
+  const [result] = await getPool().execute(
+    `INSERT INTO crm_opportunities (
+      opportunity_key, wa_id, channel, primary_intent, status, customer_master_id,
+      requirements_json, missing_requirements_json, product_interests_json,
+      objections_json, signals_json
+    ) VALUES (?, ?, 'whatsapp', 'sales', 'open', ?, JSON_ARRAY(), JSON_ARRAY(), JSON_ARRAY(), JSON_ARRAY(), JSON_OBJECT())`,
+    [uniqueBenchmarkToken("benchmark-fixture-opportunity"), input.waId, input.masterCustomerId]
+  );
+  return Number((result as { insertId: number }).insertId);
 }
 
 export type BenchmarkEnvironment = {

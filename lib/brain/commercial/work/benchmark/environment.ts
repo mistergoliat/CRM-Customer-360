@@ -1,9 +1,11 @@
-import { randomUUID } from "node:crypto";
 import { getPool, queryRows } from "@/lib/db";
 import {
   setupBenchmarkEnvironment,
   seedBenchmarkSelection,
   seedBenchmarkShippingDestination,
+  seedDurableBenchmarkConversation,
+  seedDurableBenchmarkMasterCustomer,
+  seedDurableBenchmarkOpportunity,
   type BenchmarkCarrierBehavior
 } from "../../agent-loop/benchmark/environment";
 
@@ -16,7 +18,11 @@ import {
  * crm_opportunities row (customer_master_id, wa_id) and a real
  * master_customer row to resolve a customer snapshot. This wraps the legacy
  * environment unchanged for Catalog/Carrier/commune fakes, and adds the
- * real conversation/master_customer/crm_opportunities rows R2 needs.
+ * real conversation/master_customer/crm_opportunities rows R2 needs -
+ * seeded via seedDurableBenchmark*() (agent-loop/benchmark/environment.ts),
+ * the same durable-row insert logic the R3 Stable Agent Acceptance Harness
+ * V1 fixture (r3StableAgentV1/environment.ts) now reuses, so this business
+ * logic lives in exactly one place (R3 FIX1).
  */
 
 export type R2BenchmarkEnvironment = {
@@ -28,48 +34,11 @@ export type R2BenchmarkEnvironment = {
   teardown: () => Promise<void>;
 };
 
-function unique(label: string): string {
-  return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-}
-
-async function seedConversation(): Promise<{ id: number; waId: string }> {
-  const waId = unique("wa");
-  const [result] = await getPool().execute(
-    `INSERT INTO conversation (
-      public_id, channel, provider, channel_account_id, external_contact_id,
-      status, owner_type, ai_enabled, human_owner_active
-    ) VALUES (?, 'whatsapp', 'meta', ?, ?, 'open', 'ai_sdr', 1, 0)`,
-    [randomUUID(), unique("phone"), waId]
-  );
-  return { id: Number((result as { insertId: number }).insertId), waId };
-}
-
-async function seedMasterCustomer(): Promise<number> {
-  const email = `${unique("r2-benchmark")}@example.invalid`;
-  const [result] = await getPool().execute(
-    `INSERT INTO master_customer (firstname, lastname, email, platform_origin) VALUES ('R2', 'Benchmark', ?, 'hub')`,
-    [email]
-  );
-  return Number((result as { insertId: number }).insertId);
-}
-
-async function seedOpportunity(input: { waId: string; masterCustomerId: number }): Promise<number> {
-  const [result] = await getPool().execute(
-    `INSERT INTO crm_opportunities (
-      opportunity_key, wa_id, channel, primary_intent, status, customer_master_id,
-      requirements_json, missing_requirements_json, product_interests_json,
-      objections_json, signals_json
-    ) VALUES (?, ?, 'whatsapp', 'sales', 'open', ?, JSON_ARRAY(), JSON_ARRAY(), JSON_ARRAY(), JSON_ARRAY(), JSON_OBJECT())`,
-    [unique("r2-benchmark-opportunity"), input.waId, input.masterCustomerId]
-  );
-  return Number((result as { insertId: number }).insertId);
-}
-
 export async function setupR2BenchmarkEnvironment(carrierBehavior: BenchmarkCarrierBehavior = "success"): Promise<R2BenchmarkEnvironment> {
   const legacy = await setupBenchmarkEnvironment(carrierBehavior);
-  const conversation = await seedConversation();
-  const masterCustomerId = await seedMasterCustomer();
-  const opportunityId = await seedOpportunity({ waId: conversation.waId, masterCustomerId });
+  const conversation = await seedDurableBenchmarkConversation();
+  const masterCustomerId = await seedDurableBenchmarkMasterCustomer();
+  const opportunityId = await seedDurableBenchmarkOpportunity({ waId: conversation.waId, masterCustomerId });
 
   return {
     baseUrl: legacy.baseUrl,

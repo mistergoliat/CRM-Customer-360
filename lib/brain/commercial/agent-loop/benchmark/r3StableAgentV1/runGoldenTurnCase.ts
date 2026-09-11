@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_MAX_DECISIONS, DEFAULT_MAX_TOOL_EXECUTIONS, DEFAULT_TIMEOUT_MS, runAgentToolLoop } from "../../runAgentToolLoop";
-import { setupBenchmarkEnvironment } from "../environment";
+import { setupR3BenchmarkEnvironment } from "./environment";
 import { createOfflineScriptedProvider } from "../offlineProvider";
 import { createInstrumentedProvider } from "../instrumentedProvider";
 import { createLiveBenchmarkProvider } from "../liveProvider";
@@ -12,11 +12,14 @@ import type { GoldenRunMode, GoldenTurnCase, GoldenTurnRunResult } from "./types
 
 /**
  * R3 Stable Agent Acceptance Harness V1. Mirrors the legacy
- * benchmark/runCorpus.ts#runBenchmarkCase exactly (same isolated environment,
- * same instrumented provider wrapping, same real unmodified runAgentToolLoop)
- * - the only difference is the golden scorer (scoreGoldenCase.ts) instead of
- * the legacy scoreCase, and passing environment.conversationId through so
- * select_shipping_option's evidence gate is exercisable.
+ * benchmark/runCorpus.ts#runBenchmarkCase (same instrumented provider
+ * wrapping, same real unmodified runAgentToolLoop) - the golden scorer
+ * (scoreGoldenCase.ts) replaces the legacy scoreCase, and the environment is
+ * setupR3BenchmarkEnvironment (FIX1) rather than the legacy
+ * setupBenchmarkEnvironment: this corpus needs a real, durable
+ * opportunityId/conversationId (TS-005 writes a real crm_capability_executions
+ * row referencing both as foreign keys), which the legacy synthetic-id
+ * environment never provided.
  */
 export async function runGoldenTurnCase(
   testCase: GoldenTurnCase,
@@ -24,7 +27,7 @@ export async function runGoldenTurnCase(
   liveConfig: LiveBenchmarkProviderConfig | undefined,
   runIndex: number
 ): Promise<GoldenTurnRunResult> {
-  const environment = await setupBenchmarkEnvironment();
+  const environment = await setupR3BenchmarkEnvironment();
   try {
     if (testCase.setup) {
       await testCase.setup({ opportunityId: environment.opportunityId, conversationId: environment.conversationId });
