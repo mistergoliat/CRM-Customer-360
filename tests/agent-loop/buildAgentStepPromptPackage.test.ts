@@ -144,7 +144,14 @@ test("[PR12] immutable publicLink rules are present in gathering and finalizatio
     assert.match(system, /Product URLs may only be shared when they came from a get_product_details tool observation at data\.publicLink\.canonicalUrl/);
     assert.match(system, /Never build, complete, guess, shorten, translate, or otherwise transform product URLs/);
     assert.match(system, /publicLink\.available is not true or publicLink\.canonicalUrl is null/);
-    assert.match(system, /search_products is not sufficient evidence for a product link/);
+    // SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1: the two
+    // per-tool lines (search_products / explore_catalog) became one general
+    // rule that also covers search_products_by_semantics and
+    // recommend_catalog_products, which joined the pool after those lines
+    // were written and were therefore implied - by omission - to be
+    // sufficient link evidence.
+    assert.match(system, /get_product_details is the only sufficient evidence for a product link/);
+    assert.match(system, /search_products, search_products_by_semantics, explore_catalog, recommend_catalog_products\) ever is/);
     assert.match(system, /publicLink\.requiresVariantSelection is true/);
     assert.match(system, /publicLink\.scope=parent_product/);
     assert.match(system, /publicLink\.unavailableReason is internal evidence/);
@@ -313,8 +320,11 @@ test("[PR19] ACS-R1-05.1-T02.6: explore_catalog differentiation rules are presen
   // gathered - never invocation mechanics - so it stays in both phases.
   assert.match(gatheringSystem, /Do not use search_products to claim a global maximum, minimum, top-N, or ranking/);
   assert.match(finalizationSystem, /Do not use search_products to claim a global maximum, minimum, top-N, or ranking/);
-  assert.match(gatheringSystem, /explore_catalog is not sufficient evidence for a product link either/);
-  assert.match(finalizationSystem, /explore_catalog is not sufficient evidence for a product link either/);
+  // SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1: explore_catalog
+  // is still declared insufficient link evidence, now by the single general
+  // rule PR12 above asserts rather than by its own dedicated line.
+  assert.match(gatheringSystem, /get_product_details is the only sufficient evidence for a product link/);
+  assert.match(finalizationSystem, /get_product_details is the only sufficient evidence for a product link/);
 
   // Tool-selection/sequencing mechanics: only meaningful while use_tool is a
   // legal AgentStep (gathering) - impossible to act on in finalization
@@ -666,7 +676,7 @@ test("[LLM-R1-T03 Caso 5] gathering system/user prompt lengths are unchanged fro
     identityConfiguration: pesasChileConfig(),
     availableTools: [{ name: "explore_catalog", description: "d" }]
   });
-  assert.equal(messages[0].content.length, 23521, "gathering systemPrompt.length must match the post-TR-B1-B2 measurement");
+  assert.equal(messages[0].content.length, 25982, "gathering systemPrompt.length must match the post-COMMERCIAL-POLICY-V1 measurement");
   // SALES-AGENT-R3-V1.8.1b (later): +126 chars - the new conversationContinuity
   // field (CONVERSATION_CONTINUITY_UNKNOWN, baseInput sets none) added to the
   // user payload alongside customerMessage/commercialContext/etc.
@@ -699,7 +709,7 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt stays meaningfully smaller 
     messages[0].content.length < gathering.messages[0].content.length,
     `finalization systemPrompt.length (${messages[0].content.length}) must be less than gathering's (${gathering.messages[0].content.length})`
   );
-  assert.equal(messages[0].content.length, 20420, "finalization systemPrompt.length must match the post-verified-link-autonomy measurement (unaffected by TR-B1-B2, see the gathering-only note above)");
+  assert.equal(messages[0].content.length, 21218, "finalization systemPrompt.length must match the post-COMMERCIAL-POLICY-V1 measurement");
   // SALES-AGENT-R3-V1.8.1b (later): +126 chars, same conversationContinuity
   // field addition the Caso 5 comment above explains - identical delta in
   // both phases (the user-payload shape is shared by gathering/finalization).
@@ -730,8 +740,20 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt stays meaningfully smaller 
 // SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2 (later): gathering -210 chars,
 // finalization unchanged - same select_products full-replace consolidation
 // the Caso 5 length test comment above explains.
-const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 20420;
-const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 23521;
+// SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1 (later):
+// gathering +2461, finalization +798. Gathering gains the 3-line
+// CAPABILITY_SELECTION_POLICY_RULE_LINES (gathering-only: choosing a
+// capability is impossible with no tool budget left) and all 8 lines of
+// COMMERCIAL_BEHAVIOR_POLICY_RULE_LINES; finalization gains only that
+// block's 4-line response-governing suffix
+// (COMMERCIAL_BEHAVIOR_POLICY_FINALIZATION_RULE_LINES). Both phases also
+// absorb the link-evidence consolidation (two per-tool lines -> one general
+// rule) and the derived observed-evidence allowlist text. The tool-line
+// useWhen/doNotUseWhen semantics added for all 11 pool capabilities are NOT
+// in these numbers: this fixture's availableTools is a hand-built
+// [{name:"explore_catalog", description:"d"}], not buildToolDescriptions().
+const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 21218;
+const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 25982;
 
 test("[LLM-R1-T04 Caso 1] a normal call (no priorAttemptFailure) is byte-identical to before this task - no repair instruction present", () => {
   for (const phase of ["gathering", "finalization"] as const) {

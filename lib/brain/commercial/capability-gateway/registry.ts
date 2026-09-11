@@ -125,10 +125,14 @@ function searchProductsCapability(getPort: () => CatalogPort | null): Capability
   return {
     capability: "search_products",
     version: CAPABILITY_GATEWAY_VERSION,
-    description: "Search the real product catalog by free text via the catalog microservice (T12 product intent resolution: resolved/clarification_required/no_match).",
+    description:
+      "Resolves which concrete catalog product the customer is naming or referring to, from nominal text such as a product name, model, brand or reference. Returns candidate product identities with a resolution status (resolved/clarification_required/no_match) - never current price, stock, variants or link.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: SEARCH_PRODUCTS_INPUT_SCHEMA,
     evidenceProduced: ["PRODUCT_IDENTITY"],
+    useWhen: "the unresolved problem is determining which concrete catalog product the customer is naming, searching for, or referring to through nominal information",
+    doNotUseWhen:
+      "the customer describes what a product should do, train, or satisfy without having identified a concrete one (search_products_by_semantics discovers those); the answer depends on relative price, stock, ranking, top-N, or an extreme over the catalog (explore_catalog); an already-identified product's current commercial facts are what is missing (get_product_details); the question only needs company knowledge (search_company_knowledge); or a semantic discovery already succeeded and this would only repeat the same retrieval as free text",
     maxRetries: 1,
     async checkAvailability() {
       if (catalogUnavailable(getPort())) {
@@ -184,10 +188,14 @@ function getProductDetailsCapability(getPort: () => CatalogPort | null): Capabil
   return {
     capability: "get_product_details",
     version: CAPABILITY_GATEWAY_VERSION,
-    description: "Read verified details (price, stock, variants) for one product via the catalog microservice.",
+    description:
+      "Returns the current commercial facts for one already-identified product: price, stock, availability, variants, and its verified canonical public link. The only capability whose evidence authorizes sharing a product URL.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: GET_PRODUCT_DETAILS_INPUT_SCHEMA,
     evidenceProduced: ["PRODUCT_IDENTITY", "CURRENT_PRODUCT_DETAILS"],
+    useWhen: "a concrete product is already identified and the unresolved problem is its current commercial facts - price, stock, availability, variants, or its verified canonical public link",
+    doNotUseWhen:
+      "the product's identity still has to be discovered first; or the customer is committing to what they want to buy - reading a product's details is never a commercial selection (select_products)",
     maxRetries: 1,
     async checkAvailability() {
       if (catalogUnavailable(getPort())) {
@@ -347,8 +355,9 @@ function asLegacySortAlias(input: Record<string, unknown>): CatalogExploreSort |
 
 /**
  * ACS-R1-05.1-T02.6: extremes/top-N/rankings/filtered browse - distinct from
- * search_products (open-ended semantic/textual discovery) and get_product_details
- * (expands one already-identified productId). "available" is the closed
+ * search_products (nominal product resolution), search_products_by_semantics
+ * (functional/training discovery) and get_product_details (expands one
+ * already-identified productId). "available" is the closed
  * default (never "all") unless the model explicitly asks for another scope -
  * see registry docs and buildAgentStepPromptPackage.ts rule lines.
  */
@@ -388,10 +397,13 @@ function exploreCatalogCapability(getPort: () => CatalogPort | null): Capability
     capability: "explore_catalog",
     version: CAPABILITY_GATEWAY_VERSION,
     description:
-      "Find extremes (cheapest/most expensive), top-N, rankings, or filtered/sorted views of the catalog by price, stock, or name - with optional filters by category, product type, price range, availability or text - via the catalog microservice. Not for open-ended semantic product discovery (use search_products) and not for expanding one already-identified product (use get_product_details).",
+      "Returns the catalog as an ordered or filtered set: extremes (cheapest/most expensive), top-N, rankings, or views sorted by price, stock or name, with optional filters by category, product type, price range, availability or free text. Reports whether the returned set was exhaustive for the requested scope.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: EXPLORE_CATALOG_INPUT_SCHEMA,
     evidenceProduced: ["PRODUCT_IDENTITY"],
+    useWhen: "the answer depends on relative price, stock, ranking, top-N, a minimum or maximum, a price range, or a filtered scope of the catalog rather than on one particular product",
+    doNotUseWhen:
+      "the problem is resolving nominally which product the customer named (search_products); the problem is which products satisfy a functional, training, or use requirement (search_products_by_semantics); or an already-identified product's current details are what is missing (get_product_details)",
     maxRetries: 1,
     async checkAvailability() {
       if (catalogUnavailable(getPort())) {

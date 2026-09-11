@@ -164,9 +164,16 @@ export type CapabilityGatewayDefinition<TInput = Record<string, unknown>, TOutpu
    * SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. Boundary prose the model
    * reasons over (never a routing rule the runtime executes) - rendered
    * alongside `description` by buildAgentStepPromptPackage.ts's tool-line
-   * renderer when present. Optional: absent for every capability that has
-   * no proven, already-existing boundary to state this way (this task
-   * populates none - see the release doc).
+   * renderer when present.
+   *
+   * SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1. Every
+   * AGENT_LOOP_TOOL_POOL capability now declares both. Each is a BARE
+   * CLAUSE - no leading connector, no trailing period - because
+   * renderToolLine supplies "Use when: <clause>." / "Do not use when:
+   * <clause>." itself; a string repeating the connector rendered as "Use
+   * when: Use when ... .". Still structurally optional (the internal,
+   * non-agent-facing capabilities declare neither), and asserted for the
+   * agent-facing pool in tests/commercial/capabilityEvidenceSemantics.test.ts.
    */
   useWhen?: string;
   doNotUseWhen?: string;

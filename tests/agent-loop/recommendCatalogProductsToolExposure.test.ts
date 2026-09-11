@@ -35,6 +35,10 @@ test("pool: recommend_catalog_products is visible, pool matches the canonical na
       "get_product_details",
       "search_company_knowledge",
       "explore_catalog",
+      // SALES-AGENT-R3-SEMANTIC-DISCOVERY-TR-B4 added this and left the list
+      // below stale (the exact drift this named-list test exists to make
+      // loud); restored by SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1.
+      "search_products_by_semantics",
       "recommend_catalog_products",
       "set_shipping_destination",
       "select_products",

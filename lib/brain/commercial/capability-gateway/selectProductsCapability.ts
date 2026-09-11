@@ -66,13 +66,15 @@ export function selectProductsCapability(): CapabilityGatewayDefinition<{ items:
     capability: "select_products",
     version: CAPABILITY_GATEWAY_VERSION,
     description:
-      "Records the customer's confirmed product selection (productId/combinationId/quantity) as this opportunity's durable, authoritative commercial line items, replacing any prior selection entirely. Every item must reference a product this conversation actually observed via search_products/get_product_details/explore_catalog - a fabricated or unobserved productId is rejected before this capability runs. Each call must include the complete desired selection, never just the items being added.",
+      "Records the customer's confirmed product selection (productId/combinationId/quantity) as this opportunity's durable, authoritative commercial line items. Every item must reference a product this conversation actually observed via a catalog discovery capability (search_products, search_products_by_semantics, get_product_details or explore_catalog) - a fabricated or unobserved productId is rejected before this capability runs.",
     governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "low" },
     maxRetries: 0,
     inputSchema: SELECT_PRODUCTS_INPUT_SCHEMA,
     evidenceRequired: ["PRODUCT_IDENTITY"],
     evidenceProduced: ["COMMERCIAL_SELECTION_STATE"],
     operationSemantics: "FULL_REPLACEMENT",
+    useWhen: "the conversation establishes which products and quantities make up the current purchase",
+    doNotUseWhen: "the products are still only being explored, compared, or recommended rather than committed to",
     async checkAvailability() {
       return { status: "available", reason: null };
     },

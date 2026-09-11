@@ -41,6 +41,18 @@ const OBSERVED_EVIDENCE_SOURCE_TOOLS = new Set(
   resolveCapabilitiesProducingEvidence("PRODUCT_IDENTITY").filter((tool) => !RECOMMEND_CATALOG_PRODUCTS_EXCLUDED_AS_RECURSIVE_SOURCE.has(tool))
 );
 
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1. The same set
+ * this file enforces, exposed so buildAgentStepPromptPackage.ts can state it
+ * to the model verbatim instead of maintaining its own prose copy (which had
+ * already drifted by omitting search_products_by_semantics). Sorted for a
+ * stable, deterministic prompt string - registry order is an implementation
+ * detail, never a priority signal.
+ */
+export function listObservedCatalogEvidenceTools(): string[] {
+  return [...OBSERVED_EVIDENCE_SOURCE_TOOLS].sort();
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -58,10 +58,19 @@ export const SEARCH_PRODUCTS_BY_SEMANTICS_INPUT_SCHEMA = {
   }
 } as const;
 
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1. Bare clauses: no
+ * leading connector, no trailing period - renderToolLine supplies both
+ * ("Use when: <clause>." / "Do not use when: <clause>.", see
+ * buildAgentStepPromptPackage.ts), so a string that repeated them rendered
+ * as "Use when: Use when ... ." Every AGENT_LOOP_TOOL_POOL capability now
+ * follows this same convention, asserted once in
+ * tests/commercial/capabilityEvidenceSemantics.test.ts.
+ */
 const USE_WHEN =
-  "Use when the customer expresses a functional, training, exercise, body-region, discipline, use-context, or similar semantic requirement without sufficiently identifying a concrete catalog product.";
+  "the unresolved problem is determining which products satisfy what the customer needs, wants to do, train, use, or achieve, interpreting those requirements through the canonical semantic vocabulary";
 const DO_NOT_USE_WHEN =
-  "Do not use only to retrieve current price, stock, variants, or link for an already identified product - use get_product_details for that. Do not replace nominal product resolution (search_products) when the customer already names a concrete product.";
+  "the customer already names a concrete product whose identity must be resolved nominally (search_products); the answer depends on ranking, extremes, or relative price/stock (explore_catalog); or an already-identified product's current price, stock, variants, or link is what is missing (get_product_details) - a successful semantic discovery must never be followed by search_products repeating the same search as free text";
 
 type RawRequirement = { axis?: unknown; codes?: unknown; mode?: unknown; match?: unknown };
 

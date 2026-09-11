@@ -74,9 +74,13 @@ export function companyKnowledgeCapability(): CapabilityGatewayDefinition<{ quer
   return {
     capability: "search_company_knowledge",
     version: CAPABILITY_GATEWAY_VERSION,
-    description: "Search company-provided informational knowledge (hours, channels, coverage, payment methods, policies, dispatch, human contact) via a simple lexical fixture search.",
+    description:
+      "Retrieves knowledge specific to the company itself (hours, channels, coverage, payment methods, policies, dispatch conditions, human contact) via a simple lexical fixture search. Returns informational content only - never catalog products and never any commercial effect.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: SEARCH_COMPANY_KNOWLEDGE_INPUT_SCHEMA,
+    useWhen: "the answer depends on the company's own policies, procedures, conditions, coverage, payment methods, channels, or contact paths",
+    doNotUseWhen:
+      "the answer needs catalog product information, or any commercial effect on this opportunity - company knowledge never identifies a product and never changes durable state",
     maxRetries: 0,
     async checkAvailability(_context: CapabilityGatewayContext) {
       return { status: "available", reason: null };

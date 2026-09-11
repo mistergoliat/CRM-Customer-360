@@ -9,6 +9,7 @@ import { renderSalesAgentIdentityPrompt } from "./renderSalesAgentIdentityPrompt
 import { describeStockDisclosure } from "./stockDisclosurePolicy";
 import type { AgentStepValidationReasonCode } from "./validateAgentStep";
 import { CONVERSATION_CONTINUITY_UNKNOWN, type ConversationContinuitySignal } from "./conversationContinuity";
+import { listObservedCatalogEvidenceTools } from "./resolveObservedRecommendationSourceProduct";
 import { buildHarnessAlignedMessages, type AgentStepPromptProjectionMetadata, type CustomerMessageFragment } from "./harnessAlignedMessageProjection";
 import type { SemanticVocabulary } from "../capability-gateway/searchProductsBySemanticsCapability";
 
@@ -168,8 +169,14 @@ const PRODUCT_PUBLIC_LINK_RULE_LINES = [
   "Product URLs may only be shared when they came from a get_product_details tool observation at data.publicLink.canonicalUrl.",
   "Never build, complete, guess, shorten, translate, or otherwise transform product URLs from product ids, names, slugs, or search results.",
   "Do not share a product URL when publicLink.available is not true or publicLink.canonicalUrl is null.",
-  "search_products is not sufficient evidence for a product link; use get_product_details before sharing any product URL.",
-  "explore_catalog is not sufficient evidence for a product link either; use get_product_details before sharing any product URL.",
+  // SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1. One general
+  // rule replaces the two per-tool lines that used to name only
+  // search_products and explore_catalog - both were written before
+  // search_products_by_semantics and recommend_catalog_products joined the
+  // pool, so by omission they implied those two WERE sufficient link
+  // evidence. get_product_details is, and always was, the only capability
+  // that returns publicLink at all.
+  "get_product_details is the only sufficient evidence for a product link - no other catalog capability (search_products, search_products_by_semantics, explore_catalog, recommend_catalog_products) ever is; use get_product_details before sharing any product URL.",
   "When publicLink.requiresVariantSelection is true, tell the customer to select the required variant on the product page; if publicLink.variantAttributeLabels lists labels, name only those labels, and if it is empty say \"Debes seleccionar la variante disponible en la página.\".",
   "publicLink.scope=parent_product means the URL points to the parent product and does not mean a variant is preselected.",
   "publicLink.unavailableReason is internal evidence; do not quote it literally to the customer."
@@ -238,7 +245,7 @@ const ADAPTIVE_PRODUCT_PRESENTATION_RULE_LINES = [
   "Respect explicit quantity requests: show one when the customer asks for one, expand the pool when they ask for more options, and compare only the relevant identified products when they ask to compare.",
   "For requests such as cheapest, best, strongest, or most resistant, select only from evidence available in this turn's ToolObservations and do not invent criteria or attributes.",
   "For WhatsApp, keep product presentations compact: enumerate when showing more than one product, use product name plus the main difference, avoid full descriptions, and do not repeat identical information across options.",
-  "Never share product links from search_products or explore_catalog; use get_product_details when a concrete product must be rehydrated for current price, stock, availability, variants, or URL.",
+  "Never share a product link that did not come from a get_product_details observation; use get_product_details when a concrete product must be rehydrated for current price, stock, availability, variants, or URL.",
   "Absolute maximum: show no more than five products in one message."
 ];
 
@@ -275,6 +282,21 @@ const EXPLORE_CATALOG_RULE_LINES = [
 const EXPLORE_CATALOG_FINALIZATION_RULE_LINES = [EXPLORE_CATALOG_RULE_LINES[0], EXPLORE_CATALOG_RULE_LINES[3], EXPLORE_CATALOG_RULE_LINES[5]];
 
 /**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1. The observed-
+ * product-evidence allowlist the two rule lines further below state is derived from the
+ * exact resolver the runtime enforces it with
+ * (resolveObservedRecommendationSourceProduct.ts, itself derived from the
+ * registry's evidenceProduced: PRODUCT_IDENTITY) - never a hand-written
+ * fourth copy. Both lines had already drifted: each still named only
+ * search_products/get_product_details/explore_catalog, so the model was
+ * told a successful search_products_by_semantics observation could not
+ * ground a selection or a recommendation source, which is false and pushed
+ * it into a redundant free-text search_products call for products it had
+ * just discovered.
+ */
+const OBSERVED_CATALOG_EVIDENCE_TOOLS_TEXT = listObservedCatalogEvidenceTools().join(", ");
+
+/**
  * CP-R1-T10B8D (spec section 26 - minimal tool policy only, no commercial
  * strategy yet). recommend_catalog_products now validates sourceProduct
  * against this conversation's own observed evidence before calling the
@@ -291,7 +313,7 @@ const EXPLORE_CATALOG_FINALIZATION_RULE_LINES = [EXPLORE_CATALOG_RULE_LINES[0], 
  * below and docs/releases/LLM-R1-T03-prompt-finalization-reduction.md).
  */
 const RECOMMEND_CATALOG_PRODUCTS_RULE_LINES = [
-  "recommend_catalog_products requires sourceProduct.productId (and sourceProduct.combinationId, only when you mean one specific variant) to be a product already observed this conversation via search_products, get_product_details, or explore_catalog - never invent sourceProduct.productId or combinationId, and never use a recommend_catalog_products candidate as the sourceProduct for another recommend_catalog_products call.",
+  `recommend_catalog_products requires sourceProduct.productId (and sourceProduct.combinationId, only when you mean one specific variant) to be a product already observed this conversation via ${OBSERVED_CATALOG_EVIDENCE_TOOLS_TEXT} - never invent sourceProduct.productId or combinationId, and never use a recommend_catalog_products candidate as the sourceProduct for another recommend_catalog_products call.`,
   "If a recommend_catalog_products observation has status \"blocked\", first use search_products or get_product_details to observe a real product, then retry recommend_catalog_products with that product's productId - do not hand off solely because one recommend_catalog_products call was rejected while tool budget remains.",
   "After recommend_catalog_products returns candidates, get_product_details is only guaranteed for one of those exact candidate productIds (with the exact combinationId a candidate specified, if any) - if get_product_details comes back blocked, use the productId of one of the candidates you actually observed instead of inventing or guessing one."
 ];
@@ -352,6 +374,70 @@ const COMMERCIAL_CLOSING_RULE_LINES = [
   "Never add this closing offer when: a public link was already delivered or already verified this turn; the customer explicitly asked for the link (handled by the rule below instead); no concrete product was identified; your reply is a clarifying question; a tool failed or was blocked; you are handing off; you still need to ask the customer for a precision before recommending; or your reply is not a commercial product presentation.",
   "When the customer explicitly asks for or accepts the link: use get_product_details for that product. If publicLink.available is true, deliver the real canonical URL from publicLink.canonicalUrl. If it is not available, tell the customer no public link is available for that product right now - never invent a URL. Either way, never ask again whether they want the link, and never turn that reply into another question."
 ];
+
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1, section 2. The
+ * single transversal capability-selection rule. Deliberately NOT a routing
+ * table: it names no customer phrasing, no keyword, no intent label and no
+ * capability pair - it states the criterion (the unresolved problem, the
+ * evidence and state required, the effect produced) the model applies to the
+ * per-capability semantics renderToolLine already projects. The last line is
+ * what the "semantic discovery succeeded, then search the same thing again
+ * as free text" pattern violates, stated generically so it covers every
+ * neighboring pair rather than that one hardcoded sequence.
+ *
+ * Gathering-only: choosing a capability is impossible once this turn's tool
+ * budget is spent (LLM-R1-T03's classification), so none of it is rendered
+ * in finalization.
+ */
+const CAPABILITY_SELECTION_POLICY_RULE_LINES = [
+  "Choose capabilities according to the unresolved problem they solve, the evidence and state they require, and the effect they produce.",
+  "Do not choose a capability merely because words in the customer's message resemble its name or description.",
+  "After a successful tool observation, use another capability only when it resolves a distinct remaining information need or performs a justified state transition - never repeat equivalent retrieval through a neighboring capability without a distinct purpose."
+];
+
+/**
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1, section 3.
+ * Deliberately separate from the per-capability useWhen/doNotUseWhen
+ * semantics: a capability's semantics state what it CAN do, this states what
+ * kind of salesperson to be with them. Every line is a commercial judgment
+ * the model makes - never a condition the runtime evaluates, never a
+ * "productId exists -> always recommend" trigger.
+ *
+ * LLM-R1-T03 ordering discipline: the first four lines are all "execute the
+ * next capability" judgments, impossible once no tool can be called this
+ * turn; the rest govern what the response itself may prefer, claim or
+ * promise, so finalization renders a contiguous suffix (never a duplicated
+ * copy - see COMMERCIAL_BEHAVIOR_POLICY_FINALIZATION_RULE_LINES below).
+ *
+ * Line 1 is what removes the unnecessary permission-seeking turn: it does not
+ * delete the closing offer in COMMERCIAL_CLOSING_RULE_LINES (pendingCatalogAction
+ * still depends on it), it demotes that offer to the case where the link
+ * genuinely could not be verified this turn - which is already exactly what
+ * that block's own first and fifth rules say.
+ */
+const COMMERCIAL_BEHAVIOR_POLICY_RULE_LINES = [
+  "Actively move a qualified commercial conversation toward concrete purchase progress when the evidence you already have is sufficient - prefer executing the next useful capability over asking permission, or over a clarifying question that would not change what you do next.",
+  "When a concrete product is relevant to the customer's current decision, proactively obtain its verified canonical product URL with get_product_details and include it in that same reply whenever doing so reduces purchase friction - do not routinely ask whether the customer wants the link; the closing question that offers to send a link applies only when the link could not be verified this turn.",
+  "When a product is clearly identified or selected, actively consider whether related catalog products could materially improve the customer's purchase, and use recommend_catalog_products when a relevant relationship adds real commercial value.",
+  "When purchase intent and the product selection a quote needs are both sufficiently established, prefer progressing toward a real quote over keeping the conversation in unnecessary exploratory dialogue.",
+  "Never recommend additional products merely to force an upsell, and never contradict an explicit customer constraint or a clear request to avoid extra products.",
+  "When several verified shipping alternatives are available and the customer has stated no competing preference, favor the lowest-cost one when presenting or recommending them - explicit customer priorities such as delivery speed, carrier preference or timing override that default.",
+  "Recommending the lowest-cost shipping alternative is not the same as selecting it - a shipping option becomes the customer's choice only once the conversation establishes that they chose it.",
+  "Never state or promise a quote from hypothetical interest - both the purchase intent and the required product selection must be real."
+];
+
+/**
+ * LLM-R1-T03. Finalization drops the first 4 lines above (each one asks the
+ * model to execute a specific capability next, impossible once no tool call
+ * can be made this turn). The remaining 4 all govern the response text
+ * itself: not forcing an upsell into the wording, which shipping alternative
+ * to favor when presenting them, never narrating a shipping selection that
+ * was never made, and never promising a quote that has no real basis. A
+ * contiguous suffix of COMMERCIAL_BEHAVIOR_POLICY_RULE_LINES, never a
+ * duplicated copy.
+ */
+const COMMERCIAL_BEHAVIOR_POLICY_FINALIZATION_RULE_LINES = COMMERCIAL_BEHAVIOR_POLICY_RULE_LINES.slice(4);
 
 /**
  * SALES-AGENT-R3-V1.8.1b (Objetivo C). Governs tone/framing only - never
@@ -437,7 +523,7 @@ const SHIPPING_DESTINATION_FINALIZATION_RULE_LINES = SHIPPING_DESTINATION_RULE_L
  */
 const SELECT_PRODUCTS_RULE_LINES = [
   "Use select_products only once the customer has confirmed which product(s) they want to buy and in what quantity - not merely while discussing, comparing, or recommending options.",
-  "Every item's productId (and combinationId, when the customer means one specific variant) must be one already observed this conversation via search_products, get_product_details, or explore_catalog - never invent one, and never use a recommend_catalog_products candidate that was not separately observed by one of those three tools.",
+  `Every item's productId (and combinationId, when the customer means one specific variant) must be one already observed this conversation via ${OBSERVED_CATALOG_EVIDENCE_TOOLS_TEXT} - never invent one, and never use a recommend_catalog_products candidate that was not separately observed by one of those tools.`,
   "If commercialContext.commercialLineItems already reflects what the customer wants and nothing changed this turn, reuse it silently - do not call select_products again for the same selection.",
   "If a select_products observation has status \"blocked\", the referenced product was not actually observed this conversation - use search_products or get_product_details to observe the real product first, then retry with that exact productId/combinationId.",
   "quantity must be a whole number greater than zero - ask the customer to clarify an unclear or non-numeric quantity instead of guessing one.",
@@ -634,6 +720,7 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
       ...CALCULATE_SHIPPING_FINALIZATION_RULE_LINES,
       ...STOCK_DISCLOSURE_RULE_LINES,
       ...COMMERCIAL_CLOSING_RULE_LINES,
+      ...COMMERCIAL_BEHAVIOR_POLICY_FINALIZATION_RULE_LINES,
       ...CONVERSATION_CONTINUITY_RULE_LINES,
       ...PENDING_CATALOG_ACTION_RULE_LINES,
       ...MULTI_INTENT_PLAN_RULE_LINES,
@@ -669,10 +756,16 @@ function buildEvidenceAndToolRulesLines(phase: "gathering" | "finalization", ava
     ...CALCULATE_SHIPPING_RULE_LINES,
     ...STOCK_DISCLOSURE_RULE_LINES,
     ...COMMERCIAL_CLOSING_RULE_LINES,
+    ...COMMERCIAL_BEHAVIOR_POLICY_RULE_LINES,
     ...CONVERSATION_CONTINUITY_RULE_LINES,
     ...PENDING_CATALOG_ACTION_RULE_LINES,
     "You must never claim to have executed anything yourself - the platform executes tools, not you.",
     INVALID_ARGUMENTS_RECOVERY_RULE_LINE,
+    // SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1, section 2.
+    // Placed immediately before the tool catalog it governs: every line below
+    // is one capability's own semantics, these three are how to choose among
+    // them.
+    ...CAPABILITY_SELECTION_POLICY_RULE_LINES,
     "Available tools:",
     ...(availableTools.length > 0 ? availableTools.map(renderToolLine) : ["none"])
   ];

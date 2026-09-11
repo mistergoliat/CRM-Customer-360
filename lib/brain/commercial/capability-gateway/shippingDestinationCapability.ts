@@ -58,6 +58,9 @@ export function setShippingDestinationCapability(
     governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "low" },
     maxRetries: 0,
     inputSchema: SET_SHIPPING_DESTINATION_INPUT_SCHEMA,
+    useWhen: "the conversation establishes sufficiently where this purchase must be delivered, so that destination should become the opportunity's durable one",
+    doNotUseWhen:
+      "the location is hypothetical, incidental, or only part of a question rather than the destination of this purchase - persisting a destination neither calculates shipping (calculate_shipping) nor chooses a carrier (select_shipping_option)",
     async checkAvailability() {
       return { status: "available", reason: null };
     },

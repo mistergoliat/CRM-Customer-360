@@ -79,6 +79,9 @@ export function createQuoteCapability(
     inputSchema: CREATE_QUOTE_INPUT_SCHEMA,
     evidenceProduced: ["QUOTE_CREATED"],
     operationSemantics: "CREATE_SNAPSHOT",
+    useWhen: "purchase intent is sufficiently established and the commercial selection the quote needs is already determined",
+    doNotUseWhen:
+      "the customer is still exploring, or the required commercial selection is not yet determined - a quote is never materialized from hypothetical interest",
     async checkAvailability() {
       if (!getQuoteServicePort()) {
         return { status: "unavailable", reason: "quote_service_not_configured" };

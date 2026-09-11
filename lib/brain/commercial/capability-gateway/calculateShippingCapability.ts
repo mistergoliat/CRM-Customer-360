@@ -81,6 +81,10 @@ export function calculateShippingCapability(
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     maxRetries: 0,
     inputSchema: CALCULATE_SHIPPING_INPUT_SCHEMA,
+    useWhen:
+      "real shipping alternatives - carriers, costs, and delivery estimates - are what the conversation needs next, and both the durable destination and the durable product selection are already established",
+    doNotUseWhen:
+      "the only thing to do is record where the order goes (set_shipping_destination); or the customer has already committed to one of the alternatives already calculated (select_shipping_option) - calculating options never represents the customer's choice",
     async checkAvailability() {
       return { status: "available", reason: null };
     },

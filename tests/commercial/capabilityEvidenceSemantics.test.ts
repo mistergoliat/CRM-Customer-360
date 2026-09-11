@@ -43,17 +43,34 @@ test("create_quote declares evidenceProduced: QUOTE_CREATED, operationSemantics:
   assert.equal(definition?.operationSemantics, "CREATE_SNAPSHOT");
 });
 
-test("every registered capability that does not declare evidence/operation-semantics fields remains a valid definition (fully additive/optional)", () => {
-  const untouched = ["batch_get_products", "search_company_knowledge", "set_shipping_destination", "calculate_shipping", "select_shipping_option"];
-  for (const capability of untouched) {
+test("evidence/operation-semantics fields stay fully optional - a capability with no evidence relation declares none", () => {
+  // SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1 narrowed this
+  // test. useWhen/doNotUseWhen are no longer part of it: every
+  // AGENT_LOOP_TOOL_POOL capability now declares both (asserted in
+  // tests/commercial/capabilityCommercialPolicySemantics.test.ts), so
+  // asserting their ABSENCE here would contradict that contract. What stays
+  // asserted is the invariant that did not change: these five declare no
+  // evidence relation and no operation semantics, proving the fields are
+  // still optional rather than mandatory boilerplate.
+  const withoutEvidenceRelation = ["batch_get_products", "search_company_knowledge", "set_shipping_destination", "calculate_shipping", "select_shipping_option"];
+  for (const capability of withoutEvidenceRelation) {
     const definition = resolveCapabilityGatewayDefinition(capability);
     assert.ok(definition, `${capability} must still be registered`);
     assert.equal(definition?.evidenceProduced, undefined, `${capability} must not have gained evidenceProduced`);
     assert.equal(definition?.evidenceRequired, undefined, `${capability} must not have gained evidenceRequired`);
     assert.equal(definition?.operationSemantics, undefined, `${capability} must not have gained operationSemantics`);
-    assert.equal(definition?.useWhen, undefined, `${capability} must not have gained useWhen`);
-    assert.equal(definition?.doNotUseWhen, undefined, `${capability} must not have gained doNotUseWhen`);
   }
+});
+
+test("boundary prose stays structurally optional - batch_get_products is registered, internal, and declares none", () => {
+  // The one registered capability that is deliberately never exposed to the
+  // model (not in AGENT_LOOP_TOOL_POOL, no tool alias): proof that
+  // useWhen/doNotUseWhen are a model-facing concern, not a Gateway
+  // requirement every capability must satisfy.
+  const definition = resolveCapabilityGatewayDefinition("batch_get_products");
+  assert.ok(definition, "batch_get_products must still be registered");
+  assert.equal(definition?.useWhen, undefined);
+  assert.equal(definition?.doNotUseWhen, undefined);
 });
 
 // Evidence producer classification tests: resolveCapabilitiesProducingEvidence

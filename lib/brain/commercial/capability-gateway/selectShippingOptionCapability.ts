@@ -55,6 +55,10 @@ export function selectShippingOptionCapability(): CapabilityGatewayDefinition<{ 
     governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "low" },
     maxRetries: 0,
     inputSchema: SELECT_SHIPPING_OPTION_INPUT_SCHEMA,
+    useWhen:
+      "the context shows the customer committed to one of the shipping alternatives a calculate_shipping observation already returned this conversation - infer that commitment from the whole context, never only from ordinals or particular words",
+    doNotUseWhen:
+      "the customer is still comparing, asking about, or exploring the alternatives, or no fresh calculate_shipping options have been observed to choose from",
     async checkAvailability() {
       return { status: "available", reason: null };
     },

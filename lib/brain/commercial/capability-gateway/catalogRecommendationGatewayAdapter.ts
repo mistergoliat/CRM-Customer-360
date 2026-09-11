@@ -46,10 +46,11 @@ export type RecommendCatalogProductsGatewayInput = {
 
 /**
  * ACS-R1-05.1-T02.6.1-style contract: a JSON Schema (draft-07 subset) is
- * attached to `inputSchema` for structural documentation and future
- * agent-facing reuse, even though this capability is not yet in
- * AGENT_LOOP_TOOL_POOL and buildToolDescriptions() never reads it while that
- * remains true (confirmed: that function only iterates AGENT_LOOP_TOOL_POOL).
+ * attached to `inputSchema`. CP-R1-T10B8C registered this capability in
+ * AGENT_LOOP_TOOL_POOL, so buildToolDescriptions() does read this schema and
+ * project it into the model-facing tool line (the comment previously here
+ * claiming the opposite was stale - corrected by
+ * SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1).
  * `execute()`'s own strict parser below remains the real runtime validator -
  * the Gateway itself never consults `inputSchema` to gate `execute()` (see
  * executeCapability.ts: no schema-validation step exists there for any
@@ -235,8 +236,9 @@ function mapCatalogRecommendationResultToOutcome(result: CatalogRecommendationCa
 /**
  * DI factory (same style as searchProductsCapability(getPort) in
  * registry.ts) - takes an injected getter so unit tests can supply a fake
- * CatalogRecommendationCapability without any HTTP. Not registered under
- * AGENT_LOOP_TOOL_POOL by this task - see the release doc.
+ * CatalogRecommendationCapability without any HTTP. Registered in
+ * AGENT_LOOP_TOOL_POOL since CP-R1-T10B8C (the "not registered by this task"
+ * note that used to be here described T10B8B only, and was stale).
  */
 export function recommendCatalogProductsCapability(getCapability: () => CatalogRecommendationCapability): CapabilityGatewayDefinition {
   return {
@@ -246,9 +248,13 @@ export function recommendCatalogProductsCapability(getCapability: () => CatalogR
     // AGENT_LOOP_TOOL_POOL) - no microservice names, endpoints, ownership or
     // Gateway details, see docs/integrations/recommend-catalog-products-agent-tool.md.
     description:
-      "Recommend catalog products related to an already-identified source product. Requires sourceProduct.productId and, optionally, sourceProduct.combinationId - it does not search from free text (use search_products or explore_catalog for that), and should be used after search_products or get_product_details already identified a productId. Works without an identified customer. Set explicitRepurchaseRequested to true only when the customer expresses current intent to buy that same product again. excludedProducts lists products to exclude from the current recommendations. The result is a set of candidates, not confirmed commercial facts - use get_product_details before presenting price, stock, or a link for any recommended product.",
+      "Returns catalog products related or complementary to one already-identified source product. Requires sourceProduct.productId and, optionally, sourceProduct.combinationId when one specific variant is meant; it never searches from free text. Set explicitRepurchaseRequested to true only when the customer expresses current intent to buy that same product again; excludedProducts lists products to leave out. Works without an identified customer. The result is a set of candidates, not confirmed commercial facts - get_product_details is still required before stating price, stock, or a link for any recommended product.",
     governance: { sideEffect: "read_only", authority: "autonomous", riskClass: "low" },
     inputSchema: RECOMMEND_CATALOG_PRODUCTS_INPUT_SCHEMA,
+    useWhen:
+      "a concrete source product is already identified and exploring products related or complementary to it could materially improve the customer's purchase",
+    doNotUseWhen:
+      "no source product has been identified yet; the problem is nominal product resolution (search_products), functional discovery (search_products_by_semantics), or a global ranking (explore_catalog); or the only purpose would be to add products the customer has given no reason to want",
     // SALES-AGENT-R3-CAPABILITY-SEMANTICS-TR-B1-B2. Structurally produces
     // PRODUCT_IDENTITY like the other three catalog discovery tools - this
     // does NOT make its own candidates valid recursive sourceProduct
