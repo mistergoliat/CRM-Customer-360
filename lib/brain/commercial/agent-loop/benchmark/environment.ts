@@ -52,7 +52,10 @@ export const BENCHMARK_PRODUCTS: Record<string, BenchmarkFixtureProduct> = {
 
 export const BENCHMARK_COMMUNES: readonly CommuneCatalogEntry[] = [
   { communeId: 99, canonicalName: "Ñuñoa" },
-  { communeId: 100, canonicalName: "Las Condes" }
+  { communeId: 100, canonicalName: "Las Condes" },
+  // R3 Stable Agent Acceptance Harness V1 (CM-004): a second resolvable
+  // destination distinct from the seeded prior one, purely additive.
+  { communeId: 101, canonicalName: "Providencia" }
 ];
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown) {
@@ -242,6 +245,16 @@ export type BenchmarkEnvironment = {
   baseUrl: string;
   /** A fresh, isolated opportunityId for this environment's lifetime - never reused across cases/runs. */
   opportunityId: number;
+  /**
+   * R3 Stable Agent Acceptance Harness V1. A fresh, isolated conversationId,
+   * same synthetic-range discipline as opportunityId below - purely additive,
+   * existing consumers (runCorpus.ts, runMultiIntentCorpus.ts) destructure
+   * only the fields they already used and are unaffected. Needed only by
+   * cases that exercise select_shipping_option, whose evidence gate
+   * (resolveObservedShippingOption.ts) reads crm_capability_executions by a
+   * real conversationId - a case that never calls that tool never touches it.
+   */
+  conversationId: number;
   teardown: () => Promise<void>;
 };
 
@@ -252,6 +265,12 @@ function nextBenchmarkOpportunityId(): number {
   // within one benchmark process run without needing a DB round trip.
   opportunityIdCounter += 1;
   return 900_000_000 + (Date.now() % 1_000_000) * 100 + opportunityIdCounter;
+}
+
+let conversationIdCounter = 0;
+function nextBenchmarkConversationId(): number {
+  conversationIdCounter += 1;
+  return 800_000_000 + (Date.now() % 1_000_000) * 100 + conversationIdCounter;
 }
 
 /**
@@ -281,6 +300,7 @@ export async function setupBenchmarkEnvironment(carrierBehavior: BenchmarkCarrie
   return {
     baseUrl,
     opportunityId: nextBenchmarkOpportunityId(),
+    conversationId: nextBenchmarkConversationId(),
     teardown: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       if (previousCatalogBaseUrl === undefined) delete process.env.CATALOG_SERVICE_BASE_URL;
