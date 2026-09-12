@@ -4,6 +4,7 @@ import type { AgentLoopInferenceOutcome, AgentLoopStepPhase, AgentLoopStepRecord
 import type { AgentLoopToolName } from "../runAgentToolLoop";
 import type { RecentCatalogContext } from "../recentCatalogContext";
 import type { AgentLoopProviderFailureCause } from "../providers/providerFailureClassification";
+import type { AgentLoopProviderRequest } from "../agentLoopProviderTypes";
 
 /**
  * LLM-R1-T05. Ground truth is structural, never a text-similarity check on
@@ -90,6 +91,16 @@ export type BenchmarkProviderCallRecord = {
   reasoningTokens: number | null;
   providerRequestId: string | null;
   model: string | null;
+  /**
+   * TS-005 prompt/context projection audit (benchmark-only observability).
+   * The exact request.messages this call sent to the provider - captured in
+   * instrumentedProvider.ts BEFORE invoking innerProvider, independent of
+   * success/failure. Never persisted to MariaDB or any commercial_event -
+   * this field exists only inside the in-memory BenchmarkRunSummary/
+   * GoldenRunSummary this process returns. Absent (undefined) is not a valid
+   * state for a real call - always set by createInstrumentedProvider.
+   */
+  requestMessages?: AgentLoopProviderRequest["messages"];
 };
 
 export type BenchmarkLoopConfiguration = {

@@ -49,12 +49,17 @@ function fakeResult(overrides: Partial<GoldenDecisionRunResult> = {}): GoldenDec
 }
 
 test("[R3-HARNESS-V1] parseArgs defaults to offline mode with 1 run/case", () => {
-  assert.deepEqual(parseArgs([]), { mode: "offline", runsPerCase: 1 });
+  assert.deepEqual(parseArgs([]), { mode: "offline", runsPerCase: 1, caseFilter: null });
 });
 
 test("[R3-HARNESS-V1] parseArgs honors --mode=live and --runs, defaulting live to 3 runs", () => {
-  assert.deepEqual(parseArgs(["--mode=live"]), { mode: "live", runsPerCase: 3 });
-  assert.deepEqual(parseArgs(["--mode=live", "--runs=5"]), { mode: "live", runsPerCase: 5 });
+  assert.deepEqual(parseArgs(["--mode=live"]), { mode: "live", runsPerCase: 3, caseFilter: null });
+  assert.deepEqual(parseArgs(["--mode=live", "--runs=5"]), { mode: "live", runsPerCase: 5, caseFilter: null });
+});
+
+test("[R3-HARNESS-V1] parseArgs --case filters to the named frozen case(s), never mutating the corpus", () => {
+  assert.deepEqual(parseArgs(["--case=TS-005"]), { mode: "offline", runsPerCase: 1, caseFilter: ["TS-005"] });
+  assert.deepEqual(parseArgs(["--case=TS-005,TS-001"]), { mode: "offline", runsPerCase: 1, caseFilter: ["TS-005", "TS-001"] });
 });
 
 test("[R3-HARNESS-V1] requesting --mode=live alone never bypasses the shared BENCHMARK_LIVE_LLM_ENABLED gate", () => {

@@ -29,6 +29,13 @@ export function createInstrumentedProvider(inner: AgentLoopProvider, caseId: str
       const currentCallIndex = callIndex;
       callIndex += 1;
 
+      // TS-005 prompt/context projection audit. Captured BEFORE invoking
+      // innerProvider so it is recorded regardless of success/failure below -
+      // benchmark-only observability, never read or altered by
+      // runAgentToolLoop/the provider itself (this wrapper still passes
+      // `request` through unchanged to inner.invoke).
+      const requestMessages = request.messages;
+
       try {
         const response = await inner.invoke(request, options);
         calls.push({
@@ -43,7 +50,8 @@ export function createInstrumentedProvider(inner: AgentLoopProvider, caseId: str
           outputTokens: response.outputTokens ?? null,
           reasoningTokens: response.reasoningTokens ?? null,
           providerRequestId: response.providerRequestId ?? null,
-          model: response.model ?? null
+          model: response.model ?? null,
+          requestMessages
         });
         return response;
       } catch (error) {
@@ -60,7 +68,8 @@ export function createInstrumentedProvider(inner: AgentLoopProvider, caseId: str
           outputTokens: cause.outputTokens ?? null,
           reasoningTokens: cause.reasoningTokens ?? null,
           providerRequestId: cause.providerRequestId ?? null,
-          model: cause.model
+          model: cause.model,
+          requestMessages
         });
         throw error;
       }

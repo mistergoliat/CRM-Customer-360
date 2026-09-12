@@ -9,10 +9,18 @@
  *   npx tsx scripts/r3-stable-agent-benchmark.ts                    # offline, 1 run/case
  *   npx tsx scripts/r3-stable-agent-benchmark.ts --runs=3           # offline, 3 runs/case
  *   BENCHMARK_LIVE_LLM_ENABLED=true npx tsx scripts/r3-stable-agent-benchmark.ts --mode=live --runs=3
+ *   npx tsx scripts/r3-stable-agent-benchmark.ts --case=TS-005      # only this frozen case, all other flags unchanged
+ *   npx tsx scripts/r3-stable-agent-benchmark.ts --case=TS-005,TS-001
  *
  * Never runs live unless BENCHMARK_LIVE_LLM_ENABLED=true AND --mode=live are
  * both given - same explicit double-gate discipline liveProvider.ts already
  * establishes (see resolveLiveBenchmarkProviderConfig).
+ *
+ * TS-005 prompt/context projection audit. --case is a benchmark-only,
+ * optional CLI filter: absent runs the exact existing behavior (all cases,
+ * byte-identical), present restricts the run to the named frozen case(s)
+ * only - never mutates the corpus or any case's expectation, never touches
+ * production runtime.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -32,11 +40,13 @@ export function parseArgs(argv: string[]) {
   }));
   const mode = args.get("mode") === "live" ? "live" : "offline";
   const runs = Number.parseInt(args.get("runs") ?? (mode === "live" ? "3" : "1"), 10);
-  return { mode: mode as "offline" | "live", runsPerCase: Number.isFinite(runs) && runs > 0 ? runs : 1 };
+  const caseFilterRaw = args.get("case");
+  const caseFilter = caseFilterRaw ? caseFilterRaw.split(",").map((id) => id.trim()).filter((id) => id.length > 0) : null;
+  return { mode: mode as "offline" | "live", runsPerCase: Number.isFinite(runs) && runs > 0 ? runs : 1, caseFilter };
 }
 
 async function main() {
-  const { mode, runsPerCase } = parseArgs(process.argv.slice(2));
+  const { mode, runsPerCase, caseFilter } = parseArgs(process.argv.slice(2));
 
   const validation = validateGoldenCorpus(R3_STABLE_AGENT_V1_CORPUS);
   if (!validation.ok) {
@@ -46,10 +56,22 @@ async function main() {
     return;
   }
 
+  let corpus = R3_STABLE_AGENT_V1_CORPUS;
+  if (caseFilter) {
+    const caseFilterSet = new Set(caseFilter);
+    corpus = R3_STABLE_AGENT_V1_CORPUS.filter((testCase) => caseFilterSet.has(testCase.caseId));
+    const missing = caseFilter.filter((id) => !R3_STABLE_AGENT_V1_CORPUS.some((testCase) => testCase.caseId === id));
+    if (missing.length > 0) {
+      console.error(`--case referenced unknown caseId(s): ${missing.join(", ")}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   let summary;
   if (mode === "offline") {
-    console.log(`R3 Stable Agent Acceptance Harness V1 - offline mode, ${runsPerCase} run(s)/case, ${R3_STABLE_AGENT_V1_CORPUS.length} cases.`);
-    summary = await runGoldenSuite(R3_STABLE_AGENT_V1_CORPUS, { mode: "offline", runsPerCase });
+    console.log(`R3 Stable Agent Acceptance Harness V1 - offline mode, ${runsPerCase} run(s)/case, ${corpus.length} cases.`);
+    summary = await runGoldenSuite(corpus, { mode: "offline", runsPerCase });
   } else {
     const resolution = resolveLiveBenchmarkProviderConfig();
     if (!resolution.ok) {
@@ -58,8 +80,8 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    console.log(`R3 Stable Agent Acceptance Harness V1 - live mode, model=${resolution.config.model}, ${runsPerCase} run(s)/case, ${R3_STABLE_AGENT_V1_CORPUS.length} cases.`);
-    summary = await runGoldenSuite(R3_STABLE_AGENT_V1_CORPUS, { mode: "live", runsPerCase, liveConfig: resolution.config });
+    console.log(`R3 Stable Agent Acceptance Harness V1 - live mode, model=${resolution.config.model}, ${runsPerCase} run(s)/case, ${corpus.length} cases.`);
+    summary = await runGoldenSuite(corpus, { mode: "live", runsPerCase, liveConfig: resolution.config });
   }
 
   const report = buildGoldenReport(summary);
