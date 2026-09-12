@@ -23,6 +23,7 @@ import type { RecentCatalogContext } from "./recentCatalogContext";
 import { classifyAgentLoopProviderFailure, logAgentLoopProviderFailure } from "./providers/providerFailureClassification";
 import { buildPendingCatalogActionFromRecommendation, collectAllowedProductIds, matchesPendingCatalogActionCandidate, normalizePendingCatalogActionForEvidence } from "./pendingCatalogAction";
 import { resolveObservedRecommendationSourceProduct } from "./resolveObservedRecommendationSourceProduct";
+import { resolveLatestShippingQuoteContext } from "./resolveLatestShippingQuoteContext";
 import { checkUnbackedCommercialMutationClaim } from "./commercialMutationClaims";
 import { evaluateTurnStoppingCheckpoint } from "./turnStoppingCheckpoint";
 import {
@@ -903,6 +904,30 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   // from text, never moved backward.
   let customerMessage = input.customerMessage;
   let commercialContextSummary = input.commercialContextSummary;
+
+  /**
+   * SALES-AGENT-R3-SHIPPING-CONTEXT-PROJECTION-V1. Pre-decision evidence only
+   * (see resolveLatestShippingQuoteContext.ts) - merged into
+   * commercialContextSummary itself so every existing buildAgentStepPromptPackage
+   * call site below (gathering and finalization, legacy/persistent/harness-
+   * aligned envelopes alike) picks it up with zero changes of its own. Never
+   * changes what the model may DO with it - that stays entirely
+   * buildAgentStepPromptPackage.ts's/the model's own decision.
+   */
+  async function withLatestShippingQuoteProjection(base: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const conversationId = input.conversationId;
+    const opportunityId = input.opportunityId;
+    if (!conversationId || !opportunityId) return base;
+    try {
+      const latestShippingQuote = await resolveLatestShippingQuoteContext({ conversationId, opportunityId });
+      return latestShippingQuote ? { ...base, latestShippingQuote } : base;
+    } catch (error) {
+      warnings.push(`agent_loop_latest_shipping_quote_projection_failed:${error instanceof Error ? error.message : "unknown"}`);
+      return base;
+    }
+  }
+  commercialContextSummary = await withLatestShippingQuoteProjection(commercialContextSummary);
+
   let assimilatedAnchorId: number | null = (() => {
     if (!input.inboundMessageId) return null;
     const parsed = Number(input.inboundMessageId);
@@ -992,7 +1017,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
 
     if (input.refreshCommercialContextSummary) {
       try {
-        commercialContextSummary = await input.refreshCommercialContextSummary();
+        commercialContextSummary = await withLatestShippingQuoteProjection(await input.refreshCommercialContextSummary());
       } catch (error) {
         warnings.push(`agent_loop_commercial_context_refresh_failed:${error instanceof Error ? error.message : "unknown"}`);
       }

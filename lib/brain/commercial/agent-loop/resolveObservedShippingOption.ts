@@ -42,15 +42,15 @@ type ShippingExecutionRow = {
   completed_at?: string | Date | null;
 };
 
-type ShippingExecutionDataAccess = {
+export type ShippingExecutionDataAccess = {
   queryRows(sql: string, params: unknown[]): Promise<{ ok: true; rows: ShippingExecutionRow[] } | { ok: false; rows: ShippingExecutionRow[]; error: string }>;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function asString(value: unknown): string | null {
+export function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
@@ -73,19 +73,44 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * SALES-AGENT-R3-SHIPPING-CONTEXT-PROJECTION-V1. The single durable reader
+ * both the post-decision resolver below (one specific optionIndex) and the
+ * pre-decision projector (resolveLatestShippingQuoteContext.ts, every
+ * option) build on - one SQL query, one parse, one envelope-validity
+ * definition, never duplicated. Distinguishes "no row at all" from "a row
+ * exists but is structurally unusable" so callers can keep their own
+ * existing reason-code granularity (resolveObservedShippingOption did before
+ * this task; the projector never needs to).
+ */
+export type CalculateShippingEvidenceEnvelope = {
+  shippingQuoteExecutionId: string;
+  shippingQuoteCorrelationId: string | null;
+  calculatedAt: string;
+  selectionFactId: string;
+  destinationFactId: string;
+  destination: { communeId: number; canonicalName: string } | null;
+  totalWeightKg: number | null;
+  totalBoleta: number | null;
+  /** Unvalidated per-option records - each caller applies its own validation (one index vs. every option). */
+  rawOptions: unknown[];
+};
+
+export type ReadLatestCalculateShippingEvidenceResult =
+  | { status: "found"; evidence: CalculateShippingEvidenceEnvelope }
+  | { status: "no_row" }
+  | { status: "malformed" };
+
+/**
  * Reads exactly the most recent COMPLETED calculate_shipping execution for
  * this conversation - a calculation superseded by a newer one (task section
  * 16, "multiple calculations") never resurfaces once a newer completed
  * execution exists, same discipline pendingCatalogAction.ts already
  * establishes for its own single-row lookback.
  */
-export async function resolveObservedShippingOption(input: {
+export async function readLatestCalculateShippingEvidence(input: {
   conversationId: number;
-  optionIndex: unknown;
   dataAccess?: ShippingExecutionDataAccess | null;
-}): Promise<ResolveObservedShippingOptionResult> {
-  const optionIndex = typeof input.optionIndex === "number" && Number.isInteger(input.optionIndex) && input.optionIndex >= 0 ? input.optionIndex : null;
-
+}): Promise<ReadLatestCalculateShippingEvidenceResult> {
   const dataAccess = input.dataAccess ?? { queryRows: (sql: string, params: unknown[]) => safeQueryRows<ShippingExecutionRow>(sql, params) };
   const result = await dataAccess.queryRows(
     `
@@ -101,7 +126,7 @@ export async function resolveObservedShippingOption(input: {
   );
 
   if (!result.ok || result.rows.length === 0) {
-    return { status: "blocked", reason: "no_recent_shipping_calculation" };
+    return { status: "no_row" };
   }
 
   const row = result.rows[0];
@@ -110,20 +135,60 @@ export async function resolveObservedShippingOption(input: {
   const shippingQuoteExecutionId = asString(row.public_id);
 
   if (!payload || payload.status !== "available" || !Array.isArray(payload.options) || !calculatedAt || !shippingQuoteExecutionId) {
-    return { status: "blocked", reason: "shipping_calculation_not_available" };
+    return { status: "malformed" };
   }
 
   const selectionFactId = asString(payload.selectionFactId);
   const destinationFactId = asString(payload.destinationFactId);
   if (!selectionFactId || !destinationFactId) {
+    return { status: "malformed" };
+  }
+
+  const rawDestination = payload.destination;
+  const destination =
+    isRecord(rawDestination) && typeof rawDestination.communeId === "number" && typeof rawDestination.canonicalName === "string"
+      ? { communeId: rawDestination.communeId, canonicalName: rawDestination.canonicalName }
+      : null;
+  const totalWeightKg = typeof payload.totalWeightKg === "number" && Number.isFinite(payload.totalWeightKg) ? payload.totalWeightKg : null;
+  const totalBoleta = typeof payload.totalBoleta === "number" && Number.isFinite(payload.totalBoleta) ? payload.totalBoleta : null;
+
+  return {
+    status: "found",
+    evidence: {
+      shippingQuoteExecutionId,
+      shippingQuoteCorrelationId: asString(row.correlation_id),
+      calculatedAt,
+      selectionFactId,
+      destinationFactId,
+      destination,
+      totalWeightKg,
+      totalBoleta,
+      rawOptions: payload.options
+    }
+  };
+}
+
+export async function resolveObservedShippingOption(input: {
+  conversationId: number;
+  optionIndex: unknown;
+  dataAccess?: ShippingExecutionDataAccess | null;
+}): Promise<ResolveObservedShippingOptionResult> {
+  const optionIndex = typeof input.optionIndex === "number" && Number.isInteger(input.optionIndex) && input.optionIndex >= 0 ? input.optionIndex : null;
+
+  const read = await readLatestCalculateShippingEvidence({ conversationId: input.conversationId, dataAccess: input.dataAccess });
+  if (read.status === "no_row") {
+    return { status: "blocked", reason: "no_recent_shipping_calculation" };
+  }
+  if (read.status === "malformed") {
     return { status: "blocked", reason: "shipping_calculation_not_available" };
   }
 
-  if (optionIndex === null || optionIndex >= payload.options.length) {
+  const { evidence } = read;
+  if (optionIndex === null || optionIndex >= evidence.rawOptions.length) {
     return { status: "blocked", reason: "shipping_option_index_out_of_range" };
   }
 
-  const rawOption = payload.options[optionIndex];
+  const rawOption = evidence.rawOptions[optionIndex];
   if (!isRecord(rawOption)) {
     return { status: "blocked", reason: "shipping_option_index_out_of_range" };
   }
@@ -144,11 +209,11 @@ export async function resolveObservedShippingOption(input: {
       totalCost,
       estimatedDelivery,
       optionIndex,
-      shippingQuoteExecutionId,
-      shippingQuoteCorrelationId: asString(row.correlation_id),
-      selectionFactId,
-      destinationFactId,
-      calculatedAt
+      shippingQuoteExecutionId: evidence.shippingQuoteExecutionId,
+      shippingQuoteCorrelationId: evidence.shippingQuoteCorrelationId,
+      selectionFactId: evidence.selectionFactId,
+      destinationFactId: evidence.destinationFactId,
+      calculatedAt: evidence.calculatedAt
     }
   };
 }
