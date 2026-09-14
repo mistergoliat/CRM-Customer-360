@@ -226,9 +226,24 @@ function makeQuoteGateway(opportunityId: number, statuses: Record<string, Capabi
 }
 
 async function countSideEffects() {
+  // The canonical outbound writer normalizes wa_id before persisting
+  // brain_message_outbox (e.g. "wa-<ts>-<rand>" fixture values never match
+  // the normalized digits actually stored) - matching on the fixture's raw
+  // waId here would always read zero regardless of whether delivery
+  // happened. crm_agent_actions.outbox_message_id -> brain_message_outbox.id
+  // is the real, authoritative relationship executeActionThroughGate
+  // establishes (execution-gate/executeActionThroughGate.ts): "this
+  // conversation's agent action produced one canonical outbox consequence",
+  // not "the transport stored this exact raw fixture string".
   const [actions, outbox] = await Promise.all([
     queryRows<{ count: number }>("SELECT COUNT(*) AS count FROM crm_agent_actions WHERE conversation_case_id = ?", [String(conversationId)]),
-    queryRows<{ count: number }>("SELECT COUNT(*) AS count FROM brain_message_outbox WHERE wa_id = ?", [waId])
+    queryRows<{ count: number }>(
+      `SELECT COUNT(*) AS count
+        FROM brain_message_outbox o
+        INNER JOIN crm_agent_actions a ON a.outbox_message_id = o.id
+        WHERE a.conversation_case_id = ?`,
+      [String(conversationId)]
+    )
   ]);
   return { actions: Number(actions[0].count), outbox: Number(outbox[0].count) };
 }
