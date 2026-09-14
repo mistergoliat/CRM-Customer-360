@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import test, { after, before } from "node:test";
 import { randomUUID } from "node:crypto";
 
+// Deliberately no NODE_ENV/DB_*/DATABASE_*/TEST_DATABASE_* here - unlike
+// this repo's common real-DB test convention, this file never overrides
+// connection env vars. lib/database-config.ts's resolveDatabaseConnectionFromEnv
+// refuses to run with NODE_ENV=test unless the resolved database is exactly
+// crm_test (`NODE_ENV=test requires crm_test, received ...`); forcing
+// NODE_ENV to "development" here would silently disable that guard. Connection
+// config is expected to come from whatever the environment already provides
+// (a loaded .env, TEST_DATABASE_*/DATABASE_*/DB_* exported in the shell, CI
+// secrets, etc.) - only test-specific behavioral flags are set below.
 Object.assign(process.env, {
-  NODE_ENV: "development",
-  DB_HOST: "127.0.0.1",
-  DB_PORT: "3306",
-  DB_NAME: "crm_test",
-  DB_USER: "crm_app",
-  DB_PASSWORD: "una_clave_local",
-  DB_URL: "",
-  DATABASE_URL: "",
   DB_WRITE_ENABLED: "true",
   BRAIN_AUTONOMOUS_RESPONSES_ENABLED: "true",
   BRAIN_WHATSAPP_TEST_MODE_ENABLED: "false",
