@@ -4,9 +4,11 @@ import { buildCommercialActionRequestId } from "./requestIdentity";
 import type {
   CommercialActionRequest,
   CreateQuoteActionInput,
+  IssueQuoteActionInput,
   SelectProductsActionInput,
   SelectShippingOptionActionInput,
-  SetShippingDestinationActionInput
+  SetShippingDestinationActionInput,
+  SendQuoteEmailActionInput
 } from "./types";
 
 // SALES-AGENT-R3-A03, Phase 9. Adapts an already-authorized ATL use_tool step
@@ -81,6 +83,27 @@ export function buildCommercialActionRequestFromAtlStep(input: AtlCommercialActi
       // create_quote takes no arguments by contract (CREATE_QUOTE_INPUT_SCHEMA)
       // - the model's raw arguments are never trusted here even if empty.
       const requestInput: CreateQuoteActionInput = {};
+      return {
+        ...base,
+        actionType,
+        input: requestInput,
+        requestId: buildCommercialActionRequestId({ conversationId: input.conversationId, causationId, actionType, input: requestInput })
+      };
+    }
+    case "ISSUE_QUOTE": {
+      // issue_quote takes no arguments by contract; the quote locator and
+      // fresh Quote Service version are resolved inside the capability.
+      const requestInput: IssueQuoteActionInput = {};
+      return {
+        ...base,
+        actionType,
+        input: requestInput,
+        requestId: buildCommercialActionRequestId({ conversationId: input.conversationId, causationId, actionType, input: requestInput })
+      };
+    }
+    case "SEND_QUOTE_EMAIL": {
+      const raw = input.step.arguments as SendQuoteEmailActionInput;
+      const requestInput: SendQuoteEmailActionInput = typeof raw?.recipient === "string" ? { recipient: raw.recipient } : {};
       return {
         ...base,
         actionType,

@@ -44,7 +44,10 @@ test("pool: recommend_catalog_products is visible, pool matches the canonical na
       "select_products",
       "calculate_shipping",
       "select_shipping_option",
-      "create_quote"
+      "create_quote",
+      "get_quote",
+      "issue_quote",
+      "send_quote_email"
     ]
   );
 });

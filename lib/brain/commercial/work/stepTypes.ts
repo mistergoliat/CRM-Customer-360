@@ -7,6 +7,8 @@ export const COMMERCIAL_WORK_STEP_TYPES = [
   "CALCULATE_SHIPPING",
   "SELECT_SHIPPING_OPTION",
   "CREATE_QUOTE",
+  "ISSUE_QUOTE",
+  "SEND_QUOTE_EMAIL",
   "HANDOFF",
   // SALES-AGENT-R2-ID-R2-A11. Read-only: loads this customer's purchase
   // history via the ID-R2-A10 Customer Profile boundary. Never mutates
@@ -35,6 +37,9 @@ export const COMMERCIAL_WORK_STEP_CAPABILITIES = [
   "calculate_shipping",
   "select_shipping_option",
   "create_quote",
+  "get_quote",
+  "issue_quote",
+  "send_quote_email",
   "get_customer_purchase_history",
   "get_customer_recommendation_signal"
 ] as const;

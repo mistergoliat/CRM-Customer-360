@@ -51,6 +51,22 @@ export const COMMERCIAL_WORK_RETRY_POLICIES: readonly CommercialWorkRetryPolicy[
     maxDelayMs: 5 * MINUTE,
     retryableGatewayStatuses: ["temporarily_blocked"],
     retryableOutcomeCodes: ["quote_service_not_configured", "catalog_unavailable", "created_quote_persistence_failed", "timeout", "unavailable"]
+  },
+  {
+    stepType: "ISSUE_QUOTE",
+    maxAttempts: 3,
+    baseDelayMs: MINUTE,
+    maxDelayMs: 5 * MINUTE,
+    retryableGatewayStatuses: ["temporarily_blocked"],
+    retryableOutcomeCodes: ["quote_service_not_configured", "quote_service_unavailable", "document_generation_failed", "document_storage_failed", "document_issuance_unavailable", "timeout", "unavailable"]
+  },
+  {
+    stepType: "SEND_QUOTE_EMAIL",
+    maxAttempts: 3,
+    baseDelayMs: MINUTE,
+    maxDelayMs: 5 * MINUTE,
+    retryableGatewayStatuses: ["temporarily_blocked"],
+    retryableOutcomeCodes: ["quote_service_not_configured", "quote_service_unavailable", "email_delivery_unavailable", "timeout", "unavailable"]
   }
 ] as const;
 
@@ -74,4 +90,3 @@ export function calculateCommercialWorkNextAttemptAt(input: {
   const safeBase = Number.isNaN(base.getTime()) ? new Date() : base;
   return new Date(safeBase.getTime() + calculateCommercialWorkRetryDelayMs(input.policy, input.attemptCount)).toISOString();
 }
-

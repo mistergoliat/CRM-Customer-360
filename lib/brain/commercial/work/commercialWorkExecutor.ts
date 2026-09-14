@@ -1,5 +1,6 @@
 import { executeGovernedCapability } from "@/lib/brain/commercial/capability-gateway";
 import type { CapabilityGatewayContext, CapabilityGatewayResult } from "@/lib/brain/commercial/capability-gateway";
+import { buildCommercialActionRequestFromWorkStep, executeCommercialActionRequest } from "@/lib/brain/commercial/commercial-action-request";
 import { queryRows } from "@/lib/db";
 import { buildSafeExecutionWave } from "./buildSafeExecutionWave";
 import type { ExecutionWaveDecision } from "./buildSafeExecutionWave";
@@ -27,6 +28,8 @@ const EXECUTABLE_STEP_TYPES = new Set([
   "CALCULATE_SHIPPING",
   "SELECT_SHIPPING_OPTION",
   "CREATE_QUOTE",
+  "ISSUE_QUOTE",
+  "SEND_QUOTE_EMAIL",
   // SALES-AGENT-R2-ID-R2-A11. Read-only Customer Profile lookup - no
   // buildGatewayInput case needed (falls to the `default: return {}` branch,
   // the capability reads identity from context.trustedCustomerSession).
@@ -326,9 +329,26 @@ function buildGatewayInput(step: CommercialWorkStep): Record<string, unknown> {
       return { destination: step.input.destinationText ?? step.input.canonicalDestinationName ?? "" };
     case "SELECT_SHIPPING_OPTION":
       return { optionIndex: step.input.optionIndex };
+    case "SEND_QUOTE_EMAIL":
+      return step.input.recipient ? { recipient: step.input.recipient } : {};
     default:
       return {};
   }
+}
+
+async function executeCommercialWorkStepCapability(
+  step: CommercialWorkStep,
+  context: CapabilityGatewayContext,
+  injectedExecuteCapability?: typeof executeGovernedCapability
+): Promise<CapabilityGatewayResult> {
+  if (injectedExecuteCapability) return injectedExecuteCapability(step.capabilityName as string, buildGatewayInput(step), context);
+
+  // Mutating CommercialWork steps use the same request validation, identity
+  // gate, session events and final governed execution boundary as agent tool
+  // mutations. Read-only steps continue directly through the Gateway.
+  const request = buildCommercialActionRequestFromWorkStep({ step, context });
+  if (request) return (await executeCommercialActionRequest(request, context)).gatewayResult;
+  return executeGovernedCapability(step.capabilityName as string, buildGatewayInput(step), context);
 }
 
 function stepRecordFromGateway(step: CommercialWorkStep, result: CapabilityGatewayResult, factsAfter: CurrentFacts): CommercialWorkStepExecutionRecord {
@@ -560,7 +580,7 @@ async function persistNext(publicId: string, expectedVersion: number, work: Comm
 export async function executeCommercialWork(input: ExecuteCommercialWorkInput): Promise<ExecuteCommercialWorkResult> {
   const maxSteps = Math.max(1, Math.min(input.maxSteps ?? 10, 50));
   const maxParallelSteps = Math.max(1, Math.min(input.maxParallelSteps ?? 1, 10));
-  const executeCapability = input.executeCapability ?? executeGovernedCapability;
+  const executeCapability = input.executeCapability;
   const records: CommercialWorkStepExecutionRecord[] = [];
   const waveDecisions: ExecutionWaveDecision[] = [];
   let work = await getCommercialWorkByPublicId(input.workPublicId, input.adapter);
@@ -697,13 +717,13 @@ export async function executeCommercialWork(input: ExecuteCommercialWorkInput): 
         continue;
       }
 
-      const result = await executeCapability(step.capabilityName, buildGatewayInput(step), {
+      const result = await executeCommercialWorkStepCapability(step, {
         ...input.context,
         opportunityId: work.opportunityId,
         conversationId: work.conversationId,
         requestId: work.publicId,
         actionId: step.stepId
-      });
+      }, executeCapability);
       const factsAfter = await (input.loadCurrentFacts ?? defaultLoadFacts)(work);
       const postSideEffectStaleBlockers = staleBlockersForStep(step, work, factsAfter);
       if (postSideEffectStaleBlockers.length > 0) {
@@ -782,13 +802,13 @@ export async function executeCommercialWork(input: ExecuteCommercialWorkInput): 
       // silently repeated" contract a real crash needs.
       const settled = await Promise.allSettled(
         toCall.map((step) =>
-          executeCapability(step.capabilityName as string, buildGatewayInput(step), {
+          executeCommercialWorkStepCapability(step, {
             ...input.context,
             opportunityId: workForWave.opportunityId,
             conversationId: workForWave.conversationId,
             requestId: workForWave.publicId,
             actionId: step.stepId
-          })
+          }, executeCapability)
         )
       );
       const factsAfter = await (input.loadCurrentFacts ?? defaultLoadFacts)(workForWave);

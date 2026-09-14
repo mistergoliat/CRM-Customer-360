@@ -24,14 +24,13 @@ export type OpportunityCoreForQuoteAssembly = {
  * SALES-AGENT-R1-T2 input. `actor`/`source` identify who is triggering
  * assembly (the same vocabulary Quote Service's own contract already uses,
  * see lib/domains/quote-service/types.ts) - never derived, always supplied
- * by the caller (a future capability/application layer, T3+).
- * `requireShipping` defaults to false because no durable selected-carrier
- * mechanism exists yet AND Quote Service's own line-item contract has no
- * shipping representation at all (QUOTE_LINE_TYPES = product|service only,
- * confirmed in the real service) - see "Shipping" in
- * docs/integrations/quote-input-assembly.md. Passing `true` always fails
- * closed with `shipping_selection_missing` today; this is a documented,
- * deliberate gap, not an oversight.
+ * by the caller (the capability/application layer).
+ * `requireShipping` defaults to false because Carrier MS does not yet return
+ * the tax metadata required to populate Quote Service's supported shipping
+ * line (`QUOTE_LINE_TYPES` includes `shipping`) - see "Shipping" in
+ * docs/integrations/quote-input-assembly.md. Passing `true` remains fail
+ * closed with `shipping_tax_metadata_missing` after freshness checks; this is
+ * a documented, deliberate gap, not an oversight.
  */
 export type AssembleQuoteInputInput = {
   opportunityId: number;

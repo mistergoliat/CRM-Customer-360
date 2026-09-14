@@ -20,7 +20,7 @@ export type CommercialActionRequestSource = "agent_tool_loop" | "multi_intent" |
  * safely-executable mutating capabilities (capability-gateway/registry.ts) -
  * never a new capability, never order creation/discounts/refunds.
  */
-export const COMMERCIAL_ACTION_REQUEST_TYPES = ["SELECT_PRODUCTS", "SET_SHIPPING_DESTINATION", "SELECT_SHIPPING_OPTION", "CREATE_QUOTE"] as const;
+export const COMMERCIAL_ACTION_REQUEST_TYPES = ["SELECT_PRODUCTS", "SET_SHIPPING_DESTINATION", "SELECT_SHIPPING_OPTION", "CREATE_QUOTE", "ISSUE_QUOTE", "SEND_QUOTE_EMAIL"] as const;
 export type CommercialActionRequestType = (typeof COMMERCIAL_ACTION_REQUEST_TYPES)[number];
 
 export type SelectProductsActionInput = {
@@ -38,6 +38,12 @@ export type SelectShippingOptionActionInput = {
 /** create_quote takes no arguments - everything is backend state (createQuoteCapability.ts). */
 export type CreateQuoteActionInput = Record<string, never>;
 
+/** issue_quote takes no arguments - the active opportunity resolves the quote. */
+export type IssueQuoteActionInput = Record<string, never>;
+
+/** Recipient is optional; the Quote Service may use the fresh customer snapshot email. */
+export type SendQuoteEmailActionInput = { recipient?: string };
+
 type CommercialActionRequestBase = {
   requestId: string;
   conversationId: number;
@@ -53,7 +59,9 @@ export type CommercialActionRequest =
   | (CommercialActionRequestBase & { actionType: "SELECT_PRODUCTS"; input: SelectProductsActionInput })
   | (CommercialActionRequestBase & { actionType: "SET_SHIPPING_DESTINATION"; input: SetShippingDestinationActionInput })
   | (CommercialActionRequestBase & { actionType: "SELECT_SHIPPING_OPTION"; input: SelectShippingOptionActionInput })
-  | (CommercialActionRequestBase & { actionType: "CREATE_QUOTE"; input: CreateQuoteActionInput });
+  | (CommercialActionRequestBase & { actionType: "CREATE_QUOTE"; input: CreateQuoteActionInput })
+  | (CommercialActionRequestBase & { actionType: "ISSUE_QUOTE"; input: IssueQuoteActionInput })
+  | (CommercialActionRequestBase & { actionType: "SEND_QUOTE_EMAIL"; input: SendQuoteEmailActionInput });
 
 /**
  * Phase 7. Mapped from CapabilityGatewayExecutionStatus (see

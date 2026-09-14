@@ -61,7 +61,8 @@ test("an unregistered/unknown capability name defaults to NOT_AGENT_EXPOSED", ()
 });
 
 // ---------------------------------------------------------------------------
-// [8][9][10][11] SALES-AGENT-R3-A03's four mutating actions
+// [8][9][10][11] SALES-AGENT-R3-A03's original mutating actions plus the R3
+// quote lifecycle actions
 // ---------------------------------------------------------------------------
 
 test("SELECT_PRODUCTS/SET_SHIPPING_DESTINATION/SELECT_SHIPPING_OPTION/CREATE_QUOTE capabilities are classified COMMERCIAL_ACTION", () => {
@@ -72,7 +73,7 @@ test("SELECT_PRODUCTS/SET_SHIPPING_DESTINATION/SELECT_SHIPPING_OPTION/CREATE_QUO
 });
 
 // ---------------------------------------------------------------------------
-// [12][13][14][15] the six live read tools
+// [12][13][14][15] the live read tools
 // ---------------------------------------------------------------------------
 
 test("search_products/get_product_details/explore_catalog/search_company_knowledge classification", () => {
@@ -88,6 +89,10 @@ test("recommend_catalog_products classification (Phase 10 decision: READ_TOOL, p
 
 test("calculate_shipping classification (Phase 8 decision: READ_TOOL, backed by governance.sideEffect=read_only and no persistence in its own execute())", () => {
   assert.equal(resolveAgentCapabilityExposure("calculate_shipping"), "READ_TOOL");
+});
+
+test("get_quote classification: READ_TOOL, with current quote truth owned by Quote Service", () => {
+  assert.equal(resolveAgentCapabilityExposure("get_quote"), "READ_TOOL");
 });
 
 // ---------------------------------------------------------------------------
@@ -144,11 +149,11 @@ test("AgentToolCatalog.readTools contains exactly the READ_TOOL subset of AGENT_
   }
 });
 
-test("AgentToolCatalog.commercialActions contains exactly the four R3-A03 actions, each with its real capability's inputSchema", () => {
+test("AgentToolCatalog.commercialActions contains the six governed commercial actions, each with its real capability's inputSchema", () => {
   const catalog = buildAgentToolCatalog();
   assert.deepEqual(
     catalog.commercialActions.map((action) => action.actionType).sort(),
-    ["CREATE_QUOTE", "SELECT_PRODUCTS", "SELECT_SHIPPING_OPTION", "SET_SHIPPING_DESTINATION"]
+    ["CREATE_QUOTE", "ISSUE_QUOTE", "SELECT_PRODUCTS", "SELECT_SHIPPING_OPTION", "SEND_QUOTE_EMAIL", "SET_SHIPPING_DESTINATION"]
   );
   const selectProducts = catalog.commercialActions.find((action) => action.actionType === "SELECT_PRODUCTS");
   assert.equal(selectProducts?.capability, "select_products");

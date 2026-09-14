@@ -10,7 +10,8 @@ export const AGENT_CAPABILITY_EXPOSURES = ["READ_TOOL", "COMMERCIAL_ACTION", "NO
 export type AgentCapabilityExposure = (typeof AGENT_CAPABILITY_EXPOSURES)[number];
 
 /**
- * Exhaustive over CAPABILITY_GATEWAY_REGISTRY at the time of A04 (17 entries -
+ * Exhaustive over CAPABILITY_GATEWAY_REGISTRY at the time of A04 plus the R3
+ * quote lifecycle exposure (20 entries -
  * verified by a test that diffs this map's keys against the live registry, so
  * a future capability added to the Gateway without a classification entry
  * here fails that test, never silently defaults through). Classified from
@@ -38,14 +39,17 @@ export const AGENT_CAPABILITY_EXPOSURE_CLASSIFICATION: Record<string, AgentCapab
   // is documented, not corrected (historical audits are not rewritten).
   calculate_shipping: "READ_TOOL",
 
-  // The four capabilities R3-A03's CommercialActionRequest boundary already
+  // The six capabilities R3-A03's CommercialActionRequest boundary now
   // maps - commercial-action-request/actionCapabilityMapping.ts remains the
   // single source for the action-type<->capability mapping; this entry only
-  // records that these four are agent-visible through that surface.
+  // records that these are agent-visible through that surface.
   select_products: "COMMERCIAL_ACTION",
   set_shipping_destination: "COMMERCIAL_ACTION",
   select_shipping_option: "COMMERCIAL_ACTION",
   create_quote: "COMMERCIAL_ACTION",
+  get_quote: "READ_TOOL",
+  issue_quote: "COMMERCIAL_ACTION",
+  send_quote_email: "COMMERCIAL_ACTION",
 
   // Internal hydration - never aliased in AGENT_LOOP_TOOL_POOL, the Sales
   // Agent never decides to call this for itself (registry.ts's own comment).

@@ -24,6 +24,9 @@ import type { CommercialIdentityRequirement } from "./types";
 // | calculate_shipping | yes (capability) | same | no | no | no | NONE |
 // | select_shipping_option | yes (capability) | same | yes (durable selection) | no | no | NONE |
 // | create_quote | yes (capability) | same | yes (external Quote Service) | yes | yes (pricing) | MINIMUM_LEVEL LEVEL_2 |
+// | get_quote | yes (capability) | Agent Tool Loop/Quote Service | no | yes | yes | NONE |
+// | issue_quote | yes (capability) | CommercialWork/Quote Service | yes | yes | yes | MINIMUM_LEVEL LEVEL_2 |
+// | send_quote_email | yes (capability) | CommercialWork/Quote Service | yes | yes | yes | MINIMUM_LEVEL LEVEL_2 |
 // | resolve_customer | yes (capability) | native-cycle session boundary | no | yes | yes | NONE (bootstrapping - called precisely because identity is not resolved yet) |
 // | link_external_identity | yes (capability) | native-cycle session boundary | yes (customer_external_identity) | yes | yes | MINIMUM_LEVEL LEVEL_2 (necessary precondition only - see doc) |
 // | assisted_sale_handoff | yes (CommercialWork HANDOFF step type + dispatch, no capability) | CommercialWork/Agent Tool Loop | no (dispatch only) | no | no | MINIMUM_LEVEL LEVEL_1 |
@@ -52,6 +55,9 @@ export const COMMERCIAL_OPERATIONS = [
   "calculate_shipping",
   "select_shipping_option",
   "create_quote",
+  "get_quote",
+  "issue_quote",
+  "send_quote_email",
   "resolve_customer",
   "link_external_identity",
   "assisted_sale_handoff",
@@ -79,6 +85,9 @@ const REQUIREMENT_BY_OPERATION: Record<CommercialOperation, CommercialIdentityRe
   // hard block at the capability layer yet); this is the PROPOSED
   // requirement for a future gating slice (A07+), not a behavior change here.
   create_quote: { kind: "MINIMUM_LEVEL", level: "LEVEL_2_MASTER_RESOLVED" },
+  get_quote: { kind: "NONE" },
+  issue_quote: { kind: "MINIMUM_LEVEL", level: "LEVEL_2_MASTER_RESOLVED" },
+  send_quote_email: { kind: "MINIMUM_LEVEL", level: "LEVEL_2_MASTER_RESOLVED" },
   resolve_customer: { kind: "NONE" },
   // PARTE 5: necessary but not sufficient - the real authorization (explicit
   // consent this turn, no_match freshness) is governed entirely by the

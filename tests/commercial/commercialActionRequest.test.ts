@@ -117,8 +117,12 @@ test("action type <-> capability mapping is exhaustive and bidirectional", () =>
   assert.equal(getCapabilityMappingForActionType("SET_SHIPPING_DESTINATION").capability, "set_shipping_destination");
   assert.equal(getCapabilityMappingForActionType("SELECT_SHIPPING_OPTION").capability, "select_shipping_option");
   assert.equal(getCapabilityMappingForActionType("CREATE_QUOTE").capability, "create_quote");
+  assert.equal(getCapabilityMappingForActionType("ISSUE_QUOTE").capability, "issue_quote");
+  assert.equal(getCapabilityMappingForActionType("SEND_QUOTE_EMAIL").capability, "send_quote_email");
   assert.equal(getActionTypeForCapability("select_products"), "SELECT_PRODUCTS");
   assert.equal(getActionTypeForCapability("create_quote"), "CREATE_QUOTE");
+  assert.equal(getActionTypeForCapability("issue_quote"), "ISSUE_QUOTE");
+  assert.equal(getActionTypeForCapability("send_quote_email"), "SEND_QUOTE_EMAIL");
   assert.equal(getActionTypeForCapability("search_products"), null, "a read-only capability must never map to an action type");
 });
 
@@ -158,6 +162,13 @@ test("valid SELECT_SHIPPING_OPTION request passes validation", () => {
 test("valid CREATE_QUOTE request passes validation", () => {
   const request = baseRequest({ actionType: "CREATE_QUOTE", input: {} } as Partial<CommercialActionRequest>);
   assert.deepEqual(validateCommercialActionRequest(request), { valid: true });
+});
+
+test("valid ISSUE_QUOTE and SEND_QUOTE_EMAIL requests pass validation", () => {
+  const issueRequest = baseRequest({ actionType: "ISSUE_QUOTE", input: {} } as Partial<CommercialActionRequest>);
+  const emailRequest = baseRequest({ actionType: "SEND_QUOTE_EMAIL", input: { recipient: "jane@example.com" } } as Partial<CommercialActionRequest>);
+  assert.deepEqual(validateCommercialActionRequest(issueRequest), { valid: true });
+  assert.deepEqual(validateCommercialActionRequest(emailRequest), { valid: true });
 });
 
 test("unknown action type fails closed", () => {
@@ -234,6 +245,36 @@ test("create_quote ATL adapter never trusts the model's raw arguments - always {
     inboundMessageId: "wamid.3"
   });
   assert.deepEqual(request?.input, {});
+});
+
+test("malformed quote lifecycle input fails closed: model cannot provide quoteId, expectedVersion, or idempotencyKey", () => {
+  const issueRequest = baseRequest({ actionType: "ISSUE_QUOTE", input: { quoteId: "quote-42", expectedVersion: 7, idempotencyKey: "model-controlled" } as never } as Partial<CommercialActionRequest>);
+  const emailRequest = baseRequest({ actionType: "SEND_QUOTE_EMAIL", input: { quoteId: "quote-42", recipient: "jane@example.com" } as never } as Partial<CommercialActionRequest>);
+  assert.equal(validateCommercialActionRequest(issueRequest).valid, false);
+  assert.equal(validateCommercialActionRequest(emailRequest).valid, false);
+});
+
+test("issue_quote ATL adapter never trusts model arguments and send_quote_email only carries optional recipient", () => {
+  const issue = buildCommercialActionRequestFromAtlStep({
+    step: { type: "use_tool", tool: "issue_quote", arguments: { quoteId: "forbidden" } },
+    conversationId: 1,
+    opportunityId: 42,
+    correlationId: "corr-atl-issue",
+    inboundMessageId: "wamid.issue"
+  });
+  assert.equal(issue?.actionType, "ISSUE_QUOTE");
+  assert.deepEqual(issue?.input, {});
+
+  const send = buildCommercialActionRequestFromAtlStep({
+    step: { type: "use_tool", tool: "send_quote_email", arguments: { recipient: "jane@example.com", quoteId: "forbidden" } },
+    conversationId: 1,
+    opportunityId: 42,
+    correlationId: "corr-atl-send",
+    inboundMessageId: "wamid.send"
+  });
+  assert.equal(send?.actionType, "SEND_QUOTE_EMAIL");
+  assert.deepEqual(send?.input, { recipient: "jane@example.com" });
+  assert.deepEqual(validateCommercialActionRequest(send!), { valid: true });
 });
 
 test("a null conversationId falls back to no CommercialActionRequest (caller keeps calling the Gateway directly)", () => {

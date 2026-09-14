@@ -22,10 +22,10 @@ export const QUOTE_ASSEMBLY_ERROR_CODES = [
   /**
    * SALES-AGENT-R1-T2.1: a real, documented contract gap, not a bug - Carrier
    * MS provides no tax metadata (no taxIncluded/taxRate/currency) for any
-   * shipping option, and Quote Service has no shipping line-item
-   * representation yet. A valid, fresh selection exists but cannot become a
-   * QuoteServiceCreateRequest line without fabricating data - which this
-   * assembler will never do. See docs/integrations/quote-input-assembly.md.
+   * shipping option. Quote Service supports a shipping line-item, but a
+   * valid, fresh selection cannot become a QuoteServiceCreateRequest line
+   * without those fields, which this assembler will never fabricate. See
+   * docs/integrations/quote-input-assembly.md.
    */
   "shipping_tax_metadata_missing"
 ] as const;

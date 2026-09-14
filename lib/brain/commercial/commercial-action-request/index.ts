@@ -7,9 +7,11 @@ export type {
   CommercialActionResult,
   CommercialActionResultStatus,
   CreateQuoteActionInput,
+  IssueQuoteActionInput,
   SelectProductsActionInput,
   SelectShippingOptionActionInput,
-  SetShippingDestinationActionInput
+  SetShippingDestinationActionInput,
+  SendQuoteEmailActionInput
 } from "./types";
 export { COMMERCIAL_ACTION_REQUEST_TYPES, COMMERCIAL_ACTION_RESULT_STATUSES } from "./types";
 
@@ -34,6 +36,7 @@ export { executeCommercialActionRequest } from "./executeCommercialActionRequest
 
 export type { AtlCommercialActionRequestSourceInput } from "./atlAdapter";
 export { buildCommercialActionRequestFromAtlStep } from "./atlAdapter";
+export { buildCommercialActionRequestFromWorkStep } from "./workAdapter";
 
 export type { EnsureCommercialActionOpportunityInput, EnsureCommercialActionOpportunityResult } from "./ensureCommercialActionOpportunity";
 export { ensureCommercialActionOpportunity } from "./ensureCommercialActionOpportunity";

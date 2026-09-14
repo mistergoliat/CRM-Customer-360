@@ -38,13 +38,14 @@ tags:
 Catalog Service   identifica y precia
 CRM (commercial_line_items)  selecciona (identidad + quantity, durable, nunca precio)
 Assembler (este modulo)      hidrata: selección + Catalog + identidad de cliente -> QuoteServiceCreateRequest
-Quote Service (T3, futuro)   snapshotea (inmutable, al llamar createQuote)
+Quote Service (ya integrado) snapshotea (inmutable, al llamar createQuote)
 ```
 
-**T2 no llama a Quote Service, no registra capability, no muta nada.** El
-output es un `QuoteServiceCreateQuoteInput` validado y una `evidence` de
-solo lectura — el side effect (crear la Quote real) es responsabilidad de
-una tarea futura (T3+).
+El assembler sigue siendo una pieza de solo lectura: no llama a Quote Service,
+no registra capabilities y no muta datos. El side effect de crear la Quote
+real vive en `create_quote`; `get_quote`, `issue_quote` y
+`send_quote_email` exponen después las operaciones ya existentes del mismo
+servicio, cada una con su propio límite de side effect.
 
 **Actualizacion SALES-AGENT-R1-T3**: el side effect ya existe -
 `createQuoteCapability.ts` llama a `assembleQuoteInput({requireShipping: false, ...})`
@@ -192,7 +193,7 @@ Quote Input Assembler (este modulo) -> requireShipping=true lee la seleccion,
 (Carrier MS es la unica autoridad sobre coverage/carrier/tarifa), el cliente
 selecciona (`select_shipping_option`, un `optionIndex` sobre algo
 efectivamente observado), CRM persiste (`selected_shipping_option`), Quote
-Service snapshotea (T3, futuro). El LLM nunca inventa ni elige un carrier por
+Service snapshotea cuando corresponde. El LLM nunca inventa ni elige un carrier por
 su cuenta en ningun punto de esta cadena.
 
 ### Frescura (staleness)
@@ -241,11 +242,11 @@ lugar del schema") y por el contrato HTTP real de Carrier MS
 `carrier_name/service_type/total_cost/estimated_delivery` - sin id de opcion,
 sin moneda, sin IVA): **no existe ninguna fuente real de `taxIncluded`/
 `taxRate`/moneda para una opcion de envio.** Ademas, el contrato real de
-Quote Service sigue sin representacion de linea de envio
-(`QUOTE_LINE_TYPES = ["product", "service"]`, confirmado en
-`MS-pesaschile-quote-service/src/domain/constants.ts`, sin tocar en esta
-tarea a proposito). Agregar un tipo `"shipping"` que nunca podria enviarse
-con datos reales seria peor que no tenerlo.
+Quote Service ya soporta representacion de linea de envio
+(`QUOTE_LINE_TYPES = ["product", "service", "shipping"]`, confirmado en
+`MS-pesaschile-quote-service/src/domain/constants.ts`). El bloqueo vigente
+esta en Carrier MS: no entrega taxIncluded/taxRate/moneda para la opcion, por
+lo que CRM sigue sin habilitar `requireShipping=true` ni inventar esos datos.
 
 Comportamiento del assembler:
 
@@ -272,9 +273,9 @@ seleccion.
 
 **Bloqueo acotado para una tarea futura** (propuesta conceptual, NO
 implementada): si Carrier MS o una fuente equivalente llegara a exponer
-`taxIncluded`/`taxRate`/moneda por opcion, Quote Service podria extender
-`QUOTE_LINE_TYPES` con `"shipping"` y este assembler podria mapear
-`selected_shipping_option` a esa linea con el mismo passthrough-sin-aritmetica
+`taxIncluded`/`taxRate`/moneda por opcion, este assembler podria mapear
+`selected_shipping_option` a la linea `"shipping"` ya soportada por Quote
+Service, con el mismo passthrough-sin-aritmetica
 que ya usa para producto. Requiere una decision de producto explicita sobre
 semantica tributaria de envio (task section 18) - no algo que este repo pueda
 decidir unilateralmente inventando una tasa.
@@ -317,8 +318,8 @@ lee el estado activo de `commercial_line_items` en el momento en que se lo
 invoca. Dos llamadas sucesivas después de que el cliente cambie su selección
 (`Selection V1 -> Request A`, luego `Selection V2 -> Request B`) son
 independientes por construcción, sin ningún estado compartido entre ellas -
-el snapshot inmutable real lo creará Quote Service cuando una tarea futura
-(T3) llame a `createQuote`.
+el snapshot inmutable real lo crea Quote Service cuando `create_quote` llama
+a `createQuote`.
 
 ## Tests
 

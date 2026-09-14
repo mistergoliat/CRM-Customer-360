@@ -749,7 +749,7 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt stays meaningfully smaller 
 // (COMMERCIAL_BEHAVIOR_POLICY_FINALIZATION_RULE_LINES). Both phases also
 // absorb the link-evidence consolidation (two per-tool lines -> one general
 // rule) and the derived observed-evidence allowlist text. The tool-line
-// useWhen/doNotUseWhen semantics added for all 11 pool capabilities are NOT
+// useWhen/doNotUseWhen semantics added for all 14 pool capabilities are NOT
 // in these numbers: this fixture's availableTools is a hand-built
 // [{name:"explore_catalog", description:"d"}], not buildToolDescriptions().
 const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 21218;

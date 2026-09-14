@@ -14,12 +14,12 @@ const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
  * SALES-AGENT-R1-T3. The model decides only that a formal quote is needed -
  * every parameter (products, prices, customer identity) is backend state
  * assembled by assembleQuoteInput (T2). Takes no arguments, same pattern as
- * calculate_shipping. requireShipping is hardcoded false: a quote WITH
- * shipping cannot be assembled today for any opportunity (Carrier MS reports
- * no tax metadata per option, Quote Service has no shipping line-item type -
- * see docs/integrations/quote-input-assembly.md "Shipping tax gap") - this
- * is a pre-existing contract gap between two other services, out of scope
- * for T3 (docs/audits/SALES-AGENT-R1-T3-create-quote-wiring-audit.md).
+ * calculate_shipping. requireShipping is hardcoded false: shipping assembly
+ * remains out of scope because Carrier MS does not yet provide the tax
+ * metadata needed by the quote input contract (see
+ * docs/integrations/quote-input-assembly.md "Shipping tax gap"). Quote
+ * Service itself supports a shipping line; this capability simply does not
+ * enable that separate assembly path.
  */
 export const CREATE_QUOTE_INPUT_SCHEMA = {
   type: "object",
@@ -73,7 +73,7 @@ export function createQuoteCapability(
     capability: "create_quote",
     version: CAPABILITY_GATEWAY_VERSION,
     description:
-      "Creates a formal, real draft quote for the customer's confirmed product selection via the external Quote Service - the sole authority over quote numbering/validity/pricing snapshot. Takes no arguments: products/quantities come from select_products, pricing from Catalog Service. Never includes shipping (a real, pre-existing contract gap - shipping cost is communicated separately, never invented as a quote line). Repeated calls for the SAME unchanged selection reuse the existing quote, never create a duplicate.",
+      "Creates a formal, real draft quote for the customer's confirmed product selection via the external Quote Service - the sole authority over quote numbering/validity/pricing snapshot. Takes no arguments: products/quantities come from select_products, pricing from Catalog Service. Shipping assembly is disabled until its tax metadata contract is closed; it is never invented as a quote line. Repeated calls for the SAME unchanged selection reuse the existing quote, never create a duplicate.",
     governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "medium" },
     maxRetries: 0,
     inputSchema: CREATE_QUOTE_INPUT_SCHEMA,

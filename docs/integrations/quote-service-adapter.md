@@ -14,36 +14,40 @@ tags:
 
 - Implementa: `lib/domains/quote-service/{types,errors,ports,index}.ts`
   (contrato/tipos/puerto), `lib/integrations/quote-service/{config,httpQuoteServiceAdapter,index}.ts`
-  (adapter HTTP real + factory).
+  (adapter HTTP real + factory), y las capabilities de ciclo de vida en
+  `lib/brain/commercial/capability-gateway/{getQuoteCapability,issueQuoteCapability,sendQuoteEmailCapability}.ts`.
 - Consume (sin modificar): el servicio externo `MS-pesaschile-quote-service`
   (contrato real leido directamente de su codigo fuente - `src/http/routes/quote-route.ts`,
   `src/domain/*.ts`, README - nunca inferido/adivinado).
 - No modifica: `lib/brain/commercial/quotes/repository.ts` (el motor `crm_quotes`
   legacy, desconectado, sistema distinto sin relacion con este adapter),
-  ninguna capability del Capability Gateway, `AGENT_LOOP_TOOL_POOL`,
-  `commercial_line_items`, `shipping_destination`, ningun runtime conversacional.
+  `commercial_line_items`, `shipping_destination` ni ningun runtime
+  conversacional fuera de las superficies de exposicion descritas arriba.
 - Tambien consume (sin modificar, lectura de contrato real): `Catalog Service`
   (repo hermano `MS-pesaschile-catalog-service`) para el campo `taxRate` -
   ver "Modelo contractual" abajo.
-- Task: `SALES-AGENT-R1-T1` (adapter inicial), `SALES-AGENT-R1-T1.1` (alineacion
-  de contrato: identidad externa `externalSource`/`externalVariantId` en
-  Quote Service, `taxRate` en Catalog Service V1).
+- Tasks: `SALES-AGENT-R1-T1` (adapter inicial), `SALES-AGENT-R1-T1.1`
+  (alineacion de contrato: identidad externa `externalSource`/
+  `externalVariantId` en Quote Service, `taxRate` en Catalog Service V1),
+  `SALES-AGENT-R1-T3` (create quote) y
+  `SALES-AGENT-R3-QUOTE-CAPABILITY-EXPOSURE-V1` (lectura, emision y entrega
+  durable model-facing).
 
 ## Alcance
 
 Frontera HTTP tipada y testeada entre CRM y el Quote Service externo ya
-operativo. **T1 no expone el Quote Service al Sales Agent todavia** - no hay
-capability registrada, no hay tool, no hay assembler que lea
-`commercial_line_items`/`shipping_destination`/Catalog Service para construir
-un request. Este documento describe exclusivamente el adapter.
+operativo. El adapter sigue siendo transporte: no decide ciclo de vida ni
+construye requests desde el modelo. Las capabilities model-facing resuelven
+el quote desde la oportunidad y delegan estado, emisión documental, outbox,
+reintentos y entrega al Quote Service.
 
 **Actualizacion SALES-AGENT-R1-T3**: este adapter esta ahora en uso real,
 via `createQuoteCapability()` (`lib/brain/commercial/capability-gateway/createQuoteCapability.ts`),
 registrada en el Capability Gateway y expuesta al Native Agent Tool Loop
-como el tool `create_quote`. Solo `createQuote()` se invoca (nunca
-`updateDraft`/`issueQuote`/`sendQuoteEmail` - fuera de alcance de T3). Ver
-`docs/audits/SALES-AGENT-R1-T3-create-quote-wiring-audit.md` para el diseno
-completo.
+como el tool `create_quote`. R3 agrega `get_quote`, `issue_quote` y
+`send_quote_email` con fronteras separadas; `issue_quote` usa una version
+fresca y no envia, mientras `send_quote_email` solo crea una solicitud durable
+de entrega. Ver `docs/releases/SALES-AGENT-R3-QUOTE-CAPABILITY-EXPOSURE-V1.md`.
 
 ## Configuracion
 
@@ -57,10 +61,10 @@ QUOTE_SERVICE_TIMEOUT_MS=5000
 exactamente el mismo patron que `CATALOG_SERVICE_BASE_URL`/`CARRIER_SERVICE_BASE_URL`:
 ausencia de `QUOTE_SERVICE_BASE_URL`/`QUOTE_SERVICE_AUTH_TOKEN` devuelve `null`
 (no configurado) - no existe un flag `_ENABLED` separado, la presencia de
-config *es* la señal de habilitacion, consistente con el resto del repo. No
-hay wiring productivo todavia que dependa de esto (T1 no tiene caller), asi
-que el "fail-fast" real ocurrira naturalmente cuando una tarea futura llame a
-`createQuoteServicePort()` y reciba `null`.
+config *es* la señal de habilitacion, consistente con el resto del repo. El
+wiring productivo de R1-T3/R3 llama a `createQuoteServicePort()` y, cuando
+recibe `null`, las capabilities devuelven un bloqueo temporal gobernado en
+vez de inventar disponibilidad.
 
 ## Puerto (`QuoteServicePort`)
 
@@ -99,8 +103,8 @@ retornado - `sanitizeMessage()` redacta cualquier patron `Bearer <token>`/
 
 Cada mutacion (`createQuote`/`updateDraft`/`issueQuote`/`sendQuoteEmail`)
 exige `options.idempotencyKey: string`, transportado literalmente como header
-`Idempotency-Key`. El adapter nunca genera esta key - es responsabilidad del
-caller (una tarea futura de capability/application layer). El servicio real
+`Idempotency-Key`. El adapter nunca genera esta key - las capabilities y
+callers gobernados la derivan de la identidad durable de la operacion. El servicio real
 persiste idempotencia en su propia base (README "Idempotency") - una repeticion
 exacta de key+payload responde con el resultado original; key igual con
 payload distinto responde `409 idempotency_key_reused_with_different_payload`.

@@ -27,6 +27,9 @@ import { createQuoteCapability } from "./createQuoteCapability";
 import { getCustomerPurchaseHistoryCapability } from "./getCustomerPurchaseHistoryCapability";
 import { getCustomerRecommendationSignalCapability } from "./getCustomerRecommendationSignalCapability";
 import { searchProductsBySemanticsCapability } from "./searchProductsBySemanticsCapability";
+import { getQuoteCapability } from "./getQuoteCapability";
+import { issueQuoteCapability } from "./issueQuoteCapability";
+import { sendQuoteEmailCapability } from "./sendQuoteEmailCapability";
 
 const CAPABILITY_GATEWAY_VERSION = "capability-gateway.v1" as const;
 
@@ -548,12 +551,17 @@ export const CAPABILITY_GATEWAY_REGISTRY: readonly CapabilityGatewayDefinition[]
   // name or service type from the model. See selectShippingOptionCapability.ts.
   selectShippingOptionCapability() as CapabilityGatewayDefinition,
   // SALES-AGENT-R1-T3: creates a real draft quote via the external Quote
-  // Service from the durable commercial_line_items selection (never with
-  // shipping - a pre-existing contract gap, see
-  // docs/audits/SALES-AGENT-R1-T3-create-quote-wiring-audit.md). Reuses an
-  // existing quote instead of duplicating one when the selection has not
-  // changed since it was created. See createQuoteCapability.ts.
+  // Service from the durable commercial_line_items selection. Shipping
+  // assembly remains disabled until its tax metadata contract is closed.
+  // Reuses an existing quote instead of duplicating one when the selection
+  // has not changed since it was created. See createQuoteCapability.ts.
   createQuoteCapability() as CapabilityGatewayDefinition,
+  // SALES-AGENT-R3-QUOTE-CAPABILITY-EXPOSURE-V1: these capabilities expose
+  // existing Quote Service operations; document generation, storage, retry
+  // recovery and provider delivery remain owned by Quote Service.
+  getQuoteCapability() as CapabilityGatewayDefinition,
+  issueQuoteCapability() as CapabilityGatewayDefinition,
+  sendQuoteEmailCapability() as CapabilityGatewayDefinition,
   // SALES-AGENT-R2-ID-R2-A11: reads this customer's previously purchased
   // products via the ID-R2-A10 Customer Profile boundary, gated on live
   // LEVEL_3_PRESTASHOP_LINKED identity. Registered so a REPEAT_PURCHASE

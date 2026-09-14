@@ -1717,7 +1717,7 @@ function exploreResponsePayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("I0 - el pool conserva las tools previas mas explore_catalog/set_shipping_destination/select_products/calculate_shipping/select_shipping_option/create_quote/search_products_by_semantics (expansion intencional, nada eliminado)", () => {
+test("I0 - el pool conserva las tools previas y expone el ciclo de vida de Quote Service (expansion intencional, nada eliminado)", () => {
   assert.deepEqual(
     [...AGENT_LOOP_TOOL_POOL].sort(),
     [
@@ -1731,7 +1731,10 @@ test("I0 - el pool conserva las tools previas mas explore_catalog/set_shipping_d
       "search_products_by_semantics",
       "select_products",
       "select_shipping_option",
-      "set_shipping_destination"
+      "set_shipping_destination",
+      "get_quote",
+      "issue_quote",
+      "send_quote_email"
     ].sort()
   );
 });

@@ -78,6 +78,8 @@ export type CommercialObjectiveSeed =
 
 export type CommercialObjectiveInputs = {
   query?: string;
+  /** Optional recipient for the governed SEND_QUOTE_EMAIL action. */
+  recipient?: string;
   productReference?: string;
   quantity?: number;
   items?: CommercialLineItem[];

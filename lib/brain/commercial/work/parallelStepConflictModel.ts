@@ -44,6 +44,8 @@ export const STEP_FACT_PROFILE: Record<CommercialWorkStepType, StepFactProfile> 
   CALCULATE_SHIPPING: { reads: ["commercial_line_items", "shipping_destination"], writes: [] },
   SELECT_SHIPPING_OPTION: { reads: ["commercial_line_items", "shipping_destination"], writes: ["selected_shipping_option"] },
   CREATE_QUOTE: { reads: ["commercial_line_items", "shipping_destination", "selected_shipping_option"], writes: ["created_quote"] },
+  ISSUE_QUOTE: { reads: ["created_quote"], writes: [] },
+  SEND_QUOTE_EMAIL: { reads: ["created_quote"], writes: [] },
   HANDOFF: { reads: [], writes: [] },
   // SALES-AGENT-R2-ID-R2-A11. Read-only Customer Profile lookup, touches no
   // commercial fact anchor - same profile as SEARCH_PRODUCTS/GET_PRODUCT_DETAILS.

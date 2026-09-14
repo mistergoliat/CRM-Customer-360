@@ -51,7 +51,7 @@ export type R2ArchitectureScenarioTurn = {
   directObjectiveSeeds?: CommercialObjectiveSeed[];
 };
 
-/** Capability names the R2 executor actually calls - see COMMERCIAL_WORK_STEP_CAPABILITIES in ../stepTypes. */
+/** Capability names available to CommercialWork - see COMMERCIAL_WORK_STEP_CAPABILITIES in ../stepTypes. */
 export type R2FaultInjectableCapability = "select_products" | "set_shipping_destination" | "calculate_shipping" | "create_quote";
 
 export type CommercialWorkFaultPlan = {

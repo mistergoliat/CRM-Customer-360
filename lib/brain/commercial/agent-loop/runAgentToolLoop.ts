@@ -80,9 +80,9 @@ import type { EnsureCommercialActionOpportunityInput, EnsureCommercialActionOppo
  *
  * SALES-AGENT-R1-T3 added `create_quote` (creates a real draft quote via the
  * external Quote Service from the durable commercial_line_items selection -
- * takes no arguments, everything is backend state; never includes shipping,
- * a pre-existing contract gap - see createQuoteCapability.ts and
- * docs/audits/SALES-AGENT-R1-T3-create-quote-wiring-audit.md).
+ * takes no arguments, everything is backend state. Shipping assembly remains
+ * disabled until its tax metadata contract is closed (see
+ * createQuoteCapability.ts).
  */
 export const AGENT_LOOP_TOOL_POOL = [
   "search_products",
@@ -95,7 +95,10 @@ export const AGENT_LOOP_TOOL_POOL = [
   "select_products",
   "calculate_shipping",
   "select_shipping_option",
-  "create_quote"
+  "create_quote",
+  "get_quote",
+  "issue_quote",
+  "send_quote_email"
 ] as const;
 export type AgentLoopToolName = (typeof AGENT_LOOP_TOOL_POOL)[number];
 

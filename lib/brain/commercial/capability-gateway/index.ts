@@ -28,6 +28,9 @@ export {
 } from "./toolAliases";
 export { deriveIdentityCapabilityBusinessOutcome } from "./identityCapabilityOutcome";
 export type { IdentityCapabilityName } from "./identityCapabilityOutcome";
+export { getQuoteCapability, GET_QUOTE_INPUT_SCHEMA } from "./getQuoteCapability";
+export { issueQuoteCapability, ISSUE_QUOTE_INPUT_SCHEMA } from "./issueQuoteCapability";
+export { sendQuoteEmailCapability, SEND_QUOTE_EMAIL_INPUT_SCHEMA } from "./sendQuoteEmailCapability";
 export {
   recommendCatalogProductsCapability,
   getSharedCatalogRecommendationCapability,

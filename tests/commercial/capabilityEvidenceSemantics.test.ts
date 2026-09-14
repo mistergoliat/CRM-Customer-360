@@ -43,6 +43,14 @@ test("create_quote declares evidenceProduced: QUOTE_CREATED, operationSemantics:
   assert.equal(definition?.operationSemantics, "CREATE_SNAPSHOT");
 });
 
+test("quote lifecycle capabilities declare their evidence and expose no email-sent claim", () => {
+  assert.deepEqual(resolveCapabilityGatewayDefinition("issue_quote")?.evidenceProduced, ["QUOTE_ISSUED", "QUOTE_DOCUMENT_AVAILABLE"]);
+  assert.deepEqual(resolveCapabilityGatewayDefinition("send_quote_email")?.evidenceProduced, ["QUOTE_EMAIL_DELIVERY_REQUESTED"]);
+  assert.equal(resolveCapabilitiesProducingEvidence("QUOTE_ISSUED").includes("issue_quote"), true);
+  assert.equal(resolveCapabilitiesProducingEvidence("QUOTE_EMAIL_DELIVERY_REQUESTED").includes("send_quote_email"), true);
+  assert.equal((resolveCapabilityGatewayDefinition("send_quote_email")?.evidenceProduced ?? []).includes("EMAIL_SENT" as never), false);
+});
+
 test("evidence/operation-semantics fields stay fully optional - a capability with no evidence relation declares none", () => {
   // SALES-AGENT-R3-CAPABILITY-SEMANTICS-COMMERCIAL-POLICY-V1 narrowed this
   // test. useWhen/doNotUseWhen are no longer part of it: every

@@ -182,10 +182,10 @@ export async function assembleQuoteInput(input: AssembleQuoteInputInput, deps: A
   // of this gap (a real durable selected_shipping_option now exists,
   // evidence-gated and staleness-checked) but a second, independent gap
   // remains real and unresolved: Carrier MS provides no tax metadata for any
-  // shipping option, and Quote Service has no shipping line-item
-  // representation at all yet - so even a valid, fresh selection can never
-  // become part of a QuoteServiceCreateRequest without fabricating data,
-  // which never happens here. See docs/integrations/quote-input-assembly.md
+  // shipping option. Quote Service supports a shipping line-item, but even a
+  // valid, fresh selection cannot become part of a
+  // QuoteServiceCreateRequest without fabricating those fields, which never
+  // happens here. See docs/integrations/quote-input-assembly.md
   // "Shipping tax gap" for the full evidence trail.
   if (input.requireShipping) {
     const selectedOption = await getSelectedShippingOption(input.opportunityId);
@@ -208,7 +208,7 @@ export async function assembleQuoteInput(input: AssembleQuoteInputInput, deps: A
 
     return assemblyError(
       "shipping_tax_metadata_missing",
-      "A shipping option is selected and current, but Carrier MS reports no tax metadata for it and Quote Service has no shipping line-item representation yet - a Quote with shipping cannot be assembled without fabricating data.",
+      "A shipping option is selected and current, but Carrier MS reports no tax metadata needed to form the Quote Service shipping line - a Quote with shipping cannot be assembled without fabricating data.",
       { opportunityId: input.opportunityId, carrierName: selectedOption.carrierName, serviceType: selectedOption.serviceType }
     );
   }
@@ -317,19 +317,20 @@ export async function assembleQuoteInput(input: AssembleQuoteInputInput, deps: A
       customerId: customerResult.customerId,
       selection: { factId: selection.factId, updatedAt: selection.updatedAt, itemCount: selection.items.length },
       catalog: { resolvedAt: resolvedAt.toISOString(), currency: EXPECTED_CURRENCY },
-      shipping: { requested: Boolean(input.requireShipping), resolved: false, reason: input.requireShipping ? "no_shipping_line_item_contract" : null }
+      shipping: { requested: Boolean(input.requireShipping), resolved: false, reason: input.requireShipping ? "shipping_tax_metadata_missing" : null }
     }
   };
 }
 
 /**
- * Exposed separately so a future caller (T3+) can check shipping readiness
+ * Exposed separately so a caller can check shipping readiness
  * without paying for a full assembly attempt. Always reports `ready: false`
  * today (SALES-AGENT-R1-T2.1): a missing/stale selection is reported as
  * such, and even a valid, fresh one is reported blocked - Carrier MS's real
- * contract has no tax metadata for any option, and Quote Service has no
- * shipping line-item representation yet, so no selection can ever complete
- * a Quote today regardless of how correct the selection itself is. Never
+ * contract has no tax metadata for any option, so no selection can yet
+ * complete a Quote today regardless of how correct the selection itself is.
+ * Quote Service supports a shipping line; this assembler remains fail-closed
+ * until the upstream tax metadata exists. Never
  * chooses a carrier (task section 16: "NO elegir... sin decisión explícita
  * de negocio/cliente").
  */

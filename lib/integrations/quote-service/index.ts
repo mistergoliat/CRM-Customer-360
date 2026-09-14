@@ -9,8 +9,9 @@ export * from "./httpQuoteServiceAdapter";
  * Productive QuoteServicePort factory. Returns null when
  * QUOTE_SERVICE_BASE_URL/QUOTE_SERVICE_AUTH_TOKEN are not configured, same
  * convention as createCatalogPort/createCarrierService - callers report
- * unavailable instead of crashing. SALES-AGENT-R1-T1: no caller exists yet
- * (no capability, no runtime wiring) - this factory is exported for T2+.
+ * unavailable instead of crashing. Capabilities call this factory at runtime
+ * and receive a governed temporary block when the external dependency is not
+ * configured.
  */
 export function createQuoteServicePort(): QuoteServicePort | null {
   const config = readQuoteServiceConfig();

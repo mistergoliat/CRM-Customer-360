@@ -14,9 +14,9 @@ import type {
 /**
  * Boundary the commercial domain will depend on (T2+) - the one real
  * implementation is lib/integrations/quote-service/httpQuoteServiceAdapter.ts.
- * SALES-AGENT-R1-T1 scope only: no capability, no assembler, no
- * commercial_line_items/shipping_destination reads happen through this port
- * or anywhere near it yet.
+ * Capabilities own the orchestration boundary while Quote Service remains
+ * authoritative for quote state, documents and delivery. CRM assembly and
+ * durable commercial facts stay outside this transport port.
  *
  * Deliberately minimal - matches exactly the operations T1 was scoped to
  * cover, plus getQuoteByNumber/listQuoteDeliveries (both real, already-stable

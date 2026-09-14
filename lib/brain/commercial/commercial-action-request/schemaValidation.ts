@@ -5,7 +5,7 @@
 // comment). Not a general-purpose validator, not a new dependency (no ajv/
 // json-schema in package.json - this repo hand-validates everywhere else
 // too, e.g. registry.ts's asQueryText/asProductId/asBatchItems) - reuses the
-// four capabilities' own exported *_INPUT_SCHEMA constants directly, never a
+// six capabilities' own exported *_INPUT_SCHEMA constants directly, never a
 // second, duplicated per-action validator.
 
 type JsonSchema = Record<string, unknown>;

@@ -2,6 +2,8 @@ import { CREATE_QUOTE_INPUT_SCHEMA } from "../capability-gateway/createQuoteCapa
 import { SELECT_PRODUCTS_INPUT_SCHEMA } from "../capability-gateway/selectProductsCapability";
 import { SELECT_SHIPPING_OPTION_INPUT_SCHEMA } from "../capability-gateway/selectShippingOptionCapability";
 import { SET_SHIPPING_DESTINATION_INPUT_SCHEMA } from "../capability-gateway/shippingDestinationCapability";
+import { ISSUE_QUOTE_INPUT_SCHEMA } from "../capability-gateway/issueQuoteCapability";
+import { SEND_QUOTE_EMAIL_INPUT_SCHEMA } from "../capability-gateway/sendQuoteEmailCapability";
 import type { CommercialActionRequestType } from "./types";
 
 // SALES-AGENT-R3-A03, Phase 3. The single, explicit mapping from a
@@ -21,7 +23,9 @@ const COMMERCIAL_ACTION_TO_CAPABILITY: Record<CommercialActionRequestType, Comme
   SELECT_PRODUCTS: { capability: "select_products", inputSchema: SELECT_PRODUCTS_INPUT_SCHEMA },
   SET_SHIPPING_DESTINATION: { capability: "set_shipping_destination", inputSchema: SET_SHIPPING_DESTINATION_INPUT_SCHEMA },
   SELECT_SHIPPING_OPTION: { capability: "select_shipping_option", inputSchema: SELECT_SHIPPING_OPTION_INPUT_SCHEMA },
-  CREATE_QUOTE: { capability: "create_quote", inputSchema: CREATE_QUOTE_INPUT_SCHEMA }
+  CREATE_QUOTE: { capability: "create_quote", inputSchema: CREATE_QUOTE_INPUT_SCHEMA },
+  ISSUE_QUOTE: { capability: "issue_quote", inputSchema: ISSUE_QUOTE_INPUT_SCHEMA },
+  SEND_QUOTE_EMAIL: { capability: "send_quote_email", inputSchema: SEND_QUOTE_EMAIL_INPUT_SCHEMA }
 };
 
 const CAPABILITY_TO_COMMERCIAL_ACTION = new Map<string, CommercialActionRequestType>(

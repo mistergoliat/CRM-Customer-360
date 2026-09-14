@@ -43,8 +43,8 @@ function finalizationSystemPrompt(): string {
 // A. Inventory
 // ---------------------------------------------------------------------------
 
-test("[A] every one of the 11 AGENT_LOOP_TOOL_POOL capabilities resolves a Capability Gateway definition", () => {
-  assert.equal(AGENT_LOOP_TOOL_POOL.length, 11);
+test("[A] every AGENT_LOOP_TOOL_POOL capability resolves a Capability Gateway definition", () => {
+  assert.equal(AGENT_LOOP_TOOL_POOL.length, 14);
   for (const capability of AGENT_LOOP_TOOL_POOL) {
     assert.equal(definitionOf(capability).capability, capability);
   }
@@ -173,7 +173,7 @@ test("[D] no capability-selection surface introduces an intent router, an intent
   }
 });
 
-test("[D] buildToolDescriptions has no selection branch - the same 11 tools are offered on every call", () => {
+test("[D] buildToolDescriptions has no selection branch - the same 14 tools are offered on every call", () => {
   const first = buildToolDescriptions().map((tool) => tool.name);
   const second = buildToolDescriptions().map((tool) => tool.name);
   assert.deepEqual(first, second);
@@ -294,10 +294,37 @@ const EXPECTED_CONTRACTS: Record<string, ContractRow> = {
     operationSemantics: "CREATE_SNAPSHOT",
     schemaRequired: [],
     schemaProperties: []
+  },
+  get_quote: {
+    sideEffect: "read_only",
+    riskClass: "low",
+    evidenceProduced: null,
+    evidenceRequired: null,
+    operationSemantics: null,
+    schemaRequired: [],
+    schemaProperties: []
+  },
+  issue_quote: {
+    sideEffect: "mutating",
+    riskClass: "medium",
+    evidenceProduced: ["QUOTE_ISSUED", "QUOTE_DOCUMENT_AVAILABLE"],
+    evidenceRequired: null,
+    operationSemantics: null,
+    schemaRequired: [],
+    schemaProperties: []
+  },
+  send_quote_email: {
+    sideEffect: "mutating",
+    riskClass: "medium",
+    evidenceProduced: ["QUOTE_EMAIL_DELIVERY_REQUESTED"],
+    evidenceRequired: null,
+    operationSemantics: null,
+    schemaRequired: [],
+    schemaProperties: ["recipient"]
   }
 };
 
-test("[E] governance, evidence semantics, operationSemantics and inputSchema are unchanged for all 11 pool capabilities", () => {
+test("[E] governance, evidence semantics, operationSemantics and inputSchema are explicit for all pool capabilities", () => {
   for (const capability of AGENT_LOOP_TOOL_POOL) {
     const definition = definitionOf(capability);
     const schema = definition.inputSchema as { required?: string[]; properties?: Record<string, unknown> } | undefined;

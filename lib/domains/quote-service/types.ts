@@ -17,7 +17,7 @@ export type QuoteServiceExpireActorType = (typeof QUOTE_SERVICE_EXPIRE_ACTOR_TYP
 export const QUOTE_SERVICE_SOURCE_SYSTEMS = ["crm_customer_360", "manual", "api", "scheduler"] as const;
 export type QuoteServiceSourceSystem = (typeof QUOTE_SERVICE_SOURCE_SYSTEMS)[number];
 
-export const QUOTE_SERVICE_LINE_TYPES = ["product", "service"] as const;
+export const QUOTE_SERVICE_LINE_TYPES = ["product", "service", "shipping"] as const;
 export type QuoteServiceLineType = (typeof QUOTE_SERVICE_LINE_TYPES)[number];
 
 export const QUOTE_SERVICE_STATUSES = ["draft", "issued", "accepted", "paid", "cancelled", "expired"] as const;
