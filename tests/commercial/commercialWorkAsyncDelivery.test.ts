@@ -27,13 +27,15 @@ Object.assign(process.env, {
 import { getPool, queryRows } from "@/lib/db";
 import {
   buildCommercialWorkProjection,
+  evaluateAndDispatchAsyncCommercialWorkDelivery,
   getCommercialWorkByPublicId,
   persistCommercialWorkProjection,
   runCommercialWorkTick,
   updateCommercialWorkAggregate,
   type CommercialObjectiveSeed,
   type CommercialWork,
-  type CommercialWorkProjectionInput
+  type CommercialWorkProjectionInput,
+  type CommercialWorkTickOptions
 } from "@/lib/brain/commercial/work";
 import type { CapabilityGatewayResult } from "@/lib/brain/commercial/capability-gateway";
 import { setCommercialLineItemsForOpportunity, getActiveCommercialLineItemsForOpportunity } from "@/lib/domains/commercial-line-items";
@@ -61,6 +63,46 @@ after(async () => {
     // ignore pool teardown failures in tests
   }
 });
+
+/**
+ * runCommercialWorkTick defaults every rollout gate it is not explicitly
+ * given to the real, env-backed production reader - in particular
+ * isWaIdEligibleForCommercialWork defaults to the real shouldRouteToCommercialWork,
+ * which requires BOTH BRAIN_COMMERCIAL_WORK_RUNTIME_ENABLED=true AND this
+ * suite's random wa_id to be a member of BRAIN_COMMERCIAL_WORK_RUNTIME_WA_IDS
+ * (empty by default) - the unrelated R2 pilot allowlist, never set anywhere
+ * in this file. Without this fixture every candidate here was being
+ * skipped_r2_ineligible before ever reaching a claim, which is why the
+ * suite's failures were consistent with a rollout-gate block rather than a
+ * defect in the async-delivery seam itself. Same shape
+ * commercialWorkRetryWorker.test.ts's own `isWaIdEligibleForCommercialWork: () => true`
+ * already uses for the identical reason - this suite exercises this task's
+ * own logic, never the unrelated R2 pilot rollout policy.
+ */
+const TEST_GATES: Pick<CommercialWorkTickOptions, "workerEnabled" | "autonomousResponsesEnabled" | "whatsAppAccessGate" | "isWaIdEligibleForCommercialWork" | "activationCutoff"> = {
+  workerEnabled: true,
+  autonomousResponsesEnabled: true,
+  whatsAppAccessGate: { testModeEnabled: false, testWaIds: [] },
+  isWaIdEligibleForCommercialWork: () => true,
+  activationCutoff: null
+};
+
+const ROLLOUT_GATE_SKIP_REASONS = new Set(["skipped_autonomy_disabled", "skipped_access_gate", "skipped_r2_ineligible", "skipped_before_activation_cutoff"]);
+
+/** Proves a due step actually reached the claim/execute path, never one of the four named rollout gates. */
+function assertNotGateSkipped(tick: { skipped: Array<{ workPublicId: string; stepId: string; reason: string }> }, workPublicId: string) {
+  const blocked = tick.skipped.filter((item) => item.workPublicId === workPublicId && ROLLOUT_GATE_SKIP_REASONS.has(item.reason));
+  assert.deepEqual(blocked, [], `expected no production rollout-gate skip for ${workPublicId}, got: ${JSON.stringify(blocked)}`);
+}
+
+const SWEEP_GATE_SKIP_REASONS = new Set(["skipped_access_gate", "skipped_r2_ineligible", "skipped_before_activation_cutoff"]);
+
+/** Proves the async-delivery sweep actually reached evaluateAndDispatchAsyncCommercialWorkDelivery for this work, never one of its three rollout-gate skips. */
+function assertSweepEvaluated(tick: { asyncDelivery: { evaluated: number; skipped: Array<{ workPublicId: string; reason: string }> } }, workPublicId: string) {
+  assert.equal(tick.asyncDelivery.evaluated, 1, "expected the async-delivery sweep to actually evaluate this work, not skip it at a rollout gate");
+  const blocked = tick.asyncDelivery.skipped.filter((item) => item.workPublicId === workPublicId && SWEEP_GATE_SKIP_REASONS.has(item.reason));
+  assert.deepEqual(blocked, [], `expected no rollout-gate skip inside the sweep for ${workPublicId}, got: ${JSON.stringify(blocked)}`);
+}
 
 const NOW = "2026-09-14T12:00:00.000Z";
 const DUE = "2026-09-14T12:02:00.000Z";
@@ -206,6 +248,7 @@ test("CWAD-A/H deferred create_quote: no delivery while retryable, one delivery 
 
   const blockedGateway = makeQuoteGateway(opportunityId, { create_quote: "temporarily_blocked" });
   const tick1 = await runCommercialWorkTick({
+    ...TEST_GATES,
     batchSize: 1,
     now: NOW,
     workerId: "cwad-a-1",
@@ -214,6 +257,8 @@ test("CWAD-A/H deferred create_quote: no delivery while retryable, one delivery 
     loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }),
     asyncDeliveryEnabled: true
   });
+  assert.equal(tick1.claimed, 1);
+  assertNotGateSkipped(tick1, created.work.publicId);
   const waiting = await getCommercialWorkByPublicId(created.work.publicId);
   assert.equal(step(waiting!, "CREATE_QUOTE").status, "RETRY_SCHEDULED");
   assert.equal(tick1.asyncDelivery.dispatched, 0);
@@ -222,6 +267,7 @@ test("CWAD-A/H deferred create_quote: no delivery while retryable, one delivery 
 
   const okGateway = makeQuoteGateway(opportunityId);
   const tick2 = await runCommercialWorkTick({
+    ...TEST_GATES,
     batchSize: 1,
     now: DUE,
     workerId: "cwad-a-2",
@@ -230,6 +276,8 @@ test("CWAD-A/H deferred create_quote: no delivery while retryable, one delivery 
     loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }),
     asyncDeliveryEnabled: true
   });
+  assert.equal(tick2.claimed, 1);
+  assertNotGateSkipped(tick2, created.work.publicId);
   const completed = await getCommercialWorkByPublicId(created.work.publicId);
   assert.equal(completed?.status, "COMPLETED");
   assert.equal(tick2.completed, 1);
@@ -247,7 +295,8 @@ test("CWAD-B/L worker runs again over an already-delivered work: no duplicate ac
   const opportunityId = await seedOpportunity();
   const created = await seedQuoteWork(opportunityId);
   const gateway = makeQuoteGateway(opportunityId);
-  await runCommercialWorkTick({
+  const tick1 = await runCommercialWorkTick({
+    ...TEST_GATES,
     batchSize: 1,
     now: NOW,
     workerId: "cwad-b-1",
@@ -256,12 +305,15 @@ test("CWAD-B/L worker runs again over an already-delivered work: no duplicate ac
     loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }),
     asyncDeliveryEnabled: true
   });
+  assert.equal(tick1.claimed, 1);
+  assertNotGateSkipped(tick1, created.work.publicId);
   const afterFirstDelivery = await countSideEffects();
 
   // No due step remains (work is terminal) - the sweep alone re-evaluates it,
   // simulating the worker waking up again later (or a second process racing
   // the same tick) and re-checking a work it already delivered.
   const tick2 = await runCommercialWorkTick({
+    ...TEST_GATES,
     batchSize: 1,
     now: LATER,
     workerId: "cwad-b-2",
@@ -271,7 +323,7 @@ test("CWAD-B/L worker runs again over an already-delivered work: no duplicate ac
     asyncDeliveryEnabled: true
   });
   assert.equal(tick2.claimed, 0);
-  assert.equal(tick2.asyncDelivery.evaluated, 1);
+  assertSweepEvaluated(tick2, created.work.publicId);
 
   const afterSecondTick = await countSideEffects();
   assert.deepEqual(afterSecondTick, afterFirstDelivery);
@@ -308,6 +360,7 @@ test("CWAD-C recovery: a work already COMPLETED durably (simulated crash before 
   await updateCommercialWorkAggregate({ publicId: created.work.publicId, expectedVersion: created.work.version, nextWork: crashedWork });
 
   const tick = await runCommercialWorkTick({
+    ...TEST_GATES,
     batchSize: 1,
     now: NOW,
     workerId: "cwad-c",
@@ -317,6 +370,7 @@ test("CWAD-C recovery: a work already COMPLETED durably (simulated crash before 
     asyncDeliveryEnabled: true
   });
   assert.equal(tick.claimed, 0);
+  assertSweepEvaluated(tick, created.work.publicId);
   assert.equal(tick.asyncDelivery.dispatched, 1);
 
   const after = await countSideEffects();
@@ -341,14 +395,19 @@ test("CWAD-E handoff race: human_owner_active suppresses autonomous delivery, du
   await setConversationControl({ humanOwnerActive: true });
   try {
     const tick = await runCommercialWorkTick({
+      ...TEST_GATES,
       batchSize: 1,
       now: NOW,
       workerId: "cwad-e",
       workPublicIds: [created.work.publicId],
       executeCapability: async () => gatewayResult("create_quote", "failed", null, "should_not_call", false),
-      loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }),
+      // Deliberately NOT loadConversationControl-overridden to false: this
+      // test exists to prove evaluateAndDispatchAsyncCommercialWorkDelivery's
+      // OWN fresh conversation read (loadFreshDispatchContext) - not a value
+      // any caller happened to pass in - is what the execution gate sees.
       asyncDeliveryEnabled: true
     });
+    assertSweepEvaluated(tick, created.work.publicId);
     assert.equal(tick.asyncDelivery.dispatched, 0);
 
     const after = await countSideEffects();
@@ -378,14 +437,19 @@ test("CWAD-F ai_enabled=false suppresses autonomous delivery", async () => {
   await setConversationControl({ aiEnabled: false });
   try {
     const tick = await runCommercialWorkTick({
+      ...TEST_GATES,
       batchSize: 1,
       now: NOW,
       workerId: "cwad-f",
       workPublicIds: [created.work.publicId],
       executeCapability: async () => gatewayResult("create_quote", "failed", null, "should_not_call", false),
-      loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }),
+      // See CWAD-E: no due step exists to claim here, so loadConversationControl
+      // (only read by executeCommercialWork's own claim loop) is irrelevant -
+      // the assertion below depends entirely on evaluateAndDispatchAsyncCommercialWorkDelivery's
+      // own fresh conversation.ai_enabled read.
       asyncDeliveryEnabled: true
     });
+    assertSweepEvaluated(tick, created.work.publicId);
     assert.equal(tick.asyncDelivery.dispatched, 0);
     const after = await countSideEffects();
     assert.equal(after.outbox, before.outbox);
@@ -426,15 +490,38 @@ test("CWAD-G superseded work: current durable truth (SUPERSEDED) suppresses the 
   };
   await updateCommercialWorkAggregate({ publicId: completed.publicId, expectedVersion: completed.version, nextWork: superseded });
 
+  // Reaches evaluateAndDispatchAsyncCommercialWorkDelivery directly (not
+  // through the sweep's own SQL scan, which excludes SUPERSEDED by
+  // construction and would never even surface this row as a candidate) -
+  // this is the layer that must actually prove the suppression, per this
+  // task's own requirement that the test "reach the async-delivery
+  // evaluation" rather than pass because nothing was scanned at all.
+  const evaluated = await evaluateAndDispatchAsyncCommercialWorkDelivery({
+    workPublicId: created.work.publicId,
+    correlationId: unique("cwad-g-direct"),
+    currentTime: NOW,
+    triggerSource: "recovery_sweep"
+  });
+  assert.equal(evaluated.status, "SUPERSEDED");
+  assert.equal(evaluated.dispatchWorthy, false);
+  assert.equal(evaluated.dispatched, false);
+  assert.match(evaluated.reason, /^not_dispatch_worthy:SUPERSEDED$/);
+
+  // Secondary, defense-in-depth proof: the sweep's own candidate scan never
+  // even selects a SUPERSEDED row in the first place (belt-and-suspenders
+  // with the direct-call assertion above) - TEST_GATES applied the same as
+  // every other invocation so a rollout-gate skip can never be confused with
+  // "correctly found nothing to scan".
   const tick = await runCommercialWorkTick({
+    ...TEST_GATES,
     batchSize: 5,
     now: NOW,
     workerId: "cwad-g",
     workPublicIds: [created.work.publicId],
     executeCapability: async () => gatewayResult("create_quote", "failed", null, "should_not_call", false),
-    loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }),
     asyncDeliveryEnabled: true
   });
+  assert.equal(tick.asyncDelivery.candidates, 0, "SUPERSEDED is never one of the sweep's dispatch-worthy statuses");
   assert.equal(tick.asyncDelivery.dispatched, 0);
   const after = await countSideEffects();
   assert.equal(after.outbox, before.outbox, "a stale completed snapshot must never be announced once current truth moved on");
@@ -453,6 +540,7 @@ test("CWAD-I permanent failure: async delivery never claims a false success", as
   await updateCommercialWorkAggregate({ publicId: created.work.publicId, expectedVersion: created.work.version, nextWork: exhaustedWork });
 
   const tick = await runCommercialWorkTick({
+    ...TEST_GATES,
     batchSize: 1,
     now: NOW,
     workerId: "cwad-i",
@@ -460,9 +548,11 @@ test("CWAD-I permanent failure: async delivery never claims a false success", as
     loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true }),
     asyncDeliveryEnabled: true
   });
+  assertNotGateSkipped(tick, created.work.publicId);
   const failedWork = await getCommercialWorkByPublicId(created.work.publicId);
   assert.equal(failedWork?.status, "FAILED");
   assert.equal(tick.failed, 1);
+  assertSweepEvaluated(tick, created.work.publicId);
   assert.equal(tick.asyncDelivery.dispatched, 1);
 
   const after = await countSideEffects();
@@ -478,13 +568,17 @@ test("CWAD default-off: asyncDeliveryEnabled unset keeps pre-existing worker beh
 
   const gateway = makeQuoteGateway(opportunityId);
   const tick = await runCommercialWorkTick({
+    ...TEST_GATES,
     batchSize: 1,
     now: NOW,
     workerId: "cwad-default-off",
     workPublicIds: [created.work.publicId],
     executeCapability: gateway.executeCapability,
     loadConversationControl: async () => ({ humanOwnerActive: false, aiEnabled: true })
+    // asyncDeliveryEnabled deliberately omitted - proves the seam stays
+    // opt-in/off by default even with every rollout gate otherwise open.
   });
+  assertNotGateSkipped(tick, created.work.publicId);
   assert.equal(tick.completed, 1);
   assert.equal(tick.asyncDelivery.candidates, 0);
 
