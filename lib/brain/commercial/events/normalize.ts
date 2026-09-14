@@ -7,6 +7,7 @@ import type {
   CommercialEventSource,
   CommercialEventType,
   CommercialEventV1,
+  CommercialWorkAsyncDeliveryEvaluatedPayload,
   CommercialWorkInboundCycleCompletedPayload,
   CustomerIdentityCapabilityOutcomeRecordedPayload,
   CustomerIdentityResolutionMatchedBy,
@@ -39,6 +40,7 @@ import {
   buildCommercialEventCorrelationId,
   buildCommercialEventId,
   buildCommercialStatusEventDedupeKey,
+  buildCommercialWorkAsyncDeliveryEvaluatedDedupeKey,
   buildCommercialWorkInboundCycleCompletedDedupeKey,
   buildCustomerIdentityCapabilityOutcomeDedupeKey,
   buildCustomerIdentityResolutionDedupeKey,
@@ -989,5 +991,63 @@ export function normalizePersistentSessionCognitionAppliedEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "persistent_session_cognition_applied" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. One canonical event per
+ * (workPublicId, workVersion) evaluated for customer-visible async delivery -
+ * dedupe key deliberately excludes any request-scoped id (there is no
+ * inboundMessageId for a worker-triggered evaluation), so a repeated
+ * recovery-sweep re-check of an already-delivered version collapses into the
+ * same row rather than one per tick.
+ */
+export function normalizeCommercialWorkAsyncDeliveryEvaluatedEvent(input: {
+  triggerSource: CommercialWorkAsyncDeliveryEvaluatedPayload["triggerSource"];
+  workPublicId: string;
+  workVersion: number;
+  workStatus: string | null;
+  dispatchWorthy: boolean;
+  dispatched: boolean;
+  outboxWritten: boolean;
+  disposition: CommercialWorkAsyncDeliveryEvaluatedPayload["disposition"];
+  suppressionReason: string | null;
+  actionPersistenceStatus: string | null;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const workPublicId = input.workPublicId.trim();
+  if (!workPublicId) throw new Error("commercial_event_missing_dedupe_key");
+  const payload: CommercialWorkAsyncDeliveryEvaluatedPayload = {
+    triggerSource: input.triggerSource,
+    workPublicId,
+    workVersion: input.workVersion,
+    workStatus: input.workStatus,
+    dispatchWorthy: input.dispatchWorthy,
+    dispatched: input.dispatched,
+    outboxWritten: input.outboxWritten,
+    disposition: input.disposition,
+    suppressionReason: input.suppressionReason,
+    actionPersistenceStatus: input.actionPersistenceStatus
+  };
+  return buildBaseEvent({
+    eventType: "commercial_work_async_delivery_evaluated",
+    source: "internal_command",
+    sourceEventId: workPublicId,
+    dedupeKey: buildCommercialWorkAsyncDeliveryEvaluatedDedupeKey(workPublicId, input.workVersion),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "commercial_work_async_delivery_evaluated" }
   });
 }

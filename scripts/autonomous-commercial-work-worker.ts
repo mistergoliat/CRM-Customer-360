@@ -32,7 +32,8 @@ import {
   loadCommercialWorkWorkerEnabled,
   loadAutonomousResponsesEnabled,
   loadWhatsAppAccessGateConfig,
-  loadCommercialWorkWorkerActivationCutoff
+  loadCommercialWorkWorkerActivationCutoff,
+  loadCommercialWorkAsyncDeliveryEnabled
 } from "../lib/brain/runtime/autonomousRuntimeConfig";
 
 const DEFAULT_BATCH_SIZE = 10;
@@ -101,6 +102,12 @@ async function runTick(options: { batchSize: number; lockSeconds: number; dryRun
       console.log(`[worker:commercial-work] skipped ${skip.workPublicId}/${skip.stepId}: ${skip.reason}`);
     }
   }
+  if (result.asyncDelivery.candidates > 0) {
+    console.log(
+      `[worker:commercial-work] async delivery candidates=${result.asyncDelivery.candidates} evaluated=${result.asyncDelivery.evaluated} ` +
+        `dispatched=${result.asyncDelivery.dispatched} skipped=${result.asyncDelivery.skipped.length}`
+    );
+  }
   return result.claimed;
 }
 
@@ -111,6 +118,7 @@ async function main() {
   const autonomyEnabled = loadAutonomousResponsesEnabled();
   const accessGate = loadWhatsAppAccessGateConfig();
   const activationCutoff = loadCommercialWorkWorkerActivationCutoff();
+  const asyncDeliveryEnabled = loadCommercialWorkAsyncDeliveryEnabled();
 
   const batchSize = readIntArg("batch-size", DEFAULT_BATCH_SIZE);
   const pollMs = readIntArg("poll-ms", DEFAULT_POLL_MS);
@@ -122,7 +130,7 @@ async function main() {
     `[worker:commercial-work] starting workerId=${workerId} batchSize=${batchSize} pollMs=${pollMs} dryRun=${dryRun} ` +
       `BRAIN_COMMERCIAL_WORK_WORKER_ENABLED=${workerEnabled} BRAIN_AUTONOMOUS_RESPONSES_ENABLED=${autonomyEnabled} ` +
       `BRAIN_WHATSAPP_TEST_MODE_ENABLED=${accessGate.testModeEnabled} testWaIdCount=${accessGate.testWaIds.length} ` +
-      `activationCutoff=${activationCutoff ?? "(none)"}`
+      `activationCutoff=${activationCutoff ?? "(none)"} BRAIN_COMMERCIAL_WORK_ASYNC_DELIVERY_ENABLED=${asyncDeliveryEnabled}`
   );
   if (!workerEnabled) {
     console.log("[worker:commercial-work] BRAIN_COMMERCIAL_WORK_WORKER_ENABLED is not true - every tick will be a complete no-op until it is set.");

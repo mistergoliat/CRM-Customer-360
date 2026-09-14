@@ -10,11 +10,17 @@ import { getCommercialWorkRetryPolicy } from "../retryPolicy";
 import type { CommercialWork, CommercialWorkBlocker, CommercialWorkStep } from "../types";
 import { shouldRouteToCommercialWork } from "../../config/commercialCycleConfig";
 import {
+  sweepUndeliveredCommercialWorkDeliveries,
+  type SweepUndeliveredCommercialWorkDeliveriesResult
+} from "./dispatchAsyncCommercialWorkDelivery";
+import {
   loadAutonomousResponsesEnabled,
   loadWhatsAppAccessGateConfig,
   isWaIdAllowedByAccessGate,
   loadCommercialWorkWorkerEnabled,
   loadCommercialWorkWorkerActivationCutoff,
+  loadCommercialWorkAsyncDeliveryEnabled,
+  loadCommercialWorkAsyncDeliveryLookbackMinutes,
   isBeforeActivationCutoff,
   type WhatsAppAccessGateConfig
 } from "@/lib/brain/runtime/autonomousRuntimeConfig";
@@ -72,6 +78,12 @@ export type CommercialWorkTickOptions = {
   workerEnabled?: boolean;
   /** A11, Part 59/60/61. Test-only injection point; production callers default to the real env-backed reader (null = no cutoff configured). */
   activationCutoff?: string | null;
+  /** ASYNC RESULT DELIVERY V1. Test-only injection point; production callers default to the real env-backed reader. Gates the recovery sweep independently of workerEnabled, so step execution can stay on while this newer delivery seam is reviewed separately. */
+  asyncDeliveryEnabled?: boolean;
+  /** ASYNC RESULT DELIVERY V1. Test-only injection point; production callers default to the real env-backed reader. */
+  asyncDeliveryLookbackMinutes?: number;
+  /** ASYNC RESULT DELIVERY V1. Defaults to batchSize. */
+  asyncDeliveryBatchSize?: number;
 };
 
 export type CommercialWorkTickResult = {
@@ -85,6 +97,8 @@ export type CommercialWorkTickResult = {
   staleRecovered: number;
   skipped: Array<{ workPublicId: string; stepId: string; reason: string }>;
   versionConflicts: Array<{ workPublicId: string; stepId: string }>;
+  /** ASYNC RESULT DELIVERY V1. Recovery-sweep summary - zeroed out (not run) whenever asyncDeliveryEnabled resolves false. */
+  asyncDelivery: SweepUndeliveredCommercialWorkDeliveriesResult;
 };
 
 function toIso(value: string | Date | undefined): string {
@@ -239,7 +253,8 @@ export async function runCommercialWorkTick(options: CommercialWorkTickOptions =
     failed: 0,
     staleRecovered: 0,
     skipped: [],
-    versionConflicts: []
+    versionConflicts: [],
+    asyncDelivery: { candidates: 0, evaluated: 0, dispatched: 0, skipped: [] }
   };
 
   // SALES-AGENT-R2-A11, Part 9. A disabled worker is a complete no-op - it
@@ -257,6 +272,7 @@ export async function runCommercialWorkTick(options: CommercialWorkTickOptions =
   const autonomyEnabled = options.autonomousResponsesEnabled ?? loadAutonomousResponsesEnabled();
   const accessGate = options.whatsAppAccessGate ?? loadWhatsAppAccessGateConfig();
   const activationCutoff = options.activationCutoff !== undefined ? options.activationCutoff : loadCommercialWorkWorkerActivationCutoff();
+  const eligibleForCommercialWork = options.isWaIdEligibleForCommercialWork ?? shouldRouteToCommercialWork;
 
   for (const candidate of candidates) {
     // A11 Part 59/60/61: a historical step created before the configured
@@ -283,7 +299,6 @@ export async function runCommercialWorkTick(options: CommercialWorkTickOptions =
     // A11 Part 14: a stale historical R2 work item must not bypass current
     // rollout policy - re-checked against the live R2 allowlist every tick,
     // never assumed from when the work was created.
-    const eligibleForCommercialWork = options.isWaIdEligibleForCommercialWork ?? shouldRouteToCommercialWork;
     if (!eligibleForCommercialWork(candidate.wa_id)) {
       result.skipped.push({ workPublicId: candidate.work_public_id, stepId: candidate.step_id, reason: "skipped_r2_ineligible" });
       continue;
@@ -338,6 +353,28 @@ export async function runCommercialWorkTick(options: CommercialWorkTickOptions =
     if (candidate.step_status === "RUNNING" && execution.records.some((record) => record.status === "completed" && !record.gatewayStatus)) {
       result.staleRecovered += 1;
     }
+  }
+
+  // ASYNC RESULT DELIVERY V1. Independent gate from workerEnabled/autonomyEnabled
+  // above - a disabled worker already returned before this point, and a
+  // globally-disabled autonomy killswitch must suppress this sweep exactly
+  // like it suppresses due-step claiming (no silent AI reactivation). Runs
+  // every tick, after the due-step loop, so a work this same tick just
+  // settled to a terminal status is picked up immediately, and a work that
+  // reached that status in an earlier tick (e.g. a crash between capability
+  // success and dispatch) is caught by the bounded lookback window.
+  const asyncDeliveryEnabled = options.asyncDeliveryEnabled ?? loadCommercialWorkAsyncDeliveryEnabled();
+  if (autonomyEnabled && asyncDeliveryEnabled) {
+    result.asyncDelivery = await sweepUndeliveredCommercialWorkDeliveries({
+      now,
+      lookbackMinutes: options.asyncDeliveryLookbackMinutes ?? loadCommercialWorkAsyncDeliveryLookbackMinutes(),
+      batchSize: options.asyncDeliveryBatchSize ?? batchSize,
+      workPublicIds: options.workPublicIds,
+      activationCutoff,
+      whatsAppAccessGate: accessGate,
+      isWaIdEligibleForCommercialWork: eligibleForCommercialWork,
+      correlationPrefix: `commercial-work-async-delivery:${workerId}`
+    });
   }
 
   return result;

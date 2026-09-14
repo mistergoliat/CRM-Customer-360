@@ -4,6 +4,7 @@ import {
   normalizeAgentToolLoopCompletedCommercialEvent,
   normalizeAutonomousTurnContinuityFailedCommercialEvent,
   normalizeAutonomousTurnDispositionCommercialEvent,
+  normalizeCommercialWorkAsyncDeliveryEvaluatedEvent,
   normalizeCommercialWorkInboundCycleCompletedEvent,
   normalizeCustomerIdentityCapabilityOutcomeCommercialEvent,
   normalizeCustomerIdentityResolutionCommercialEvent,
@@ -152,4 +153,13 @@ export async function recordPersistentSessionCognitionAppliedEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizePersistentSessionCognitionAppliedEvent(input), connection);
+}
+
+// SALES-AGENT-R3 ASYNC RESULT DELIVERY V1.
+
+export async function recordCommercialWorkAsyncDeliveryEvaluatedEvent(
+  input: Parameters<typeof normalizeCommercialWorkAsyncDeliveryEvaluatedEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCommercialWorkAsyncDeliveryEvaluatedEvent(input), connection);
 }

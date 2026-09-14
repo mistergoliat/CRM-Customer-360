@@ -61,7 +61,15 @@ export type CommercialEventType =
   // majority of ordinary turns - see resolvePersistentSessionCognitionContext.ts.
   // Descriptive only: whether the persistent path was actually used this
   // turn, or fell back to legacy, and why.
-  | "persistent_session_cognition_applied";
+  | "persistent_session_cognition_applied"
+  // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. One per (workPublicId, version)
+  // whose durable status was evaluated for customer-visible async delivery
+  // (worker step completion or the recovery sweep) - descriptive only, the
+  // durable state is the crm_agent_actions/brain_message_outbox rows (or
+  // their absence). Dedupe key is workPublicId:version, so a repeated
+  // idempotent re-evaluation of the same already-delivered version is never
+  // re-recorded.
+  | "commercial_work_async_delivery_evaluated";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -394,6 +402,23 @@ export type CommercialWorkInboundCycleCompletedPayload = {
   llmCallCount: number;
   executedStepCount: number | null;
   outboxWritten: boolean;
+};
+
+/**
+ * SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. Bounded structural summary only -
+ * no message body (that already lives on the crm_agent_actions row itself).
+ */
+export type CommercialWorkAsyncDeliveryEvaluatedPayload = {
+  triggerSource: "recovery_sweep";
+  workPublicId: string;
+  workVersion: number | null;
+  workStatus: string | null;
+  dispatchWorthy: boolean;
+  dispatched: boolean;
+  outboxWritten: boolean;
+  disposition: "FINAL" | "PARTIAL" | "BLOCKED" | "fallback" | null;
+  suppressionReason: string | null;
+  actionPersistenceStatus: string | null;
 };
 
 export type AgentToolLoopCompletedRecordedPayload = {

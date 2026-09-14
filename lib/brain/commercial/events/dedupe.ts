@@ -125,6 +125,15 @@ export function buildPersistentSessionCognitionAppliedDedupeKey(inboundMessageId
   return `persistent-session-cognition-applied:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. Keyed on the delivered work
+// version (an optimistic-concurrency identity only one caller can ever
+// legitimately reach - see commercialWorkExecutor.ts), never a random id -
+// a repeated idempotent re-evaluation of the same version collapses into the
+// same event instead of spamming one row per recovery-sweep tick.
+export function buildCommercialWorkAsyncDeliveryEvaluatedDedupeKey(workPublicId: string, workVersion: number) {
+  return `commercial-work-async-delivery-evaluated:${workPublicId.trim()}:${workVersion}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

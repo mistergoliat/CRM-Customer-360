@@ -270,6 +270,30 @@ export function loadCommercialWorkFollowUpActivationCutoff(env: NodeJS.ProcessEn
   return Number.isNaN(Date.parse(raw)) ? null : raw;
 }
 
+/**
+ * SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. Separate from
+ * BRAIN_COMMERCIAL_WORK_WORKER_ENABLED so the existing worker (step
+ * execution/retry) can stay on while this newer customer-visible-delivery
+ * seam is reviewed independently - same rollout discipline as every other
+ * flag in this file (default false, inert until explicitly opted in).
+ */
+export function loadCommercialWorkAsyncDeliveryEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return readStrictBooleanFlagWithDefault("BRAIN_COMMERCIAL_WORK_ASYNC_DELIVERY_ENABLED", env, false);
+}
+
+/**
+ * How far back (in minutes) the async-delivery recovery sweep looks for a
+ * CommercialWork that reached a dispatch-worthy status but has not yet been
+ * confirmed delivered (e.g. a worker process crash between capability
+ * success and dispatch). Bounded and defaulted rather than unbounded so a
+ * recently-restarted worker cannot re-scan the entire historical backlog.
+ */
+export function loadCommercialWorkAsyncDeliveryLookbackMinutes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.BRAIN_COMMERCIAL_WORK_ASYNC_DELIVERY_LOOKBACK_MINUTES?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 1440) : 30;
+}
+
 /** True when createdAt predates the configured cutoff (always false when no cutoff is configured). */
 export function isBeforeActivationCutoff(createdAt: string | null | undefined, cutoffIso: string | null): boolean {
   if (!cutoffIso || !createdAt) return false;
