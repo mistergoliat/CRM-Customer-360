@@ -62,6 +62,10 @@ export type CommercialEventType =
   // Descriptive only: whether the persistent path was actually used this
   // turn, or fell back to legacy, and why.
   | "persistent_session_cognition_applied"
+  // SALES-AGENT-R3-P2. One per eligible R3 inbound turn, descriptive shadow
+  // evidence only - the durable work/objective domains remain authoritative
+  // and the AgentTurnInput is never persisted.
+  | "agent_turn_input_shadow_built"
   // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. One per (workPublicId, version)
   // whose durable status was evaluated for customer-visible async delivery
   // (worker step completion or the recovery sweep) - descriptive only, the
@@ -612,6 +616,41 @@ export type PersistentSessionCognitionAppliedPayload = {
   active: boolean;
   fallbackReason: string | null;
   historyMessageCount: number;
+};
+
+export type AgentTurnInputShadowBuiltPayload = {
+  schemaVersion: "1";
+  inboundMessageId: string;
+  case: {
+    workId: string | null;
+    workVersion: number | null;
+    objectiveId: string | null;
+    objectiveType: string | null;
+    objectiveStatus: string | null;
+  };
+  state: {
+    cartPresent: boolean;
+    destinationStatus: string;
+    shippingStatus: string;
+    quoteStatus: string | null;
+    quoteGrounding: string | null;
+    identityLevel: string;
+  };
+  capabilityNames: string[];
+  buildStatus: "BUILT" | "NO_ACTIVE_WORK" | "PARTIAL" | "FAILED";
+  warnings: string[];
+  classification: "OBJECTIVE_MATCH" | "OBJECTIVE_MISMATCH" | "NO_DURABLE_OBJECTIVE" | "NO_ACTIVE_WORK" | "STATE_PARTIAL" | null;
+  missingRequirements: string[];
+  r3CommercialObjective: string | null;
+  terminalReason: string | null;
+  toolExecutionCount: number | null;
+  outboxWritten: boolean | null;
+  outboxId: number | null;
+  toolComparison: "OBJECTIVE_REQUIRES_PROGRESS_BUT_NO_TOOL_USED" | null;
+  addedDbReads: number;
+  addedHttpReads: number;
+  sessionAvailable: boolean;
+  sessionVersion: string | number | null;
 };
 
 export type CommercialEventPersistStatus = "created" | "duplicate";

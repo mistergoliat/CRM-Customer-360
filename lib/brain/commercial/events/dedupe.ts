@@ -125,6 +125,12 @@ export function buildPersistentSessionCognitionAppliedDedupeKey(inboundMessageId
   return `persistent-session-cognition-applied:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R3-P2. One descriptive shadow observation per inbound turn;
+// retries/replays collapse to the same commercial_event row.
+export function buildAgentTurnInputShadowBuiltDedupeKey(inboundMessageId: string) {
+  return `agent-turn-input-shadow-built:${inboundMessageId.trim()}`;
+}
+
 // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. Keyed on the delivered work
 // version (an optimistic-concurrency identity only one caller can ever
 // legitimately reach - see commercialWorkExecutor.ts), never a random id -

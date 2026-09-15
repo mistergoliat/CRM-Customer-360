@@ -337,6 +337,20 @@ export function buildPersistentSessionShadowFeatureFlags(overrides?: Partial<{ p
 }
 
 /**
+ * SALES-AGENT-R3-P2. Fail-closed shadow-only construction of the P0
+ * CommercialDomainReadModel + P1 AgentTurnInput v1 at the real R3 cognition
+ * boundary. It is intentionally independent from routing and allowlists:
+ * those decide whether R3 runs at all; this flag only decides whether an
+ * already-eligible R3 turn is observed. It never changes the provider input.
+ */
+export function buildAgentTurnInputShadowFeatureFlags(overrides?: Partial<{ agentTurnInputShadowEnabled: boolean }>) {
+  return {
+    agentTurnInputShadowEnabled: readEnvFlag("BRAIN_R3_AGENT_TURN_INPUT_SHADOW_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
+
+/**
  * SALES-AGENT-R3-V1.8-D5/D6. Fail-closed toggle for LIVE persistent-session
  * cognition - unlike buildPersistentSessionShadowFeatureFlags above (D4,
  * load/derive/compare/discard only), enabling this actually changes what the

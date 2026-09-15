@@ -20,6 +20,13 @@ import { recordPersistentSessionCognitionAppliedEvent } from "../events/service"
 import type { AgentToolLoopStepSummary } from "../events/types";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 import type { SalesAgentPromptConfiguration } from "../sales-agent-configuration";
+import {
+  buildAgentTurnInputShadow,
+  buildAgentTurnInputShadowConversationContext,
+  buildFailedAgentTurnInputShadowObservation,
+  type AgentTurnInputShadowObservation,
+  type AgentTurnInputShadowRuntimeOptions
+} from "../agent-turn-input/shadow";
 
 // SALES-AGENT-R3-V1.3. The first provider-neutral boundary that consumes an
 // AgentRuntimeEvent (R3-A05) and runs a real, dynamic model/tool loop to a
@@ -112,6 +119,8 @@ export type SalesAgentRuntimeInput = {
   openTurnExecutionEnabled?: boolean;
   /** SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Resolved by the caller from BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED - threaded to runAgentToolLoop unchanged. */
   harnessAlignedMessageModelEnabled?: boolean;
+  /** SALES-AGENT-R3-P2. Read-only AgentTurnInput v1 construction, resolved at the R3 cycle boundary. */
+  agentTurnInputShadow?: AgentTurnInputShadowRuntimeOptions;
 };
 
 export const SALES_AGENT_RUNTIME_STATUSES = ["responded", "blocked", "failed", "handoff"] as const;
@@ -157,6 +166,8 @@ export type SalesAgentRuntimeResult = {
   projectedMessageCount: number;
   projectedToolObservationCount: number;
   projectedAssimilatedUserMessageCount: number;
+  /** P2 shadow projection only; the full AgentTurnInput is intentionally not retained. */
+  agentTurnInputShadow?: AgentTurnInputShadowObservation | null;
 };
 
 /**
@@ -441,6 +452,78 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled
   };
 
+  // SALES-AGENT-R3-P2. This is the cognition-adjacent shadow seam: the
+  // existing loopInput is already complete, including the exact session
+  // projection used by the provider, and no provider call has happened yet.
+  // Only the small PII-safe observation survives the call; the full P1 input
+  // is intentionally not attached to the runtime result.
+  let agentTurnInputShadow: AgentTurnInputShadowObservation | null = null;
+  const shadowOptions = input.agentTurnInputShadow;
+  if (shadowOptions?.enabled && inboundMessageId) {
+    let domainReadModel: Awaited<ReturnType<AgentTurnInputShadowRuntimeOptions["buildDomainReadModel"]>> | null = null;
+    try {
+      domainReadModel = await shadowOptions.buildDomainReadModel();
+    } catch {
+      agentTurnInputShadow = buildFailedAgentTurnInputShadowObservation({
+        correlationId: event.correlationId,
+        conversationId: String(event.conversationId),
+        inboundMessageId,
+        trustedCustomerSession: input.trustedCustomerSession,
+        humanOwnerActive: input.governance?.humanOwnerActive === true,
+        aiBlocked: input.governance?.aiBlocked === true,
+        metrics: shadowOptions.metrics,
+        sessionAvailable: persistentSessionCognition.active,
+        warning: "domain_read_model_build_failed"
+      });
+    }
+
+    if (!agentTurnInputShadow && domainReadModel) {
+      try {
+        const preparation = await buildAgentTurnInputShadow({
+          domainReadModel,
+          opportunityId: domainReadModel.case.opportunityId,
+          currentTurn: {
+            inboundMessageId,
+            channel: "whatsapp",
+            text: event.messageText,
+            occurredAt: event.currentTime,
+            correlationId: event.correlationId
+          },
+          conversationContext: buildAgentTurnInputShadowConversationContext({
+            legacySummary: input.commercialContextSummary ?? {},
+            historicalMessages: persistentSessionCognition.active ? persistentSessionCognition.historicalMessages : null,
+            continuity: conversationContinuity
+          }),
+          trustedCustomerSession: input.trustedCustomerSession,
+          humanOwnerActive: input.governance?.humanOwnerActive === true,
+          aiBlocked: input.governance?.aiBlocked === true,
+          correlationId: event.correlationId,
+          conversationId: String(event.conversationId),
+          inboundMessageId,
+          metrics: shadowOptions.metrics,
+          buildAgentTurnInputFn: shadowOptions.buildAgentTurnInputFn,
+          sessionAvailable: persistentSessionCognition.active
+        });
+        agentTurnInputShadow = preparation.observation;
+      } catch {
+        // P1/shadow failures are descriptive only. In particular, do not
+        // append this to preLoopWarnings: existing R3 warning consumers must
+        // see the same behavior as before P2.
+        agentTurnInputShadow = buildFailedAgentTurnInputShadowObservation({
+          correlationId: event.correlationId,
+          conversationId: String(event.conversationId),
+          inboundMessageId,
+          trustedCustomerSession: input.trustedCustomerSession,
+          humanOwnerActive: input.governance?.humanOwnerActive === true,
+          aiBlocked: input.governance?.aiBlocked === true,
+          metrics: shadowOptions.metrics,
+          sessionAvailable: persistentSessionCognition.active,
+          warning: "agent_turn_input_build_failed"
+        });
+      }
+    }
+  }
+
   // SALES-AGENT-R3-V1.8-D2. Durable BEFORE cognition starts - see
   // recordUserMessageReceivedEvent's own comment. Skipped, not faked, when
   // no real inboundMessageId exists (same condition the post-loop shadow
@@ -555,6 +638,7 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     messageModelMode: loop.messageModelMode ?? "legacy_envelope",
     projectedMessageCount: loop.projectedMessageCount ?? 0,
     projectedToolObservationCount: loop.projectedToolObservationCount ?? 0,
-    projectedAssimilatedUserMessageCount: loop.projectedAssimilatedUserMessageCount ?? 0
+    projectedAssimilatedUserMessageCount: loop.projectedAssimilatedUserMessageCount ?? 0,
+    ...(agentTurnInputShadow ? { agentTurnInputShadow } : {})
   };
 }

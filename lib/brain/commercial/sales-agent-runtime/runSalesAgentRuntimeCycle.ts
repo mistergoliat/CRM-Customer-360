@@ -21,6 +21,13 @@ import type { ContinuityFallbackContext } from "../continuity/buildContinuityFal
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session";
 import type { CommercialContextSnapshot } from "../context/buildNativeCommercialContext";
 import type { ResolvedSalesAgentConfiguration } from "../sales-agent-configuration";
+import { buildR3AgentTurnInputShadowDomainReadModel } from "../agent-turn-input/buildR3AgentTurnInputShadowDomainReadModel";
+import {
+  finalizeAgentTurnInputShadowObservation,
+  type AgentTurnInputShadowObservation,
+  type AgentTurnInputShadowReadMetrics
+} from "../agent-turn-input/shadow";
+import type { CommercialDomainReadModel } from "../domain-read-model";
 
 // SALES-AGENT-R3-V1.4/V1.5/V1.6. The channel-adapter/dispatch seam around
 // SalesAgentRuntime (V1.3) - deliberately NOT part of the runtime module
@@ -118,6 +125,10 @@ export type RunSalesAgentRuntimeCycleInput = {
   openTurnExecutionEnabled?: boolean;
   /** SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Resolved by the caller from BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED - threaded to runSalesAgentRuntime unchanged. */
   harnessAlignedMessageModelEnabled?: boolean;
+  /** SALES-AGENT-R3-P2. Resolved by the caller from BRAIN_R3_AGENT_TURN_INPUT_SHADOW_ENABLED; default false. */
+  agentTurnInputShadowEnabled?: boolean;
+  /** Test/DI seam for the P2 read-only domain builder; production uses the real P0 wiring below. */
+  buildAgentTurnInputShadowDomainReadModel?: () => Promise<CommercialDomainReadModel>;
 };
 
 /**
@@ -151,6 +162,7 @@ export type SalesAgentRuntimeCycleResult = {
   dispatch: SalesAgentRuntimeDispatchResult;
   humanOwnerActive: boolean;
   aiBlocked: boolean;
+  agentTurnInputShadow: AgentTurnInputShadowObservation | null;
 };
 
 /**
@@ -325,7 +337,8 @@ function skippedCycleResult(runtime: SalesAgentRuntimeResult, humanOwnerActive: 
       warnings: [runtime.reason ?? "sales_agent_runtime_blocked"]
     },
     humanOwnerActive,
-    aiBlocked
+    aiBlocked,
+    agentTurnInputShadow: null
   };
 }
 
@@ -343,6 +356,24 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
   const opportunityId = typeof input.snapshot.opportunity?.id === "number" ? input.snapshot.opportunity.id : null;
   const conversationCaseId = input.snapshot.opportunity?.conversationCaseId ?? input.conversationId;
   const { configuration: identityConfiguration, effectiveModelConfiguration, effectiveLoopConfiguration } = input.resolvedSalesAgentConfiguration;
+  const shadowReadMetrics: AgentTurnInputShadowReadMetrics = { dbReads: 0, httpReads: 0 };
+  const agentTurnInputShadow = input.agentTurnInputShadowEnabled
+    ? {
+        enabled: true,
+        metrics: shadowReadMetrics,
+        buildDomainReadModel:
+          input.buildAgentTurnInputShadowDomainReadModel ??
+          (() =>
+            buildR3AgentTurnInputShadowDomainReadModel({
+              conversationId: input.conversationId,
+              opportunityId,
+              correlationId: input.correlationId,
+              snapshot: input.snapshot,
+              trustedCustomerSession: input.trustedCustomerSession,
+              metrics: shadowReadMetrics
+            }))
+      }
+    : undefined;
 
   const event: AgentRuntimeEvent = {
     type: "CUSTOMER_MESSAGE",
@@ -383,7 +414,8 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     liveTurnAssimilationEnabled: input.liveTurnAssimilationEnabled,
     refreshCommercialContextSummary: input.refreshCommercialContextSummary,
     openTurnExecutionEnabled: input.openTurnExecutionEnabled,
-    harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled
+    harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled,
+    agentTurnInputShadow
   });
 
   if (runtime.status === "blocked") {
@@ -554,5 +586,16 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     loop.warnings.push(`agent_tool_loop_completed_event_write_failed:${message}`);
   }
 
-  return { runtime, dispatch, humanOwnerActive, aiBlocked };
+  const finalizedAgentTurnInputShadow = runtime.agentTurnInputShadow
+    ? finalizeAgentTurnInputShadowObservation({
+        observation: runtime.agentTurnInputShadow,
+        r3CommercialObjective: null,
+        terminalReason: loop.terminalReason,
+        toolExecutionCount: runtime.toolCalls,
+        outboxWritten: dispatch.outboxWritten,
+        outboxId: dispatch.outboxId
+      })
+    : null;
+
+  return { runtime, dispatch, humanOwnerActive, aiBlocked, agentTurnInputShadow: finalizedAgentTurnInputShadow };
 }

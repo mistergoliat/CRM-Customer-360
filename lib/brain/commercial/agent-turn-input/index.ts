@@ -32,3 +32,26 @@ export {
   type BuildAgentTurnInputInput
 } from "./types";
 export { buildAgentTurnInput } from "./buildAgentTurnInput";
+export {
+  AGENT_TURN_INPUT_SHADOW_BUILD_STATUSES,
+  AGENT_TURN_INPUT_SHADOW_CLASSIFICATIONS,
+  AGENT_TURN_INPUT_SHADOW_SCHEMA_VERSION,
+  AGENT_TURN_INPUT_SHADOW_TOOL_COMPARISONS,
+  buildAgentTurnInputShadow,
+  buildAgentTurnInputShadowConversationContext,
+  buildFailedAgentTurnInputShadowObservation,
+  finalizeAgentTurnInputShadowObservation
+} from "./shadow";
+export type {
+  AgentTurnInputShadowBuildStatus,
+  AgentTurnInputShadowClassification,
+  AgentTurnInputShadowObservation,
+  AgentTurnInputShadowPreparation,
+  AgentTurnInputShadowReadMetrics,
+  AgentTurnInputShadowRuntimeOptions,
+  AgentTurnInputShadowToolComparison,
+  BuildAgentTurnInputShadowFailureInput,
+  BuildAgentTurnInputShadowInput
+} from "./shadow";
+export { recordAgentTurnInputShadowObservation } from "./shadowEvent";
+export { buildR3AgentTurnInputShadowDomainReadModel } from "./buildR3AgentTurnInputShadowDomainReadModel";

@@ -2,6 +2,7 @@ import type { PoolConnection } from "mysql2/promise";
 import type { CommercialEventPersistResult } from "./types";
 import {
   normalizeAgentToolLoopCompletedCommercialEvent,
+  normalizeAgentTurnInputShadowBuiltEvent,
   normalizeAutonomousTurnContinuityFailedCommercialEvent,
   normalizeAutonomousTurnDispositionCommercialEvent,
   normalizeCommercialWorkAsyncDeliveryEvaluatedEvent,
@@ -153,6 +154,16 @@ export async function recordPersistentSessionCognitionAppliedEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizePersistentSessionCognitionAppliedEvent(input), connection);
+}
+
+// SALES-AGENT-R3-P2. Descriptive only; a failed write never becomes a
+// customer-turn failure because callers invoke this after the R3 outcome is
+// already known and isolate the write.
+export async function recordAgentTurnInputShadowBuiltCommercialEvent(
+  input: Parameters<typeof normalizeAgentTurnInputShadowBuiltEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeAgentTurnInputShadowBuiltEvent(input), connection);
 }
 
 // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1.

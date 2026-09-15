@@ -11,6 +11,8 @@ import {
   recordAutonomousTurnDispositionCommercialEvent
 } from "../events/service";
 import type { AutonomousTurnDispositionRecordedPayload } from "../events/types";
+import { recordAgentTurnInputShadowObservation } from "../agent-turn-input/shadowEvent";
+import { finalizeAgentTurnInputShadowObservation } from "../agent-turn-input/shadow";
 
 /**
  * ACS-R1-05-T06.2 (release spec section A1). Shared application service:
@@ -126,6 +128,39 @@ async function persistContinuityFailed(input: { inboundMessageId: string; correl
     });
   } catch {
     // Same rationale as persistDisposition above.
+  }
+}
+
+async function persistAgentTurnInputShadow(input: {
+  cycle: NativeAutonomousCycleResult;
+  disposition: SalesTurnDisposition;
+  customerId: number | null;
+  conversationId: number;
+  currentTime: string;
+}) {
+  const shadow = input.cycle.salesAgentRuntime?.agentTurnInputShadow;
+  if (!shadow) return;
+
+  const observation = finalizeAgentTurnInputShadowObservation({
+    observation: shadow,
+    r3CommercialObjective: input.disposition.commercialObjective,
+    terminalReason: shadow.terminalReason,
+    toolExecutionCount: shadow.toolExecutionCount ?? 0,
+    outboxWritten: shadow.outboxWritten ?? false,
+    outboxId: shadow.outboxId
+  });
+
+  try {
+    await recordAgentTurnInputShadowObservation({
+      observation,
+      customerId: input.customerId,
+      conversationId: input.conversationId,
+      opportunityId: input.cycle.salesAgentRuntime?.runtime.resolvedOpportunityId ?? null,
+      occurredAt: input.currentTime
+    });
+  } catch {
+    // P2 is shadow-only. The R3 dispatch/disposition already completed, so a
+    // commercial_event failure can never block, retry, or alter this turn.
   }
 }
 
@@ -363,6 +398,14 @@ export async function ensureAutonomousSalesTurnContinuity(
         reason: `sales_agent_runtime_dispatch_failed:${runtime.status}:${dispatch.warnings.join(",")}`
       });
     }
+
+    await persistAgentTurnInputShadow({
+      cycle,
+      disposition,
+      customerId: input.customerMasterId,
+      conversationId: input.conversationId,
+      currentTime: input.currentTime
+    });
 
     return { cycle, disposition };
   }
