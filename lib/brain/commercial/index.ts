@@ -53,6 +53,7 @@ export * from "./action-queue";
 export * from "./autonomy-sandbox";
 export * from "./execution-gate";
 export * from "./domain-read-model";
+export * from "./agent-turn-input";
 // ACS-R1-05-T05: `autonomous-loop`, `scenario-simulator`, `follow-up-scheduling`,
 // `follow-up-replanning` and `../messaging/outbox-worker` (hyphenated) are a
 // self-contained, in-memory-only dev sandbox (see docs/audits/follow-up-runtime-reconciliation.md,
