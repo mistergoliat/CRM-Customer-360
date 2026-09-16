@@ -292,7 +292,26 @@ test("CIW30: re-running the same pure projection twice (simulating a restart) re
 // ---------------------------------------------------------------------------
 
 test("PARTE 2: every objective type that produces a real deriveCommercialWorkSteps.ts case is represented in the operation mapping (or deliberately absent - no capability exists for it)", () => {
-  const deliberatelyUnmapped = new Set(["WAIT_FOR_QUOTE_APPROVAL"]);
+  const deliberatelyUnmapped = new Set([
+    "WAIT_FOR_QUOTE_APPROVAL",
+    // SALES-AGENT-R3-P5. DISCOVER_NEED/QUOTE/ORDER/AFTER_SALES are R3-native
+    // objective kinds (CommercialProposalV1's CommercialObjectiveKind,
+    // additive to this same COMMERCIAL_OBJECTIVE_TYPES union - see
+    // objectiveTypes.ts's own comment). They are governed exclusively by
+    // CommercialProposal -> P5 deterministic reconciliation ->
+    // CommercialWork (lib/brain/commercial/work/objective-reconciliation/),
+    // never by this legacy R2 identity gate/operation pipeline
+    // (commercialIdentityGate.ts's own applyObjectiveState is only ever
+    // called from R2's buildCommercialWorkProjection, which P5 never
+    // invokes). Giving them a real entry here would fabricate an R2
+    // operation (search_products/create_quote/etc.) they have no
+    // relationship to, purely to satisfy this test's exhaustiveness - the
+    // exact kind of invented mapping this test exists to catch.
+    "DISCOVER_NEED",
+    "QUOTE",
+    "ORDER",
+    "AFTER_SALES"
+  ]);
   for (const type of COMMERCIAL_OBJECTIVE_TYPES) {
     if (deliberatelyUnmapped.has(type)) {
       assert.equal(COMMERCIAL_OBJECTIVE_TYPE_TO_OPERATION[type], undefined, `${type} must stay unmapped`);

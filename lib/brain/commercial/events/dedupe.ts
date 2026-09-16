@@ -154,6 +154,20 @@ export function buildCommercialWorkKernelResolvedDedupeKey(inboundMessageId: str
   return `commercial-work-kernel-resolved:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R3-P5. One reconciliation decision per inbound turn, same
+// rationale as buildCommercialProposalShadowBuiltDedupeKey above.
+export function buildCommercialObjectiveReconciliationDecidedDedupeKey(inboundMessageId: string) {
+  return `commercial-objective-reconciliation-decided:${inboundMessageId.trim()}`;
+}
+
+// SALES-AGENT-R3-P5. At most one durable reconciliation mutation per inbound
+// turn - a retry that decides CONTINUE/MODIFY/NOOP/REJECT never reaches this
+// event at all (applyCommercialObjectiveReconciliation.ts only calls it after
+// a successful write), so this key never needs to distinguish attempts.
+export function buildCommercialObjectiveReconciledDedupeKey(inboundMessageId: string) {
+  return `commercial-objective-reconciled:${inboundMessageId.trim()}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

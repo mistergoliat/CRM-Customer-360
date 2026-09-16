@@ -21,7 +21,24 @@ export const COMMERCIAL_OBJECTIVE_TYPES = [
   // (never blocks, never re-triggers onboarding) whenever history is absent
   // or Customer Profile is unavailable. Candidates always come from a real
   // search_products/T12 execution, never from historical data directly.
-  "CUSTOMER_AWARE_RECOMMENDATION"
+  "CUSTOMER_AWARE_RECOMMENDATION",
+  // SALES-AGENT-R3-P5. R3's own, coarser objective vocabulary
+  // (CommercialProposalV1's CommercialObjectiveKind) - additive, never
+  // replaces the R2 values above. SELECT_PRODUCTS is intentionally shared
+  // (same name, same meaning) rather than duplicated as e.g.
+  // "R3_SELECT_PRODUCTS". No CHECK constraint exists on this column
+  // (migrations/029, `type VARCHAR(64)`), so this extension needs no
+  // migration. R2's own consumers of CommercialObjectiveType
+  // (deriveCommercialObjectives.ts's commercialObjectiveSupersessionFamily,
+  // objectiveFollowUpPolicies.ts, commercialIdentityGate.ts) were audited and
+  // none switches exhaustively on this union - every one either only
+  // type-annotates or falls back to "other" for an unrecognized value, so
+  // these four new values are inert to R2's own pipeline (which R3 never
+  // calls anyway - see objective-reconciliation/reconcile.ts's own comment).
+  "DISCOVER_NEED",
+  "QUOTE",
+  "ORDER",
+  "AFTER_SALES"
 ] as const;
 
 export type CommercialObjectiveType = (typeof COMMERCIAL_OBJECTIVE_TYPES)[number];

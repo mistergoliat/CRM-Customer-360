@@ -8,6 +8,8 @@ import {
   normalizeCommercialProposalShadowBuiltEvent,
   normalizeCommercialWorkAsyncDeliveryEvaluatedEvent,
   normalizeCommercialWorkInboundCycleCompletedEvent,
+  normalizeCommercialObjectiveReconciledEvent,
+  normalizeCommercialObjectiveReconciliationDecidedEvent,
   normalizeCommercialWorkKernelResolvedEvent,
   normalizeCustomerIdentityCapabilityOutcomeCommercialEvent,
   normalizeCustomerIdentityResolutionCommercialEvent,
@@ -192,4 +194,20 @@ export async function recordCommercialWorkKernelResolvedEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeCommercialWorkKernelResolvedEvent(input), connection);
+}
+
+// SALES-AGENT-R3-P5.
+
+export async function recordCommercialObjectiveReconciliationDecidedEvent(
+  input: Parameters<typeof normalizeCommercialObjectiveReconciliationDecidedEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCommercialObjectiveReconciliationDecidedEvent(input), connection);
+}
+
+export async function recordCommercialObjectiveReconciledEvent(
+  input: Parameters<typeof normalizeCommercialObjectiveReconciledEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCommercialObjectiveReconciledEvent(input), connection);
 }

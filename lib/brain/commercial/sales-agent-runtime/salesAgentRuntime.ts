@@ -2,6 +2,7 @@ import { runAgentToolLoop } from "../agent-loop/runAgentToolLoop";
 import type { RunAgentToolLoopInput } from "../agent-loop/runAgentToolLoop";
 import type { AgentLoopProvider } from "../agent-loop/agentLoopProviderTypes";
 import type { AgentLoopResult, AgentLoopStepRecord, AgentLoopTerminalReason, PendingCatalogActionStep } from "../agent-loop/agentStepTypes";
+import type { CommercialProposalV1 } from "../commercial-proposal";
 import type { RecentCatalogContext } from "../agent-loop/recentCatalogContext";
 import type { AgentRuntimeEvent } from "../agent-runtime-event/types";
 import { resolveAgentCapabilityExposure } from "../agent-capability-exposure/types";
@@ -170,6 +171,15 @@ export type SalesAgentRuntimeResult = {
   projectedAssimilatedUserMessageCount: number;
   /** P2 shadow projection only; the full AgentTurnInput is intentionally not retained. */
   agentTurnInputShadow?: AgentTurnInputShadowObservation | null;
+  /**
+   * SALES-AGENT-R3-P4. Mirrors AgentLoopResult's own finalCommercialProposal -
+   * null whenever commercialProposalShadowEnabled was off this turn, or the
+   * model produced no (or an invalid) proposal. Declaration added by P5
+   * (this field was already produced at the call site below and consumed by
+   * P4's own shadow-event write and by P5's reconciler, but was missing from
+   * this type - a pre-existing tsc gap from the P4 commit, not a P5 change).
+   */
+  commercialProposal: CommercialProposalV1 | null;
 };
 
 /**
@@ -291,7 +301,8 @@ function blockedResult(reason: string, opportunityId: number | null): SalesAgent
     messageModelMode: "legacy_envelope",
     projectedMessageCount: 0,
     projectedToolObservationCount: 0,
-    projectedAssimilatedUserMessageCount: 0
+    projectedAssimilatedUserMessageCount: 0,
+    commercialProposal: null
   };
 }
 
@@ -325,7 +336,8 @@ function failedResult(reason: string, opportunityId: number | null): SalesAgentR
     messageModelMode: "legacy_envelope",
     projectedMessageCount: 0,
     projectedToolObservationCount: 0,
-    projectedAssimilatedUserMessageCount: 0
+    projectedAssimilatedUserMessageCount: 0,
+    commercialProposal: null
   };
 }
 

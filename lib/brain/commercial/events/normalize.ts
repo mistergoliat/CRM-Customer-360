@@ -8,6 +8,8 @@ import type {
   CommercialEventSource,
   CommercialEventType,
   CommercialEventV1,
+  CommercialObjectiveReconciledPayload,
+  CommercialObjectiveReconciliationDecidedPayload,
   CommercialProposalShadowBuiltPayload,
   CommercialWorkAsyncDeliveryEvaluatedPayload,
   CommercialWorkInboundCycleCompletedPayload,
@@ -43,6 +45,8 @@ import {
   buildAutonomousTurnDispositionDedupeKey,
   buildCommercialEventCorrelationId,
   buildCommercialEventId,
+  buildCommercialObjectiveReconciledDedupeKey,
+  buildCommercialObjectiveReconciliationDecidedDedupeKey,
   buildCommercialProposalShadowBuiltDedupeKey,
   buildCommercialStatusEventDedupeKey,
   buildCommercialWorkAsyncDeliveryEvaluatedDedupeKey,
@@ -1162,5 +1166,75 @@ export function normalizeCommercialWorkKernelResolvedEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: input.payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "commercial_work_kernel_resolved" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-P5. One descriptive event per inbound turn where objective
+ * reconciliation ran - always emitted, including NOOP/REJECT, so model
+ * adherence to the deterministic decision rules stays measurable.
+ */
+export function normalizeCommercialObjectiveReconciliationDecidedEvent(input: {
+  inboundMessageId: string;
+  payload: CommercialObjectiveReconciliationDecidedPayload;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = input.inboundMessageId.trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  return buildBaseEvent({
+    eventType: "commercial_objective_reconciliation_decided",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildCommercialObjectiveReconciliationDecidedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: input.payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "commercial_objective_reconciliation_decided" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-P5. One descriptive event per inbound turn where
+ * reconciliation actually mutated CommercialWork (START/REPLACE/CANCEL) -
+ * never emitted for NOOP/REJECT/CONTINUE/MODIFY.
+ */
+export function normalizeCommercialObjectiveReconciledEvent(input: {
+  inboundMessageId: string;
+  payload: CommercialObjectiveReconciledPayload;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = input.inboundMessageId.trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  return buildBaseEvent({
+    eventType: "commercial_objective_reconciled",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildCommercialObjectiveReconciledDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: input.payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "commercial_objective_reconciled" }
   });
 }

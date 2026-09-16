@@ -30,9 +30,15 @@ import {
 import type { CommercialDomainReadModel } from "../domain-read-model";
 import { ensureCommercialWorkCase } from "../work/ensureCommercialWorkCase";
 import {
+  recordCommercialObjectiveReconciledEvent,
+  recordCommercialObjectiveReconciliationDecidedEvent,
   recordCommercialProposalShadowBuiltEvent,
   recordCommercialWorkKernelResolvedEvent
 } from "../events/service";
+import { applyCommercialObjectiveReconciliationDecision, buildTurnObjectiveId, decideCommercialObjectiveReconciliation } from "../work/objective-reconciliation";
+import { CommercialWorkPersistenceError } from "../work/persistenceTypes";
+import type { PersistedCommercialWork } from "../work/persistenceTypes";
+import { selectActiveObjective } from "../domain-read-model";
 
 // SALES-AGENT-R3-V1.4/V1.5/V1.6. The channel-adapter/dispatch seam around
 // SalesAgentRuntime (V1.3) - deliberately NOT part of the runtime module
@@ -140,6 +146,21 @@ export type RunSalesAgentRuntimeCycleInput = {
   commercialWorkKernelEnabled?: boolean;
   /** Test/DI seam for the P3.5 case-kernel bootstrap; production uses the real ensureCommercialWorkCase below. */
   ensureCommercialWorkCaseFn?: typeof ensureCommercialWorkCase;
+  /**
+   * SALES-AGENT-R3-P5. Resolved by the caller from
+   * BRAIN_R3_COMMERCIAL_OBJECTIVE_RECONCILIATION_ENABLED; default false.
+   * Meaningless unless the kernel bootstrap above resolved a work THIS turn
+   * AND commercialProposalShadowEnabled produced a real proposal - both are
+   * re-checked at the call site, never assumed here.
+   */
+  commercialObjectiveReconciliationEnabled?: boolean;
+  /**
+   * Test/DI seam for the P5 CAS writer; production uses the real
+   * applyCommercialObjectiveReconciliationDecision below. Deciding
+   * (decideCommercialObjectiveReconciliation) is pure and always the real
+   * import - only the DB-touching apply step needs a seam.
+   */
+  applyCommercialObjectiveReconciliationDecisionFn?: typeof applyCommercialObjectiveReconciliationDecision;
 };
 
 /**
@@ -375,6 +396,12 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
   // opportunity exists; reuses the existing lazy-opportunity-wiring rule
   // rather than inventing a new one here). Failure is descriptive-only
   // (Section 20): the turn continues exactly as if the kernel flag were off.
+  // SALES-AGENT-R3-P5. Lifted out of the `if` block below (unlike P3.5's own
+  // local `kernel` variable, unused past its own telemetry write) so the
+  // reconciliation step further down - which needs the SAME already-
+  // resolved-this-turn work, never a second read - can reach it after
+  // runSalesAgentRuntime resolves the proposal.
+  let kernelWorkForReconciliation: PersistedCommercialWork | null = null;
   if (input.commercialWorkKernelEnabled && opportunityId !== null) {
     const ensureFn = input.ensureCommercialWorkCaseFn ?? ensureCommercialWorkCase;
     try {
@@ -386,6 +413,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
         correlationId: input.correlationId,
         now: input.currentTime
       });
+      if (kernel.result !== "FAILED") kernelWorkForReconciliation = kernel.work;
       await recordCommercialWorkKernelResolvedEvent({
         inboundMessageId: input.inboundMessageId,
         correlationId: input.correlationId,
@@ -469,6 +497,132 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
 
   if (runtime.status === "blocked") {
     return skippedCycleResult(runtime, humanOwnerActive, aiBlocked);
+  }
+
+  // SALES-AGENT-R3-P5. Deterministic CommercialProposalV1 -> CommercialWork
+  // objective reconciliation. Requires BOTH the P3.5 kernel to have resolved
+  // a work THIS turn (kernelWorkForReconciliation - never a second read) AND
+  // a real P4 proposal (runtime.commercialProposal is only ever non-null
+  // when commercialProposalShadowEnabled made the model produce one).
+  // Isolated exactly like the P3.5 bootstrap above: any UNEXPECTED failure
+  // here never blocks or alters the turn's own response/dispatch (outer
+  // try/catch). A version conflict is not unexpected - it is a normal,
+  // named outcome of CAS (see below), handled on its own, never re-read,
+  // never retried (that guarantee lives in the turn-settlement/P3.5 reload
+  // seam - see objective-reconciliation's own idempotency-contract comment).
+  //
+  // Ordering is deliberate and required for observability: (a) decide is
+  // pure, computed first; (b) commercial_objective_reconciliation_decided
+  // is recorded right after deciding, BEFORE attempting the durable write -
+  // so the decision is always observable even if the write below fails;
+  // (c) only then is the decision applied via CAS; (d) commercial_objective_reconciled
+  // is recorded only after a successful mutation - never on a version
+  // conflict, never speculatively before the write.
+  if (input.commercialObjectiveReconciliationEnabled && input.commercialProposalShadowEnabled && kernelWorkForReconciliation !== null) {
+    const workBefore = kernelWorkForReconciliation;
+    const applyFn = input.applyCommercialObjectiveReconciliationDecisionFn ?? applyCommercialObjectiveReconciliationDecision;
+    try {
+      const activeBefore = selectActiveObjective(workBefore);
+      const turnObjectiveId = buildTurnObjectiveId(workBefore.publicId, input.inboundMessageId);
+
+      // (a) decide - pure, no DB, no LLM.
+      const decision = decideCommercialObjectiveReconciliation({
+        proposal: runtime.commercialProposal,
+        activeObjective: activeBefore,
+        workStatus: workBefore.status,
+        turnObjectiveId
+      });
+
+      // (b) decided-event, before the write is even attempted.
+      await recordCommercialObjectiveReconciliationDecidedEvent({
+        inboundMessageId: input.inboundMessageId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        opportunityId: runtime.resolvedOpportunityId,
+        payload: {
+          schemaVersion: "1",
+          inboundMessageId: input.inboundMessageId,
+          workId: workBefore.publicId,
+          workVersionBefore: workBefore.version,
+          proposalObjectiveKind: runtime.commercialProposal?.objective?.kind ?? null,
+          proposalOperation: runtime.commercialProposal?.objective?.operation ?? null,
+          previousObjectiveKind: activeBefore?.type ?? null,
+          decisionAction: decision.action,
+          reasonCode: decision.reasonCode
+        }
+      }).catch(() => {
+        // Descriptive telemetry only - never lets a write failure affect the turn.
+      });
+
+      // (c) apply via CAS. A version conflict is caught HERE ONLY, narrowly,
+      // and never rethrown as a generic failure - it is a named, expected
+      // outcome (a concurrent write already changed workBefore.version),
+      // never a bug to isolate blindly like the outer catch does.
+      let updatedWork: PersistedCommercialWork;
+      try {
+        updatedWork = await applyFn({ decision, work: workBefore, turnObjectiveId });
+      } catch (error) {
+        if (error instanceof CommercialWorkPersistenceError && error.code === "VERSION_CONFLICT") {
+          // SALES-AGENT-R3-P5. Structured, PII-safe warning only - never a
+          // new durable failure event (the brief's own instruction: P5 does
+          // not invent a durable event for this). No customer text, no
+          // stack, no model rationale - same discipline as every payload
+          // this module already writes. No re-read, no retry: the next
+          // legitimate attempt is a fresh turn-settlement reload, not this
+          // function reaching back into the DB again.
+          console.warn(
+            "commercial_objective_reconciliation_cas_conflict",
+            JSON.stringify({
+              workId: workBefore.publicId,
+              inboundMessageId: input.inboundMessageId,
+              expectedWorkVersion: workBefore.version,
+              proposalObjectiveKind: runtime.commercialProposal?.objective?.kind ?? null,
+              proposalOperation: runtime.commercialProposal?.objective?.operation ?? null,
+              decisionAction: decision.action,
+              reasonCode: decision.reasonCode,
+              errorCode: error.code
+            })
+          );
+          updatedWork = workBefore;
+        } else {
+          throw error;
+        }
+      }
+
+      // (d) reconciled-event, only after a real mutation. Referential
+      // equality: applyCommercialObjectiveReconciliationDecision returns the
+      // SAME `work` object it was given whenever no write happened (NOOP/
+      // REJECT/CONTINUE/MODIFY) or a version conflict was absorbed above - a
+      // distinct object only ever comes back from a successful
+      // updateCommercialWorkAggregate call.
+      if (updatedWork !== workBefore) {
+        const resultingObjectiveId = decision.action === "CANCEL" ? decision.objectiveId : turnObjectiveId;
+        const resultingObjectiveKind =
+          decision.action === "CANCEL" ? activeBefore?.type ?? null : decision.action === "START" || decision.action === "REPLACE" ? decision.kind : null;
+
+        await recordCommercialObjectiveReconciledEvent({
+          inboundMessageId: input.inboundMessageId,
+          correlationId: input.correlationId,
+          conversationId: input.conversationId,
+          opportunityId: runtime.resolvedOpportunityId,
+          payload: {
+            schemaVersion: "1",
+            inboundMessageId: input.inboundMessageId,
+            workId: workBefore.publicId,
+            workVersionBefore: workBefore.version,
+            workVersionAfter: updatedWork.version,
+            decisionAction: decision.action,
+            previousObjectiveKind: activeBefore?.type ?? null,
+            resultingObjectiveId,
+            resultingObjectiveKind
+          }
+        }).catch(() => {
+          // Descriptive telemetry only - never lets a write failure affect the turn.
+        });
+      }
+    } catch {
+      // Any OTHER (non-CAS) reconciliation failure never blocks the existing R3 turn (same isolation as the P3.5 bootstrap above).
+    }
   }
 
   // Adapter, not a second AgentLoopResult producer: only the three fields

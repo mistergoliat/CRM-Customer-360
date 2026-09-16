@@ -496,6 +496,29 @@ export function shouldEnableHarnessAlignedMessageModel(): boolean {
   return readEnvFlag("BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED", false);
 }
 
+/**
+ * SALES-AGENT-R3-P5. Fail-closed (default false) toggle for deterministic
+ * CommercialProposalV1 -> CommercialWork objective reconciliation
+ * (objective-reconciliation/). Meaningless unless BOTH
+ * BRAIN_R3_COMMERCIAL_PROPOSAL_SHADOW_ENABLED (the proposal must exist) and
+ * BRAIN_R3_COMMERCIAL_WORK_KERNEL_ENABLED (the durable work must exist) are
+ * also on - runSalesAgentRuntimeCycle.ts checks all three before ever
+ * calling the reconciler, never assumes it here. OFF preserves the exact
+ * pre-P5 behavior: no CommercialWork objective is ever created/mutated by
+ * this path, byte-identical to P4/P3.5 alone.
+ */
+export function buildCommercialObjectiveReconciliationFeatureFlags(
+  overrides?: Partial<{ commercialObjectiveReconciliationEnabled: boolean }>
+) {
+  return {
+    commercialObjectiveReconciliationEnabled: readEnvFlag(
+      "BRAIN_R3_COMMERCIAL_OBJECTIVE_RECONCILIATION_ENABLED",
+      false
+    ),
+    ...(overrides ?? {})
+  };
+}
+
 export function buildLegacySalesConsultativeFeatureFlags(
   overrides?: Partial<CommercialLegacySalesConsultativeFeatureFlags>
 ): CommercialLegacySalesConsultativeFeatureFlags {

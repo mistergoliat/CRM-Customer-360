@@ -13,6 +13,8 @@ import { loadPendingCatalogAction } from "@/lib/brain/commercial/agent-loop/pend
 import { createMariaDbAgentSessionStore } from "@/lib/brain/commercial/agent-session/mariaDbAgentSessionStore";
 import type { AgentSessionStore } from "@/lib/brain/commercial/agent-session/store";
 import type { CommercialContextSnapshot } from "@/lib/brain/commercial/context/buildNativeCommercialContext";
+import type { PersistedCommercialWork } from "@/lib/brain/commercial/work/persistenceTypes";
+import { buildTurnObjectiveId } from "@/lib/brain/commercial/work/objective-reconciliation";
 import {
   makeCommercialFreshness,
   type CommercialDomainReadModel
@@ -1048,6 +1050,165 @@ test("[P4-C2] terminal response without a valid proposal persists proposalPresen
       assert.equal(payload!.ambiguityPresent, null);
       assert.equal(payload!.ambiguityReasonCode, null);
       assert.equal(payload!.terminalReason, "responded");
+    }
+  );
+});
+
+/**
+ * SALES-AGENT-R3-P5. reconcileCommercialObjectiveFn is a DI seam (same
+ * pattern as P3.5's own ensureCommercialWorkCaseFn) so these two tests can
+ * prove the wiring - is the reconciler actually invoked with the right
+ * (proposal, work), does it run only when kernel+proposal+P5 flags are all
+ * present, is the decided-event actually persisted - without depending on
+ * a live CommercialWork repository write to succeed.
+ */
+function buildFakeKernelWork(conversationId: number, opportunityId: number, overrides: Partial<PersistedCommercialWork> = {}): PersistedCommercialWork {
+  return {
+    id: `projection:${conversationId}:kernel-bootstrap`,
+    projectionVersion: 1,
+    opportunityId,
+    conversationId,
+    sourceMessageId: null,
+    sourceSequence: null,
+    lastReconciledSequence: null,
+    previousWorkPublicId: null,
+    supersedesWorkPublicId: null,
+    trigger: { type: "SYSTEM_EVENT", eventType: "commercial_work_kernel_bootstrap", correlationId: "corr-p5", conversationId, opportunityId },
+    status: "ACTIVE",
+    objectives: [],
+    steps: [],
+    blockers: [],
+    derivedAt: "2026-09-16T12:00:00.000Z",
+    metrics: { objectiveCount: 0, readyStepCount: 0, waitingCustomerObjectiveCount: 0, waitingSystemStepCount: 0, blockerCount: 0 },
+    publicId: `cw-p5-${conversationId}`,
+    correlationKey: `corr-key-p5-${conversationId}`,
+    version: 1,
+    createdAt: "2026-09-16T12:00:00.000Z",
+    updatedAt: "2026-09-16T12:00:00.000Z",
+    completedAt: null,
+    cancelledAt: null,
+    cancelReason: null,
+    ...overrides
+  };
+}
+
+async function loadCommercialObjectiveReconciliationDecidedPayload(inboundMessageId: string) {
+  const rows = await safeQueryRows<{ payload_json: unknown }>(
+    `SELECT payload_json
+       FROM commercial_event
+      WHERE event_type = 'commercial_objective_reconciliation_decided'
+        AND source_event_id = ?
+      LIMIT 1`,
+    [inboundMessageId]
+  );
+  assert.ok(rows.ok, rows.ok ? "" : rows.error);
+  const raw = rows.rows[0]?.payload_json;
+  if (raw === undefined || raw === null) return null;
+  return typeof raw === "string" ? (JSON.parse(raw) as Record<string, unknown>) : (raw as Record<string, unknown>);
+}
+
+test("[P5-C1] kernel + proposal + both P5 flags on: reconciler runs with the real (work, proposal) pair and the decision event is persisted", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  const fakeWork = buildFakeKernelWork(conversationId, 7001);
+
+  const proposal = {
+    schemaVersion: "1" as const,
+    objective: { kind: "QUOTE" as const, operation: "START" as const, confidence: "HIGH" as const },
+    requestedOutcome: "QUOTE_CREATION" as const,
+    requirementSignals: [],
+    evidenceCodes: [],
+    ambiguity: { present: false, reasonCode: null }
+  };
+
+  const provider = createFakeAgentLoopProvider({
+    script: [{ type: "respond", message: "Empiezo tu cotizacion.", commercialProposal: proposal }]
+  });
+
+  const applyCalls: Array<{ decisionAction: string; workPublicId: string; turnObjectiveId: string }> = [];
+  const applyCommercialObjectiveReconciliationDecisionFn = async (applyInput: { decision: { action: string }; work: PersistedCommercialWork; turnObjectiveId: string }) => {
+    applyCalls.push({ decisionAction: applyInput.decision.action, workPublicId: applyInput.work.publicId, turnObjectiveId: applyInput.turnObjectiveId });
+    return applyInput.work;
+  };
+
+  await withEnv(
+    { ...RESPONSE_DISPATCH_ENABLED_ENV, BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId },
+    async () => {
+      const result = await runSalesAgentRuntimeCycle({
+        ...input,
+        customerMessage: "quiero cotizar",
+        snapshot: buildSnapshot(),
+        provider,
+        commercialWorkKernelEnabled: true,
+        ensureCommercialWorkCaseFn: async () => ({ result: "CREATED", work: fakeWork }),
+        commercialProposalShadowEnabled: true,
+        commercialObjectiveReconciliationEnabled: true,
+        applyCommercialObjectiveReconciliationDecisionFn
+      });
+
+      assert.equal(result.runtime.status, "responded");
+      // decideCommercialObjectiveReconciliation is no longer mocked - the
+      // real, pure decision function ran against the real fakeWork/proposal
+      // pair; only the DB-touching apply step is a spy.
+      assert.equal(applyCalls.length, 1);
+      assert.equal(applyCalls[0].decisionAction, "START");
+      assert.equal(applyCalls[0].workPublicId, fakeWork.publicId);
+      assert.equal(applyCalls[0].turnObjectiveId, buildTurnObjectiveId(fakeWork.publicId, input.inboundMessageId));
+
+      const payload = await loadCommercialObjectiveReconciliationDecidedPayload(input.inboundMessageId);
+      assert.ok(payload, "commercial_objective_reconciliation_decided must be persisted");
+      assert.equal(payload!.workId, fakeWork.publicId);
+      assert.equal(payload!.workVersionBefore, fakeWork.version);
+      assert.equal(payload!.proposalObjectiveKind, "QUOTE");
+      assert.equal(payload!.proposalOperation, "START");
+      assert.equal(payload!.previousObjectiveKind, null);
+      assert.equal(payload!.decisionAction, "START");
+      assert.equal(payload!.reasonCode, "START_NO_ACTIVE_OBJECTIVE");
+    }
+  );
+});
+
+test("[P5-C2] commercialObjectiveReconciliationEnabled false: reconciler never runs, zero decision event, byte-identical to pre-P5 behavior", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+  const fakeWork = buildFakeKernelWork(conversationId, 7002);
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: "Empiezo tu cotizacion.",
+        commercialProposal: { schemaVersion: "1" as const, objective: { kind: "QUOTE" as const, operation: "START" as const, confidence: "HIGH" as const }, requestedOutcome: null, requirementSignals: [], evidenceCodes: [], ambiguity: { present: false, reasonCode: null } }
+      }
+    ]
+  });
+
+  let applyCalled = false;
+  const applyCommercialObjectiveReconciliationDecisionFn = async (applyInput: { work: PersistedCommercialWork }) => {
+    applyCalled = true;
+    return applyInput.work;
+  };
+
+  await withEnv(
+    { ...RESPONSE_DISPATCH_ENABLED_ENV, BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId },
+    async () => {
+      const result = await runSalesAgentRuntimeCycle({
+        ...input,
+        customerMessage: "quiero cotizar",
+        snapshot: buildSnapshot(),
+        provider,
+        commercialWorkKernelEnabled: true,
+        ensureCommercialWorkCaseFn: async () => ({ result: "CREATED", work: fakeWork }),
+        commercialProposalShadowEnabled: true,
+        commercialObjectiveReconciliationEnabled: false,
+        applyCommercialObjectiveReconciliationDecisionFn
+      });
+
+      assert.equal(result.runtime.status, "responded");
+      assert.equal(applyCalled, false);
+
+      const payload = await loadCommercialObjectiveReconciliationDecidedPayload(input.inboundMessageId);
+      assert.equal(payload, null);
     }
   );
 });

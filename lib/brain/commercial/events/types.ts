@@ -82,7 +82,18 @@ export type CommercialEventType =
   // durable case-kernel bootstrap ran (ensureCommercialWorkCase.ts) -
   // descriptive only, the durable state is the crm_commercial_work row
   // itself. Dedupe key is the inbound message id.
-  | "commercial_work_kernel_resolved";
+  | "commercial_work_kernel_resolved"
+  // SALES-AGENT-R3-P5. One per inbound turn where objective reconciliation
+  // ran (reconcile.ts + applyCommercialObjectiveReconciliation.ts) -
+  // descriptive only, always emitted regardless of decision (NOOP/REJECT
+  // included). Dedupe key is the inbound message id.
+  | "commercial_objective_reconciliation_decided"
+  // SALES-AGENT-R3-P5. One per inbound turn where reconciliation actually
+  // produced a durable CommercialWork mutation (START/REPLACE/CANCEL) -
+  // never emitted for NOOP/REJECT/CONTINUE/MODIFY. Descriptive only, the
+  // durable state is the crm_commercial_work/crm_commercial_work_objectives
+  // rows themselves. Dedupe key is the inbound message id.
+  | "commercial_objective_reconciled";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -690,6 +701,43 @@ export type AgentTurnInputShadowBuiltPayload = {
   addedHttpReads: number;
   sessionAvailable: boolean;
   sessionVersion: string | number | null;
+};
+
+/**
+ * SALES-AGENT-R3-P5. Emitted for EVERY reconciliation attempt (NOOP/REJECT
+ * included), never only on a durable mutation - see
+ * CommercialObjectiveReconciledPayload below for the mutation-only event.
+ * No PII, no customer free text, no model rationale: every field is either
+ * an id, a version, or one of the fixed enums CommercialProposalV1/
+ * CommercialWork already define.
+ */
+export type CommercialObjectiveReconciliationDecidedPayload = {
+  schemaVersion: "1";
+  inboundMessageId: string;
+  workId: string;
+  workVersionBefore: number;
+  proposalObjectiveKind: string | null;
+  proposalOperation: string | null;
+  previousObjectiveKind: string | null;
+  decisionAction: string;
+  reasonCode: string;
+};
+
+/**
+ * SALES-AGENT-R3-P5. Emitted only when the decision above actually produced
+ * a durable mutation (START/REPLACE/CANCEL) - CONTINUE/MODIFY/NOOP/REJECT
+ * never emit this event, since they never call updateCommercialWorkAggregate.
+ */
+export type CommercialObjectiveReconciledPayload = {
+  schemaVersion: "1";
+  inboundMessageId: string;
+  workId: string;
+  workVersionBefore: number;
+  workVersionAfter: number;
+  decisionAction: string;
+  previousObjectiveKind: string | null;
+  resultingObjectiveId: string | null;
+  resultingObjectiveKind: string | null;
 };
 
 export type CommercialEventPersistStatus = "created" | "duplicate";

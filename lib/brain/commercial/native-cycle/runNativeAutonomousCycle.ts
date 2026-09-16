@@ -24,6 +24,7 @@ import {
   buildAgentTurnInputShadowFeatureFlags,
   buildCommercialProposalShadowFeatureFlags,
   buildCommercialWorkKernelFeatureFlags,
+  buildCommercialObjectiveReconciliationFeatureFlags,
   buildSessionCompactionFeatureFlags,
   shouldEnablePersistentSessionCognition,
   shouldEnableLiveTurnAssimilation,
@@ -754,6 +755,13 @@ export async function runNativeAutonomousCycle(
     const commercialProposalShadowEnabled =
       buildCommercialProposalShadowFeatureFlags().commercialProposalShadowEnabled;
     const commercialWorkKernelEnabled = buildCommercialWorkKernelFeatureFlags().commercialWorkKernelEnabled;
+    // SALES-AGENT-R3-P5. See buildCommercialObjectiveReconciliationFeatureFlags'
+    // own comment - meaningless unless commercialProposalShadowEnabled and
+    // commercialWorkKernelEnabled above are also true this turn;
+    // runSalesAgentRuntimeCycle.ts re-checks that dependency itself (via
+    // kernelWorkForReconciliation/runtime.commercialProposal), never assumed here.
+    const commercialObjectiveReconciliationEnabled =
+      buildCommercialObjectiveReconciliationFeatureFlags().commercialObjectiveReconciliationEnabled;
     const liveTurnAssimilationEnabled = shouldEnableLiveTurnAssimilation();
     const openTurnExecutionEnabled = shouldEnableOpenTurnExecution();
     const harnessAlignedMessageModelEnabled = shouldEnableHarnessAlignedMessageModel();
@@ -834,7 +842,8 @@ export async function runNativeAutonomousCycle(
       harnessAlignedMessageModelEnabled,
       agentTurnInputShadowEnabled,
       commercialProposalShadowEnabled,
-      commercialWorkKernelEnabled
+      commercialWorkKernelEnabled,
+      commercialObjectiveReconciliationEnabled
     });
 
     const commercialNeed: NativeAutonomousCycleCommercialNeed = {

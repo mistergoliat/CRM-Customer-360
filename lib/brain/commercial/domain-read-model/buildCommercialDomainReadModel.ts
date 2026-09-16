@@ -95,7 +95,13 @@ function factFreshness(source: string, fact: { factId: string; updatedAt: string
   });
 }
 
-function selectActiveObjective(work: PersistedCommercialWork | null): PersistedCommercialWork["objectives"][number] | null {
+/**
+ * Exported for SALES-AGENT-R3-P5 (objective-reconciliation/reconcile.ts) -
+ * the same "which objective counts as active" tie-break (filter terminal
+ * statuses, then the lowest objectiveId) both the read-only P0 projection
+ * and P5's deterministic reconciler need. Deliberately not duplicated.
+ */
+export function selectActiveObjective(work: PersistedCommercialWork | null): PersistedCommercialWork["objectives"][number] | null {
   if (!work) return null;
   return [...work.objectives]
     .filter((objective) => !TERMINAL_OBJECTIVE_STATUSES.has(objective.status))
