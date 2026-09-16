@@ -14,13 +14,16 @@ export const CAPABILITY_ELIGIBILITY_REASON_CODES = [
   "OBJECTIVE_INCOMPATIBLE",
   "MISSING_SELECTION",
   "SELECTION_NOT_CURRENT",
+  "IDENTITY_LEVEL_INSUFFICIENT",
+  "MISSING_QUOTE",
+  "QUOTE_NOT_CURRENT",
   "MISSING_DESTINATION",
   "DESTINATION_NOT_CURRENT"
 ] as const;
 export type CapabilityEligibilityReasonCode = (typeof CAPABILITY_ELIGIBILITY_REASON_CODES)[number];
 
 export type CapabilityEligibilityObjectiveType = "SELECT_PRODUCTS" | "QUOTE";
-export type CapabilityEligibilityPrerequisite = "CURRENT_SELECTION" | "CURRENT_DESTINATION";
+export type CapabilityEligibilityPrerequisite = "CURRENT_SELECTION" | "CURRENT_DESTINATION" | "CURRENT_QUOTE";
 
 /**
  * Deliberately excludes executionClass and runtime availability. The former

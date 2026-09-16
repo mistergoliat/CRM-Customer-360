@@ -1,6 +1,7 @@
 import type { CommercialDomainReadModel } from "../domain-read-model";
 import { selectActiveObjective } from "../domain-read-model";
 import type { PersistedCommercialWork } from "../work/persistenceTypes";
+import { isIdentityLevelAtLeast } from "../identity/commercial-identity-requirement/evaluate";
 import { CAPABILITY_ELIGIBILITY_METADATA_VERSION, resolveCapabilityEligibilityDefinitions } from "./definitions";
 import type {
   CapabilityEligibilityEntry,
@@ -26,6 +27,23 @@ function currentDestinationReasonCodes(readModel: CommercialDomainReadModel): Ca
   return readModel.destination.freshness.state === "CURRENT" ? [] : ["DESTINATION_NOT_CURRENT"];
 }
 
+function currentQuoteReasonCodes(readModel: CommercialDomainReadModel): CapabilityEligibilityReasonCode[] {
+  if (readModel.quote === null) return ["MISSING_QUOTE"];
+  return readModel.quote.freshness.state === "CURRENT" ? [] : ["QUOTE_NOT_CURRENT"];
+}
+
+function identityReasonCodes(definition: ResolvedCapabilityEligibilityDefinition, readModel: CommercialDomainReadModel): CapabilityEligibilityReasonCode[] {
+  const requirement = definition.identityRequirement;
+  if (requirement.kind === "NONE") return [];
+  if (requirement.kind === "MINIMUM_LEVEL") {
+    const currentLevel = readModel.customer.identityLevel;
+    return currentLevel !== null && isIdentityLevelAtLeast(currentLevel, requirement.level) ? [] : ["IDENTITY_LEVEL_INSUFFICIENT"];
+  }
+  // definitions.ts rejects ENTITY_VERIFICATION because the complete
+  // entity-scoped projection is intentionally outside P6.2's scope.
+  return ["IDENTITY_LEVEL_INSUFFICIENT"];
+}
+
 function evaluateDefinition(
   definition: ResolvedCapabilityEligibilityDefinition,
   readModel: CommercialDomainReadModel,
@@ -38,13 +56,12 @@ function evaluateDefinition(
     else if (!(definition.supportedObjectives as readonly string[]).includes(objectiveType)) reasonCodes.push("OBJECTIVE_INCOMPATIBLE");
   }
 
-  // Every P6.2-A definition resolves to the canonical NONE identity policy.
-  // Keep the lookup in definitions so later scope can add an identity-aware
-  // structural rule without introducing a parallel policy table here.
   if (reasonCodes.length === 0) {
+    reasonCodes.push(...identityReasonCodes(definition, readModel));
     for (const prerequisite of definition.prerequisites) {
       if (prerequisite === "CURRENT_SELECTION") reasonCodes.push(...currentSelectionReasonCodes(readModel));
       if (prerequisite === "CURRENT_DESTINATION") reasonCodes.push(...currentDestinationReasonCodes(readModel));
+      if (prerequisite === "CURRENT_QUOTE") reasonCodes.push(...currentQuoteReasonCodes(readModel));
     }
   }
 

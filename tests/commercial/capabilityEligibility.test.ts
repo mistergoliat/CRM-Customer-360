@@ -22,10 +22,14 @@ function buildReadModel(input: {
   objectiveType?: "SELECT_PRODUCTS" | "QUOTE" | null;
   selection?: "missing" | FreshnessState;
   destination?: "missing" | FreshnessState;
+  identityLevel?: CommercialDomainReadModel["customer"]["identityLevel"];
+  quote?: "missing" | FreshnessState;
 } = {}): CommercialDomainReadModel {
   const objectiveType = input.objectiveType ?? null;
   const selection = input.selection ?? "CURRENT";
   const destination = input.destination ?? "CURRENT";
+  const identityLevel = input.identityLevel ?? null;
+  const quote = input.quote ?? "missing";
   return {
     case: {
       caseId: "case-1",
@@ -56,8 +60,22 @@ function buildReadModel(input: {
       calculation: null,
       freshness: freshness("CURRENT")
     },
-    quote: null,
-    customer: { status: "unknown", identityLevel: null, hasResolvedCustomer: false, verificationRequired: false, profile: null },
+    quote:
+      quote === "missing"
+        ? null
+        : {
+            quoteId: "quote-1",
+            quoteNumber: "Q-1",
+            status: "draft",
+            currency: "CLP",
+            total: "10000",
+            validUntil: "2026-10-16T00:00:00.000Z",
+            version: 1,
+            selectionFactId: "fact-selection-1",
+            freshness: freshness(quote),
+            grounding: quote === "CURRENT" ? "CURRENT_FOR_KNOWN_ANCHORS" : quote === "STALE" ? "STALE" : "UNKNOWN"
+          },
+    customer: { status: identityLevel === null ? "unknown" : "identified", identityLevel, hasResolvedCustomer: identityLevel !== null, verificationRequired: false, profile: null },
     conversation: { conversationId: 1, sessionVersion: null },
     evidence: []
   };
@@ -133,7 +151,7 @@ test("P6-A12/A13/A14: evaluator is synchronous, leaves its read model untouched 
   const before = structuredClone(readModel);
   const snapshot = evaluate(readModel);
   assert.deepEqual(readModel, before);
-  assert.equal(snapshot.metadataVersion, "p6.2-a.1");
+  assert.equal(snapshot.metadataVersion, "p6.2-b.1");
   const source = readFileSync(new URL("../../lib/brain/commercial/capability-eligibility/evaluateCapabilityEligibility.ts", import.meta.url), "utf8");
   assert.ok(!source.includes("executeGovernedCapability"));
   assert.ok(!source.includes(".execute("));
@@ -215,4 +233,79 @@ test("P6-A17/A18: execution class comes from Gateway governance and never assert
     assert.equal(entry(snapshot, definition.capability)?.executionClass, gateway?.governance.sideEffect);
   }
   assert.equal("runtimeAvailability" in snapshot, false);
+});
+
+test("P6-B1/B5/B14: QUOTE with current selection and canonical LEVEL_2 identity makes create_quote eligible without shipping", () => {
+  const snapshot = evaluate(buildReadModel({ objectiveType: "QUOTE", identityLevel: "LEVEL_2_MASTER_RESOLVED" }));
+  assert.equal(entry(snapshot, "create_quote")?.status, "ELIGIBLE");
+  assert.equal(entry(snapshot, "create_quote")?.reasonCodes.length, 0);
+});
+
+test("P6-B2/B3: create_quote fails closed for missing or non-current selection", () => {
+  assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "QUOTE", selection: "missing", identityLevel: "LEVEL_2_MASTER_RESOLVED" })), "create_quote")?.reasonCodes, ["MISSING_SELECTION"]);
+  assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "QUOTE", selection: "STALE", identityLevel: "LEVEL_2_MASTER_RESOLVED" })), "create_quote")?.reasonCodes, ["SELECTION_NOT_CURRENT"]);
+});
+
+test("P6-B4: create_quote blocks below the canonical LEVEL_2 policy", () => {
+  assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "QUOTE", identityLevel: "LEVEL_1_CHANNEL_OBSERVED" })), "create_quote")?.reasonCodes, ["IDENTITY_LEVEL_INSUFFICIENT"]);
+});
+
+test("P6-B6: create_quote is incompatible with SELECT_PRODUCTS", () => {
+  assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "SELECT_PRODUCTS", identityLevel: "LEVEL_2_MASTER_RESOLVED" })), "create_quote")?.reasonCodes, ["OBJECTIVE_INCOMPATIBLE"]);
+});
+
+test("P6-B7/B10: get_quote needs a current quote fact but no identity", () => {
+  const snapshot = evaluate(buildReadModel({ objectiveType: "QUOTE", quote: "CURRENT", identityLevel: "LEVEL_0_ANONYMOUS" }));
+  assert.equal(entry(snapshot, "get_quote")?.status, "ELIGIBLE");
+});
+
+test("P6-B8/B9: get_quote blocks for absent, stale, or unknown quote facts", () => {
+  assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "SELECT_PRODUCTS", quote: "CURRENT" })), "get_quote")?.reasonCodes, ["OBJECTIVE_INCOMPATIBLE"]);
+  assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "QUOTE", quote: "missing" })), "get_quote")?.reasonCodes, ["MISSING_QUOTE"]);
+  assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "QUOTE", quote: "STALE" })), "get_quote")?.reasonCodes, ["QUOTE_NOT_CURRENT"]);
+  assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "QUOTE", quote: "UNKNOWN" })), "get_quote")?.reasonCodes, ["QUOTE_NOT_CURRENT"]);
+});
+
+test("P6-B11/B12: quote execution classes remain derived from Gateway governance", () => {
+  const snapshot = evaluate(buildReadModel({ objectiveType: "QUOTE", quote: "CURRENT", identityLevel: "LEVEL_2_MASTER_RESOLVED" }));
+  for (const capability of ["create_quote", "get_quote"]) {
+    assert.equal(entry(snapshot, capability)?.executionClass, resolveCapabilityGatewayDefinition(capability)?.governance.sideEffect);
+  }
+});
+
+test("P6-B13: quote eligibility remains a pure evaluator with no execution, ports, or asynchronous work", () => {
+  const source = readFileSync(new URL("../../lib/brain/commercial/capability-eligibility/evaluateCapabilityEligibility.ts", import.meta.url), "utf8");
+  assert.ok(!source.includes("executeGovernedCapability"));
+  assert.ok(!source.includes("createQuoteServicePort"));
+  assert.ok(!source.includes("getQuoteServicePort"));
+  assert.ok(!source.includes("queryRows"));
+  assert.ok(!source.includes("fetch("));
+  assert.ok(!source.includes("await "));
+});
+
+test("P6-B15/B16: unchanged shadow adapter emits the expanded snapshot only when enabled", async () => {
+  const readModel = buildReadModel({ objectiveType: "QUOTE", quote: "CURRENT", identityLevel: "LEVEL_2_MASTER_RESOLVED" });
+  let recorded: ReturnType<typeof evaluateCapabilityEligibility> | null = null;
+  await runCapabilityEligibilityShadow({
+    enabled: true,
+    domainReadModel: readModel,
+    evaluatedAt: "2026-09-16T00:00:00.000Z",
+    record: async (snapshot) => { recorded = snapshot; }
+  });
+  assert.equal(entry(recorded!, "create_quote")?.status, "ELIGIBLE");
+  assert.equal(entry(recorded!, "get_quote")?.status, "ELIGIBLE");
+  const event = normalizeCommercialCapabilityEligibilityEvaluatedEvent({
+    inboundMessageId: "inbound-p6-b16",
+    payload: {
+      schemaVersion: "1",
+      workId: recorded!.workId,
+      workVersion: recorded!.workVersion,
+      objectiveType: recorded!.objectiveType,
+      eligibleCapabilityNames: recorded!.eligible.map((candidate) => candidate.capability),
+      blockedCapabilities: recorded!.blocked.map((candidate) => ({ capability: candidate.capability, reasonCodes: [...candidate.reasonCodes] })),
+      metadataVersion: recorded!.metadataVersion
+    }
+  });
+  assert.ok((event.payload.eligibleCapabilityNames as string[]).includes("create_quote"));
+  assert.ok((event.payload.eligibleCapabilityNames as string[]).includes("get_quote"));
 });
