@@ -20,9 +20,8 @@
  *   npm run worker:outbox -- --batch-size=5 --poll-ms=3000 --dry-run
  */
 
-import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { loadEnvFile, PROJECT_ROOT } from "./db-utils";
+import { loadProductionEnv } from "./db-utils";
 import { loadOutboxWorkerRuntimeConfig, assertOutboxWorkerRuntimeConfigIsSafe } from "../lib/brain/runtime/autonomousRuntimeConfig";
 
 const DEFAULT_BATCH_SIZE = 5;
@@ -55,12 +54,6 @@ function readBoolArg(name: string, fallback = false): boolean {
 // per the pilot contract below, BRAIN_OUTBOX_WORKER_ENABLED/
 // BRAIN_OUTBOX_WORKER_ALLOW_REAL_SEND + a non-empty allowlist) in
 // .env/.env.local themselves.
-async function loadRuntimeEnv() {
-  // Production workers use the deployment environment as the authoritative
-  // source. Do not let infra/.env replace DATABASE_URL with local Docker DB_*.
-  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), true);
-}
-
 let workerRunning = true;
 let poolClosed = false;
 
@@ -103,7 +96,7 @@ async function runTick(options: {
 }
 
 async function main() {
-  await loadRuntimeEnv();
+  await loadProductionEnv();
 
   // Fail closed at startup, not per-message: real send authorized with an
   // empty allowlist is invalid pilot configuration, never "send to everyone".

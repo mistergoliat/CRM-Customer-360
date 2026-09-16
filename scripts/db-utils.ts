@@ -12,6 +12,17 @@ export type DatabaseTarget = "dev" | "test" | "legacy";
 
 export const PROJECT_ROOT = process.cwd();
 
+/**
+ * Long-lived production entrypoints must load the repository's deployment
+ * environment before importing runtime code that reads process.env. Keeping
+ * the path and overwrite policy here prevents each worker from drifting to a
+ * different env-file convention. The production source is intentionally the
+ * project .env, never infra/.env's local-Docker values.
+ */
+export async function loadProductionEnv(projectRoot = PROJECT_ROOT) {
+  await loadEnvFile(path.resolve(projectRoot, ".env"), true);
+}
+
 export async function loadEnvFile(filePath: string, overwrite = false) {
   try {
     const raw = await readFile(filePath, "utf8");

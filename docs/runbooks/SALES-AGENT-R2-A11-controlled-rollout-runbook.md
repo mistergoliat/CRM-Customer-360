@@ -30,6 +30,20 @@ below. If your instance already has different names for the web process or the
 existing outbox/follow-up workers, use those instead; only the new
 `crm-worker-commercial-work` process is genuinely new.
 
+## Environment loading contract
+
+The project `.env` is the canonical deployment configuration source. `next start`
+loads it through Next.js for `crm-web`; the long-lived workers load the same file
+through `loadProductionEnv()` in `scripts/db-utils.ts` before importing runtime
+modules or reading feature flags. Workers must not use `infra/.env`, which is the
+local-Docker configuration source.
+
+The file is read at process startup. Editing `.env` does not mutate an already
+running Node process; every PM2 process that reads the changed value must be
+restarted after the edit. PM2's `--update-env` only forwards variables present in
+the shell environment that invoked PM2. It does not parse or reload the project
+`.env`, so it is not a substitute for the entrypoint loader.
+
 ## 0. Pre-deploy checks
 
 ```bash
@@ -47,6 +61,21 @@ git pull --ff-only origin main
 npm ci
 npm run build
 ```
+
+After changing the project `.env`, restart each managed process that must receive
+the new values. Use the names shown by `pm2 list` on the instance:
+
+```bash
+pm2 restart crm-web
+pm2 restart crm-turn-settle
+pm2 restart crm-outbox
+pm2 restart crm-commercial-work
+pm2 restart crm-followup
+```
+
+The worker entrypoints load `.env` during those boots; no individual feature flag
+is hardcoded in PM2 or application code. Do not run a restart for a process name
+that is not managed on the instance.
 
 ## 2. Migrations
 

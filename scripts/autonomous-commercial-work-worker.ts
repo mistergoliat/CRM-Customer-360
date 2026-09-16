@@ -25,9 +25,8 @@
  *   npm run worker:commercial-work -- --batch-size=10 --poll-ms=10000 --dry-run
  */
 
-import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { loadEnvFile, PROJECT_ROOT } from "./db-utils";
+import { loadProductionEnv } from "./db-utils";
 import {
   loadCommercialWorkWorkerEnabled,
   loadAutonomousResponsesEnabled,
@@ -57,12 +56,6 @@ function readBoolArg(name: string, fallback = false): boolean {
   const raw = readArg(name) ?? (process.argv.includes(`--${name}`) ? "true" : null);
   if (raw === null) return fallback;
   return raw.toLowerCase() !== "false" && raw !== "0";
-}
-
-async function loadRuntimeEnv() {
-  // Production workers use the deployment environment as the authoritative
-  // source, same discipline as worker:outbox/worker:followup.
-  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), true);
 }
 
 let workerRunning = true;
@@ -112,7 +105,7 @@ async function runTick(options: { batchSize: number; lockSeconds: number; dryRun
 }
 
 async function main() {
-  await loadRuntimeEnv();
+  await loadProductionEnv();
 
   const workerEnabled = loadCommercialWorkWorkerEnabled();
   const autonomyEnabled = loadAutonomousResponsesEnabled();

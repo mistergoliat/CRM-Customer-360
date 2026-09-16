@@ -18,8 +18,7 @@
  *   npm run worker:turn-settle -- --poll-ms=1000 --limit=20
  */
 
-import path from "node:path";
-import { loadEnvFile, PROJECT_ROOT } from "./db-utils";
+import { loadProductionEnv } from "./db-utils";
 
 const DEFAULT_POLL_MS = 1000; // settle windows are seconds-scale, unlike the 30s follow-up worker
 const DEFAULT_LIMIT = 20;
@@ -35,13 +34,6 @@ function readIntArg(name: string, fallback: number): number {
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-async function loadRuntimeEnv() {
-  // Same convention as worker:followup/worker:outbox/worker:commercial-work -
-  // the deployment environment (.env) is authoritative for a production
-  // worker process, never infra/.env's local-Docker DB_* values.
-  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), true);
 }
 
 let workerRunning = true;
@@ -72,7 +64,7 @@ async function closeGracefully() {
 }
 
 async function main() {
-  await loadRuntimeEnv();
+  await loadProductionEnv();
 
   const pollMs = readIntArg("poll-ms", DEFAULT_POLL_MS);
   const limit = readIntArg("limit", DEFAULT_LIMIT);

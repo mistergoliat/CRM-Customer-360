@@ -20,8 +20,7 @@
  *   npm run worker:followup -- --poll-ms=30000 --limit=10 --dry-run
  */
 
-import path from "node:path";
-import { loadEnvFile, PROJECT_ROOT } from "./db-utils";
+import { loadProductionEnv } from "./db-utils";
 import { loadFollowUpWorkerRuntimeConfig, assertFollowUpWorkerRuntimeConfigIsSafe } from "../lib/brain/runtime/autonomousRuntimeConfig";
 
 const DEFAULT_POLL_MS = 30000; // check every 30s — don't need sub-minute precision
@@ -52,12 +51,6 @@ function readBoolArg(name: string, fallback = false): boolean {
 // pipeline (BRAIN_SALES_AGENT_ENABLED, BRAIN_COMMERCIAL_*, BRAIN_EXECUTION_
 // GATE_ENABLED, BRAIN_OUTBOX_BRIDGE_ENABLED, etc.) in .env/.env.local
 // themselves; an unset flag stays disabled, same as any other process.
-async function loadRuntimeEnv() {
-  // Production workers use the deployment environment as the authoritative
-  // source. Do not let infra/.env replace DATABASE_URL with local Docker DB_*.
-  await loadEnvFile(path.resolve(PROJECT_ROOT, ".env"), true);
-}
-
 const AUTONOMOUS_CYCLE_STATUS_FLAGS = [
   "BRAIN_SALES_AGENT_ENABLED",
   "BRAIN_SALES_AGENT_DRY_RUN",
@@ -112,7 +105,7 @@ async function closeGracefully() {
 }
 
 async function main() {
-  await loadRuntimeEnv();
+  await loadProductionEnv();
 
   // ACS-R1-05-T06.1: fail closed before polling starts, not on the first
   // tick - a partial chain (some of the five structural flags true, others
