@@ -38,14 +38,26 @@ function readIntArg(name: string, fallback: number): number {
 
 let workerRunning = true;
 
+async function loadTurnSettlementModule() {
+  const imported = await import("../lib/brain/commercial/turn-settlement");
+
+  return (
+    imported.default && typeof imported.default === "object"
+      ? imported.default
+      : imported
+  ) as typeof import("../lib/brain/commercial/turn-settlement");
+}
+
 async function runTick(limit: number) {
-  const { runTurnSettleTick } = await import("../lib/brain/commercial/turn-settlement");
-  const result = await runTurnSettleTick({ limit });
+  const turnSettlement = await loadTurnSettlementModule();
+  const result = await turnSettlement.runTurnSettleTick({ limit });
+
   if (result.processed > 0) {
     console.log(
       `[worker:turn-settle] tick summary processed=${result.processed} settled=${result.settled} superseded=${result.superseded} reclaimed=${result.reclaimed} failed=${result.failed}`
     );
   }
+
   return result.processed;
 }
 
@@ -69,8 +81,8 @@ async function main() {
   const pollMs = readIntArg("poll-ms", DEFAULT_POLL_MS);
   const limit = readIntArg("limit", DEFAULT_LIMIT);
 
-  const { loadTurnSettlementConfig } = await import("../lib/brain/commercial/turn-settlement");
-  const config = loadTurnSettlementConfig();
+  const turnSettlement = await loadTurnSettlementModule();
+  const config = turnSettlement.loadTurnSettlementConfig();
   console.log(
     `[worker:turn-settle] starting — pollMs=${pollMs} limit=${limit} settleDelayMs=${config.settleDelayMs} maxSettleMs=${config.maxSettleMs}`
   );
