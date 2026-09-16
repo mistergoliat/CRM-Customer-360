@@ -1,4 +1,5 @@
 import { AGENT_STEP_TYPES, type AgentStep, type AgentStepType, type PendingCatalogActionStep } from "./agentStepTypes";
+import { parseCommercialProposalV1 } from "../commercial-proposal";
 
 const MAX_MESSAGE_LENGTH = 2000;
 const MAX_REASON_LENGTH = 500;
@@ -124,12 +125,31 @@ export function validateAgentStep(raw: unknown, allowedTypes: readonly AgentStep
     }
     const trimmed = message.trim().slice(0, MAX_MESSAGE_LENGTH);
     const pendingCatalogAction = parsePendingCatalogAction(raw.pendingCatalogAction);
-    return { status: "valid", step: { type: "respond", message: trimmed, ...(pendingCatalogAction ? { pendingCatalogAction } : {}) } };
+    const commercialProposal = parseCommercialProposalV1(raw.commercialProposal);
+
+    return {
+      status: "valid",
+      step: {
+        type: "respond",
+        message: trimmed,
+        ...(pendingCatalogAction ? { pendingCatalogAction } : {}),
+        ...(commercialProposal ? { commercialProposal } : {})
+      }
+    };
   }
 
   const reason = raw.reason;
   if (typeof reason !== "string" || !reason.trim()) {
     return { status: "invalid", reason: "AgentStep.reason is required for handoff.", reasonCode: "missing_required_field" };
   }
-  return { status: "valid", step: { type: "handoff", reason: reason.trim().slice(0, MAX_REASON_LENGTH) } };
+  const commercialProposal = parseCommercialProposalV1(raw.commercialProposal);
+
+  return {
+    status: "valid",
+    step: {
+      type: "handoff",
+      reason: reason.trim().slice(0, MAX_REASON_LENGTH),
+      ...(commercialProposal ? { commercialProposal } : {})
+    }
+  };
 }

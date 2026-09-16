@@ -1656,3 +1656,71 @@ test("[TR-B4.1] flag off: semanticVocabulary is ignored entirely - legacy mega-e
   });
   assert.deepEqual(withVocabulary, withoutVocabulary);
 });
+
+// SALES-AGENT-R3-P4 - CommercialProposal is emitted by the same cognition
+// contract, only on terminal steps.
+
+test("[P4-P1] gathering exposes commercialProposal on respond/handoff while use_tool remains unchanged", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    commercialProposalShadowEnabled: true
+  });
+
+  const system = messages[0].content;
+
+  assert.match(system, /commercialProposal is required on respond/);
+  assert.match(system, /commercialProposal is required on handoff/);
+  assert.match(system, /Never emit commercialProposal on use_tool/);
+
+  const useToolShape = '{"type":"use_tool","tool":"<tool name>","arguments":{...}}';
+  assert.ok(system.includes(useToolShape));
+});
+
+test("[P4-P2] finalization requires commercialProposal and exposes no use_tool action", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    availableTools: [],
+    stepsRemaining: 0,
+    identityConfiguration: pesasChileConfig(),
+    commercialProposalShadowEnabled: true
+  });
+
+  const system = messages[0].content;
+
+  assert.match(system, /commercialProposal is required on respond/);
+  assert.match(system, /commercialProposal is required on handoff/);
+  assert.match(system, /use_tool is not available this turn/);
+});
+
+test("[P4-P3] prompt explicitly allows objective=null instead of inventing DISCOVER_NEED", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    commercialProposalShadowEnabled: true
+  });
+
+  const system = messages[0].content;
+
+  assert.match(system, /set objective=null and requestedOutcome=null/);
+  assert.match(system, /set objective=null and requestedOutcome=null/);
+  assert.match(system, /Never emit DISCOVER_NEED, QUOTE\/CONTINUE/);
+  assert.match(system, /NOT a snapshot of the currently active CommercialWork objective/);
+});
+
+test("[P4-P4] SHIPPING is explicitly a requirement and never an objective kind", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    identityConfiguration: pesasChileConfig(),
+    commercialProposalShadowEnabled: true
+  });
+
+  const system = messages[0].content;
+
+  assert.match(system, /SHIPPING is not an objective kind/);
+  assert.match(system, /DISCOVER_NEED, SELECT_PRODUCTS, QUOTE, ORDER, AFTER_SALES only/);
+});

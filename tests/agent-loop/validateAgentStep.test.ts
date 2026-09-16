@@ -142,3 +142,115 @@ test("filters blank/non-string candidateProductIds and caps the list", () => {
     assert.ok((result.step.pendingCatalogAction?.candidateProductIds.length ?? 0) <= 20);
   }
 });
+
+// SALES-AGENT-R3-P4 - CommercialProposal shadow-safe validation.
+
+const P4_VALID_QUOTE_PROPOSAL = {
+  schemaVersion: "1",
+  objective: {
+    kind: "QUOTE",
+    operation: "CONTINUE",
+    confidence: "HIGH"
+  },
+  requestedOutcome: "QUOTE_CREATION",
+  requirementSignals: [
+    { requirement: "DESTINATION", signal: "PROVIDED" }
+  ],
+  evidenceCodes: ["EXPLICIT_QUOTE_CONTINUATION"],
+  ambiguity: {
+    present: false,
+    reasonCode: null
+  }
+};
+
+test("[P4-V1] respond preserves a valid commercialProposal", () => {
+  const result = validateAgentStep({
+    type: "respond",
+    message: "Continuo con la cotizacion.",
+    commercialProposal: P4_VALID_QUOTE_PROPOSAL
+  });
+
+  assert.equal(result.status, "valid");
+  if (result.status === "valid" && result.step.type === "respond") {
+    assert.deepEqual(result.step.commercialProposal, P4_VALID_QUOTE_PROPOSAL);
+  }
+});
+
+test("[P4-V2] malformed commercialProposal is dropped without invalidating respond", () => {
+  const result = validateAgentStep({
+    type: "respond",
+    message: "Continuo.",
+    commercialProposal: {
+      ...P4_VALID_QUOTE_PROPOSAL,
+      objective: {
+        kind: "INVENTED_OBJECTIVE",
+        operation: "CONTINUE",
+        confidence: "HIGH"
+      }
+    }
+  });
+
+  assert.equal(result.status, "valid");
+  if (result.status === "valid" && result.step.type === "respond") {
+    assert.equal("commercialProposal" in result.step, false);
+  }
+});
+
+test("[P4-V3] handoff preserves a valid commercialProposal", () => {
+  const result = validateAgentStep({
+    type: "handoff",
+    reason: "customer_requested_human",
+    commercialProposal: {
+      ...P4_VALID_QUOTE_PROPOSAL,
+      objective: {
+        kind: "AFTER_SALES",
+        operation: "CONTINUE",
+        confidence: "HIGH"
+      },
+      requestedOutcome: "AFTER_SALES_RESOLUTION"
+    }
+  });
+
+  assert.equal(result.status, "valid");
+  if (result.status === "valid" && result.step.type === "handoff") {
+    assert.equal(result.step.commercialProposal?.objective?.kind, "AFTER_SALES");
+  }
+});
+
+test("[P4-V4] use_tool never carries commercialProposal through validation", () => {
+  const result = validateAgentStep({
+    type: "use_tool",
+    tool: "get_quote",
+    arguments: {},
+    commercialProposal: P4_VALID_QUOTE_PROPOSAL
+  });
+
+  assert.equal(result.status, "valid");
+  if (result.status === "valid" && result.step.type === "use_tool") {
+    assert.equal("commercialProposal" in result.step, false);
+  }
+});
+
+test("[P4-V5] objective=null is valid for a terminal acknowledgement proposal", () => {
+  const result = validateAgentStep({
+    type: "respond",
+    message: "Perfecto.",
+    commercialProposal: {
+      schemaVersion: "1",
+      objective: null,
+      requestedOutcome: null,
+      requirementSignals: [],
+      evidenceCodes: ["COURTESY_ACKNOWLEDGEMENT"],
+      ambiguity: {
+        present: false,
+        reasonCode: null
+      }
+    }
+  });
+
+  assert.equal(result.status, "valid");
+  if (result.status === "valid" && result.step.type === "respond") {
+    assert.equal(result.step.commercialProposal?.objective, null);
+    assert.equal(result.step.commercialProposal?.requestedOutcome, null);
+  }
+});

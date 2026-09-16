@@ -914,3 +914,115 @@ test("the result exposes only structured, bounded fields - no chain-of-thought",
     ].sort()
   );
 });
+
+// ---------------------------------------------------------------------------
+// SALES-AGENT-R3-P4 - CommercialProposal runtime propagation.
+// ---------------------------------------------------------------------------
+
+const P4_RUNTIME_QUOTE_PROPOSAL = {
+  schemaVersion: "1" as const,
+  objective: {
+    kind: "QUOTE" as const,
+    operation: "CONTINUE" as const,
+    confidence: "HIGH" as const
+  },
+  requestedOutcome: "QUOTE_CREATION" as const,
+  requirementSignals: [
+    {
+      requirement: "DESTINATION" as const,
+      signal: "PROVIDED" as const
+    }
+  ],
+  evidenceCodes: ["EXPLICIT_QUOTE_CONTINUATION"],
+  ambiguity: {
+    present: false,
+    reasonCode: null
+  }
+};
+
+test("[P4-R1] terminal respond exposes the same commercialProposal on SalesAgentRuntimeResult", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: "Continuo con la cotizacion.",
+        commercialProposal: P4_RUNTIME_QUOTE_PROPOSAL
+      }
+    ]
+  });
+
+  const result = await runSalesAgentRuntime(
+    runtimeInput({
+      event: baseEvent({
+        messageText: "continua con la cotizacion"
+      }),
+      provider
+    })
+  );
+
+  assert.equal(result.status, "responded");
+  assert.deepEqual(result.commercialProposal, P4_RUNTIME_QUOTE_PROPOSAL);
+});
+
+test("[P4-R2] terminal handoff exposes the same commercialProposal on SalesAgentRuntimeResult", async () => {
+  const proposal = {
+    schemaVersion: "1" as const,
+    objective: {
+      kind: "AFTER_SALES" as const,
+      operation: "CONTINUE" as const,
+      confidence: "HIGH" as const
+    },
+    requestedOutcome: "AFTER_SALES_RESOLUTION" as const,
+    requirementSignals: [],
+    evidenceCodes: ["CUSTOMER_REQUESTED_HUMAN"],
+    ambiguity: {
+      present: false,
+      reasonCode: null
+    }
+  };
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "handoff",
+        reason: "customer_requested_human",
+        commercialProposal: proposal
+      }
+    ]
+  });
+
+  const result = await runSalesAgentRuntime(
+    runtimeInput({
+      event: baseEvent({
+        messageText: "quiero hablar con una persona"
+      }),
+      provider
+    })
+  );
+
+  assert.equal(result.status, "handoff");
+  assert.deepEqual(result.commercialProposal, proposal);
+});
+
+test("[P4-R3] terminal response without a valid proposal exposes commercialProposal=null", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: "Perfecto."
+      }
+    ]
+  });
+
+  const result = await runSalesAgentRuntime(
+    runtimeInput({
+      event: baseEvent({
+        messageText: "gracias"
+      }),
+      provider
+    })
+  );
+
+  assert.equal(result.status, "responded");
+  assert.equal(result.commercialProposal, null);
+});

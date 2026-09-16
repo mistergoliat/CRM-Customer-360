@@ -1,3 +1,4 @@
+import type { CommercialProposalV1 } from "../commercial-proposal";
 /**
  * ACS-R1-05.1-T02.1 (Native Read-Only Agent Tool Loop). Minimal per-step
  * contract: the model answers exactly one question per call - "what is the
@@ -57,16 +58,28 @@ export type PendingCatalogActionStep = {
   candidateProducts?: PendingCatalogActionCandidateProduct[];
 };
 
+
 export type AgentStepRespond = {
   type: "respond";
   message: string;
   /** Present only when this reply introduces or renews a pending catalog action; absent means none is open after this turn. */
   pendingCatalogAction?: PendingCatalogActionStep;
+  /**
+   * SALES-AGENT-R3-P4. Final commercial interpretation proposed by the same
+   * cognition call that authored this terminal response. Proposal only:
+   * never mutates CommercialWork and never owns durable objective state.
+   */
+  commercialProposal?: CommercialProposalV1;
 };
 
 export type AgentStepHandoff = {
   type: "handoff";
   reason: string;
+  /**
+   * SALES-AGENT-R3-P4. Same proposal contract as AgentStepRespond.
+   * Optional and shadow-safe during P4.
+   */
+  commercialProposal?: CommercialProposalV1;
 };
 
 export type AgentStep = AgentStepUseTool | AgentStepRespond | AgentStepHandoff;
@@ -289,6 +302,13 @@ export type AgentLoopResult = {
   toolExecutionCount: number;
   finalMessage: string | null;
   handoffReason: string | null;
+  /**
+   * SALES-AGENT-R3-P4. Commercial interpretation carried only by the
+   * accepted terminal respond/handoff step. Null for technical terminals,
+   * provider failures, timeouts, or terminal steps that emitted no valid
+   * proposal. Proposal only; never durable CommercialWork state.
+   */
+  finalCommercialProposal?: CommercialProposalV1 | null;
   warnings: string[];
   /** Present only when terminalReason is "provider_unavailable" and a real provider error was caught (never fabricated). */
   providerFailure?: AgentLoopProviderFailure | null;

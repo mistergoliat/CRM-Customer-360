@@ -8,6 +8,7 @@ import type {
   CommercialEventSource,
   CommercialEventType,
   CommercialEventV1,
+  CommercialProposalShadowBuiltPayload,
   CommercialWorkAsyncDeliveryEvaluatedPayload,
   CommercialWorkInboundCycleCompletedPayload,
   CommercialWorkKernelResolvedPayload,
@@ -42,6 +43,7 @@ import {
   buildAutonomousTurnDispositionDedupeKey,
   buildCommercialEventCorrelationId,
   buildCommercialEventId,
+  buildCommercialProposalShadowBuiltDedupeKey,
   buildCommercialStatusEventDedupeKey,
   buildCommercialWorkAsyncDeliveryEvaluatedDedupeKey,
   buildCommercialWorkKernelResolvedDedupeKey,
@@ -995,6 +997,42 @@ export function normalizePersistentSessionCognitionAppliedEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "persistent_session_cognition_applied" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-P4. One durable, PII-safe observation of the terminal
+ * CommercialProposal emitted by the same R3 harness invocation path.
+ * Descriptive shadow only; never authoritative CommercialWork state.
+ */
+export function normalizeCommercialProposalShadowBuiltEvent(input: {
+  inboundMessageId: string;
+  payload: CommercialProposalShadowBuiltPayload;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = input.inboundMessageId.trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+
+  return buildBaseEvent({
+    eventType: "commercial_proposal_shadow_built",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildCommercialProposalShadowBuiltDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: input.payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "commercial_proposal_shadow_built" }
   });
 }
 

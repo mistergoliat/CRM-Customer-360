@@ -1,3 +1,4 @@
+import type { CommercialProposalV1 } from "../commercial-proposal";
 import { createCatalogPort } from "@/lib/catalog";
 import { executeGovernedCapability } from "../capability-gateway/executeCapability";
 import { insertCapabilityExecution } from "../capability-gateway/repository";
@@ -233,6 +234,12 @@ export type RunAgentToolLoopInput = {
    * byte-identical to before this task - see buildAgentStepPromptPackage.ts.
    */
   harnessAlignedMessageModelEnabled?: boolean;
+  /**
+   * SALES-AGENT-R3-P4. Enables the structured CommercialProposal terminal
+   * companion in the provider prompt. Default false/absent preserves the
+   * exact pre-P4 prompt contract.
+   */
+  commercialProposalShadowEnabled?: boolean;
 };
 
 /**
@@ -1036,6 +1043,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     toolExecutionCount,
     finalMessage: null,
     handoffReason: null,
+    finalCommercialProposal: null,
     warnings,
     providerFailure: providerFailure ?? null,
     finalPendingCatalogAction: null,
@@ -1137,6 +1145,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       toolExecutionCount,
       finalMessage,
       handoffReason: null,
+      finalCommercialProposal: step.commercialProposal ?? null,
       warnings,
       finalPendingCatalogAction,
       llmCalls,
@@ -1160,13 +1169,17 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   };
 
   /** Same shape both phases' handoff branches return - kept as one closure so the new observational fields can never drift out of sync between them. */
-  const handoffResult = (reason: string): AgentLoopResult => ({
+  const handoffResult = (
+    reason: string,
+    commercialProposal: CommercialProposalV1 | undefined = undefined
+  ): AgentLoopResult => ({
     ran: true,
     terminalReason: "handoff",
     steps,
     toolExecutionCount,
     finalMessage: null,
     handoffReason: reason,
+    finalCommercialProposal: commercialProposal ?? null,
     warnings,
     finalPendingCatalogAction: null,
     llmCalls,
@@ -1251,6 +1264,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null,
       conversationContinuity: input.conversationContinuity ?? null,
       harnessAlignedMessageModelEnabled,
+      commercialProposalShadowEnabled: input.commercialProposalShadowEnabled,
       customerMessageFragments,
       semanticVocabulary
     });
@@ -1369,7 +1383,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
         }
       }
       steps.push({ stepIndex: decisionIndex, step, governance: null, observation: null, phase: "gathering" });
-      return step.type === "respond" ? respondedResult(step) : handoffResult(step.reason);
+      return step.type === "respond" ? respondedResult(step) : handoffResult(step.reason, step.commercialProposal);
     }
 
     const toolObservationsThisTurn = steps.map((record) => record.observation).filter((observation): observation is ToolObservation => observation !== null);
@@ -1529,6 +1543,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       persistentSessionHistoricalMessages: input.persistentSessionHistoricalMessages ?? null,
       conversationContinuity: input.conversationContinuity ?? null,
       harnessAlignedMessageModelEnabled,
+      commercialProposalShadowEnabled: input.commercialProposalShadowEnabled,
       customerMessageFragments,
       semanticVocabulary
     });
@@ -1627,7 +1642,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       }
 
       steps.push({ stepIndex: steps.length, step, governance: null, observation: null, phase: "finalization" });
-      return step.type === "respond" ? respondedResult(step) : handoffResult(step.reason);
+      return step.type === "respond" ? respondedResult(step) : handoffResult(step.reason, step.commercialProposal);
     }
   }
 }

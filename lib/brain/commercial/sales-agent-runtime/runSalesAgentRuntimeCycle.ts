@@ -29,7 +29,10 @@ import {
 } from "../agent-turn-input/shadow";
 import type { CommercialDomainReadModel } from "../domain-read-model";
 import { ensureCommercialWorkCase } from "../work/ensureCommercialWorkCase";
-import { recordCommercialWorkKernelResolvedEvent } from "../events/service";
+import {
+  recordCommercialProposalShadowBuiltEvent,
+  recordCommercialWorkKernelResolvedEvent
+} from "../events/service";
 
 // SALES-AGENT-R3-V1.4/V1.5/V1.6. The channel-adapter/dispatch seam around
 // SalesAgentRuntime (V1.3) - deliberately NOT part of the runtime module
@@ -129,6 +132,8 @@ export type RunSalesAgentRuntimeCycleInput = {
   harnessAlignedMessageModelEnabled?: boolean;
   /** SALES-AGENT-R3-P2. Resolved by the caller from BRAIN_R3_AGENT_TURN_INPUT_SHADOW_ENABLED; default false. */
   agentTurnInputShadowEnabled?: boolean;
+  /** SALES-AGENT-R3-P4. Same-harness CommercialProposal shadow; default false and independent from P2. */
+  commercialProposalShadowEnabled?: boolean;
   /** Test/DI seam for the P2 read-only domain builder; production uses the real P0 wiring below. */
   buildAgentTurnInputShadowDomainReadModel?: () => Promise<CommercialDomainReadModel>;
   /** SALES-AGENT-R3-P3.5. Resolved by the caller from BRAIN_R3_COMMERCIAL_WORK_KERNEL_ENABLED; default false. */
@@ -458,6 +463,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     refreshCommercialContextSummary: input.refreshCommercialContextSummary,
     openTurnExecutionEnabled: input.openTurnExecutionEnabled,
     harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled,
+    commercialProposalShadowEnabled: input.commercialProposalShadowEnabled,
     agentTurnInputShadow
   });
 
@@ -479,6 +485,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     toolExecutionCount: runtime.toolCalls,
     finalMessage: runtime.responseText,
     handoffReason: runtime.status === "handoff" ? runtime.reason : null,
+    finalCommercialProposal: runtime.commercialProposal,
     warnings: runtime.warnings,
     finalPendingCatalogAction: runtime.finalPendingCatalogAction,
     llmCalls: []
@@ -639,6 +646,46 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
         outboxId: dispatch.outboxId
       })
     : null;
+
+  // SALES-AGENT-R3-P4. Shadow-only observation of the commercial proposal
+  // emitted by the same R3 cognition path. Never mutates CommercialWork and
+  // never performs an additional domain read. A missing/invalid proposal is
+  // recorded as proposalPresent=false so model adherence remains measurable.
+  if (input.commercialProposalShadowEnabled) {
+    const proposal = runtime.commercialProposal;
+
+    try {
+      const result = await recordCommercialProposalShadowBuiltEvent({
+        inboundMessageId: input.inboundMessageId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        opportunityId: runtime.resolvedOpportunityId,
+        payload: {
+          schemaVersion: "1",
+          inboundMessageId: input.inboundMessageId,
+          workId: runtime.agentTurnInputShadow?.case.workId ?? null,
+          workVersion: runtime.agentTurnInputShadow?.case.workVersion ?? null,
+          proposalPresent: proposal !== null,
+          objectiveKind: proposal?.objective?.kind ?? null,
+          operation: proposal?.objective?.operation ?? null,
+          confidence: proposal?.objective?.confidence ?? null,
+          requestedOutcome: proposal?.requestedOutcome ?? null,
+          requirementSignals: proposal?.requirementSignals ?? [],
+          evidenceCodes: proposal?.evidenceCodes ?? [],
+          ambiguityPresent: proposal?.ambiguity.present ?? null,
+          ambiguityReasonCode: proposal?.ambiguity.reasonCode ?? null,
+          terminalReason: loop.terminalReason
+        }
+      });
+
+      if (!result.ok) {
+        loop.warnings.push(`commercial_proposal_shadow_event_write_failed:${result.warning}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown";
+      loop.warnings.push(`commercial_proposal_shadow_event_write_failed:${message}`);
+    }
+  }
 
   return { runtime, dispatch, humanOwnerActive, aiBlocked, agentTurnInputShadow: finalizedAgentTurnInputShadow };
 }

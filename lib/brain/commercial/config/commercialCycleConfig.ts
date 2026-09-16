@@ -351,6 +351,25 @@ export function buildAgentTurnInputShadowFeatureFlags(overrides?: Partial<{ agen
 }
 
 /**
+ * SALES-AGENT-R3-P4. Fail-closed shadow toggle for the structured
+ * CommercialProposal emitted by the same R3 cognition call that produces
+ * the terminal AgentStep. Independent from P2 AgentTurnInput shadow and
+ * P3.5 CommercialWork kernel bootstrap. OFF preserves the pre-P4 provider
+ * prompt and emits no P4 shadow event.
+ */
+export function buildCommercialProposalShadowFeatureFlags(
+  overrides?: Partial<{ commercialProposalShadowEnabled: boolean }>
+) {
+  return {
+    commercialProposalShadowEnabled: readEnvFlag(
+      "BRAIN_R3_COMMERCIAL_PROPOSAL_SHADOW_ENABLED",
+      false
+    ),
+    ...(overrides ?? {})
+  };
+}
+
+/**
  * SALES-AGENT-R3-P3.5. Fail-closed (default false) toggle for the
  * CommercialWork durable case-kernel bootstrap (ensureCommercialWorkCase.ts)
  * at the real R3 cognition boundary. Deliberately its own flag, never

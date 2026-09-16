@@ -461,3 +461,80 @@ test("[AE35] agent_tool_loop_completed omits pendingCatalogAction entirely when 
   const persistedPayload = JSON.parse(row.rows[0]?.payload_json ?? "{}");
   assert.equal("pendingCatalogAction" in persistedPayload, false);
 });
+
+// SALES-AGENT-R3-P4 - CommercialProposal shadow event normalization.
+
+test("[P4-E1] commercial proposal shadow event has stable type, dedupe and PII-safe payload", async () => {
+  const { normalizeCommercialProposalShadowBuiltEvent } = await import(
+    "@/lib/brain/commercial/events/normalize"
+  );
+
+  const event = normalizeCommercialProposalShadowBuiltEvent({
+    inboundMessageId: "wamid.p4.event.1",
+    correlationId: "corr-p4-event-1",
+    conversationId: 123,
+    opportunityId: 456,
+    payload: {
+      schemaVersion: "1",
+      inboundMessageId: "wamid.p4.event.1",
+      workId: "cw-test",
+      workVersion: 3,
+      proposalPresent: true,
+      objectiveKind: "QUOTE",
+      operation: "CONTINUE",
+      confidence: "HIGH",
+      requestedOutcome: "QUOTE_CREATION",
+      requirementSignals: [
+        { requirement: "DESTINATION", signal: "PROVIDED" }
+      ],
+      evidenceCodes: ["EXPLICIT_QUOTE_CONTINUATION"],
+      ambiguityPresent: false,
+      ambiguityReasonCode: null,
+      terminalReason: "responded"
+    }
+  });
+
+  assert.equal(event.eventType, "commercial_proposal_shadow_built");
+  assert.equal(event.sourceEventId, "wamid.p4.event.1");
+  assert.equal(
+    event.dedupeKey,
+    "commercial-proposal-shadow-built:wamid.p4.event.1"
+  );
+  assert.equal(event.payload.proposalPresent, true);
+  assert.equal(event.payload.objectiveKind, "QUOTE");
+
+  const serialized = JSON.stringify(event.payload);
+  assert.equal(serialized.includes("customerMessage"), false);
+  assert.equal(serialized.includes("responseText"), false);
+  assert.equal(serialized.includes("reasoning"), false);
+});
+
+test("[P4-E2] missing model proposal is representable as proposalPresent=false", async () => {
+  const { normalizeCommercialProposalShadowBuiltEvent } = await import(
+    "@/lib/brain/commercial/events/normalize"
+  );
+
+  const event = normalizeCommercialProposalShadowBuiltEvent({
+    inboundMessageId: "wamid.p4.event.2",
+    payload: {
+      schemaVersion: "1",
+      inboundMessageId: "wamid.p4.event.2",
+      workId: null,
+      workVersion: null,
+      proposalPresent: false,
+      objectiveKind: null,
+      operation: null,
+      confidence: null,
+      requestedOutcome: null,
+      requirementSignals: [],
+      evidenceCodes: [],
+      ambiguityPresent: null,
+      ambiguityReasonCode: null,
+      terminalReason: "responded"
+    }
+  });
+
+  assert.equal(event.payload.proposalPresent, false);
+  assert.equal(event.payload.objectiveKind, null);
+  assert.equal(event.payload.operation, null);
+});

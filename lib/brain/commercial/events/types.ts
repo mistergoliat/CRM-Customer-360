@@ -66,6 +66,10 @@ export type CommercialEventType =
   // evidence only - the durable work/objective domains remain authoritative
   // and the AgentTurnInput is never persisted.
   | "agent_turn_input_shadow_built"
+  // SALES-AGENT-R3-P4. One PII-safe observation of the same R3 harness'
+  // terminal commercial proposal per inbound turn. Descriptive shadow only;
+  // CommercialWork remains authoritative and is never mutated by this event.
+  | "commercial_proposal_shadow_built"
   // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. One per (workPublicId, version)
   // whose durable status was evaluated for customer-visible async delivery
   // (worker step completion or the recovery sweep) - descriptive only, the
@@ -631,6 +635,26 @@ export type PersistentSessionCognitionAppliedPayload = {
   active: boolean;
   fallbackReason: string | null;
   historyMessageCount: number;
+};
+
+export type CommercialProposalShadowBuiltPayload = {
+  schemaVersion: "1";
+  inboundMessageId: string;
+  workId: string | null;
+  workVersion: number | null;
+  proposalPresent: boolean;
+  objectiveKind: string | null;
+  operation: string | null;
+  confidence: string | null;
+  requestedOutcome: string | null;
+  requirementSignals: Array<{
+    requirement: string;
+    signal: string;
+  }>;
+  evidenceCodes: string[];
+  ambiguityPresent: boolean | null;
+  ambiguityReasonCode: string | null;
+  terminalReason: string;
 };
 
 export type AgentTurnInputShadowBuiltPayload = {

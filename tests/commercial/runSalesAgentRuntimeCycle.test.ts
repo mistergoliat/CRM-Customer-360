@@ -14,6 +14,10 @@ import { createMariaDbAgentSessionStore } from "@/lib/brain/commercial/agent-ses
 import type { AgentSessionStore } from "@/lib/brain/commercial/agent-session/store";
 import type { CommercialContextSnapshot } from "@/lib/brain/commercial/context/buildNativeCommercialContext";
 import {
+  makeCommercialFreshness,
+  type CommercialDomainReadModel
+} from "@/lib/brain/commercial/domain-read-model";
+import {
   SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
   SALES_AGENT_CONFIGURATION_SCOPE,
   SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT,
@@ -803,4 +807,247 @@ test("[D7-CC3] sessionCompactionEnabled true but the compaction model fails: the
 
   const session = await store.loadSessionForConversation(conversationId);
   assert.equal(session?.compactedThroughSeq, null);
+});
+
+// ---------------------------------------------------------------------------
+// SALES-AGENT-R3-P4 - CommercialProposal terminal cognition shadow.
+// ---------------------------------------------------------------------------
+
+function buildP4DomainReadModel(conversationId: number): CommercialDomainReadModel {
+  return {
+    case: {
+      caseId: `commercial-case-${conversationId}`,
+      conversationId,
+      opportunityId: 7001,
+      workId: `cw-p4-${conversationId}`,
+      workVersion: 4,
+      status: "ACTIVE",
+      blockers: [],
+      freshness: makeCommercialFreshness({
+        state: "CURRENT",
+        source: "crm_commercial_work",
+        sourceVersion: 4
+      })
+    },
+    objective: {
+      objectiveId: `objective-p4-${conversationId}`,
+      type: "CREATE_QUOTE",
+      status: "IN_PROGRESS",
+      missingRequirements: ["SHIPPING"],
+      blockers: [],
+      freshness: makeCommercialFreshness({
+        state: "CURRENT",
+        source: "crm_commercial_work",
+        sourceVersion: 4
+      })
+    },
+    cart: {
+      factId: `cart-p4-${conversationId}`,
+      updatedAt: "2026-09-16T12:00:00.000Z",
+      items: [
+        {
+          productId: "501",
+          combinationId: null,
+          quantity: 1,
+          product: null,
+          freshness: makeCommercialFreshness({
+            state: "CURRENT",
+            source: "crm_request_facts:commercial_line_items"
+          })
+        }
+      ],
+      freshness: makeCommercialFreshness({
+        state: "CURRENT",
+        source: "crm_request_facts:commercial_line_items"
+      })
+    },
+    destination: {
+      factId: `destination-p4-${conversationId}`,
+      communeId: 134,
+      canonicalName: "San Bernardo",
+      updatedAt: "2026-09-16T12:00:00.000Z",
+      freshness: makeCommercialFreshness({
+        state: "CURRENT",
+        source: "crm_request_facts:shipping_destination"
+      })
+    },
+    shipping: {
+      state: "MISSING",
+      selection: null,
+      calculation: null,
+      freshness: makeCommercialFreshness({
+        state: "UNKNOWN",
+        source: "crm_request_facts:selected_shipping_option",
+        reason: "shipping_calculation_missing"
+      })
+    },
+    quote: null,
+    customer: {
+      status: "unknown",
+      identityLevel: "LEVEL_2_MASTER_RESOLVED",
+      hasResolvedCustomer: true,
+      verificationRequired: false,
+      profile: null
+    },
+    conversation: {
+      conversationId,
+      sessionVersion: `session-p4-${conversationId}`
+    },
+    evidence: []
+  };
+}
+
+async function loadCommercialProposalShadowPayload(inboundMessageId: string) {
+  const rows = await safeQueryRows<{ payload_json: unknown }>(
+    `SELECT payload_json
+       FROM commercial_event
+      WHERE event_type = 'commercial_proposal_shadow_built'
+        AND source_event_id = ?
+      LIMIT 1`,
+    [inboundMessageId]
+  );
+
+  assert.ok(rows.ok, rows.ok ? "" : rows.error);
+
+  const raw = rows.rows[0]?.payload_json;
+  if (raw === undefined || raw === null) return null;
+
+  return typeof raw === "string"
+    ? (JSON.parse(raw) as Record<string, unknown>)
+    : (raw as Record<string, unknown>);
+}
+
+test("[P4-C1] same terminal cognition proposal survives runtime and is persisted as commercial_proposal_shadow_built", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+
+  const proposal = {
+    schemaVersion: "1" as const,
+    objective: {
+      kind: "QUOTE" as const,
+      operation: "CONTINUE" as const,
+      confidence: "HIGH" as const
+    },
+    requestedOutcome: "QUOTE_CREATION" as const,
+    requirementSignals: [
+      {
+        requirement: "DESTINATION" as const,
+        signal: "PROVIDED" as const
+      }
+    ],
+    evidenceCodes: ["EXPLICIT_QUOTE_CONTINUATION"],
+    ambiguity: {
+      present: false,
+      reasonCode: null
+    }
+  };
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: "Continuo con la cotizacion.",
+        commercialProposal: proposal
+      }
+    ]
+  });
+
+  await withEnv(
+    {
+      ...RESPONSE_DISPATCH_ENABLED_ENV,
+      BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId
+    },
+    async () => {
+      const result = await runSalesAgentRuntimeCycle({
+        ...input,
+        customerMessage: "continua con la cotizacion",
+        snapshot: buildSnapshot(),
+        provider,
+        agentTurnInputShadowEnabled: true,
+        buildAgentTurnInputShadowDomainReadModel: async () =>
+          buildP4DomainReadModel(conversationId)
+      });
+
+      assert.equal(result.runtime.status, "responded");
+      assert.deepEqual(result.runtime.commercialProposal, proposal);
+      assert.equal(result.dispatch.outboxWritten, true);
+
+      const payload = await loadCommercialProposalShadowPayload(
+        input.inboundMessageId
+      );
+
+      assert.ok(payload, "commercial_proposal_shadow_built must be persisted");
+      assert.equal(payload!.proposalPresent, true);
+      assert.equal(payload!.objectiveKind, "QUOTE");
+      assert.equal(payload!.operation, "CONTINUE");
+      assert.equal(payload!.confidence, "HIGH");
+      assert.equal(payload!.requestedOutcome, "QUOTE_CREATION");
+      assert.equal(payload!.workId, `cw-p4-${conversationId}`);
+      assert.equal(payload!.workVersion, 4);
+      assert.equal(payload!.terminalReason, "responded");
+
+      assert.deepEqual(payload!.requirementSignals, [
+        {
+          requirement: "DESTINATION",
+          signal: "PROVIDED"
+        }
+      ]);
+
+      assert.deepEqual(payload!.evidenceCodes, [
+        "EXPLICIT_QUOTE_CONTINUATION"
+      ]);
+    }
+  );
+});
+
+test("[P4-C2] terminal response without a valid proposal persists proposalPresent=false without affecting dispatch", async () => {
+  const conversationId = await insertConversation();
+  const input = baseInput(conversationId);
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: "Perfecto."
+      }
+    ]
+  });
+
+  await withEnv(
+    {
+      ...RESPONSE_DISPATCH_ENABLED_ENV,
+      BRAIN_AUTONOMOUS_TEST_WA_IDS: input.waId
+    },
+    async () => {
+      const result = await runSalesAgentRuntimeCycle({
+        ...input,
+        customerMessage: "gracias",
+        snapshot: buildSnapshot(),
+        provider,
+        agentTurnInputShadowEnabled: true,
+        buildAgentTurnInputShadowDomainReadModel: async () =>
+          buildP4DomainReadModel(conversationId)
+      });
+
+      assert.equal(result.runtime.status, "responded");
+      assert.equal(result.runtime.commercialProposal, null);
+      assert.equal(result.dispatch.outboxWritten, true);
+
+      const payload = await loadCommercialProposalShadowPayload(
+        input.inboundMessageId
+      );
+
+      assert.ok(payload, "missing proposal must still produce shadow evidence");
+      assert.equal(payload!.proposalPresent, false);
+      assert.equal(payload!.objectiveKind, null);
+      assert.equal(payload!.operation, null);
+      assert.equal(payload!.confidence, null);
+      assert.equal(payload!.requestedOutcome, null);
+      assert.deepEqual(payload!.requirementSignals, []);
+      assert.deepEqual(payload!.evidenceCodes, []);
+      assert.equal(payload!.ambiguityPresent, null);
+      assert.equal(payload!.ambiguityReasonCode, null);
+      assert.equal(payload!.terminalReason, "responded");
+    }
+  );
 });

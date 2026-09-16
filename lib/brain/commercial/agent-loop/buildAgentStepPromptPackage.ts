@@ -130,6 +130,12 @@ export type AgentLoopPromptInput = {
    */
   harnessAlignedMessageModelEnabled?: boolean;
   /**
+   * SALES-AGENT-R3-P4. When true, terminal respond/handoff must include the
+   * structured CommercialProposal companion. False/absent preserves the
+   * pre-P4 AgentStep prompt contract.
+   */
+  commercialProposalShadowEnabled?: boolean;
+  /**
    * SALES-AGENT-R3-V1.8.2-C1. Only meaningful when harnessAlignedMessageModelEnabled
    * is true; ignored otherwise. Absent/empty falls back to a single fragment
    * built from customerMessage - see buildAgentStepPromptPackage() below.
@@ -614,30 +620,77 @@ const MULTI_INTENT_PLAN_RULE_LINES = [
   "If multiIntentPlan lists more than one intent this turn, answer all of them in a single consolidated reply - never one message per intent."
 ];
 
-const RESPOND_STEP_SHAPE_WITH_PENDING_ACTION =
+const COMMERCIAL_PROPOSAL_SHAPE =
+  '"commercialProposal":{"schemaVersion":"1","objective":{"kind":"DISCOVER_NEED|SELECT_PRODUCTS|QUOTE|ORDER|AFTER_SALES","operation":"START|CONTINUE|MODIFY|REPLACE|COMPLETE|CANCEL|NONE","confidence":"HIGH|MEDIUM|LOW"},"requestedOutcome":"RECOMMENDATION|PRODUCT_SELECTION|SHIPPING_CALCULATION|QUOTE_CREATION|QUOTE_RETRIEVAL|QUOTE_DELIVERY|ORDER_PROGRESS|AFTER_SALES_RESOLUTION|CLARIFICATION|OTHER|null","requirementSignals":[{"requirement":"PRODUCTS|QUANTITY|BUDGET|DESTINATION|SHIPPING|IDENTITY","signal":"PROVIDED|CHANGED|REQUESTED|AMBIGUOUS"}],"evidenceCodes":["UPPER_SNAKE_CASE"],"ambiguity":{"present":false,"reasonCode":null}}';
+
+const LEGACY_RESPOND_STEP_SHAPE_WITH_PENDING_ACTION =
   '{"type":"respond","message":"...","pendingCatalogAction":{"actionType":"send_product_link","candidateProductIds":["..."]}}. pendingCatalogAction is optional on respond - include it only per the pendingCatalogAction rules above';
+
+const LEGACY_HANDOFF_STEP_SHAPE =
+  '{"type":"handoff","reason":"..."}';
+
+const RESPOND_STEP_SHAPE_WITH_PENDING_ACTION =
+  `{"type":"respond","message":"...",${COMMERCIAL_PROPOSAL_SHAPE},"pendingCatalogAction":{"actionType":"send_product_link","candidateProductIds":["..."]}}. commercialProposal is required on respond. pendingCatalogAction is optional on respond - include it only per the pendingCatalogAction rules above`;
+
+const HANDOFF_STEP_SHAPE =
+  `{"type":"handoff","reason":"...",${COMMERCIAL_PROPOSAL_SHAPE}}. commercialProposal is required on handoff`;
+
+const COMMERCIAL_PROPOSAL_RULE_LINES = [
+  "commercialProposal is your structured interpretation of the customer's commercial objective at the moment you choose a terminal respond or handoff step. It is a proposal only; it never means a backend mutation succeeded.",
+  "Never emit commercialProposal on use_tool.",
+  "Never invent or include workId, objectiveId, workVersion, quoteId, orderId, database ids, or any other durable identifier inside commercialProposal.",
+  "commercialProposal describes the commercial objective transition requested or evidenced by the customer's latest turn; it is NOT a snapshot of the currently active CommercialWork objective, cart, destination, identity, quote state, or prior conversation.",
+  "Existing commercial context and prior ToolObservations may help interpret the latest turn, but they MUST NOT by themselves cause objective to be non-null.",
+  "If the customer's latest turn is only an acknowledgement, courtesy, thanks, farewell, or other message that requests no commercial transition, set objective=null and requestedOutcome=null even when an active quote, selected products, destination, identity, or other commercial state already exists.",
+  "Never emit DISCOVER_NEED, QUOTE/CONTINUE, or any other objective merely because an objective is already active or because a terminal response is required.",
+  "When objective is non-null, choose objective.kind from DISCOVER_NEED, SELECT_PRODUCTS, QUOTE, ORDER, AFTER_SALES only.",
+  "Shipping, destination, identity, budget, products, and quantity are requirements or facts supporting an objective; SHIPPING is not an objective kind.",
+  "Use START when beginning a genuinely new objective, CONTINUE when advancing the same objective, MODIFY when changing details within it, REPLACE when the customer abandons it for another objective, COMPLETE only when the requested commercial outcome is actually complete, CANCEL when explicitly cancelled, and NONE when no objective transition is being proposed.",
+  "evidenceCodes must contain only short UPPER_SNAKE_CASE labels describing observable evidence; never include customer text, private reasoning, chain-of-thought, phone numbers, names, addresses, ids, or free prose.",
+  "If the commercial interpretation is genuinely ambiguous, set ambiguity.present=true and use a short UPPER_SNAKE_CASE reasonCode; otherwise set present=false and reasonCode=null.",
+  "commercialProposal must reflect the latest evidence available in this same turn, including completed ToolObservations."
+];
 
 /**
  * Layer 1: the immutable Agent Tool Loop contract - what actions exist this
  * phase and the exact response shape. Never editable, never touched by
  * configuration.
  */
-function buildLoopContractLines(phase: "gathering" | "finalization", stepsRemaining: number): string[] {
+function buildLoopContractLines(
+  phase: "gathering" | "finalization",
+  stepsRemaining: number,
+  commercialProposalShadowEnabled = false
+): string[] {
+  const respondShape = commercialProposalShadowEnabled
+    ? RESPOND_STEP_SHAPE_WITH_PENDING_ACTION
+    : LEGACY_RESPOND_STEP_SHAPE_WITH_PENDING_ACTION;
+
+  const handoffShape = commercialProposalShadowEnabled
+    ? HANDOFF_STEP_SHAPE
+    : LEGACY_HANDOFF_STEP_SHAPE;
+
+  const commercialProposalRules = commercialProposalShadowEnabled
+    ? COMMERCIAL_PROPOSAL_RULE_LINES
+    : [];
+
   if (phase === "finalization") {
     return [
       "This turn's tool budget is spent - no more tools are available.",
       "You must now either respond to the customer with what you already know, or hand off to a human if you genuinely cannot proceed.",
       RESPOND_JSON_INSTRUCTION,
-      `AgentStep shapes: ${RESPOND_STEP_SHAPE_WITH_PENDING_ACTION} | {"type":"handoff","reason":"..."}. use_tool is not available this turn.`,
+      `AgentStep shapes: ${respondShape} | ${handoffShape}. use_tool is not available this turn.`,
+      ...commercialProposalRules,
       "type must be one of: respond, handoff."
     ];
   }
+
   return [
     "Deciding one step at a time.",
     "You may only: request one read-only tool, respond to the customer, or hand off to a human.",
     `Steps remaining this turn: ${stepsRemaining}.`,
     RESPOND_JSON_INSTRUCTION,
-    `AgentStep shapes: {"type":"use_tool","tool":"<tool name>","arguments":{...}} | ${RESPOND_STEP_SHAPE_WITH_PENDING_ACTION} | {"type":"handoff","reason":"..."}.`,
+    `AgentStep shapes: {"type":"use_tool","tool":"<tool name>","arguments":{...}} | ${respondShape} | ${handoffShape}.`,
+    ...commercialProposalRules,
     `type must be one of: ${AGENT_STEP_TYPES.join(", ")}.`
   ];
 }
@@ -837,7 +890,11 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
 
   const systemInstructions = [
     ...buildPriorAttemptFailureLines(input.priorAttemptFailure),
-    ...buildLoopContractLines(phase, input.stepsRemaining),
+    ...buildLoopContractLines(
+      phase,
+      input.stepsRemaining,
+      input.commercialProposalShadowEnabled === true
+    ),
     ...buildEvidenceAndToolRulesLines(phase, input.availableTools),
     renderSalesAgentIdentityPrompt(input.identityConfiguration),
     IMMUTABLE_CONFIGURATION_BOUNDARY_LINE

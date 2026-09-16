@@ -131,6 +131,12 @@ export function buildAgentTurnInputShadowBuiltDedupeKey(inboundMessageId: string
   return `agent-turn-input-shadow-built:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R3-P4. One commercial-proposal shadow observation per
+// inbound turn. Retries/replays collapse onto the same event.
+export function buildCommercialProposalShadowBuiltDedupeKey(inboundMessageId: string) {
+  return `commercial-proposal-shadow-built:${inboundMessageId.trim()}`;
+}
+
 // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. Keyed on the delivered work
 // version (an optimistic-concurrency identity only one caller can ever
 // legitimately reach - see commercialWorkExecutor.ts), never a random id -

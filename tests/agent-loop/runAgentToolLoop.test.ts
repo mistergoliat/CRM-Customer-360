@@ -3388,3 +3388,105 @@ test("[R3-V1.2 E2E] one durable opportunity across a full browse -> select -> qu
   assert.equal(quoteStep?.observation?.status, "blocked");
   assert.equal(quoteStep?.observation?.errorCode, "master_identity_required");
 });
+
+// SALES-AGENT-R3-P4 - terminal CommercialProposal propagation.
+
+const P4_LOOP_QUOTE_PROPOSAL = {
+  schemaVersion: "1" as const,
+  objective: {
+    kind: "QUOTE" as const,
+    operation: "CONTINUE" as const,
+    confidence: "HIGH" as const
+  },
+  requestedOutcome: "QUOTE_CREATION" as const,
+  requirementSignals: [
+    {
+      requirement: "DESTINATION" as const,
+      signal: "PROVIDED" as const
+    }
+  ],
+  evidenceCodes: ["EXPLICIT_QUOTE_CONTINUATION"],
+  ambiguity: {
+    present: false,
+    reasonCode: null
+  }
+};
+
+test("[P4-L1] terminal respond propagates commercialProposal into finalCommercialProposal", async () => {
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "respond",
+        message: "Continuo con la cotizacion.",
+        commercialProposal: P4_LOOP_QUOTE_PROPOSAL
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "continua con la cotizacion",
+    commercialContextSummary: {},
+    provider
+  });
+
+  assert.equal(result.terminalReason, "responded");
+  assert.deepEqual(result.finalCommercialProposal, P4_LOOP_QUOTE_PROPOSAL);
+});
+
+test("[P4-L2] terminal handoff propagates commercialProposal into finalCommercialProposal", async () => {
+  const proposal = {
+    schemaVersion: "1" as const,
+    objective: {
+      kind: "AFTER_SALES" as const,
+      operation: "CONTINUE" as const,
+      confidence: "HIGH" as const
+    },
+    requestedOutcome: "AFTER_SALES_RESOLUTION" as const,
+    requirementSignals: [],
+    evidenceCodes: ["CUSTOMER_REQUESTED_HUMAN"],
+    ambiguity: {
+      present: false,
+      reasonCode: null
+    }
+  };
+
+  const provider = createFakeAgentLoopProvider({
+    script: [
+      {
+        type: "handoff",
+        reason: "customer_requested_human",
+        commercialProposal: proposal
+      }
+    ]
+  });
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "quiero hablar con una persona",
+    commercialContextSummary: {},
+    provider
+  });
+
+  assert.equal(result.terminalReason, "handoff");
+  assert.deepEqual(result.finalCommercialProposal, proposal);
+});
+
+test("[P4-L3] technical provider failure never fabricates finalCommercialProposal", async () => {
+  const provider: AgentLoopProvider = {
+    name: "p4-throwing-provider",
+    async invoke() {
+      throw new Error("p4 simulated provider failure");
+    }
+  };
+
+  const result = await runAgentToolLoop({
+    ...baseInput,
+    customerMessage: "continua con la cotizacion",
+    commercialContextSummary: {},
+    provider
+  });
+
+  assert.equal(result.terminalReason, "provider_unavailable");
+  assert.equal(result.finalCommercialProposal ?? null, null);
+});

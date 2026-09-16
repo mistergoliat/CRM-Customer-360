@@ -119,6 +119,8 @@ export type SalesAgentRuntimeInput = {
   openTurnExecutionEnabled?: boolean;
   /** SALES-AGENT-R3-V1.8.2-C1 (Harness-Aligned Message Sequencing). Resolved by the caller from BRAIN_R3_HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED - threaded to runAgentToolLoop unchanged. */
   harnessAlignedMessageModelEnabled?: boolean;
+  /** SALES-AGENT-R3-P4. Enables the terminal CommercialProposal prompt contract. Default false. */
+  commercialProposalShadowEnabled?: boolean;
   /** SALES-AGENT-R3-P2. Read-only AgentTurnInput v1 construction, resolved at the R3 cycle boundary. */
   agentTurnInputShadow?: AgentTurnInputShadowRuntimeOptions;
 };
@@ -449,7 +451,8 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     liveTurnAssimilationEnabled: input.liveTurnAssimilationEnabled,
     refreshCommercialContextSummary: input.refreshCommercialContextSummary,
     openTurnExecutionEnabled: input.openTurnExecutionEnabled,
-    harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled
+    harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled,
+    commercialProposalShadowEnabled: input.commercialProposalShadowEnabled
   };
 
   // SALES-AGENT-R3-P2. This is the cognition-adjacent shadow seam: the
@@ -619,6 +622,7 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     commercialActionCalls,
     resolvedOpportunityId,
     finalPendingCatalogAction: loop.finalPendingCatalogAction ?? null,
+    commercialProposal: loop.finalCommercialProposal ?? null,
     durationMs,
     inputTokens,
     outputTokens,

@@ -5,6 +5,7 @@ import {
   normalizeAgentTurnInputShadowBuiltEvent,
   normalizeAutonomousTurnContinuityFailedCommercialEvent,
   normalizeAutonomousTurnDispositionCommercialEvent,
+  normalizeCommercialProposalShadowBuiltEvent,
   normalizeCommercialWorkAsyncDeliveryEvaluatedEvent,
   normalizeCommercialWorkInboundCycleCompletedEvent,
   normalizeCommercialWorkKernelResolvedEvent,
@@ -165,6 +166,14 @@ export async function recordAgentTurnInputShadowBuiltCommercialEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeAgentTurnInputShadowBuiltEvent(input), connection);
+}
+
+// SALES-AGENT-R3-P4. Descriptive shadow only; callers must isolate failures.
+export async function recordCommercialProposalShadowBuiltEvent(
+  input: Parameters<typeof normalizeCommercialProposalShadowBuiltEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCommercialProposalShadowBuiltEvent(input), connection);
 }
 
 // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1.
