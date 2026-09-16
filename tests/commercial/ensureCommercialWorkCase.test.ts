@@ -14,17 +14,16 @@ import {
 // (no local MariaDB/Docker reachable, same limitation documented by every
 // recent SALES-AGENT-R3 task - see docs/releases/SALES-AGENT-R3-P3.5-*.md).
 
-Object.assign(process.env, {
-  NODE_ENV: "development",
-  DB_HOST: "127.0.0.1",
-  DB_PORT: "3306",
-  DB_NAME: "crm_test",
-  DB_USER: "crm_app",
-  DB_PASSWORD: "una_clave_local",
-  DB_URL: "",
-  DATABASE_URL: "",
-  DB_WRITE_ENABLED: "true"
-});
+process.env.NODE_ENV ??= "development";
+process.env.DB_HOST ??= "127.0.0.1";
+process.env.DB_PORT ??= "3306";
+process.env.DB_NAME ??= "crm_test";
+process.env.DB_USER ??= "crm_app";
+process.env.DB_PASSWORD ??= "una_clave_local";
+
+process.env.DB_URL = "";
+process.env.DATABASE_URL = "";
+process.env.DB_WRITE_ENABLED = "true";
 
 const NOW = "2026-09-16T12:00:00.000Z";
 
