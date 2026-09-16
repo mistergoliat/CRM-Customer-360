@@ -351,6 +351,22 @@ export function buildAgentTurnInputShadowFeatureFlags(overrides?: Partial<{ agen
 }
 
 /**
+ * SALES-AGENT-R3-P3.5. Fail-closed (default false) toggle for the
+ * CommercialWork durable case-kernel bootstrap (ensureCommercialWorkCase.ts)
+ * at the real R3 cognition boundary. Deliberately its own flag, never
+ * BRAIN_COMMERCIAL_WORK_RUNTIME_ENABLED - that one belongs to the historical
+ * CommercialWork/R2 cognition runtime and must stay untouched by this
+ * bootstrap. Creates/reuses the durable case row only; never reconciles
+ * objectives, never changes routing, tools, provider input or response.
+ */
+export function buildCommercialWorkKernelFeatureFlags(overrides?: Partial<{ commercialWorkKernelEnabled: boolean }>) {
+  return {
+    commercialWorkKernelEnabled: readEnvFlag("BRAIN_R3_COMMERCIAL_WORK_KERNEL_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
+
+/**
  * SALES-AGENT-R3-V1.8-D5/D6. Fail-closed toggle for LIVE persistent-session
  * cognition - unlike buildPersistentSessionShadowFeatureFlags above (D4,
  * load/derive/compare/discard only), enabling this actually changes what the

@@ -73,7 +73,12 @@ export type CommercialEventType =
   // their absence). Dedupe key is workPublicId:version, so a repeated
   // idempotent re-evaluation of the same already-delivered version is never
   // re-recorded.
-  | "commercial_work_async_delivery_evaluated";
+  | "commercial_work_async_delivery_evaluated"
+  // SALES-AGENT-R3-P3.5. One per inbound turn where the CommercialWork
+  // durable case-kernel bootstrap ran (ensureCommercialWorkCase.ts) -
+  // descriptive only, the durable state is the crm_commercial_work row
+  // itself. Dedupe key is the inbound message id.
+  | "commercial_work_kernel_resolved";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -423,6 +428,16 @@ export type CommercialWorkAsyncDeliveryEvaluatedPayload = {
   disposition: "FINAL" | "PARTIAL" | "BLOCKED" | "fallback" | null;
   suppressionReason: string | null;
   actionPersistenceStatus: string | null;
+};
+
+/**
+ * SALES-AGENT-R3-P3.5. PII-safe: identifiers and the bootstrap outcome only,
+ * never conversation content.
+ */
+export type CommercialWorkKernelResolvedPayload = {
+  workId: string | null;
+  workVersion: number | null;
+  result: "EXISTING" | "CREATED" | "UNAVAILABLE" | "FAILED";
 };
 
 export type AgentToolLoopCompletedRecordedPayload = {

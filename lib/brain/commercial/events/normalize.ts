@@ -10,6 +10,7 @@ import type {
   CommercialEventV1,
   CommercialWorkAsyncDeliveryEvaluatedPayload,
   CommercialWorkInboundCycleCompletedPayload,
+  CommercialWorkKernelResolvedPayload,
   CustomerIdentityCapabilityOutcomeRecordedPayload,
   CustomerIdentityResolutionMatchedBy,
   CustomerIdentityResolutionOutcome,
@@ -43,6 +44,7 @@ import {
   buildCommercialEventId,
   buildCommercialStatusEventDedupeKey,
   buildCommercialWorkAsyncDeliveryEvaluatedDedupeKey,
+  buildCommercialWorkKernelResolvedDedupeKey,
   buildCommercialWorkInboundCycleCompletedDedupeKey,
   buildCustomerIdentityCapabilityOutcomeDedupeKey,
   buildCustomerIdentityResolutionDedupeKey,
@@ -1087,5 +1089,40 @@ export function normalizeCommercialWorkAsyncDeliveryEvaluatedEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "commercial_work_async_delivery_evaluated" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-P3.5. One descriptive event per inbound turn where the
+ * CommercialWork case-kernel bootstrap ran - workId/workVersion/result only,
+ * never conversation content.
+ */
+export function normalizeCommercialWorkKernelResolvedEvent(input: {
+  inboundMessageId: string;
+  payload: CommercialWorkKernelResolvedPayload;
+  correlationId?: string | null;
+  customerId?: string | number | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = input.inboundMessageId.trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  return buildBaseEvent({
+    eventType: "commercial_work_kernel_resolved",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildCommercialWorkKernelResolvedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: input.customerId ?? null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: input.payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "commercial_work_kernel_resolved" }
   });
 }

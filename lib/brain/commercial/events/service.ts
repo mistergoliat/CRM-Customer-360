@@ -7,6 +7,7 @@ import {
   normalizeAutonomousTurnDispositionCommercialEvent,
   normalizeCommercialWorkAsyncDeliveryEvaluatedEvent,
   normalizeCommercialWorkInboundCycleCompletedEvent,
+  normalizeCommercialWorkKernelResolvedEvent,
   normalizeCustomerIdentityCapabilityOutcomeCommercialEvent,
   normalizeCustomerIdentityResolutionCommercialEvent,
   normalizeCustomerOnboardingTransitionCommercialEvent,
@@ -173,4 +174,13 @@ export async function recordCommercialWorkAsyncDeliveryEvaluatedEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeCommercialWorkAsyncDeliveryEvaluatedEvent(input), connection);
+}
+
+// SALES-AGENT-R3-P3.5.
+
+export async function recordCommercialWorkKernelResolvedEvent(
+  input: Parameters<typeof normalizeCommercialWorkKernelResolvedEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCommercialWorkKernelResolvedEvent(input), connection);
 }

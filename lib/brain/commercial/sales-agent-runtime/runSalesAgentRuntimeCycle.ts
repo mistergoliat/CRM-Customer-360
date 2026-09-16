@@ -28,6 +28,8 @@ import {
   type AgentTurnInputShadowReadMetrics
 } from "../agent-turn-input/shadow";
 import type { CommercialDomainReadModel } from "../domain-read-model";
+import { ensureCommercialWorkCase } from "../work/ensureCommercialWorkCase";
+import { recordCommercialWorkKernelResolvedEvent } from "../events/service";
 
 // SALES-AGENT-R3-V1.4/V1.5/V1.6. The channel-adapter/dispatch seam around
 // SalesAgentRuntime (V1.3) - deliberately NOT part of the runtime module
@@ -129,6 +131,10 @@ export type RunSalesAgentRuntimeCycleInput = {
   agentTurnInputShadowEnabled?: boolean;
   /** Test/DI seam for the P2 read-only domain builder; production uses the real P0 wiring below. */
   buildAgentTurnInputShadowDomainReadModel?: () => Promise<CommercialDomainReadModel>;
+  /** SALES-AGENT-R3-P3.5. Resolved by the caller from BRAIN_R3_COMMERCIAL_WORK_KERNEL_ENABLED; default false. */
+  commercialWorkKernelEnabled?: boolean;
+  /** Test/DI seam for the P3.5 case-kernel bootstrap; production uses the real ensureCommercialWorkCase below. */
+  ensureCommercialWorkCaseFn?: typeof ensureCommercialWorkCase;
 };
 
 /**
@@ -356,6 +362,43 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
   const opportunityId = typeof input.snapshot.opportunity?.id === "number" ? input.snapshot.opportunity.id : null;
   const conversationCaseId = input.snapshot.opportunity?.conversationCaseId ?? input.conversationId;
   const { configuration: identityConfiguration, effectiveModelConfiguration, effectiveLoopConfiguration } = input.resolvedSalesAgentConfiguration;
+
+  // SALES-AGENT-R3-P3.5. Case-kernel bootstrap, resolved/created BEFORE the
+  // P0/P1 shadow construction below (Section 12 of the brief), so the same
+  // turn's own domain read model already observes it. Never runs without a
+  // resolved opportunity (Section 8 - no case for "hola"/"gracias" before an
+  // opportunity exists; reuses the existing lazy-opportunity-wiring rule
+  // rather than inventing a new one here). Failure is descriptive-only
+  // (Section 20): the turn continues exactly as if the kernel flag were off.
+  if (input.commercialWorkKernelEnabled && opportunityId !== null) {
+    const ensureFn = input.ensureCommercialWorkCaseFn ?? ensureCommercialWorkCase;
+    try {
+      const kernel = await ensureFn({
+        conversationId: input.conversationId,
+        opportunityId,
+        conversation: { id: input.conversationId, humanOwnerActive, aiEnabled: !aiBlocked, status: input.snapshot.conversation?.status ?? null },
+        opportunity: { id: opportunityId, status: input.snapshot.opportunity?.status ?? null },
+        correlationId: input.correlationId,
+        now: input.currentTime
+      });
+      await recordCommercialWorkKernelResolvedEvent({
+        inboundMessageId: input.inboundMessageId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        opportunityId,
+        payload: {
+          workId: kernel.result === "FAILED" ? null : kernel.work.publicId,
+          workVersion: kernel.result === "FAILED" ? null : kernel.work.version,
+          result: kernel.result
+        }
+      }).catch(() => {
+        // Descriptive telemetry only - never lets a write failure affect the turn.
+      });
+    } catch {
+      // Bootstrap failure never blocks the existing R3 turn (Section 20).
+    }
+  }
+
   const shadowReadMetrics: AgentTurnInputShadowReadMetrics = { dbReads: 0, httpReads: 0 };
   const agentTurnInputShadow = input.agentTurnInputShadowEnabled
     ? {

@@ -140,6 +140,14 @@ export function buildCommercialWorkAsyncDeliveryEvaluatedDedupeKey(workPublicId:
   return `commercial-work-async-delivery-evaluated:${workPublicId.trim()}:${workVersion}`;
 }
 
+// SALES-AGENT-R3-P3.5. One descriptive case-kernel-resolution event per
+// inbound turn where the bootstrap ran; retries/replays collapse to the
+// same commercial_event row, same rationale as
+// buildAgentTurnInputShadowBuiltDedupeKey above.
+export function buildCommercialWorkKernelResolvedDedupeKey(inboundMessageId: string) {
+  return `commercial-work-kernel-resolved:${inboundMessageId.trim()}`;
+}
+
 export function buildCommercialEventCorrelationId(
   eventType: CommercialEventType,
   source: string,

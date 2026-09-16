@@ -21,6 +21,7 @@ export * from "./worker";
 export * from "./followup";
 export * from "./sequencing";
 export * from "./reconciliation";
+export * from "./ensureCommercialWorkCase";
 export * from "./semanticIntentAdapter";
 export * from "./capabilityExecutionReader";
 export * from "./settleCommercialWorkProjection";

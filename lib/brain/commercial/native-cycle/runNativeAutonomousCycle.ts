@@ -22,6 +22,7 @@ import {
   buildCommercialSalesAgentDryRun,
   buildPersistentSessionShadowFeatureFlags,
   buildAgentTurnInputShadowFeatureFlags,
+  buildCommercialWorkKernelFeatureFlags,
   buildSessionCompactionFeatureFlags,
   shouldEnablePersistentSessionCognition,
   shouldEnableLiveTurnAssimilation,
@@ -749,6 +750,7 @@ export async function runNativeAutonomousCycle(
     // hotfix's own scope guard - ATL's existing behavior is unchanged.
     const sessionCompactionFeatureFlags = buildSessionCompactionFeatureFlags();
     const agentTurnInputShadowEnabled = buildAgentTurnInputShadowFeatureFlags().agentTurnInputShadowEnabled;
+    const commercialWorkKernelEnabled = buildCommercialWorkKernelFeatureFlags().commercialWorkKernelEnabled;
     const liveTurnAssimilationEnabled = shouldEnableLiveTurnAssimilation();
     const openTurnExecutionEnabled = shouldEnableOpenTurnExecution();
     const harnessAlignedMessageModelEnabled = shouldEnableHarnessAlignedMessageModel();
@@ -827,7 +829,8 @@ export async function runNativeAutonomousCycle(
       checkInboundFreshnessBeforeDispatch: input.checkInboundFreshnessBeforeDispatch,
       openTurnExecutionEnabled,
       harnessAlignedMessageModelEnabled,
-      agentTurnInputShadowEnabled
+      agentTurnInputShadowEnabled,
+      commercialWorkKernelEnabled
     });
 
     const commercialNeed: NativeAutonomousCycleCommercialNeed = {
