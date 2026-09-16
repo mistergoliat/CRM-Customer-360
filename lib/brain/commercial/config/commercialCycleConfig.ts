@@ -351,6 +351,19 @@ export function buildAgentTurnInputShadowFeatureFlags(overrides?: Partial<{ agen
 }
 
 /**
+ * SALES-AGENT-R3-P6.2-A. Fail-closed structural eligibility observation.
+ * It never changes prompt/tool exposure or invokes the Gateway; it only
+ * records a bounded PII-safe shadow event when same-turn kernel work and the
+ * existing P2 DRM shadow are available.
+ */
+export function buildCapabilityEligibilityShadowFeatureFlags(overrides?: Partial<{ capabilityEligibilityShadowEnabled: boolean }>) {
+  return {
+    capabilityEligibilityShadowEnabled: readEnvFlag("BRAIN_R3_CAPABILITY_ELIGIBILITY_SHADOW_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
+
+/**
  * SALES-AGENT-R3-P4. Fail-closed shadow toggle for the structured
  * CommercialProposal emitted by the same R3 cognition call that produces
  * the terminal AgentStep. Independent from P2 AgentTurnInput shadow and

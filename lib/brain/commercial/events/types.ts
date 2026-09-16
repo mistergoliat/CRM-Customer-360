@@ -70,6 +70,9 @@ export type CommercialEventType =
   // terminal commercial proposal per inbound turn. Descriptive shadow only;
   // CommercialWork remains authoritative and is never mutated by this event.
   | "commercial_proposal_shadow_built"
+  // SALES-AGENT-R3-P6.2-A. Shadow-only structural eligibility snapshot;
+  // Gateway remains the final execution authority.
+  | "commercial_capability_eligibility_evaluated"
   // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. One per (workPublicId, version)
   // whose durable status was evaluated for customer-visible async delivery
   // (worker step completion or the recovery sweep) - descriptive only, the
@@ -666,6 +669,16 @@ export type CommercialProposalShadowBuiltPayload = {
   ambiguityPresent: boolean | null;
   ambiguityReasonCode: string | null;
   terminalReason: string;
+};
+
+export type CommercialCapabilityEligibilityEvaluatedPayload = {
+  schemaVersion: "1";
+  workId: string | null;
+  workVersion: number | null;
+  objectiveType: string | null;
+  eligibleCapabilityNames: string[];
+  blockedCapabilities: Array<{ capability: string; reasonCodes: string[] }>;
+  metadataVersion: string;
 };
 
 export type AgentTurnInputShadowBuiltPayload = {

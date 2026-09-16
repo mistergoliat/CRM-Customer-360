@@ -6,6 +6,7 @@ import {
   normalizeAutonomousTurnContinuityFailedCommercialEvent,
   normalizeAutonomousTurnDispositionCommercialEvent,
   normalizeCommercialProposalShadowBuiltEvent,
+  normalizeCommercialCapabilityEligibilityEvaluatedEvent,
   normalizeCommercialWorkAsyncDeliveryEvaluatedEvent,
   normalizeCommercialWorkInboundCycleCompletedEvent,
   normalizeCommercialObjectiveReconciledEvent,
@@ -176,6 +177,15 @@ export async function recordCommercialProposalShadowBuiltEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeCommercialProposalShadowBuiltEvent(input), connection);
+}
+
+// SALES-AGENT-R3-P6.2-A. Descriptive shadow only; callers isolate failures
+// so telemetry can never affect the customer turn or Gateway authority.
+export async function recordCommercialCapabilityEligibilityEvaluatedEvent(
+  input: Parameters<typeof normalizeCommercialCapabilityEligibilityEvaluatedEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCommercialCapabilityEligibilityEvaluatedEvent(input), connection);
 }
 
 // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1.

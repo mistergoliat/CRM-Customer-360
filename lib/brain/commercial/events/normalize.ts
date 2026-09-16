@@ -10,6 +10,7 @@ import type {
   CommercialEventV1,
   CommercialObjectiveReconciledPayload,
   CommercialObjectiveReconciliationDecidedPayload,
+  CommercialCapabilityEligibilityEvaluatedPayload,
   CommercialProposalShadowBuiltPayload,
   CommercialWorkAsyncDeliveryEvaluatedPayload,
   CommercialWorkInboundCycleCompletedPayload,
@@ -48,6 +49,7 @@ import {
   buildCommercialObjectiveReconciledDedupeKey,
   buildCommercialObjectiveReconciliationDecidedDedupeKey,
   buildCommercialProposalShadowBuiltDedupeKey,
+  buildCommercialCapabilityEligibilityEvaluatedDedupeKey,
   buildCommercialStatusEventDedupeKey,
   buildCommercialWorkAsyncDeliveryEvaluatedDedupeKey,
   buildCommercialWorkKernelResolvedDedupeKey,
@@ -1037,6 +1039,40 @@ export function normalizeCommercialProposalShadowBuiltEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: input.payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "commercial_proposal_shadow_built" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-P6.2-A. Stores only structural capability names and stable
+ * reason codes. Never customer text, PII, model rationale or an execution
+ * claim; Gateway/P7 remains authoritative.
+ */
+export function normalizeCommercialCapabilityEligibilityEvaluatedEvent(input: {
+  inboundMessageId: string;
+  payload: CommercialCapabilityEligibilityEvaluatedPayload;
+  correlationId?: string | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = input.inboundMessageId.trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  return buildBaseEvent({
+    eventType: "commercial_capability_eligibility_evaluated",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildCommercialCapabilityEligibilityEvaluatedDedupeKey(dedupeSourceId),
+    correlationId: input.correlationId,
+    customerId: null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: input.payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "commercial_capability_eligibility_evaluated" }
   });
 }
 

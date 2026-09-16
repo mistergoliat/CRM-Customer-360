@@ -22,6 +22,7 @@ import {
   buildCommercialSalesAgentDryRun,
   buildPersistentSessionShadowFeatureFlags,
   buildAgentTurnInputShadowFeatureFlags,
+  buildCapabilityEligibilityShadowFeatureFlags,
   buildCommercialProposalShadowFeatureFlags,
   buildCommercialWorkKernelFeatureFlags,
   buildCommercialObjectiveReconciliationFeatureFlags,
@@ -752,6 +753,8 @@ export async function runNativeAutonomousCycle(
     // hotfix's own scope guard - ATL's existing behavior is unchanged.
     const sessionCompactionFeatureFlags = buildSessionCompactionFeatureFlags();
     const agentTurnInputShadowEnabled = buildAgentTurnInputShadowFeatureFlags().agentTurnInputShadowEnabled;
+    const capabilityEligibilityShadowEnabled =
+      buildCapabilityEligibilityShadowFeatureFlags().capabilityEligibilityShadowEnabled;
     const commercialProposalShadowEnabled =
       buildCommercialProposalShadowFeatureFlags().commercialProposalShadowEnabled;
     const commercialWorkKernelEnabled = buildCommercialWorkKernelFeatureFlags().commercialWorkKernelEnabled;
@@ -841,6 +844,7 @@ export async function runNativeAutonomousCycle(
       openTurnExecutionEnabled,
       harnessAlignedMessageModelEnabled,
       agentTurnInputShadowEnabled,
+      capabilityEligibilityShadowEnabled,
       commercialProposalShadowEnabled,
       commercialWorkKernelEnabled,
       commercialObjectiveReconciliationEnabled

@@ -12,6 +12,7 @@ import type { CommercialOperation } from "./operations";
 // single `customer_profile_history` LEVEL_3 boundary (see operations.ts).
 const CAPABILITY_TO_COMMERCIAL_OPERATION: Partial<Record<string, CommercialOperation>> = {
   search_products: "search_products",
+  search_products_by_semantics: "search_products_by_semantics",
   get_product_details: "get_product_details",
   batch_get_products: "batch_get_products",
   explore_catalog: "explore_catalog",

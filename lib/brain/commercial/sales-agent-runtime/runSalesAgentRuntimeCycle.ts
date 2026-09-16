@@ -1,4 +1,4 @@
-import { runSalesAgentRuntime } from "./salesAgentRuntime";
+import { getAgentTurnInputShadowDomainReadModel, runSalesAgentRuntime } from "./salesAgentRuntime";
 import type { SalesAgentRuntimeResult } from "./salesAgentRuntime";
 import type { AgentRuntimeEvent } from "../agent-runtime-event/types";
 import { dispatchSalesAgentTerminalOutcome } from "./dispatchSalesAgentTerminalOutcome";
@@ -28,11 +28,13 @@ import {
   type AgentTurnInputShadowReadMetrics
 } from "../agent-turn-input/shadow";
 import type { CommercialDomainReadModel } from "../domain-read-model";
+import { runCapabilityEligibilityShadow } from "../capability-eligibility";
 import { ensureCommercialWorkCase } from "../work/ensureCommercialWorkCase";
 import {
   recordCommercialObjectiveReconciledEvent,
   recordCommercialObjectiveReconciliationDecidedEvent,
   recordCommercialProposalShadowBuiltEvent,
+  recordCommercialCapabilityEligibilityEvaluatedEvent,
   recordCommercialWorkKernelResolvedEvent
 } from "../events/service";
 import { applyCommercialObjectiveReconciliationDecision, buildTurnObjectiveId, decideCommercialObjectiveReconciliation } from "../work/objective-reconciliation";
@@ -154,6 +156,8 @@ export type RunSalesAgentRuntimeCycleInput = {
    * re-checked at the call site, never assumed here.
    */
   commercialObjectiveReconciliationEnabled?: boolean;
+  /** SALES-AGENT-R3-P6.2-A. Shadow-only structural eligibility telemetry; default false. */
+  capabilityEligibilityShadowEnabled?: boolean;
   /**
    * Test/DI seam for the P5 CAS writer; production uses the real
    * applyCommercialObjectiveReconciliationDecision below. Deciding
@@ -431,6 +435,10 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
       // Bootstrap failure never blocks the existing R3 turn (Section 20).
     }
   }
+  // P6.2-A consumes only the work already resolved by the P3.5 kernel. It
+  // never causes a work read/bootstrap on its own, preserving its no-I/O
+  // evaluator boundary and keeping flag-on observation explicitly scoped.
+  let workForCapabilityEligibility = kernelWorkForReconciliation;
 
   const shadowReadMetrics: AgentTurnInputShadowReadMetrics = { dbReads: 0, httpReads: 0 };
   const agentTurnInputShadow = input.agentTurnInputShadowEnabled
@@ -589,6 +597,10 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
         }
       }
 
+      // P6 observes the exact in-memory post-P5 work when reconciliation
+      // succeeded, without rereading or altering P5's decision/write flow.
+      workForCapabilityEligibility = updatedWork;
+
       // (d) reconciled-event, only after a real mutation. Referential
       // equality: applyCommercialObjectiveReconciliationDecision returns the
       // SAME `work` object it was given whenever no write happened (NOOP/
@@ -622,6 +634,47 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
       }
     } catch {
       // Any OTHER (non-CAS) reconciliation failure never blocks the existing R3 turn (same isolation as the P3.5 bootstrap above).
+    }
+  }
+
+  // SALES-AGENT-R3-P6.2-A. Reuse the P2 DRM already built for this turn.
+  // P6 never constructs a second CommercialDomainReadModel: authoritative
+  // same-turn work supplies any post-P5 objective/version, while the prebuilt
+  // DRM remains the canonical cart/destination freshness source. Nothing
+  // reaches AgentTurnInput, provider input, tool exposure or Gateway execution.
+  if (input.capabilityEligibilityShadowEnabled && workForCapabilityEligibility !== null) {
+    const capabilityEligibilityDomainReadModel = getAgentTurnInputShadowDomainReadModel(runtime);
+    if (!capabilityEligibilityDomainReadModel) {
+      // P6 deliberately requires the already-built P2 snapshot instead of
+      // constructing another DRM when P2 shadow is disabled.
+    } else {
+      try {
+        await runCapabilityEligibilityShadow({
+          enabled: true,
+          domainReadModel: capabilityEligibilityDomainReadModel,
+          work: workForCapabilityEligibility,
+          evaluatedAt: input.currentTime,
+          record: async (eligibility) => {
+            await recordCommercialCapabilityEligibilityEvaluatedEvent({
+              inboundMessageId: input.inboundMessageId,
+              correlationId: input.correlationId,
+              conversationId: input.conversationId,
+              opportunityId: runtime.resolvedOpportunityId,
+              payload: {
+                schemaVersion: "1",
+                workId: eligibility.workId,
+                workVersion: eligibility.workVersion,
+                objectiveType: eligibility.objectiveType,
+                eligibleCapabilityNames: eligibility.eligible.map((entry) => entry.capability),
+                blockedCapabilities: eligibility.blocked.map((entry) => ({ capability: entry.capability, reasonCodes: [...entry.reasonCodes] })),
+                metadataVersion: eligibility.metadataVersion
+              }
+            });
+          }
+        });
+      } catch {
+        // Shadow telemetry is never allowed to alter the R3 turn.
+      }
     }
   }
 

@@ -28,6 +28,7 @@ import {
   type AgentTurnInputShadowObservation,
   type AgentTurnInputShadowRuntimeOptions
 } from "../agent-turn-input/shadow";
+import type { CommercialDomainReadModel } from "../domain-read-model";
 
 // SALES-AGENT-R3-V1.3. The first provider-neutral boundary that consumes an
 // AgentRuntimeEvent (R3-A05) and runs a real, dynamic model/tool loop to a
@@ -181,6 +182,15 @@ export type SalesAgentRuntimeResult = {
    */
   commercialProposal: CommercialProposalV1 | null;
 };
+
+// Kept off the public SalesAgentRuntimeResult shape: P6 can reuse the exact
+// P2 read model during the same in-memory cycle without exposing it to any
+// provider, dispatcher, caller contract or durable payload.
+const AGENT_TURN_INPUT_SHADOW_READ_MODELS = new WeakMap<SalesAgentRuntimeResult, CommercialDomainReadModel>();
+
+export function getAgentTurnInputShadowDomainReadModel(result: SalesAgentRuntimeResult): CommercialDomainReadModel | null {
+  return AGENT_TURN_INPUT_SHADOW_READ_MODELS.get(result) ?? null;
+}
 
 /**
  * Mirrors runNativeAgentToolLoopCycle.ts#buildStepsSummary exactly, kept as
@@ -473,11 +483,13 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
   // Only the small PII-safe observation survives the call; the full P1 input
   // is intentionally not attached to the runtime result.
   let agentTurnInputShadow: AgentTurnInputShadowObservation | null = null;
+  let agentTurnInputShadowDomainReadModel: CommercialDomainReadModel | null = null;
   const shadowOptions = input.agentTurnInputShadow;
   if (shadowOptions?.enabled && inboundMessageId) {
     let domainReadModel: Awaited<ReturnType<AgentTurnInputShadowRuntimeOptions["buildDomainReadModel"]>> | null = null;
     try {
       domainReadModel = await shadowOptions.buildDomainReadModel();
+      agentTurnInputShadowDomainReadModel = domainReadModel;
     } catch {
       agentTurnInputShadow = buildFailedAgentTurnInputShadowObservation({
         correlationId: event.correlationId,
@@ -624,7 +636,7 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
         ? loop.handoffReason
         : (loop.providerFailure?.normalizedReason ?? loop.terminalReason);
 
-  return {
+  const result: SalesAgentRuntimeResult = {
     status,
     responseText: status === "responded" ? loop.finalMessage : null,
     reason,
@@ -657,4 +669,6 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     projectedAssimilatedUserMessageCount: loop.projectedAssimilatedUserMessageCount ?? 0,
     ...(agentTurnInputShadow ? { agentTurnInputShadow } : {})
   };
+  if (agentTurnInputShadowDomainReadModel) AGENT_TURN_INPUT_SHADOW_READ_MODELS.set(result, agentTurnInputShadowDomainReadModel);
+  return result;
 }

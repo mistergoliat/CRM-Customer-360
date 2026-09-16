@@ -45,6 +45,7 @@ import type { CommercialIdentityRequirement } from "./types";
 
 export const COMMERCIAL_OPERATIONS = [
   "search_products",
+  "search_products_by_semantics",
   "get_product_details",
   "batch_get_products",
   "explore_catalog",
@@ -69,6 +70,10 @@ export type CommercialOperation = (typeof COMMERCIAL_OPERATIONS)[number];
 
 const REQUIREMENT_BY_OPERATION: Record<CommercialOperation, CommercialIdentityRequirement> = {
   search_products: { kind: "NONE" },
+  // Semantic catalog discovery is a product query, not a customer-specific
+  // operation. Keep it under the same canonical no-identity policy as the
+  // nominal catalog reads instead of letting a new caller infer that locally.
+  search_products_by_semantics: { kind: "NONE" },
   get_product_details: { kind: "NONE" },
   batch_get_products: { kind: "NONE" },
   explore_catalog: { kind: "NONE" },

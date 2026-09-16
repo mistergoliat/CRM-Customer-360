@@ -137,6 +137,12 @@ export function buildCommercialProposalShadowBuiltDedupeKey(inboundMessageId: st
   return `commercial-proposal-shadow-built:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R3-P6.2-A. One structural eligibility shadow observation per
+// inbound turn. It is descriptive only and never authorizes execution.
+export function buildCommercialCapabilityEligibilityEvaluatedDedupeKey(inboundMessageId: string) {
+  return `commercial-capability-eligibility-evaluated:${inboundMessageId.trim()}`;
+}
+
 // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. Keyed on the delivered work
 // version (an optimistic-concurrency identity only one caller can ever
 // legitimately reach - see commercialWorkExecutor.ts), never a random id -
