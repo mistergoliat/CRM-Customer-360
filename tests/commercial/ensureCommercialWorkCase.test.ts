@@ -14,7 +14,12 @@ import {
 // (no local MariaDB/Docker reachable, same limitation documented by every
 // recent SALES-AGENT-R3 task - see docs/releases/SALES-AGENT-R3-P3.5-*.md).
 
-process.env.NODE_ENV ??= "development";
+// NODE_ENV is typed readonly on process.env (@types/node) - Object.assign,
+// not direct/??= assignment, is the convention this repo already uses in
+// every other test file that needs to set it (e.g.
+// tests/commercial/agentSessionStoreMariaDb.test.ts). Same "only if unset"
+// semantics as the ??= this replaces.
+if (process.env.NODE_ENV === undefined) Object.assign(process.env, { NODE_ENV: "development" });
 process.env.DB_HOST ??= "127.0.0.1";
 process.env.DB_PORT ??= "3306";
 process.env.DB_NAME ??= "crm_test";

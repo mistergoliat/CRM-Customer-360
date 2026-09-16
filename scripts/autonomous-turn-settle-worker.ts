@@ -38,14 +38,25 @@ function readIntArg(name: string, fallback: number): number {
 
 let workerRunning = true;
 
-async function loadTurnSettlementModule() {
-  const imported = await import("../lib/brain/commercial/turn-settlement");
+// The turn-settlement barrel (lib/brain/commercial/turn-settlement/index.ts)
+// only ever declares named exports - its static type has no `default`.
+// At runtime, dynamic `import()` of a CJS-compiled module can still come
+// back either as that flat named-exports object OR wrapped as
+// `{ default: <that same object> }`, depending on the exact ESM/CJS interop
+// path the running environment takes (observed divergence: local tsx vs.
+// EC2). Both shapes must keep working - this type only teaches TypeScript
+// about the shape runtime already tolerates; it changes no behavior.
+type TurnSettlementModule = typeof import("../lib/brain/commercial/turn-settlement");
+type TurnSettlementModuleInterop = TurnSettlementModule | { default: TurnSettlementModule };
 
-  return (
-    imported.default && typeof imported.default === "object"
-      ? imported.default
-      : imported
-  ) as typeof import("../lib/brain/commercial/turn-settlement");
+function hasWrappedDefault(value: TurnSettlementModuleInterop): value is { default: TurnSettlementModule } {
+  const candidate = (value as { default?: unknown }).default;
+  return Boolean(candidate) && typeof candidate === "object";
+}
+
+async function loadTurnSettlementModule(): Promise<TurnSettlementModule> {
+  const imported = (await import("../lib/brain/commercial/turn-settlement")) as TurnSettlementModuleInterop;
+  return hasWrappedDefault(imported) ? imported.default : imported;
 }
 
 async function runTick(limit: number) {
