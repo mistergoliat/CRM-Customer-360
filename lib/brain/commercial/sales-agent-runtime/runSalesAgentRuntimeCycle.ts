@@ -159,6 +159,20 @@ export type RunSalesAgentRuntimeCycleInput = {
   /** SALES-AGENT-R3-P6.2-A. Shadow-only structural eligibility telemetry; default false. */
   capabilityEligibilityShadowEnabled?: boolean;
   /**
+   * Test-only seams for the cycle's already-isolated telemetry and terminal
+   * dispatch boundaries. Production always uses the canonical functions.
+   * They keep P6.2-C integration tests independent of MariaDB without
+   * changing AgentTurnInput, provider input, or capability execution.
+   */
+  dispatchSalesAgentTerminalOutcomeFn?: typeof dispatchSalesAgentTerminalOutcome;
+  recordAgentToolLoopCompletedCommercialEventFn?: typeof recordAgentToolLoopCompletedCommercialEvent;
+  recordCommercialWorkKernelResolvedEventFn?: typeof recordCommercialWorkKernelResolvedEvent;
+  recordCommercialObjectiveReconciliationDecidedEventFn?: typeof recordCommercialObjectiveReconciliationDecidedEvent;
+  recordCommercialObjectiveReconciledEventFn?: typeof recordCommercialObjectiveReconciledEvent;
+  recordCommercialProposalShadowBuiltEventFn?: typeof recordCommercialProposalShadowBuiltEvent;
+  recordCommercialCapabilityEligibilityEvaluatedEventFn?: typeof recordCommercialCapabilityEligibilityEvaluatedEvent;
+  runCapabilityEligibilityShadowFn?: typeof runCapabilityEligibilityShadow;
+  /**
    * Test/DI seam for the P5 CAS writer; production uses the real
    * applyCommercialObjectiveReconciliationDecision below. Deciding
    * (decideCommercialObjectiveReconciliation) is pure and always the real
@@ -418,7 +432,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
         now: input.currentTime
       });
       if (kernel.result !== "FAILED") kernelWorkForReconciliation = kernel.work;
-      await recordCommercialWorkKernelResolvedEvent({
+      await (input.recordCommercialWorkKernelResolvedEventFn ?? recordCommercialWorkKernelResolvedEvent)({
         inboundMessageId: input.inboundMessageId,
         correlationId: input.correlationId,
         conversationId: input.conversationId,
@@ -542,7 +556,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
       });
 
       // (b) decided-event, before the write is even attempted.
-      await recordCommercialObjectiveReconciliationDecidedEvent({
+      await (input.recordCommercialObjectiveReconciliationDecidedEventFn ?? recordCommercialObjectiveReconciliationDecidedEvent)({
         inboundMessageId: input.inboundMessageId,
         correlationId: input.correlationId,
         conversationId: input.conversationId,
@@ -612,7 +626,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
         const resultingObjectiveKind =
           decision.action === "CANCEL" ? activeBefore?.type ?? null : decision.action === "START" || decision.action === "REPLACE" ? decision.kind : null;
 
-        await recordCommercialObjectiveReconciledEvent({
+        await (input.recordCommercialObjectiveReconciledEventFn ?? recordCommercialObjectiveReconciledEvent)({
           inboundMessageId: input.inboundMessageId,
           correlationId: input.correlationId,
           conversationId: input.conversationId,
@@ -649,13 +663,13 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
       // constructing another DRM when P2 shadow is disabled.
     } else {
       try {
-        await runCapabilityEligibilityShadow({
+        await (input.runCapabilityEligibilityShadowFn ?? runCapabilityEligibilityShadow)({
           enabled: true,
           domainReadModel: capabilityEligibilityDomainReadModel,
           work: workForCapabilityEligibility,
           evaluatedAt: input.currentTime,
           record: async (eligibility) => {
-            await recordCommercialCapabilityEligibilityEvaluatedEvent({
+            await (input.recordCommercialCapabilityEligibilityEvaluatedEventFn ?? recordCommercialCapabilityEligibilityEvaluatedEvent)({
               inboundMessageId: input.inboundMessageId,
               correlationId: input.correlationId,
               conversationId: input.conversationId,
@@ -714,7 +728,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
   // site, no crm_agent_actions/autonomy-sandbox/execution-gate reachable from
   // SalesAgentRuntime at all.
   const dispatch = adaptTerminalOutcomeDispatch(
-    await dispatchSalesAgentTerminalOutcome({
+    await (input.dispatchSalesAgentTerminalOutcomeFn ?? dispatchSalesAgentTerminalOutcome)({
       conversationId: input.conversationId,
       conversationCaseId,
       opportunityId: runtime.resolvedOpportunityId,
@@ -786,7 +800,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
   // supports. A write failure here never blocks the turn - the customer
   // already has their dispatched response.
   try {
-    await recordAgentToolLoopCompletedCommercialEvent({
+    await (input.recordAgentToolLoopCompletedCommercialEventFn ?? recordAgentToolLoopCompletedCommercialEvent)({
       inboundMessageId: input.inboundMessageId,
       correlationId: input.correlationId,
       conversationId: input.conversationId,
@@ -862,7 +876,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     const proposal = runtime.commercialProposal;
 
     try {
-      const result = await recordCommercialProposalShadowBuiltEvent({
+      const result = await (input.recordCommercialProposalShadowBuiltEventFn ?? recordCommercialProposalShadowBuiltEvent)({
         inboundMessageId: input.inboundMessageId,
         correlationId: input.correlationId,
         conversationId: input.conversationId,
