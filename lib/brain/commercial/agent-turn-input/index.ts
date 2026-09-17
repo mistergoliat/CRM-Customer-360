@@ -4,6 +4,7 @@ export {
   AGENT_TURN_INPUT_SCHEMA_VERSION,
   type AgentActiveObjective,
   type AgentCapabilityAvailability,
+  type AgentCapabilityEligibilityView,
   type AgentCapabilityExposure,
   type AgentCaseBlocker,
   type AgentCaseState,

@@ -139,6 +139,10 @@ function quoteObjective(objectiveId = "cwo-p6-c-quote"): PersistedCommercialWork
   return { objectiveId, type: "QUOTE", status: "PENDING" } as PersistedCommercialWork["objectives"][number];
 }
 
+function selectProductsObjective(objectiveId = "cwo-p6-c-selection"): PersistedCommercialWork["objectives"][number] {
+  return { objectiveId, type: "SELECT_PRODUCTS", status: "PENDING" } as PersistedCommercialWork["objectives"][number];
+}
+
 const DISPATCH_SKIPPED: DispatchSalesAgentTerminalOutcomeResult = {
   attempted: false,
   dispatchKind: "responded",
@@ -187,6 +191,7 @@ function buildCycleInput(input: {
   readModel?: CommercialDomainReadModel;
   work?: PersistedCommercialWork | null;
   capabilityEligibilityShadowEnabled?: boolean;
+  capabilityEligibilityInputEnabled?: boolean;
   commercialProposalShadowEnabled?: boolean;
   commercialObjectiveReconciliationEnabled?: boolean;
   kernelFailure?: boolean;
@@ -222,6 +227,7 @@ function buildCycleInput(input: {
     commercialObjectiveReconciliationEnabled: input.commercialObjectiveReconciliationEnabled ?? false,
     applyCommercialObjectiveReconciliationDecisionFn: input.applyWork === undefined ? undefined : async () => input.applyWork!,
     capabilityEligibilityShadowEnabled: input.capabilityEligibilityShadowEnabled ?? false,
+    capabilityEligibilityInputEnabled: input.capabilityEligibilityInputEnabled ?? false,
     dispatchSalesAgentTerminalOutcomeFn: async () => DISPATCH_SKIPPED,
     recordAgentToolLoopCompletedCommercialEventFn: eventOk,
     recordCommercialWorkKernelResolvedEventFn: eventOk,
@@ -459,4 +465,60 @@ test("P6-C15: eligibility telemetry failure is isolated from the terminal respon
   }));
   assert.deepEqual(runtimeComparable(failed), runtimeComparable(base));
   assert.equal(telemetryAttempts, 1);
+});
+
+test("P6.3-C: one DRM supplies distinct pre-cognition provider eligibility and post-P5 shadow eligibility", async () => {
+  const workBefore = buildWork({ objectives: [selectProductsObjective()] });
+  const workAfter = buildWork({ version: 5, objectives: [quoteObjective()] });
+  const provider = providerFor(QUOTE_START_PROPOSAL);
+  const recorded: EligibilityEventInput[] = [];
+  let drmBuilds = 0;
+  const input = buildCycleInput({
+    provider: provider.provider,
+    readModel: buildReadModel({ quote: "missing" }),
+    work: workBefore,
+    capabilityEligibilityInputEnabled: true,
+    capabilityEligibilityShadowEnabled: true,
+    commercialProposalShadowEnabled: true,
+    commercialObjectiveReconciliationEnabled: true,
+    applyWork: workAfter,
+    eligibilityRecorder: async (event) => {
+      recorded.push(event);
+      return successfulEvent();
+    }
+  });
+  const buildDrm = input.buildAgentTurnInputShadowDomainReadModel!;
+  input.buildAgentTurnInputShadowDomainReadModel = async () => {
+    drmBuilds += 1;
+    return buildDrm();
+  };
+
+  const result = await runSalesAgentRuntimeCycle(input);
+  const providerPayload = JSON.parse(provider.inputs[0]!.messages.at(-1)!.content) as Record<string, unknown>;
+  const pre = providerPayload.capabilityEligibility as { blocked: { capability: string; reasonCodes: string[] }[] };
+
+  assert.equal(drmBuilds, 1);
+  assert.equal(provider.calls(), 1);
+  assert.deepEqual(pre.blocked.find((entry) => entry.capability === "create_quote")?.reasonCodes, ["OBJECTIVE_INCOMPATIBLE"]);
+  assert.equal(result.runtime.cognitionContext?.preCognitionCapabilityEligibility?.objectiveType, "SELECT_PRODUCTS");
+  assert.equal(recorded[0]!.payload.objectiveType, "QUOTE");
+  assert.ok(recorded[0]!.payload.eligibleCapabilityNames.includes("create_quote"));
+  assert.equal(result.runtime.toolCalls, 0);
+});
+
+test("P6.3-D: unavailable pre-cognition DRM passes null to the provider without a second call or fabricated eligibility", async () => {
+  const provider = providerFor(undefined);
+  const input = buildCycleInput({
+    provider: provider.provider,
+    work: buildWork({ objectives: [quoteObjective()] }),
+    capabilityEligibilityInputEnabled: true
+  });
+  input.buildAgentTurnInputShadowDomainReadModel = async () => {
+    throw new Error("p6.3_drm_unavailable");
+  };
+  const result = await runSalesAgentRuntimeCycle(input);
+  const payload = JSON.parse(provider.inputs[0]!.messages.at(-1)!.content) as Record<string, unknown>;
+  assert.equal(provider.calls(), 1);
+  assert.equal(result.runtime.cognitionContext, undefined);
+  assert.equal(payload.capabilityEligibility, null);
 });

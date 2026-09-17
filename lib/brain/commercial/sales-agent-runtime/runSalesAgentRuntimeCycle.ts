@@ -1,4 +1,4 @@
-import { getAgentTurnInputShadowDomainReadModel, runSalesAgentRuntime } from "./salesAgentRuntime";
+import { runSalesAgentRuntime } from "./salesAgentRuntime";
 import type { SalesAgentRuntimeResult } from "./salesAgentRuntime";
 import type { AgentRuntimeEvent } from "../agent-runtime-event/types";
 import { dispatchSalesAgentTerminalOutcome } from "./dispatchSalesAgentTerminalOutcome";
@@ -158,6 +158,8 @@ export type RunSalesAgentRuntimeCycleInput = {
   commercialObjectiveReconciliationEnabled?: boolean;
   /** SALES-AGENT-R3-P6.2-A. Shadow-only structural eligibility telemetry; default false. */
   capabilityEligibilityShadowEnabled?: boolean;
+  /** SALES-AGENT-R3-P6.3. Pre-cognition eligibility in AgentTurnInput/prompt; default false. */
+  capabilityEligibilityInputEnabled?: boolean;
   /**
    * Test-only seams for the cycle's already-isolated telemetry and terminal
    * dispatch boundaries. Production always uses the canonical functions.
@@ -455,7 +457,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
   let workForCapabilityEligibility = kernelWorkForReconciliation;
 
   const shadowReadMetrics: AgentTurnInputShadowReadMetrics = { dbReads: 0, httpReads: 0 };
-  const agentTurnInputShadow = input.agentTurnInputShadowEnabled
+  const agentTurnInputShadow = input.agentTurnInputShadowEnabled || input.capabilityEligibilityInputEnabled
     ? {
         enabled: true,
         metrics: shadowReadMetrics,
@@ -514,7 +516,11 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     openTurnExecutionEnabled: input.openTurnExecutionEnabled,
     harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled,
     commercialProposalShadowEnabled: input.commercialProposalShadowEnabled,
-    agentTurnInputShadow
+    agentTurnInputShadow,
+    capabilityEligibilityInput: {
+      enabled: input.capabilityEligibilityInputEnabled === true,
+      work: kernelWorkForReconciliation
+    }
   });
 
   if (runtime.status === "blocked") {
@@ -657,7 +663,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
   // DRM remains the canonical cart/destination freshness source. Nothing
   // reaches AgentTurnInput, provider input, tool exposure or Gateway execution.
   if (input.capabilityEligibilityShadowEnabled && workForCapabilityEligibility !== null) {
-    const capabilityEligibilityDomainReadModel = getAgentTurnInputShadowDomainReadModel(runtime);
+    const capabilityEligibilityDomainReadModel = runtime.cognitionContext?.domainReadModel ?? null;
     if (!capabilityEligibilityDomainReadModel) {
       // P6 deliberately requires the already-built P2 snapshot instead of
       // constructing another DRM when P2 shadow is disabled.

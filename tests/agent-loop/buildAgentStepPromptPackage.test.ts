@@ -1724,3 +1724,30 @@ test("[P4-P4] SHIPPING is explicitly a requirement and never an objective kind",
   assert.match(system, /SHIPPING is not an objective kind/);
   assert.match(system, /DISCOVER_NEED, SELECT_PRODUCTS, QUOTE, ORDER, AFTER_SALES only/);
 });
+
+test("[P6.3-B] eligibility is opt-in, advisory, and reaches the provider context without changing tool exposure", () => {
+  const view = {
+    schemaVersion: "1" as const,
+    metadataVersion: "p6.2-b.1",
+    eligible: ["create_quote"],
+    blocked: [{ capability: "get_quote", reasonCodes: ["MISSING_QUOTE" as const] }]
+  };
+  const baseline = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig() });
+  const flagged = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig(), capabilityEligibility: view });
+  const baselinePayload = JSON.parse(baseline.messages.at(-1)!.content) as Record<string, unknown>;
+  const flaggedPayload = JSON.parse(flagged.messages.at(-1)!.content) as Record<string, unknown>;
+
+  assert.equal("capabilityEligibility" in baselinePayload, false);
+  assert.deepEqual(flaggedPayload.capabilityEligibility, view);
+  assert.deepEqual(flaggedPayload.recentCatalogContext, baselinePayload.recentCatalogContext);
+  assert.match(flagged.messages[0].content, /not execution authority/);
+  assert.match(flagged.messages[0].content, /can become usable after new facts/);
+  assert.match(flagged.messages[0].content, /does not guarantee execution/);
+});
+
+test("[P6.3-B] unavailable eligibility is explicit null with a safe prompt fallback", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig(), capabilityEligibility: null });
+  const payload = JSON.parse(messages.at(-1)!.content) as Record<string, unknown>;
+  assert.equal(payload.capabilityEligibility, null);
+  assert.match(messages[0].content, /Eligibility information is unavailable/);
+});

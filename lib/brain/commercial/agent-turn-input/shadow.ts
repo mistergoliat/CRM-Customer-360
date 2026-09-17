@@ -8,6 +8,7 @@ import { HARD_HANDOFF_ELIGIBLE_REASON_CODES } from "../sales-agent-runtime/dispa
 import { buildAgentTurnInput } from "./buildAgentTurnInput";
 import type {
   AgentCapabilityExposure,
+  AgentCapabilityEligibilityView,
   AgentConversationContext,
   AgentExecutionPolicy,
   AgentTurnInput,
@@ -108,6 +109,8 @@ export type BuildAgentTurnInputShadowInput = {
   inboundMessageId: string;
   metrics?: AgentTurnInputShadowReadMetrics;
   buildAgentTurnInputFn?: typeof buildAgentTurnInput;
+  /** P6.3 pre-cognition projection; null is an explicit safe degradation. */
+  capabilityEligibility?: AgentCapabilityEligibilityView | null;
   /** Whether the persistent session projection was available for this turn. */
   sessionAvailable?: boolean;
 };
@@ -336,7 +339,8 @@ export async function buildAgentTurnInputShadow(input: BuildAgentTurnInputShadow
     currentTurn: input.currentTurn,
     conversationContext: input.conversationContext,
     capabilities,
-    executionPolicy
+    executionPolicy,
+    capabilityEligibility: input.capabilityEligibility
   });
   const hasActiveWork = input.domainReadModel.case.workId !== null;
   const workReadFailed = input.domainReadModel.case.freshness.reason === "commercial_work_read_failed";

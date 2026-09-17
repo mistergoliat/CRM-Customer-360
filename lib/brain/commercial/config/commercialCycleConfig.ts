@@ -364,6 +364,17 @@ export function buildCapabilityEligibilityShadowFeatureFlags(overrides?: Partial
 }
 
 /**
+ * SALES-AGENT-R3-P6.3. Independent, fail-closed cognitive input toggle.
+ * Shadow telemetry must never accidentally alter provider cognition.
+ */
+export function buildCapabilityEligibilityInputFeatureFlags(overrides?: Partial<{ capabilityEligibilityInputEnabled: boolean }>) {
+  return {
+    capabilityEligibilityInputEnabled: readEnvFlag("BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED", false),
+    ...(overrides ?? {})
+  };
+}
+
+/**
  * SALES-AGENT-R3-P4. Fail-closed shadow toggle for the structured
  * CommercialProposal emitted by the same R3 cognition call that produces
  * the terminal AgentStep. Independent from P2 AgentTurnInput shadow and

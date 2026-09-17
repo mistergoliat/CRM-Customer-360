@@ -11,6 +11,7 @@ import { executeReadTool } from "../read-tool-request/executeReadTool";
 import type { NativeCustomerSessionExecutionContext } from "../native-cycle/customer-session/types";
 import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfiguration } from "../sales-agent-configuration";
 import { buildAgentStepPromptPackage, type AgentLoopPriorAttemptFailure, type AgentLoopToolDescription } from "./buildAgentStepPromptPackage";
+import type { AgentCapabilityEligibilityView } from "../agent-turn-input";
 import type { AgentStepPromptProjectionMetadata, CustomerMessageFragment } from "./harnessAlignedMessageProjection";
 import type { ConversationContinuitySignal } from "./conversationContinuity";
 import { checkForNewInbound as defaultCheckForNewInbound } from "../turn-settlement/checkForNewInbound";
@@ -151,6 +152,8 @@ export type RunAgentToolLoopInput = {
   inboundMessageId?: string | null;
   /** Already-sanitized, already-reduced context - never raw PII, never a full domain snapshot. */
   commercialContextSummary: Record<string, unknown>;
+  /** P6.3 cognitive-only P6 projection. Undefined preserves the pre-P6.3 request shape. */
+  capabilityEligibility?: AgentCapabilityEligibilityView | null;
   /** Ephemeral recent catalog product identity context. Never a source of current price, stock, availability or URLs. */
   recentCatalogContext?: RecentCatalogContext | null;
   /** ACS-R1-05.1-T02.7. A catalog action this conversation's immediately preceding turn left open - see buildAgentStepPromptPackage.ts. */
@@ -1253,6 +1256,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       currentTime: input.currentTime,
       customerMessage,
       commercialContextSummary,
+      capabilityEligibility: input.capabilityEligibility,
       recentCatalogContext: input.recentCatalogContext ?? null,
       pendingCatalogAction: input.pendingCatalogAction ?? null,
       availableTools: toolDescriptions,
@@ -1532,6 +1536,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       currentTime: input.currentTime,
       customerMessage,
       commercialContextSummary,
+      capabilityEligibility: input.capabilityEligibility,
       recentCatalogContext: input.recentCatalogContext ?? null,
       pendingCatalogAction: input.pendingCatalogAction ?? null,
       availableTools: [],

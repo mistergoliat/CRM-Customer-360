@@ -23,6 +23,7 @@ import {
   buildPersistentSessionShadowFeatureFlags,
   buildAgentTurnInputShadowFeatureFlags,
   buildCapabilityEligibilityShadowFeatureFlags,
+  buildCapabilityEligibilityInputFeatureFlags,
   buildCommercialProposalShadowFeatureFlags,
   buildCommercialWorkKernelFeatureFlags,
   buildCommercialObjectiveReconciliationFeatureFlags,
@@ -755,6 +756,8 @@ export async function runNativeAutonomousCycle(
     const agentTurnInputShadowEnabled = buildAgentTurnInputShadowFeatureFlags().agentTurnInputShadowEnabled;
     const capabilityEligibilityShadowEnabled =
       buildCapabilityEligibilityShadowFeatureFlags().capabilityEligibilityShadowEnabled;
+    const capabilityEligibilityInputEnabled =
+      buildCapabilityEligibilityInputFeatureFlags().capabilityEligibilityInputEnabled;
     const commercialProposalShadowEnabled =
       buildCommercialProposalShadowFeatureFlags().commercialProposalShadowEnabled;
     const commercialWorkKernelEnabled = buildCommercialWorkKernelFeatureFlags().commercialWorkKernelEnabled;
@@ -845,6 +848,7 @@ export async function runNativeAutonomousCycle(
       harnessAlignedMessageModelEnabled,
       agentTurnInputShadowEnabled,
       capabilityEligibilityShadowEnabled,
+      capabilityEligibilityInputEnabled,
       commercialProposalShadowEnabled,
       commercialWorkKernelEnabled,
       commercialObjectiveReconciliationEnabled

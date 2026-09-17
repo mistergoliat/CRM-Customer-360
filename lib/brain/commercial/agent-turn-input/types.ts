@@ -8,6 +8,7 @@ import type {
 import type { CatalogAvailabilityStatus } from "@/lib/catalog";
 import type { QuoteServiceQuote } from "@/lib/domains/quote-service";
 import type { CommercialWorkStatus } from "../work";
+import type { CapabilityEligibilityReasonCode } from "../capability-eligibility";
 
 /** The provider-neutral cognitive input contract consumed by the future R3 Harness. */
 export const AGENT_TURN_INPUT_CONTRACT_NAME = "AgentTurnInput" as const;
@@ -189,6 +190,22 @@ export type AgentExecutionPolicy = {
   };
 };
 
+/**
+ * The compact, cognitive projection of P6. It deliberately omits the
+ * evaluator's work identifiers, timestamp, execution class, and all DRM
+ * fields. Eligibility remains advisory; the Gateway is never represented
+ * here as an authorization decision.
+ */
+export type AgentCapabilityEligibilityView = {
+  readonly schemaVersion: "1";
+  readonly metadataVersion: string;
+  readonly eligible: readonly string[];
+  readonly blocked: readonly {
+    capability: string;
+    reasonCodes: readonly CapabilityEligibilityReasonCode[];
+  }[];
+};
+
 export type AgentTurnInput = {
   readonly caseState: AgentCaseState;
   readonly activeObjective: AgentActiveObjective | null;
@@ -199,6 +216,8 @@ export type AgentTurnInput = {
   readonly relevantEvidence: readonly AgentRelevantEvidence[];
   readonly capabilities: readonly AgentCapabilityExposure[];
   readonly executionPolicy: AgentExecutionPolicy;
+  /** Null when P6.3 cognition is disabled or the pre-cognition snapshot is unavailable. */
+  readonly capabilityEligibility: AgentCapabilityEligibilityView | null;
 };
 
 /** Inputs are already-read projections. The builder intentionally owns no I/O dependency. */
@@ -208,6 +227,7 @@ export type BuildAgentTurnInputInput = {
   readonly conversationContext: AgentConversationContext;
   readonly capabilities?: readonly AgentCapabilityExposure[];
   readonly executionPolicy: AgentExecutionPolicy;
+  readonly capabilityEligibility?: AgentCapabilityEligibilityView | null;
 };
 
 /** Alias kept for callers that name the argument after the builder rather than the output contract. */

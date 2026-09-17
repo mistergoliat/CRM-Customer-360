@@ -8,6 +8,7 @@ import type { CommercialWorkBlocker } from "../work";
 import type {
   AgentActiveObjective,
   AgentCapabilityExposure,
+  AgentCapabilityEligibilityView,
   AgentCatalogHydration,
   AgentCaseBlocker,
   AgentCaseState,
@@ -221,6 +222,16 @@ function cloneExecutionPolicy(policy: AgentExecutionPolicy): AgentExecutionPolic
   };
 }
 
+function cloneCapabilityEligibility(view: AgentCapabilityEligibilityView | null | undefined): AgentCapabilityEligibilityView | null {
+  if (!view) return null;
+  return {
+    schemaVersion: view.schemaVersion,
+    metadataVersion: view.metadataVersion,
+    eligible: [...view.eligible],
+    blocked: view.blocked.map((entry) => ({ capability: entry.capability, reasonCodes: [...entry.reasonCodes] }))
+  };
+}
+
 /**
  * Pure P1 compiler. Every value is projected from already-settled inputs;
  * this function performs no domain reads, capability calls, provider calls or
@@ -242,6 +253,7 @@ export function buildAgentTurnInput(input: BuildAgentTurnInputInput): AgentTurnI
     conversationContext: cloneConversationContext(input.conversationContext),
     relevantEvidence: mapEvidence(input.domainReadModel.evidence),
     capabilities: cloneCapabilities(input.capabilities ?? []),
-    executionPolicy: cloneExecutionPolicy(input.executionPolicy)
+    executionPolicy: cloneExecutionPolicy(input.executionPolicy),
+    capabilityEligibility: cloneCapabilityEligibility(input.capabilityEligibility)
   };
 }

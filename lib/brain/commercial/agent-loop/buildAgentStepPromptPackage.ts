@@ -1,4 +1,5 @@
 import type { SalesAgentPromptConfiguration } from "../sales-agent-configuration";
+import type { AgentCapabilityEligibilityView } from "../agent-turn-input";
 import type { CapabilityOperationSemantics } from "../capability-gateway/types";
 import { AGENT_STEP_TYPES } from "./agentStepTypes";
 import type { AgentLoopStepRecord } from "./agentStepTypes";
@@ -60,6 +61,8 @@ export type AgentLoopPromptInput = {
   customerMessage: string;
   /** Whatever reduced, already-sanitized commercial context is available this turn (opportunity id/stage, need profile fields, recent messages) - never raw PII, never a full domain snapshot. */
   commercialContextSummary: Record<string, unknown>;
+  /** Undefined is the byte-compatible P6.3-off path; null is safe unavailable state. */
+  capabilityEligibility?: AgentCapabilityEligibilityView | null;
   /**
    * Ephemeral product-identity context derived from recent catalog tool
    * executions. It is only for resolving conversational references; commercial
@@ -865,6 +868,17 @@ function buildPriorAttemptFailureLines(priorAttemptFailure: AgentLoopPriorAttemp
   ];
 }
 
+function buildCapabilityEligibilityAdvisoryLines(view: AgentCapabilityEligibilityView | null | undefined): string[] {
+  if (view === undefined) return [];
+  return [
+    "Capability eligibility is advisory structural information at the start of this turn; it is not execution authority.",
+    "Eligible does not guarantee execution: the Capability Gateway remains authoritative and can reject a request.",
+    "A blocked capability has a known structural blocker now and can become usable after new facts are obtained during this turn.",
+    "Do not claim a capability executed merely because it is eligible, and do not expose internal reason codes to the customer unless useful for internal diagnostics.",
+    ...(view === null ? ["Eligibility information is unavailable for this turn; use normal tool reasoning and Gateway authority."] : [])
+  ];
+}
+
 /**
  * ACS-R1-05.1-T02.1/T02.3B (spec section 7). One question only: "what is the
  * next step?" - never analysis, policy assessment, rationale, a final
@@ -896,6 +910,7 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
       input.commercialProposalShadowEnabled === true
     ),
     ...buildEvidenceAndToolRulesLines(phase, input.availableTools),
+    ...buildCapabilityEligibilityAdvisoryLines(input.capabilityEligibility),
     renderSalesAgentIdentityPrompt(input.identityConfiguration),
     IMMUTABLE_CONFIGURATION_BOUNDARY_LINE
   ].join("\n");
@@ -915,6 +930,7 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
       systemInstructions,
       currentTime: input.currentTime,
       commercialContextSummary: input.commercialContextSummary,
+      ...(input.capabilityEligibility !== undefined ? { capabilityEligibility: input.capabilityEligibility } : {}),
       recentCatalogContext: input.recentCatalogContext,
       pendingCatalogAction: input.pendingCatalogAction,
       conversationContinuity: input.conversationContinuity,
@@ -944,6 +960,7 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
       currentTime: input.currentTime,
       customerMessage: input.customerMessage,
       commercialContext: input.commercialContextSummary,
+      ...(input.capabilityEligibility !== undefined ? { capabilityEligibility: input.capabilityEligibility } : {}),
       recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
       ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {}),
       conversationContinuity: input.conversationContinuity ?? CONVERSATION_CONTINUITY_UNKNOWN,
@@ -962,6 +979,7 @@ export function buildAgentStepPromptPackage(input: AgentLoopPromptInput): { mess
     currentTime: input.currentTime,
     customerMessage: input.customerMessage,
     commercialContext: input.commercialContextSummary,
+    ...(input.capabilityEligibility !== undefined ? { capabilityEligibility: input.capabilityEligibility } : {}),
     recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
     ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {}),
     conversationContinuity: input.conversationContinuity ?? CONVERSATION_CONTINUITY_UNKNOWN,

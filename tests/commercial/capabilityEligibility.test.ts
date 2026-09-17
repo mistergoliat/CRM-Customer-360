@@ -5,10 +5,13 @@ import { resolveCapabilityGatewayDefinition } from "@/lib/brain/commercial/capab
 import {
   CAPABILITY_ELIGIBILITY_DEFINITIONS,
   evaluateCapabilityEligibility,
-  runCapabilityEligibilityShadow
+  runCapabilityEligibilityShadow,
+  toAgentCapabilityEligibilityView
 } from "@/lib/brain/commercial/capability-eligibility";
-import { buildCapabilityEligibilityShadowFeatureFlags } from "@/lib/brain/commercial/config/commercialCycleConfig";
+import { buildCapabilityEligibilityInputFeatureFlags, buildCapabilityEligibilityShadowFeatureFlags } from "@/lib/brain/commercial/config/commercialCycleConfig";
+import { buildAgentTurnInput } from "@/lib/brain/commercial/agent-turn-input";
 import type { CommercialDomainReadModel } from "@/lib/brain/commercial/domain-read-model";
+import type { PersistedCommercialWork } from "@/lib/brain/commercial/work/persistenceTypes";
 import { makeCommercialFreshness } from "@/lib/brain/commercial/domain-read-model";
 import { normalizeCommercialCapabilityEligibilityEvaluatedEvent } from "@/lib/brain/commercial/events/normalize";
 
@@ -78,6 +81,25 @@ function buildReadModel(input: {
     customer: { status: identityLevel === null ? "unknown" : "identified", identityLevel, hasResolvedCustomer: identityLevel !== null, verificationRequired: false, profile: null },
     conversation: { conversationId: 1, sessionVersion: null },
     evidence: []
+  };
+}
+
+function workAtObjective(type: "SELECT_PRODUCTS" | "QUOTE"): Pick<PersistedCommercialWork, "publicId" | "version" | "objectives"> {
+  return {
+    publicId: `cw-${type.toLowerCase()}`,
+    version: type === "SELECT_PRODUCTS" ? 1 : 2,
+    objectives: [{
+      objectiveId: `objective-${type.toLowerCase()}`,
+      type,
+      status: "PENDING",
+      origin: "customer_requested",
+      inputs: {},
+      resolvedInputs: {},
+      missingRequirements: [],
+      supersedesObjectiveIds: [],
+      evidence: [],
+      blockers: []
+    }]
   };
 }
 
@@ -196,6 +218,19 @@ test("P6-A15: feature flag is fail-closed by default and has no dependency on to
   }
 });
 
+test("P6.3: cognition input flag is independently fail-closed from shadow telemetry", () => {
+  const previous = process.env.BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED;
+  try {
+    delete process.env.BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED;
+    assert.equal(buildCapabilityEligibilityInputFeatureFlags().capabilityEligibilityInputEnabled, false);
+    process.env.BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED = "true";
+    assert.equal(buildCapabilityEligibilityInputFeatureFlags().capabilityEligibilityInputEnabled, true);
+  } finally {
+    if (previous === undefined) delete process.env.BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED;
+    else process.env.BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED = previous;
+  }
+});
+
 test("P6 telemetry normalizes a PII-safe bounded shadow payload", () => {
   const event = normalizeCommercialCapabilityEligibilityEvaluatedEvent({
     inboundMessageId: "inbound-1",
@@ -264,6 +299,46 @@ test("P6-B8/B9: get_quote blocks for absent, stale, or unknown quote facts", () 
   assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "QUOTE", quote: "missing" })), "get_quote")?.reasonCodes, ["MISSING_QUOTE"]);
   assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "QUOTE", quote: "STALE" })), "get_quote")?.reasonCodes, ["QUOTE_NOT_CURRENT"]);
   assert.deepEqual(entry(evaluate(buildReadModel({ objectiveType: "QUOTE", quote: "UNKNOWN" })), "get_quote")?.reasonCodes, ["QUOTE_NOT_CURRENT"]);
+});
+
+test("P6.3-A: cognitive eligibility view is compact, deterministic, and excludes snapshot internals", () => {
+  const snapshot = evaluate(buildReadModel({ objectiveType: "QUOTE", quote: "missing", identityLevel: "LEVEL_2_MASTER_RESOLVED" }));
+  const view = toAgentCapabilityEligibilityView(snapshot);
+
+  assert.deepEqual(view.eligible, snapshot.eligible.map((entry) => entry.capability));
+  assert.deepEqual(view.blocked, snapshot.blocked.map((entry) => ({ capability: entry.capability, reasonCodes: [...entry.reasonCodes] })));
+  assert.equal(view.schemaVersion, "1");
+  assert.equal(view.metadataVersion, snapshot.metadataVersion);
+  assert.ok(!("workId" in view));
+  assert.ok(!("workVersion" in view));
+  assert.ok(!("objectiveId" in view));
+  assert.ok(!("evaluatedAt" in view));
+  assert.deepEqual(view.blocked.find((entry) => entry.capability === "get_quote")?.reasonCodes, ["MISSING_QUOTE"]);
+  assert.ok(view.eligible.includes("create_quote"), "shipping is not a create_quote prerequisite");
+});
+
+test("P6.3-A: AgentTurnInput defaults eligibility to null and preserves a supplied compact view", () => {
+  const readModel = buildReadModel({ objectiveType: "QUOTE", quote: "missing", identityLevel: "LEVEL_2_MASTER_RESOLVED" });
+  const base = {
+    domainReadModel: readModel,
+    currentTurn: { inboundMessageId: "inbound-1", channel: "whatsapp" as const, text: "cotiza", occurredAt: "2026-09-17T00:00:00.000Z", correlationId: "corr-1" },
+    conversationContext: { compactSummary: null, recentMessages: [], sessionVersion: null, continuity: { isFirstConversationalTurn: false, hasPriorAssistantMessages: true, hasPriorCustomerMessages: true } },
+    executionPolicy: { identityLevel: "LEVEL_2_MASTER_RESOLVED", humanOwner: false, aiBlocked: false, allowedSensitiveActions: [], handoff: { allowedReasons: [] } }
+  };
+  assert.equal(buildAgentTurnInput(base).capabilityEligibility, null);
+  const view = toAgentCapabilityEligibilityView(evaluate(readModel));
+  assert.deepEqual(buildAgentTurnInput({ ...base, capabilityEligibility: view }).capabilityEligibility, view);
+});
+
+test("P6.3-C: pre-cognition and post-reconciliation snapshots are distinct moments over one DRM", () => {
+  const drm = buildReadModel({ objectiveType: "SELECT_PRODUCTS", identityLevel: "LEVEL_2_MASTER_RESOLVED", quote: "missing" });
+  const pre = evaluateCapabilityEligibility({ domainReadModel: drm, work: workAtObjective("SELECT_PRODUCTS"), evaluatedAt: "2026-09-17T00:00:00.000Z" });
+  const post = evaluateCapabilityEligibility({ domainReadModel: drm, work: workAtObjective("QUOTE"), evaluatedAt: "2026-09-17T00:00:01.000Z" });
+
+  assert.deepEqual(entry(pre, "create_quote")?.reasonCodes, ["OBJECTIVE_INCOMPATIBLE"]);
+  assert.equal(entry(post, "create_quote")?.status, "ELIGIBLE", "QUOTE plus current selection and LEVEL_2 remains eligible without shipping");
+  assert.deepEqual(entry(post, "get_quote")?.reasonCodes, ["MISSING_QUOTE"]);
+  assert.equal(drm.objective?.type, "SELECT_PRODUCTS", "the evaluator never mutates/rebuilds the original DRM");
 });
 
 test("P6-B11/B12: quote execution classes remain derived from Gateway governance", () => {

@@ -35,6 +35,7 @@ import type { AgentLoopStepRecord, AgentStep, PendingCatalogActionStep } from ".
 import type { RecentCatalogContext } from "./recentCatalogContext";
 import { CONVERSATION_CONTINUITY_UNKNOWN, type ConversationContinuitySignal } from "./conversationContinuity";
 import type { SemanticVocabulary } from "../capability-gateway/searchProductsBySemanticsCapability";
+import type { AgentCapabilityEligibilityView } from "../agent-turn-input";
 
 /**
  * One customer-authored fragment of this turn's own input - the original
@@ -63,6 +64,7 @@ const TOOL_RESULT_LABEL_PREFIX = "[TOOL RESULT: ";
 function buildDynamicContextMessage(input: {
   currentTime: string;
   commercialContextSummary: Record<string, unknown>;
+  capabilityEligibility?: AgentCapabilityEligibilityView | null;
   recentCatalogContext?: RecentCatalogContext | null;
   pendingCatalogAction?: PendingCatalogActionStep | null;
   conversationContinuity?: ConversationContinuitySignal | null;
@@ -71,6 +73,7 @@ function buildDynamicContextMessage(input: {
   const payload = {
     currentTime: input.currentTime,
     commercialContext: input.commercialContextSummary,
+    ...(input.capabilityEligibility !== undefined ? { capabilityEligibility: input.capabilityEligibility } : {}),
     recentCatalogContext: input.recentCatalogContext ?? { interactions: [] },
     ...(input.pendingCatalogAction ? { pendingCatalogAction: input.pendingCatalogAction } : {}),
     conversationContinuity: input.conversationContinuity ?? CONVERSATION_CONTINUITY_UNKNOWN,
@@ -130,6 +133,7 @@ export type BuildHarnessAlignedMessagesInput = {
   systemInstructions: string;
   currentTime: string;
   commercialContextSummary: Record<string, unknown>;
+  capabilityEligibility?: AgentCapabilityEligibilityView | null;
   recentCatalogContext?: RecentCatalogContext | null;
   pendingCatalogAction?: PendingCatalogActionStep | null;
   conversationContinuity?: ConversationContinuitySignal | null;

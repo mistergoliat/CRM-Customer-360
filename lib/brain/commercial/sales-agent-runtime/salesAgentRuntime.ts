@@ -29,6 +29,10 @@ import {
   type AgentTurnInputShadowRuntimeOptions
 } from "../agent-turn-input/shadow";
 import type { CommercialDomainReadModel } from "../domain-read-model";
+import type { AgentTurnInput, AgentCapabilityEligibilityView } from "../agent-turn-input";
+import { evaluateCapabilityEligibility, toAgentCapabilityEligibilityView } from "../capability-eligibility";
+import type { CapabilityEligibilitySnapshot } from "../capability-eligibility";
+import type { PersistedCommercialWork } from "../work/persistenceTypes";
 
 // SALES-AGENT-R3-V1.3. The first provider-neutral boundary that consumes an
 // AgentRuntimeEvent (R3-A05) and runs a real, dynamic model/tool loop to a
@@ -125,6 +129,11 @@ export type SalesAgentRuntimeInput = {
   commercialProposalShadowEnabled?: boolean;
   /** SALES-AGENT-R3-P2. Read-only AgentTurnInput v1 construction, resolved at the R3 cycle boundary. */
   agentTurnInputShadow?: AgentTurnInputShadowRuntimeOptions;
+  /** P6.3 pre-cognition eligibility. This is cognition-only, never a Gateway authorization. */
+  capabilityEligibilityInput?: {
+    enabled: boolean;
+    work?: Pick<PersistedCommercialWork, "publicId" | "version" | "objectives"> | null;
+  };
 };
 
 export const SALES_AGENT_RUNTIME_STATUSES = ["responded", "blocked", "failed", "handoff"] as const;
@@ -181,16 +190,12 @@ export type SalesAgentRuntimeResult = {
    * this type - a pre-existing tsc gap from the P4 commit, not a P5 change).
    */
   commercialProposal: CommercialProposalV1 | null;
+  /** Internal same-turn context. It is not sent to the provider or persisted. */
+  cognitionContext?: {
+    domainReadModel: CommercialDomainReadModel;
+    preCognitionCapabilityEligibility: CapabilityEligibilitySnapshot | null;
+  };
 };
-
-// Kept off the public SalesAgentRuntimeResult shape: P6 can reuse the exact
-// P2 read model during the same in-memory cycle without exposing it to any
-// provider, dispatcher, caller contract or durable payload.
-const AGENT_TURN_INPUT_SHADOW_READ_MODELS = new WeakMap<SalesAgentRuntimeResult, CommercialDomainReadModel>();
-
-export function getAgentTurnInputShadowDomainReadModel(result: SalesAgentRuntimeResult): CommercialDomainReadModel | null {
-  return AGENT_TURN_INPUT_SHADOW_READ_MODELS.get(result) ?? null;
-}
 
 /**
  * Mirrors runNativeAgentToolLoopCycle.ts#buildStepsSummary exactly, kept as
@@ -484,6 +489,9 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
   // is intentionally not attached to the runtime result.
   let agentTurnInputShadow: AgentTurnInputShadowObservation | null = null;
   let agentTurnInputShadowDomainReadModel: CommercialDomainReadModel | null = null;
+  let preCognitionCapabilityEligibility: CapabilityEligibilitySnapshot | null = null;
+  let agentTurnInput: AgentTurnInput | null = null;
+  const capabilityEligibilityInputEnabled = input.capabilityEligibilityInput?.enabled === true;
   const shadowOptions = input.agentTurnInputShadow;
   if (shadowOptions?.enabled && inboundMessageId) {
     let domainReadModel: Awaited<ReturnType<AgentTurnInputShadowRuntimeOptions["buildDomainReadModel"]>> | null = null;
@@ -505,6 +513,20 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     }
 
     if (!agentTurnInputShadow && domainReadModel) {
+      let capabilityEligibility: AgentCapabilityEligibilityView | null = null;
+      if (capabilityEligibilityInputEnabled) {
+        try {
+          preCognitionCapabilityEligibility = evaluateCapabilityEligibility({
+            domainReadModel,
+            work: input.capabilityEligibilityInput?.work,
+            evaluatedAt: event.currentTime
+          });
+          capabilityEligibility = toAgentCapabilityEligibilityView(preCognitionCapabilityEligibility);
+        } catch {
+          // Input cognition degrades to null; never manufacture eligibility.
+          preCognitionCapabilityEligibility = null;
+        }
+      }
       try {
         const preparation = await buildAgentTurnInputShadow({
           domainReadModel,
@@ -529,9 +551,11 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
           inboundMessageId,
           metrics: shadowOptions.metrics,
           buildAgentTurnInputFn: shadowOptions.buildAgentTurnInputFn,
+          capabilityEligibility: capabilityEligibilityInputEnabled ? capabilityEligibility : null,
           sessionAvailable: persistentSessionCognition.active
         });
         agentTurnInputShadow = preparation.observation;
+        agentTurnInput = preparation.agentTurnInput;
       } catch {
         // P1/shadow failures are descriptive only. In particular, do not
         // append this to preLoopWarnings: existing R3 warning consumers must
@@ -549,6 +573,13 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
         });
       }
     }
+  }
+
+  // P6.3 is the only route that adds this field. Flag-off calls preserve the
+  // existing prompt/provider request shape exactly; flag-on failures use an
+  // explicit null so the prompt can apply its safe advisory fallback.
+  if (capabilityEligibilityInputEnabled) {
+    loopInput.capabilityEligibility = agentTurnInput?.capabilityEligibility ?? null;
   }
 
   // SALES-AGENT-R3-V1.8-D2. Durable BEFORE cognition starts - see
@@ -667,8 +698,15 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     projectedMessageCount: loop.projectedMessageCount ?? 0,
     projectedToolObservationCount: loop.projectedToolObservationCount ?? 0,
     projectedAssimilatedUserMessageCount: loop.projectedAssimilatedUserMessageCount ?? 0,
-    ...(agentTurnInputShadow ? { agentTurnInputShadow } : {})
+    ...(agentTurnInputShadow ? { agentTurnInputShadow } : {}),
+    ...(agentTurnInputShadowDomainReadModel
+      ? {
+          cognitionContext: {
+            domainReadModel: agentTurnInputShadowDomainReadModel,
+            preCognitionCapabilityEligibility
+          }
+        }
+      : {})
   };
-  if (agentTurnInputShadowDomainReadModel) AGENT_TURN_INPUT_SHADOW_READ_MODELS.set(result, agentTurnInputShadowDomainReadModel);
   return result;
 }

@@ -1,6 +1,6 @@
 # R3 Commercial Agent — Architecture & Handoff
 
-Documento técnico canónico de handoff para retomar la línea R3 Commercial Agent desde P6.3. Describe contratos y seams vigentes en `develop`; no convierte la telemetría P6 en autorización ni cambia el roadmap de la release activa.
+Documento técnico canónico de handoff para retomar la línea R3 Commercial Agent después de P6.3. Describe contratos y seams vigentes en `develop`; no convierte la telemetría P6 en autorización ni cambia el roadmap de la release activa.
 
 ## 1. Purpose
 
@@ -18,15 +18,15 @@ Inbound turn
   -> runNativeAutonomousCycle
   -> CommercialWork kernel (P3.5)
   -> cierre P2 para construir CommercialDomainReadModel
-  -> AgentTurnInput shadow / R3 provider-harness
+  -> eligibility pre-cognición (P6.3) -> AgentTurnInput -> R3 provider-harness
   -> CommercialProposal (P4, mismo harness)
   -> objective reconciliation (P5)
-  -> structural capability eligibility shadow (P6.2)
+  -> structural capability eligibility post-reconciliation shadow (P6.2)
   -> terminal response or handoff
   -> canonical Outbox dispatch
 ```
 
-Implementado: turn settlement, kernel P3.5, DRM P0/P2 shadow, runtime/harness, proposal P4, reconciliación P5, eligibility P6.2 y dispatcher R3 nativo. P6 no altera todavía el prompt ni la tool pool. P7/P8/P9 representan la integración posterior de eligibility con ejecución gobernada, reproyección/continuación y recuperación durable; no están implementados por P6.
+Implementado: turn settlement, kernel P3.5, DRM P0/P2, runtime/harness, proposal P4, reconciliación P5, eligibility P6.2 y su vista cognitiva P6.3, y dispatcher R3 nativo. P6.3 informa el prompt, pero no altera la tool pool ni la autoridad de ejecución. P7/P8/P9 representan la integración posterior de eligibility con ejecución gobernada, reproyección/continuación y recuperación durable; no están implementados por P6.
 
 El execution path de capabilities ya existe en R3:
 
@@ -111,7 +111,7 @@ Puntos de entrada y ownership de ciclo:
 | P6.2-A structural eligibility base | CLOSED | evaluator puro y evento shadow |
 | P6.2-B create_quote/get_quote | CLOSED | scope quote e identidad canónica |
 | P6.2-C integrated shadow validation | CLOSED | wiring post-P5 y regresiones integradas |
-| P6.3 eligibility → AgentTurnInput/R3 | NEXT | informar cognición sin filtrar herramientas |
+| P6.3 eligibility → AgentTurnInput/R3 | CLOSED | informar cognición sin filtrar herramientas |
 | P7 eligibility-aware governed execution | PENDING | integrar eligibility con el Gateway/execution path ya existente, manteniendo Gateway como autoridad final |
 | P8 reproject + continue cognition | PENDING | observar resultado y continuar |
 | P9 durable retry/wait/recovery | PENDING | recuperación durable |
@@ -204,30 +204,29 @@ Ausencia conocida no equivale a unknown: `null` puede significar una fact ausent
 
 P6 no construye otro DRM ni duplica freshness. Reutiliza el DRM P2 ya construido, añade cero HTTP/DB y no inventa truth.
 
-## 12. Current P6.2-C Wiring
+## 12. Current P6.3 Wiring
 
 ```text
 runNativeAutonomousCycle
 -> runSalesAgentRuntimeCycle
 -> ensureCommercialWorkCase (kernel P3.5)
 -> runSalesAgentRuntime
--> buildDomainReadModel P2 (antes del provider)
+-> buildDomainReadModel P2 (una vez, antes del provider)
+-> evaluate pre-cognition eligibility (work durable al inicio del turno)
+-> compact AgentCapabilityEligibilityView -> AgentTurnInput -> prompt/provider
 -> provider/harness
 -> CommercialProposal
 -> P5 reconciliation
--> workForCapabilityEligibility
--> runCapabilityEligibilityShadow
+-> work post-reconciliation -> runCapabilityEligibilityShadow
 -> commercial_capability_eligibility_evaluated
 -> dispatchSalesAgentTerminalOutcome
 ```
 
-En `runSalesAgentRuntimeCycle`, P6 empieza con el work del kernel y, si P5 aplica una mutación, reemplaza la referencia por `updatedWork`. Por eso evalúa el work post-P5, no un turno atrasado. Proposal `null` con QUOTE durable es NOOP P5 y P6 sigue evaluando QUOTE. Si no hay DRM P2, P6 no lo reconstruye y no emite evento; si no hay kernel work, no evalúa.
+La eligibility que llega al modelo es pre-cognición: usa el work durable al inicio del turno y el DRM ya construido. El shadow/evento existente conserva su semántica post-P5: `runSalesAgentRuntimeCycle` empieza con el work del kernel y, si P5 aplica una mutación, reemplaza la referencia por `updatedWork`. Proposal `null` con QUOTE durable es NOOP P5 y el snapshot post-reconciliation sigue evaluando QUOTE. No son un snapshot único ni se ejecuta un segundo DRM o provider call. Si no hay DRM para P6.3, el input cognitivo degrada a `capabilityEligibility: null`; para P6.2 post-P5 no se reconstruye DRM ni se emite evento.
 
-## 13. WeakMap Bridge
+## 13. Same-turn Context
 
-`lib/brain/commercial/sales-agent-runtime/salesAgentRuntime.ts` declara `WeakMap<SalesAgentRuntimeResult, CommercialDomainReadModel>` y exporta `getAgentTurnInputShadowDomainReadModel(runtime)`. Al finalizar `runSalesAgentRuntime`, guarda el DRM exacto ya usado por P2; el ciclo P6 lo recupera desde la misma instancia de result.
-
-Es un bridge temporal interno: está scoped a una instancia runtime, no cruza turns ni modifica provider/AgentTurnInput contracts. La referencia al resultado permanece viva mientras corre el ciclo, por lo que el GC no puede afectar esa lectura. No debe convertirse en interfaz definitiva: P6.3 es el punto natural para decidir si reemplazarlo por un contrato explícito y compacto.
+P6.3 retiró el `WeakMap` temporal P2→P6. `SalesAgentRuntimeResult.cognitionContext` mantiene explícitamente, sólo durante el ciclo en memoria, el DRM ya construido y el `preCognitionCapabilityEligibility` interno. No cruza turns, no se persiste y no alcanza provider, dispatcher ni Gateway. El provider recibe solamente `AgentCapabilityEligibilityView` dentro del `AgentTurnInput`/prompt.
 
 ## 14. Feature Flags
 
@@ -240,6 +239,7 @@ Todas se resuelven en `lib/brain/commercial/config/commercialCycleConfig.ts` con
 | `BRAIN_R3_COMMERCIAL_PROPOSAL_SHADOW_ENABLED` | proposal P4 del mismo harness | `false` | necesaria para transición nueva del turno | `true` |
 | `BRAIN_R3_COMMERCIAL_OBJECTIVE_RECONCILIATION_ENABLED` | P5 proposal→work | `false` | requiere proposal + kernel | `true` |
 | `BRAIN_R3_CAPABILITY_ELIGIBILITY_SHADOW_ENABLED` | evaluator/event P6 | `false` | requiere DRM + work para emitir | `true` |
+| `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` | vista P6.3 para AgentTurnInput/prompt | `false` | requiere DRM; `null` si no puede construirse | `false` hasta activación controlada |
 | `BRAIN_COMMERCIAL_WORK_RUNTIME_ENABLED` | runtime histórico CommercialWork/R2 | `false` | independiente; no usar para R3 kernel | `false` |
 
 El mínimo observacional P6 sobre work ya existente es P2 + kernel + P6. El conjunto de cinco flags es el necesario para validar la transición completa proposal→P5→P6.
@@ -261,11 +261,12 @@ La proposal existe en memoria antes de P5; su evento se persiste más tarde, pos
 
 ## 16. Test Baseline
 
-Última validación conocida en `develop` al cierre P6.2-C:
+Validación al cierre P6.3:
 
 - P4: 17/17 PASS.
 - P5: 35/35 PASS.
 - P6: 26/26 PASS (20 base/B + 6 integración C).
+- P6.3: 10/10 PASS (contrato/view, prompt/provider, fallback `null` y momentos pre/post).
 - `npm run typecheck`: PASS.
 - lint focalizado: PASS.
 - `git diff --check`: PASS.
@@ -289,8 +290,7 @@ Suites DB se clasifican `ENVIRONMENT_BLOCKED` si MariaDB local no está disponib
 
 **Architectural debt**
 
-- WeakMap bridge temporal; eligibility aún no forma parte de AgentTurnInput.
-- P6 no filtra tool exposure y Gateway continúa como autoridad runtime.
+- P6.3 no filtra tools y Gateway continúa como autoridad runtime; esa integración queda para P7.
 - TTL/freshness temporal no está formalizado; quote locator freshness y remote truth pueden terminar en `UNKNOWN`.
 - Registries y paths legacy/R2 aún existen físicamente y no deben recuperar autoridad.
 
@@ -302,11 +302,10 @@ Suites DB se clasifican `ENVIRONMENT_BLOCKED` si MariaDB local no está disponib
 
 **Trabajo diferido intencionalmente**
 
-- Exposición de eligibility a AgentTurnInput/provider (P6.3).
 - Filtrado dinámico de tools y control de ejecución por eligibility.
 - P7/P8/P9, incluyendo reprojection/continuación y recovery durable.
 
-## 19. P6.3 Objective
+## 19. P6.3 Delivered Integration
 
 P6.3 conecta:
 
@@ -317,7 +316,7 @@ CapabilityEligibilitySnapshot
 -> R3 cognition
 ```
 
-Regla central: **“Eligibility informs cognition. Gateway authorizes execution.”** Debe conservar el mismo provider/harness, Gateway y tool pool inicialmente; no habilita hard filtering.
+Regla central: **“Eligibility informs cognition. Gateway authorizes execution.”** Conserva el mismo provider/harness, Gateway y tool pool; no habilita hard filtering.
 
 ## 20. P6.3 Non-Goals
 
@@ -329,9 +328,9 @@ Regla central: **“Eligibility informs cognition. Gateway authorizes execution.
 - No prediction de availability ni workflow rígido.
 - No requisito nuevo de shipping para `create_quote`.
 
-## 21. P6.3 Proposed Integration Shape
+## 21. P6.3 Cognitive View
 
-Propuesta documental, no implementación:
+Representación implementada, compacta y determinista:
 
 ```yaml
 capabilityEligibility:
@@ -345,7 +344,7 @@ capabilityEligibility:
         - MISSING_QUOTE
 ```
 
-Antes de implementar se debe auditar el formato exacto. Debe ser compacto, determinista, PII-safe, con reason codes; no duplicar DRM completo ni producir una explicación backend en lenguaje natural.
+No es el snapshot interno completo: omite `workId`, versiones de work, `objectiveId`, `evaluatedAt`, clases de ejecución, PII y DRM. Conserva únicamente `schemaVersion`, `metadataVersion`, capability names y reason codes canónicos.
 
 ## 22. P6.3 Acceptance Criteria
 
@@ -360,14 +359,9 @@ Antes de implementar se debe auditar el formato exacto. Debe ser compacto, deter
 9. Flags permiten apagar por completo la influencia P6.3 y hay fallback seguro si no existe snapshot.
 10. Telemetría P6 shadow sigue disponible.
 
-## 23. Expected Next Implementation Sequence
+## 23. Next Implementation Sequence
 
-1. **P6.3-A:** contrato/extensión de AgentTurnInput.
-2. **P6.3-B:** exposición al prompt/provider.
-3. **P6.3-C:** pruebas de comportamiento.
-4. **P6.3-D:** shadow productivo/activación controlada.
-
-Después: P7 governed execution integration, P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
+P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. Después: P7 governed execution integration, P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
 
 ## 24. Do Not Accidentally Reintroduce
 
