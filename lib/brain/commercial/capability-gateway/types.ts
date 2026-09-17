@@ -127,6 +127,24 @@ export type CapabilityGatewayContext = {
    * resolveNativeCustomerSession.
    */
   trustedCustomerSession?: NativeCustomerSessionExecutionContext | null;
+  /**
+   * SALES-AGENT-R3-P7.1 (Trusted Execution Context). Durable CommercialWork/
+   * objective trace context for this turn - assembled by the runtime from
+   * the same work the P3.5 kernel already resolved (see
+   * salesAgentRuntime.ts), never re-read or re-derived here. Audit/
+   * correlation only: no capability's checkAvailability/execute and no
+   * Gateway policy (identity gate, availability, retry) reads these fields
+   * to decide anything - adding this context does not add authorization.
+   * Never supplied or overridable by the model - runAgentToolLoop.ts builds
+   * this exclusively from runtime state, never from AgentStepUseTool.arguments.
+   * `workId`/`workVersion` null means no durable work exists this turn;
+   * `objectiveId`/`objectiveType` null (with work present) means the work
+   * has no active objective - never a sentinel string like "unknown"/"none".
+   */
+  workId?: string | null;
+  workVersion?: number | null;
+  objectiveId?: string | null;
+  objectiveType?: string | null;
 };
 
 export type CapabilityGatewayDefinition<TInput = Record<string, unknown>, TOutput = Record<string, unknown>> = {

@@ -29,10 +29,45 @@ import {
   type AgentTurnInputShadowRuntimeOptions
 } from "../agent-turn-input/shadow";
 import type { CommercialDomainReadModel } from "../domain-read-model";
+import { selectActiveObjective } from "../domain-read-model";
 import type { AgentTurnInput, AgentCapabilityEligibilityView } from "../agent-turn-input";
 import { evaluateCapabilityEligibility, toAgentCapabilityEligibilityView } from "../capability-eligibility";
 import type { CapabilityEligibilitySnapshot } from "../capability-eligibility";
 import type { PersistedCommercialWork } from "../work/persistenceTypes";
+
+/**
+ * SALES-AGENT-R3-P7.1 (Trusted Execution Context). Derives the four trusted
+ * work/objective trace fields from the same work the P3.5 kernel already
+ * resolved this turn - never a DB read, DRM build or CommercialWork reread
+ * of its own. Pure and independent of any P6 eligibility flag: this exists
+ * so runSalesAgentRuntime can thread work/objective identity to the Gateway
+ * regardless of whether P6 eligibility itself runs this turn. Exported only
+ * for direct unit testing.
+ *
+ * Null semantics: workId/workVersion null means no durable work exists this
+ * turn; objectiveId/objectiveType null (work present) means the work has no
+ * active (non-terminal) objective - never a sentinel string like
+ * "unknown"/"none".
+ */
+export type TrustedCommercialExecutionContext = {
+  workId: string | null;
+  workVersion: number | null;
+  objectiveId: string | null;
+  objectiveType: string | null;
+};
+
+export function resolveTrustedCommercialExecutionContext(
+  work: Pick<PersistedCommercialWork, "publicId" | "version" | "objectives"> | null | undefined
+): TrustedCommercialExecutionContext {
+  const resolvedWork = work ?? null;
+  const activeObjective = selectActiveObjective(resolvedWork as PersistedCommercialWork | null);
+  return {
+    workId: resolvedWork?.publicId ?? null,
+    workVersion: resolvedWork?.version ?? null,
+    objectiveId: activeObjective?.objectiveId ?? null,
+    objectiveType: activeObjective?.type ?? null
+  };
+}
 
 // SALES-AGENT-R3-V1.3. The first provider-neutral boundary that consumes an
 // AgentRuntimeEvent (R3-A05) and runs a real, dynamic model/tool loop to a
@@ -450,6 +485,14 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     if (!diagnosticResult.ok) preLoopWarnings.push(diagnosticResult.warning);
   }
 
+  // SALES-AGENT-R3-P7.1 (Trusted Execution Context). Reuses the exact work
+  // the P3.5 kernel already resolved this turn (input.capabilityEligibilityInput?.work) -
+  // never a second DB read, DRM build or CommercialWork reread. Deliberately
+  // independent of capabilityEligibilityInputEnabled (P6): this seam threads
+  // durable work/objective identity to the Gateway regardless of whether P6
+  // eligibility itself runs this turn.
+  const trustedExecutionContext = resolveTrustedCommercialExecutionContext(input.capabilityEligibilityInput?.work);
+
   const loopInput: RunAgentToolLoopInput = {
     correlationId: event.correlationId,
     conversationId: event.conversationId,
@@ -457,6 +500,10 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     currentTime: event.currentTime,
     customerMessage: event.messageText,
     inboundMessageId,
+    workId: trustedExecutionContext.workId,
+    workVersion: trustedExecutionContext.workVersion,
+    objectiveId: trustedExecutionContext.objectiveId,
+    objectiveType: trustedExecutionContext.objectiveType,
     // Task brief Section B: never send both persistent history and legacy
     // recentMessages for the same turn - stripped only when the persistent
     // path is actually active this turn.

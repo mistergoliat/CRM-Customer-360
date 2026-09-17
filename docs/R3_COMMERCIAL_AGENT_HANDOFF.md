@@ -112,7 +112,11 @@ Puntos de entrada y ownership de ciclo:
 | P6.2-B create_quote/get_quote | CLOSED | scope quote e identidad canónica |
 | P6.2-C integrated shadow validation | CLOSED | wiring post-P5 y regresiones integradas |
 | P6.3 eligibility → AgentTurnInput/R3 | CLOSED | informar cognición sin filtrar herramientas |
-| P7 eligibility-aware governed execution | PENDING | integrar eligibility con el Gateway/execution path ya existente, manteniendo Gateway como autoridad final |
+| P7.0 comparative harness/runtime audit | CLOSED | `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`; scope minimo validado para P7.1+ |
+| P7.1 trusted execution context | CLOSED | workId/workVersion/objectiveId/objectiveType threadeados de runtime a `CapabilityGatewayContext`, sin autoridad de ejecución |
+| P7.2 eligibility/request/outcome correlation | NEXT | observar cómo la invocación se relaciona con la eligibility pre-cognición que vio el modelo |
+| P7.3 in-turn relevant change detection | PENDING | distinguir bloqueador resuelto en el turno vs pedido repetido sin evidencia nueva |
+| P7.4 benchmark connection | PENDING | conectar P7 al benchmark E2E |
 | P8 reproject + continue cognition | PENDING | observar resultado y continuar |
 | P9 durable retry/wait/recovery | PENDING | recuperación durable |
 | P10 follow-up | PENDING | continuidad programada |
@@ -361,7 +365,22 @@ No es el snapshot interno completo: omite `workId`, versiones de work, `objectiv
 
 ## 23. Next Implementation Sequence
 
-P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. Después: P7 governed execution integration, P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
+P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`) y P7.1 (trusted execution context) están cerrados. Después: P7.2 eligibility/request/outcome correlation, P7.3 in-turn relevant change detection, P7.4 benchmark connection, P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
+
+## 23.1. P7.1 — Trusted Execution Context
+
+P7.1 threads trusted CommercialWork/objective context through capability invocation without granting it execution authority.
+
+`CapabilityGatewayContext` (`capability-gateway/types.ts`) gana cuatro campos opcionales: `workId`, `workVersion`, `objectiveId`, `objectiveType`. Se derivan en `resolveTrustedCommercialExecutionContext` (`sales-agent-runtime/salesAgentRuntime.ts`) a partir del mismo work que el kernel P3.5 ya resolvió este turno (`capabilityEligibilityInput.work`) - sin segunda lectura de DB, sin build de DRM, sin segundo llamado al provider - y se transportan por `RunAgentToolLoopInput` hasta `buildAgentLoopGatewayContext` (`agent-loop/runAgentToolLoop.ts`), que construye el `gatewayContext` compartido de todo el turno.
+
+Invariantes de P7.1:
+
+- Nunca provienen de `AgentStepUseTool.arguments` - no hay canal para que el modelo los suministre o sobreescriba.
+- Ninguna capability, `checkAvailability`, `execute`, identity gate ni policy de Gateway los lee para decidir nada; Gateway sigue siendo la autoridad final, sin cambios.
+- No se persisten (`crm_capability_executions` no gana columnas), no aparecen en `ToolObservation` ni en el prompt/tool schema.
+- `workId`/`workVersion` null significa que no existe work durable este turno; `objectiveId`/`objectiveType` null (con work presente) significa que el work no tiene objective activo - nunca un string sentinel.
+
+El seam para P7.2 (correlacionar la invocación con `preCognitionCapabilityEligibility`, ya calculada en el mismo punto) queda identificado pero no implementado.
 
 ## 24. Do Not Accidentally Reintroduce
 

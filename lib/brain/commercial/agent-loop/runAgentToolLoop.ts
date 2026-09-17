@@ -243,6 +243,20 @@ export type RunAgentToolLoopInput = {
    * exact pre-P4 prompt contract.
    */
   commercialProposalShadowEnabled?: boolean;
+  /**
+   * SALES-AGENT-R3-P7.1 (Trusted Execution Context). Durable CommercialWork/
+   * objective trace context for this turn, resolved by the caller
+   * (salesAgentRuntime.ts) from the same work the P3.5 kernel already
+   * resolved - never a second read/DRM build here. Carried unchanged onto
+   * gatewayContext (see its construction below) for every capability
+   * invocation this turn - audit/correlation only, never a Gateway policy
+   * input, never read from step.arguments. Absent/null preserves the exact
+   * pre-P7.1 gatewayContext shape.
+   */
+  workId?: string | null;
+  workVersion?: number | null;
+  objectiveId?: string | null;
+  objectiveType?: string | null;
 };
 
 /**
@@ -838,6 +852,30 @@ async function processUseToolStep(
  *    facing fallback; a full/exhausted gathering phase always gets this
  *    dedicated, simpler last chance first.
  */
+/**
+ * SALES-AGENT-R3-P7.1 (Trusted Execution Context). Pure extraction of the
+ * gatewayContext construction below - exported only so the trusted
+ * work/objective trace-context wiring is directly unit-testable without
+ * driving a full loop/DB/HTTP run. Not a new envelope: same shape,
+ * same call site, same values, just named. The parameter type deliberately
+ * excludes AgentStepUseTool/arguments - there is structurally no channel
+ * for model-supplied data to reach this function.
+ */
+export function buildAgentLoopGatewayContext(
+  input: Pick<RunAgentToolLoopInput, "correlationId" | "conversationId" | "opportunityId" | "trustedCustomerSession" | "workId" | "workVersion" | "objectiveId" | "objectiveType">
+): CapabilityGatewayContext {
+  return {
+    correlationId: input.correlationId,
+    conversationId: input.conversationId,
+    opportunityId: input.opportunityId,
+    trustedCustomerSession: input.trustedCustomerSession ?? null,
+    workId: input.workId ?? null,
+    workVersion: input.workVersion ?? null,
+    objectiveId: input.objectiveId ?? null,
+    objectiveType: input.objectiveType ?? null
+  };
+}
+
 export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<AgentLoopResult> {
   const maxDecisions = input.maxDecisions ?? DEFAULT_MAX_DECISIONS;
   const maxToolExecutions = input.maxToolExecutions ?? DEFAULT_MAX_TOOL_EXECUTIONS;
@@ -883,12 +921,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
   }
 
   const toolDescriptions = buildToolDescriptions();
-  const gatewayContext: CapabilityGatewayContext = {
-    correlationId: input.correlationId,
-    conversationId: input.conversationId,
-    opportunityId: input.opportunityId,
-    trustedCustomerSession: input.trustedCustomerSession ?? null
-  };
+  const gatewayContext: CapabilityGatewayContext = buildAgentLoopGatewayContext(input);
 
   const steps: AgentLoopStepRecord[] = [];
   /** LLM-R1-T02. One entry per real provider invocation this turn - see AgentLoopInferenceRecord. */
