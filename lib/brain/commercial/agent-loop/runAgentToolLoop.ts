@@ -14,6 +14,7 @@ import { buildAgentStepPromptPackage, type AgentLoopPriorAttemptFailure, type Ag
 import type { AgentCapabilityEligibilityView } from "../agent-turn-input";
 import type { CapabilityEligibilitySnapshot } from "../capability-eligibility/types";
 import { lookupCapabilityEligibility } from "../capability-eligibility/lookupCapabilityEligibility";
+import { deriveInTurnEvidenceForInvocation, type PriorToolStepForEvidence } from "../capability-eligibility/deriveInTurnEvidence";
 import { recordCommercialCapabilityInvocationObservedEvent } from "../events/service";
 import type { AgentStepPromptProjectionMetadata, CustomerMessageFragment } from "./harnessAlignedMessageProjection";
 import type { ConversationContinuitySignal } from "./conversationContinuity";
@@ -615,6 +616,14 @@ async function recordPreGatewayToolRejection(
  * skipped (not an error) - matching every other per-turn shadow event in
  * this codebase that requires one.
  *
+ * SALES-AGENT-R3-P7.3 (In-turn Relevant Evidence Correlation). `steps` is
+ * this turn's own gathering-phase history so far, including the just-pushed
+ * current step - deriveInTurnEvidenceForInvocation itself filters to
+ * stepIndex < input.stepIndex, so passing the full array is safe and no
+ * second, pre-filtered copy is built here. Adds inTurnEvidence to the
+ * recorded payload without touching eligibilityAtTurnStart/gateway/
+ * toolObservation above, and without ever claiming a blocker is resolved.
+ *
  * Fail-open, same discipline as recordPreGatewayToolRejection above: a
  * persistence failure folds into this turn's own `warnings` channel and
  * never throws into the caller.
@@ -626,11 +635,24 @@ async function recordCapabilityInvocationCoherenceObservation(input: {
   preCognitionCapabilityEligibility: CapabilityEligibilitySnapshot | null;
   gatewayResult: CapabilityGatewayResult | null;
   observation: ToolObservation;
+  steps: readonly AgentLoopStepRecord[];
   inboundMessageId: string | null;
   warnings: string[];
 }): Promise<void> {
   if (!input.inboundMessageId) return;
   const eligibility = lookupCapabilityEligibility(input.preCognitionCapabilityEligibility, input.capability);
+  const priorToolSteps: PriorToolStepForEvidence[] = input.steps
+    .filter((record): record is AgentLoopStepRecord & { step: AgentStepUseTool } => record.step.type === "use_tool")
+    .map((record) => ({
+      stepIndex: record.stepIndex,
+      capability: record.step.tool,
+      observationStatus: record.observation?.status ?? "blocked"
+    }));
+  const inTurnEvidence = deriveInTurnEvidenceForInvocation({
+    currentStepIndex: input.stepIndex,
+    eligibilityAtTurnStart: eligibility,
+    priorToolSteps
+  });
   try {
     const result = await recordCommercialCapabilityInvocationObservedEvent({
       inboundMessageId: input.inboundMessageId,
@@ -656,6 +678,11 @@ async function recordCapabilityInvocationCoherenceObservation(input: {
           status: input.observation.status,
           errorCode: input.observation.errorCode ?? null,
           retryable: input.observation.retryable ?? null
+        },
+        inTurnEvidence: {
+          relevantEvidenceProduced: [...inTurnEvidence.relevantEvidenceProducedThisTurn],
+          blockerPotentiallyChanged: inTurnEvidence.blockerPotentiallyChangedThisTurn,
+          potentiallyAffectedReasonCodes: [...inTurnEvidence.potentiallyAffectedReasonCodes]
         }
       }
     });
@@ -1542,6 +1569,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       preCognitionCapabilityEligibility: input.preCognitionCapabilityEligibility ?? null,
       gatewayResult: result.gatewayResult,
       observation: result.observation,
+      steps,
       inboundMessageId: input.inboundMessageId ?? null,
       warnings
     });

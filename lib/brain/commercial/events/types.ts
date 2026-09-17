@@ -726,6 +726,25 @@ export type CommercialCapabilityInvocationObservedPayload = {
     errorCode: string | null;
     retryable: boolean | null;
   };
+  /**
+   * SALES-AGENT-R3-P7.3 (In-turn Relevant Evidence Correlation). Distinct
+   * from eligibilityAtTurnStart, which never changes once computed:
+   * relevantEvidenceProduced/blockerPotentiallyChanged/
+   * potentiallyAffectedReasonCodes describe what happened AFTER that
+   * snapshot, within the same turn, before this invocation. Only Gateway
+   * evidence codes and P6 reason codes already used elsewhere in this
+   * payload - no product/quote/customer ids, no raw arguments.
+   * blockerPotentiallyChanged is never a claim that the blocker is resolved
+   * (that requires DRM reprojection, P8) - only that a capability whose
+   * registry-declared evidenceProduced relates to this blocker's reason
+   * code(s) completed earlier in this same turn. Always the deterministic
+   * empty/false shape when eligibilityAtTurnStart is null or ELIGIBLE.
+   */
+  inTurnEvidence: {
+    relevantEvidenceProduced: string[];
+    blockerPotentiallyChanged: boolean;
+    potentiallyAffectedReasonCodes: string[];
+  };
 };
 
 export type AgentTurnInputShadowBuiltPayload = {

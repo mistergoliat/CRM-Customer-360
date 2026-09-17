@@ -58,6 +58,12 @@ export function setShippingDestinationCapability(
     governance: { sideEffect: "mutating", authority: "autonomous", riskClass: "low" },
     maxRetries: 0,
     inputSchema: SET_SHIPPING_DESTINATION_INPUT_SCHEMA,
+    // SALES-AGENT-R3-P7.3. Declares the same real completion this capability
+    // already persists (setShippingDestinationForOpportunity) as registry
+    // evidence, mirroring select_products/create_quote's existing
+    // evidenceProduced precedent - no behavior change, no new consumer reads
+    // this yet besides deriveInTurnEvidence.ts's in-turn correlation.
+    evidenceProduced: ["COMMERCIAL_DESTINATION_STATE"],
     useWhen: "the conversation establishes sufficiently where this purchase must be delivered, so that destination should become the opportunity's durable one",
     doNotUseWhen:
       "the location is hypothetical, incidental, or only part of a question rather than the destination of this purchase - persisting a destination neither calculates shipping (calculate_shipping) nor chooses a carrier (select_shipping_option)",

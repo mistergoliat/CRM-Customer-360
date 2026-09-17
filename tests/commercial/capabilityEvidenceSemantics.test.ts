@@ -43,6 +43,18 @@ test("create_quote declares evidenceProduced: QUOTE_CREATED, operationSemantics:
   assert.equal(definition?.operationSemantics, "CREATE_SNAPSHOT");
 });
 
+// SALES-AGENT-R3-P7.3. set_shipping_destination previously declared no
+// evidence relation (see the "without evidence relation" list below, which
+// this task removes it from) - closing a real registry gap that blocked
+// deriveInTurnEvidence.ts from ever correlating MISSING_DESTINATION with a
+// completed set_shipping_destination call, the same way select_products/
+// create_quote already do for their own reason codes.
+test("set_shipping_destination declares evidenceProduced: COMMERCIAL_DESTINATION_STATE", () => {
+  const definition = resolveCapabilityGatewayDefinition("set_shipping_destination");
+  assert.deepEqual(definition?.evidenceProduced, ["COMMERCIAL_DESTINATION_STATE"]);
+  assert.equal(definition?.evidenceRequired, undefined);
+});
+
 test("quote lifecycle capabilities declare their evidence and expose no email-sent claim", () => {
   assert.deepEqual(resolveCapabilityGatewayDefinition("issue_quote")?.evidenceProduced, ["QUOTE_ISSUED", "QUOTE_DOCUMENT_AVAILABLE"]);
   assert.deepEqual(resolveCapabilityGatewayDefinition("send_quote_email")?.evidenceProduced, ["QUOTE_EMAIL_DELIVERY_REQUESTED"]);
@@ -60,7 +72,7 @@ test("evidence/operation-semantics fields stay fully optional - a capability wit
   // asserted is the invariant that did not change: these five declare no
   // evidence relation and no operation semantics, proving the fields are
   // still optional rather than mandatory boilerplate.
-  const withoutEvidenceRelation = ["batch_get_products", "search_company_knowledge", "set_shipping_destination", "calculate_shipping", "select_shipping_option"];
+  const withoutEvidenceRelation = ["batch_get_products", "search_company_knowledge", "calculate_shipping", "select_shipping_option"];
   for (const capability of withoutEvidenceRelation) {
     const definition = resolveCapabilityGatewayDefinition(capability);
     assert.ok(definition, `${capability} must still be registered`);
@@ -99,6 +111,10 @@ test("resolveCapabilitiesProducingEvidence('COMMERCIAL_SELECTION_STATE') returns
 
 test("resolveCapabilitiesProducingEvidence('QUOTE_CREATED') returns exactly create_quote", () => {
   assert.deepEqual(resolveCapabilitiesProducingEvidence("QUOTE_CREATED"), ["create_quote"]);
+});
+
+test("resolveCapabilitiesProducingEvidence('COMMERCIAL_DESTINATION_STATE') returns exactly set_shipping_destination", () => {
+  assert.deepEqual(resolveCapabilitiesProducingEvidence("COMMERCIAL_DESTINATION_STATE"), ["set_shipping_destination"]);
 });
 
 test("resolveCapabilitiesProducingEvidence('SEMANTIC_ELIGIBILITY') returns exactly search_products_by_semantics (TR-B4's producer)", () => {

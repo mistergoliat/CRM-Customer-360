@@ -117,8 +117,8 @@ Puntos de entrada y ownership de ciclo:
 | P7.0 comparative harness/runtime audit | CLOSED | `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`; scope minimo validado para P7.1+ |
 | P7.1 trusted execution context | CLOSED | workId/workVersion/objectiveId/objectiveType threadeados de runtime a `CapabilityGatewayContext`, sin autoridad de ejecución |
 | P7.2 eligibility/request/outcome correlation | CLOSED | evento `commercial_capability_invocation_observed` por invocation, PII-safe, fail-open, sin autoridad de ejecución |
-| P7.3 in-turn relevant change detection | NEXT | distinguir bloqueador resuelto en el turno vs pedido repetido sin evidencia nueva |
-| P7.4 benchmark connection | PENDING | conectar P7 al benchmark E2E |
+| P7.3 in-turn relevant evidence correlation | CLOSED | `inTurnEvidence` en `commercial_capability_invocation_observed`; distingue evidencia relevante producida en el turno de un pedido repetido sin evidencia nueva, sin afirmar blocker resuelto |
+| P7.4 benchmark connection | NEXT | conectar P7 al benchmark E2E |
 | P8 reproject + continue cognition | PENDING | observar resultado y continuar |
 | P9 durable retry/wait/recovery | PENDING | recuperación durable |
 | P10 follow-up | PENDING | continuidad programada |
@@ -367,7 +367,7 @@ No es el snapshot interno completo: omite `workId`, versiones de work, `objectiv
 
 ## 23. Next Implementation Sequence
 
-P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context) y P7.2 (invocation coherence telemetry) están cerrados. Después: P7.3 in-turn relevant change detection, P7.4 benchmark connection, P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
+P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context), P7.2 (invocation coherence telemetry) y P7.3 (in-turn relevant evidence correlation) están cerrados. Después: P7.4 benchmark connection, P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
 
 ## 23.1. P7.1 — Trusted Execution Context
 
@@ -400,6 +400,22 @@ Placement: se registra para toda invocation que `processUseToolStep` acepta como
 
 Sin feature flag dedicado: a diferencia de los shadows P6.2/P6.3 (que informan al modelo o cambian el prompt), P7.2 solo agrega una fila de auditoría descriptiva sobre un tool call que ya está dentro de un turno pilotado/allowlisted - mismo criterio que `recordPreGatewayToolRejection`/`insertCapabilityExecution`, que tampoco tienen flag propio en este archivo.
 
+## 23.3. P7.3 — In-turn Relevant Evidence Correlation
+
+P7.3 agrega una señal determinista, puramente observacional, a `commercial_capability_invocation_observed`: distingue "una tool previa del mismo turno produjo evidencia relevante para el blocker que P6.3 vio al inicio del turno" (Case 3) de "el modelo pide la misma capability BLOCKED sin que nada relevante haya cambiado" (Case 4). No recalcula eligibility, no reproyecta el DRM y nunca afirma que el blocker quedó resuelto - eso exige verdad fresca, que sólo P8 puede dar.
+
+Principio central: **"P7.3 correlates eligibility blockers with evidence produced by prior successful tool calls in the same turn. It indicates that a blocker may have changed, not that it is resolved."**
+
+Componentes:
+
+- `lib/brain/commercial/capability-eligibility/blockerEvidenceMapping.ts#CAPABILITY_ELIGIBILITY_REASON_CODE_TO_EVIDENCE`: mapping puro y pequeño, `CapabilityEligibilityReasonCode -> readonly CapabilityEvidenceType[]`, curado a mano. Cubre `MISSING_SELECTION`/`SELECTION_NOT_CURRENT -> COMMERCIAL_SELECTION_STATE`, `MISSING_DESTINATION`/`DESTINATION_NOT_CURRENT -> COMMERCIAL_DESTINATION_STATE`, `MISSING_QUOTE`/`QUOTE_NOT_CURRENT -> QUOTE_CREATED`. Deliberadamente sin entrada para `OBJECTIVE_REQUIRED`, `OBJECTIVE_INCOMPATIBLE` e `IDENTITY_LEVEL_INSUFFICIENT`: ninguna capability del registry declara `evidenceProduced` para objective o identity, y no se inventó una relación para forzar el mapping completo.
+- `lib/brain/commercial/capability-gateway/types.ts#CAPABILITY_EVIDENCE_TYPES` gana `COMMERCIAL_DESTINATION_STATE`, y `set_shipping_destination` (`shippingDestinationCapability.ts`) ahora declara `evidenceProduced: ["COMMERCIAL_DESTINATION_STATE"]` - mismo patrón ya usado por `select_products` (`COMMERCIAL_SELECTION_STATE`) y `create_quote` (`QUOTE_CREATED`). Antes de P7.3 el registry no tenía ningún evidence code para destino a pesar de que `MISSING_DESTINATION`/`DESTINATION_NOT_CURRENT` ya existían como reason codes P6 - un gap real, cerrado extendiendo el modelo existente en vez de crear uno paralelo. Es un campo declarativo aditivo: no cambia `checkAvailability`/`execute`, tool pool, prompt ni ningún consumidor existente de `evidenceProduced` (que hoy sólo lee `PRODUCT_IDENTITY`).
+- `lib/brain/commercial/capability-eligibility/deriveInTurnEvidence.ts#deriveInTurnEvidenceForInvocation`: función pura (sin IO/DB/HTTP/DRM/Gateway/LLM). Entrada: `currentStepIndex`, `eligibilityAtTurnStart` (`CapabilityEligibilityAtTurnStart | null`, el mismo tipo que P7.2 ya usa) y `priorToolSteps` (una proyección mínima de pasos previos - `stepIndex`/`capability`/`observationStatus` - deliberadamente desacoplada de `AgentLoopStepRecord` para no acoplar este sidecar de P6 a los tipos internos del loop). Salida: `{relevantEvidenceProducedThisTurn, blockerPotentiallyChangedThisTurn, potentiallyAffectedReasonCodes}`. `ELIGIBLE`/`null` en `eligibilityAtTurnStart` siempre retorna la señal vacía sin tocar el status. Sólo cuenta un paso previo con `stepIndex < currentStepIndex` y `observationStatus === "completed"` - nunca el paso actual, nunca uno futuro, nunca `blocked`/`failed`/`skipped`/un rechazo pre-Gateway.
+- `runAgentToolLoop.ts#recordCapabilityInvocationCoherenceObservation` (P7.2) ahora también recibe `steps` (el historial de gathering del turno hasta ese punto), construye la proyección mínima y llama `deriveInTurnEvidenceForInvocation` antes de armar el payload - sin alterar `eligibilityAtTurnStart`/`gateway`/`toolObservation` ya existentes.
+- `commercial_capability_invocation_observed` (`events/types.ts`) gana `inTurnEvidence: {relevantEvidenceProduced: string[], blockerPotentiallyChanged: boolean, potentiallyAffectedReasonCodes: string[]}`. Mismos códigos ya usados en otras partes del payload (evidence types del Gateway, reason codes de P6) - ningún ID de producto/quote/customer, ningún argumento crudo, mismo `schemaVersion: "1"` (cambio aditivo).
+
+Case 3 (`calculate_shipping` BLOCKED `MISSING_DESTINATION`, `set_shipping_destination` completado antes en el mismo turno) produce `blockerPotentiallyChanged: true` con `COMMERCIAL_DESTINATION_STATE`; Case 4 (mismo blocker, `select_products` - evidencia no relacionada - completado antes) produce `blockerPotentiallyChanged: false`. Ambos casos dejan que el Gateway decida su propio outcome sin condicionarlo.
+
 ## 24. Do Not Accidentally Reintroduce
 
 - No usar `CommercialProposal` como estado persistente ni dejar que el LLM decida directamente el objective durable.
@@ -409,4 +425,6 @@ Sin feature flag dedicado: a diferencia de los shadows P6.2/P6.3 (que informan a
 - No filtrar tools en P6.3 sin fase explícita.
 - No guardar razonamiento/CoT, customer text o PII en telemetry.
 - No bloquear `create_quote` por shipping ausente.
+- No usar `blockerPotentiallyChangedThisTurn`/`inTurnEvidence` como `blockerResolvedThisTurn`, ni recalcular eligibility a partir de esa señal - sólo P8 (reproyección de DRM) puede afirmar que un prerequisite volvió a `CURRENT`.
+- No agregar una señal genérica `mutationOccurredThisTurn`/"cualquier mutación cuenta" - toda relevancia P7.3 pasa por `CAPABILITY_ELIGIBILITY_REASON_CODE_TO_EVIDENCE` y el `evidenceProduced` real del registry.
 - No reemplazar wiring válido por un rebuild conceptual completo.

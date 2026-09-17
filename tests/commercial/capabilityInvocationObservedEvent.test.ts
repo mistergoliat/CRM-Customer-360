@@ -20,6 +20,7 @@ function payload(overrides: Partial<CommercialCapabilityInvocationObservedPayloa
     eligibilityAtTurnStart: { status: "ELIGIBLE", reasonCodes: [], metadataVersion: "p6.2-a.1" },
     gateway: { status: "completed", errorCode: null, retryable: false },
     toolObservation: { status: "completed", errorCode: null, retryable: null },
+    inTurnEvidence: { relevantEvidenceProduced: [], blockerPotentiallyChanged: false, potentiallyAffectedReasonCodes: [] },
     ...overrides
   };
 }
@@ -77,6 +78,7 @@ test("P7.2-K: payload never carries raw arguments/PII - only the allowlisted, bo
     "capability",
     "eligibilityAtTurnStart",
     "gateway",
+    "inTurnEvidence",
     "objectiveId",
     "objectiveType",
     "schemaVersion",
@@ -91,6 +93,8 @@ test("P7.2-K: payload never carries raw arguments/PII - only the allowlisted, bo
   assert.deepEqual(Object.keys(gateway).sort(), ["errorCode", "retryable", "status"]);
   const toolObservation = event.payload.toolObservation as Record<string, unknown>;
   assert.deepEqual(Object.keys(toolObservation).sort(), ["errorCode", "retryable", "status"]);
+  const inTurnEvidence = event.payload.inTurnEvidence as Record<string, unknown>;
+  assert.deepEqual(Object.keys(inTurnEvidence).sort(), ["blockerPotentiallyChanged", "potentiallyAffectedReasonCodes", "relevantEvidenceProduced"]);
 });
 
 test("P7.2: a missing inboundMessageId throws - fail-open recording relies on the caller catching this", () => {

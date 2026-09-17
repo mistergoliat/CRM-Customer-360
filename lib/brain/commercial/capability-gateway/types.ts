@@ -64,6 +64,14 @@ export const CAPABILITY_EVIDENCE_TYPES = [
   "SEMANTIC_ELIGIBILITY",
   "CURRENT_PRODUCT_DETAILS",
   "COMMERCIAL_SELECTION_STATE",
+  /**
+   * SALES-AGENT-R3-P7.3. Added alongside COMMERCIAL_SELECTION_STATE's
+   * existing precedent - declares what set_shipping_destination's own
+   * completed execution structurally produced. Purely additive: no existing
+   * consumer of CAPABILITY_EVIDENCE_TYPES reads this value, so nothing that
+   * filters/renders by evidence type today changes behavior.
+   */
+  "COMMERCIAL_DESTINATION_STATE",
   "QUOTE_CREATED",
   "QUOTE_ISSUED",
   "QUOTE_DOCUMENT_AVAILABLE",
