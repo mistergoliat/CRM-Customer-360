@@ -12,6 +12,9 @@ import type { NativeCustomerSessionExecutionContext } from "../native-cycle/cust
 import { SALES_AGENT_CONFIGURATION_SAFE_DEFAULT, type SalesAgentPromptConfiguration } from "../sales-agent-configuration";
 import { buildAgentStepPromptPackage, type AgentLoopPriorAttemptFailure, type AgentLoopToolDescription } from "./buildAgentStepPromptPackage";
 import type { AgentCapabilityEligibilityView } from "../agent-turn-input";
+import type { CapabilityEligibilitySnapshot } from "../capability-eligibility/types";
+import { lookupCapabilityEligibility } from "../capability-eligibility/lookupCapabilityEligibility";
+import { recordCommercialCapabilityInvocationObservedEvent } from "../events/service";
 import type { AgentStepPromptProjectionMetadata, CustomerMessageFragment } from "./harnessAlignedMessageProjection";
 import type { ConversationContinuitySignal } from "./conversationContinuity";
 import { checkForNewInbound as defaultCheckForNewInbound } from "../turn-settlement/checkForNewInbound";
@@ -154,6 +157,19 @@ export type RunAgentToolLoopInput = {
   commercialContextSummary: Record<string, unknown>;
   /** P6.3 cognitive-only P6 projection. Undefined preserves the pre-P6.3 request shape. */
   capabilityEligibility?: AgentCapabilityEligibilityView | null;
+  /**
+   * SALES-AGENT-R3-P7.2. The exact CapabilityEligibilitySnapshot P6.3 already
+   * evaluated once, before the provider ran (salesAgentRuntime.ts's own
+   * `preCognitionCapabilityEligibility` local) - threaded here unchanged so
+   * the invocation-coherence telemetry below can look up "what the model saw
+   * at the start of the turn" per capability without a second evaluation.
+   * Never read by Gateway/policy, never sent to the provider/prompt (that is
+   * `capabilityEligibility` above, a different, already-compact projection).
+   * `null`/absent means no snapshot existed this turn (P6 input disabled or
+   * failed) - eligibilityAtTurnStart in the recorded event is then null too,
+   * never a fabricated ELIGIBLE/BLOCKED guess.
+   */
+  preCognitionCapabilityEligibility?: CapabilityEligibilitySnapshot | null;
   /** Ephemeral recent catalog product identity context. Never a source of current price, stock, availability or URLs. */
   recentCatalogContext?: RecentCatalogContext | null;
   /** ACS-R1-05.1-T02.7. A catalog action this conversation's immediately preceding turn left open - see buildAgentStepPromptPackage.ts. */
@@ -587,6 +603,71 @@ async function recordPreGatewayToolRejection(
 }
 
 /**
+ * SALES-AGENT-R3-P7.2 (Invocation Coherence Telemetry). Correlates, for one
+ * accepted use_tool request, the eligibility the model saw at the start of
+ * the turn (a pure lookup into the already-computed preCognitionCapability-
+ * Eligibility snapshot - never recomputed, never a second DRM) against the
+ * real Gateway outcome (null when the request never reached the Gateway -
+ * every pre-Gateway rejection path in processUseToolStep) and the final
+ * ToolObservation already built for the model. Descriptive only: recording
+ * never changes either of those, never gates the Gateway, never adds a
+ * rejection. No inboundMessageId means no dedupe key is possible, so this is
+ * skipped (not an error) - matching every other per-turn shadow event in
+ * this codebase that requires one.
+ *
+ * Fail-open, same discipline as recordPreGatewayToolRejection above: a
+ * persistence failure folds into this turn's own `warnings` channel and
+ * never throws into the caller.
+ */
+async function recordCapabilityInvocationCoherenceObservation(input: {
+  capability: string;
+  stepIndex: number;
+  gatewayContext: CapabilityGatewayContext;
+  preCognitionCapabilityEligibility: CapabilityEligibilitySnapshot | null;
+  gatewayResult: CapabilityGatewayResult | null;
+  observation: ToolObservation;
+  inboundMessageId: string | null;
+  warnings: string[];
+}): Promise<void> {
+  if (!input.inboundMessageId) return;
+  const eligibility = lookupCapabilityEligibility(input.preCognitionCapabilityEligibility, input.capability);
+  try {
+    const result = await recordCommercialCapabilityInvocationObservedEvent({
+      inboundMessageId: input.inboundMessageId,
+      stepIndex: input.stepIndex,
+      correlationId: input.gatewayContext.correlationId,
+      conversationId: input.gatewayContext.conversationId ?? null,
+      opportunityId: typeof input.gatewayContext.opportunityId === "number" ? input.gatewayContext.opportunityId : null,
+      payload: {
+        schemaVersion: "1",
+        capability: input.capability,
+        stepIndex: input.stepIndex,
+        workId: input.gatewayContext.workId ?? null,
+        workVersion: input.gatewayContext.workVersion ?? null,
+        objectiveId: input.gatewayContext.objectiveId ?? null,
+        objectiveType: input.gatewayContext.objectiveType ?? null,
+        eligibilityAtTurnStart: eligibility
+          ? { status: eligibility.status, reasonCodes: [...eligibility.reasonCodes], metadataVersion: eligibility.metadataVersion }
+          : null,
+        gateway: input.gatewayResult
+          ? { status: input.gatewayResult.status, errorCode: input.gatewayResult.errorCode ?? null, retryable: input.gatewayResult.retryable }
+          : null,
+        toolObservation: {
+          status: input.observation.status,
+          errorCode: input.observation.errorCode ?? null,
+          retryable: input.observation.retryable ?? null
+        }
+      }
+    });
+    if (!result.ok) {
+      input.warnings.push(`agent_loop_capability_invocation_observed_write_failed:${input.capability}:${result.warning}`);
+    }
+  } catch (error) {
+    input.warnings.push(`agent_loop_capability_invocation_observed_write_failed:${input.capability}:${error instanceof Error ? error.message : "unknown"}`);
+  }
+}
+
+/**
  * Runs one governed use_tool decision: dedup, registry/authorization check,
  * execution, observation. Shared by the gathering and finalization phases
  * would be overkill (finalization never allows use_tool), so this is called
@@ -607,7 +688,22 @@ async function processUseToolStep(
     /** CP-R1-T10B8D. Already null when consumed - callers only ever pass an action still active for this exact call. */
     activeRecommendationPendingAction: PendingCatalogActionStep | null;
   }
-): Promise<{ step: AgentStepUseTool; governance: "authorized" | "blocked_unregistered" | "blocked_duplicate" | "blocked_not_exposed"; observation: ToolObservation; executed: boolean }> {
+): Promise<{
+  step: AgentStepUseTool;
+  governance: "authorized" | "blocked_unregistered" | "blocked_duplicate" | "blocked_not_exposed";
+  observation: ToolObservation;
+  executed: boolean;
+  /**
+   * SALES-AGENT-R3-P7.2. The exact CapabilityGatewayResult this call
+   * produced, or null when the request was rejected before
+   * executeGovernedCapability ever ran (every pre-Gateway check above).
+   * Telemetry-only addition for the caller's invocation-coherence recorder -
+   * buildToolObservation's own projection already discards most of this
+   * shape, so the caller cannot otherwise tell "Gateway never called" apart
+   * from "Gateway called and denied" without it.
+   */
+  gatewayResult: CapabilityGatewayResult | null;
+}> {
   const effectiveArguments = enrichToolArguments(step.tool, step.arguments, commercialContextSummary);
   const enrichedStep: AgentStepUseTool = { ...step, arguments: effectiveArguments };
   const dedupeKey = buildDedupeKey(step.tool, effectiveArguments);
@@ -615,13 +711,13 @@ async function processUseToolStep(
   if (!AGENT_LOOP_TOOL_POOL.includes(step.tool as AgentLoopToolName) || !resolveCapabilityGatewayDefinition(step.tool)) {
     warnings.push(`agent_loop_tool_blocked_unregistered:${step.tool}`);
     await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, "capability_not_registered", warnings);
-    return { step: enrichedStep, governance: "blocked_unregistered", observation: { tool: step.tool, status: "blocked", errorCode: "capability_not_registered" }, executed: false };
+    return { step: enrichedStep, governance: "blocked_unregistered", observation: { tool: step.tool, status: "blocked", errorCode: "capability_not_registered" }, executed: false, gatewayResult: null };
   }
 
   if (executedCalls.has(dedupeKey)) {
     warnings.push(`agent_loop_tool_blocked_duplicate:${step.tool}`);
     await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, "duplicate_tool_call", warnings);
-    return { step: enrichedStep, governance: "blocked_duplicate", observation: { tool: step.tool, status: "blocked", errorCode: "duplicate_tool_call" }, executed: false };
+    return { step: enrichedStep, governance: "blocked_duplicate", observation: { tool: step.tool, status: "blocked", errorCode: "duplicate_tool_call" }, executed: false, gatewayResult: null };
   }
 
   executedCalls.add(dedupeKey);
@@ -640,7 +736,7 @@ async function processUseToolStep(
     if (evidence.status === "blocked") {
       warnings.push(`agent_loop_tool_blocked_evidence:${step.tool}:${evidence.reason}`);
       await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, evidence.reason, warnings);
-      return { step: enrichedStep, governance: "authorized", observation: { tool: step.tool, status: "blocked", errorCode: evidence.reason }, executed: false };
+      return { step: enrichedStep, governance: "authorized", observation: { tool: step.tool, status: "blocked", errorCode: evidence.reason }, executed: false, gatewayResult: null };
     }
   }
 
@@ -675,7 +771,7 @@ async function processUseToolStep(
       if (evidence.status === "blocked") {
         warnings.push(`agent_loop_tool_blocked_evidence:${step.tool}:${evidence.reason}`);
         await recordPreGatewayToolRejection(step.tool, effectiveArguments, gatewayContext, evidence.reason, warnings);
-        return { step: enrichedStep, governance: "authorized", observation: { tool: step.tool, status: "blocked", errorCode: evidence.reason }, executed: false };
+        return { step: enrichedStep, governance: "authorized", observation: { tool: step.tool, status: "blocked", errorCode: evidence.reason }, executed: false, gatewayResult: null };
       }
     }
   }
@@ -710,7 +806,8 @@ async function processUseToolStep(
           step: enrichedStep,
           governance: "authorized",
           observation: { tool: step.tool, status: "blocked", errorCode: GET_PRODUCT_DETAILS_PENDING_CATALOG_BLOCKED_REASON },
-          executed: false
+          executed: false,
+          gatewayResult: null
         };
       }
     }
@@ -736,7 +833,8 @@ async function processUseToolStep(
       step: enrichedStep,
       governance: "blocked_not_exposed",
       observation: { tool: step.tool, status: "blocked", errorCode: "capability_not_agent_exposed" },
-      executed: false
+      executed: false,
+      gatewayResult: null
     };
   }
 
@@ -776,7 +874,8 @@ async function processUseToolStep(
         step: enrichedStep,
         governance: "authorized",
         observation: { tool: step.tool, status: "failed", errorCode: "opportunity_unavailable" },
-        executed: true
+        executed: true,
+        gatewayResult: null
       };
     }
 
@@ -833,10 +932,10 @@ async function processUseToolStep(
 
   if (gatewayResult.status === "invalid_arguments") {
     warnings.push(`agent_loop_tool_invalid_arguments:${step.tool}:${gatewayResult.errorCode ?? "unknown"}`);
-    return { step: enrichedStep, governance: "authorized", observation: buildToolObservation(step.tool, gatewayResult), executed: false };
+    return { step: enrichedStep, governance: "authorized", observation: buildToolObservation(step.tool, gatewayResult), executed: false, gatewayResult };
   }
 
-  return { step: enrichedStep, governance: "authorized", observation: buildToolObservation(step.tool, gatewayResult), executed: true };
+  return { step: enrichedStep, governance: "authorized", observation: buildToolObservation(step.tool, gatewayResult), executed: true, gatewayResult };
 }
 
 /**
@@ -1431,6 +1530,21 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
     });
     if (result.executed) toolExecutionCount += 1;
     steps.push({ stepIndex: decisionIndex, step: result.step, governance: result.governance, observation: result.observation, phase: "gathering" });
+    // SALES-AGENT-R3-P7.2. Recorded for every accepted use_tool decision,
+    // unconditionally - same "always-on descriptive audit" discipline as
+    // recordPreGatewayToolRejection above (no feature flag: this is
+    // observability riding along an already turn-scoped, already-pilot-
+    // allowlisted execution path, never a second business gate).
+    await recordCapabilityInvocationCoherenceObservation({
+      capability: result.step.tool,
+      stepIndex: decisionIndex,
+      gatewayContext,
+      preCognitionCapabilityEligibility: input.preCognitionCapabilityEligibility ?? null,
+      gatewayResult: result.gatewayResult,
+      observation: result.observation,
+      inboundMessageId: input.inboundMessageId ?? null,
+      warnings
+    });
     if (openTurnExecutionEnabled) {
       recordAcceptedStep(progress);
       recordToolExecution(progress, {

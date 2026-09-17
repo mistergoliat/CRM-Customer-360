@@ -44,7 +44,9 @@ P6.2 todavía no condiciona esa ejecución: eligibility permanece shadow-only. E
 
 ```text
 P6.3 -> informar cognición con eligibility
-P7   -> integrar/revalidar eligibility con el execution path gobernado existente
+P7.1 -> trusted execution context (workId/objectiveId llegan al Gateway)
+P7.2 -> correlacionar eligibility pre-cognición <-> request <-> outcome real
+P7.3 -> distinguir bloqueador resuelto en el turno vs pedido repetido
 P8   -> reproyectar estado durable después de efectos y continuar cognición
 P9   -> recovery/retry/wait durable
 ```
@@ -114,8 +116,8 @@ Puntos de entrada y ownership de ciclo:
 | P6.3 eligibility → AgentTurnInput/R3 | CLOSED | informar cognición sin filtrar herramientas |
 | P7.0 comparative harness/runtime audit | CLOSED | `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`; scope minimo validado para P7.1+ |
 | P7.1 trusted execution context | CLOSED | workId/workVersion/objectiveId/objectiveType threadeados de runtime a `CapabilityGatewayContext`, sin autoridad de ejecución |
-| P7.2 eligibility/request/outcome correlation | NEXT | observar cómo la invocación se relaciona con la eligibility pre-cognición que vio el modelo |
-| P7.3 in-turn relevant change detection | PENDING | distinguir bloqueador resuelto en el turno vs pedido repetido sin evidencia nueva |
+| P7.2 eligibility/request/outcome correlation | CLOSED | evento `commercial_capability_invocation_observed` por invocation, PII-safe, fail-open, sin autoridad de ejecución |
+| P7.3 in-turn relevant change detection | NEXT | distinguir bloqueador resuelto en el turno vs pedido repetido sin evidencia nueva |
 | P7.4 benchmark connection | PENDING | conectar P7 al benchmark E2E |
 | P8 reproject + continue cognition | PENDING | observar resultado y continuar |
 | P9 durable retry/wait/recovery | PENDING | recuperación durable |
@@ -365,7 +367,7 @@ No es el snapshot interno completo: omite `workId`, versiones de work, `objectiv
 
 ## 23. Next Implementation Sequence
 
-P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`) y P7.1 (trusted execution context) están cerrados. Después: P7.2 eligibility/request/outcome correlation, P7.3 in-turn relevant change detection, P7.4 benchmark connection, P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
+P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context) y P7.2 (invocation coherence telemetry) están cerrados. Después: P7.3 in-turn relevant change detection, P7.4 benchmark connection, P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
 
 ## 23.1. P7.1 — Trusted Execution Context
 
@@ -381,6 +383,22 @@ Invariantes de P7.1:
 - `workId`/`workVersion` null significa que no existe work durable este turno; `objectiveId`/`objectiveType` null (con work presente) significa que el work no tiene objective activo - nunca un string sentinel.
 
 El seam para P7.2 (correlacionar la invocación con `preCognitionCapabilityEligibility`, ya calculada en el mismo punto) queda identificado pero no implementado.
+
+## 23.2. P7.2 — Invocation Coherence Telemetry
+
+P7.2 correlaciona, por cada invocation de capability dentro de un turno, cuatro cosas que ya existen por separado: la eligibility pre-cognición que vio el modelo (P6.3), el capability que efectivamente pidió, el trusted commercial context de P7.1 (`workId`/`workVersion`/`objectiveId`/`objectiveType`, leído del mismo `gatewayContext` que P7.1 ya construye) y el outcome real (Gateway + `ToolObservation`). No recalcula eligibility, no reconstruye DRM, no agrega autoridad de rechazo y no cambia `ToolObservation` ni la política del Gateway.
+
+Componentes:
+
+- `lib/brain/commercial/capability-eligibility/lookupCapabilityEligibility.ts#lookupCapabilityEligibility`: función pura, dado un `CapabilityEligibilitySnapshot | null` y un nombre de capability, retorna `{status, reasonCodes, metadataVersion} | null`. `null` cuando no hay snapshot o la capability no está cubierta por las definitions P6 - nunca un `ELIGIBLE`/`BLOCKED` inventado.
+- `RunAgentToolLoopInput.preCognitionCapabilityEligibility` (`agent-loop/runAgentToolLoop.ts`): el mismo snapshot que `salesAgentRuntime.ts` ya computó antes del provider (`preCognitionCapabilityEligibility` local), threadeado sin cambios - no es el `capabilityEligibility` compacto que ve el prompt (ese sigue gateado por `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED`); este campo es telemetry-only y se llena siempre, incluso con el flag P6.3 apagado (queda `null` en ese caso, exactamente el caso "eligibility ausente").
+- `processUseToolStep`'s return interno ahora incluye `gatewayResult: CapabilityGatewayResult | null` - `null` en cada rechazo pre-Gateway (unregistered/duplicate/evidence/not-exposed/opportunity-unavailable), el resultado real en cualquier llamada que sí alcanzó `executeGovernedCapability`. Cambio interno de una función no exportada; no altera ningún contrato público.
+- `recordCapabilityInvocationCoherenceObservation` (mismo archivo): construye el payload PII-safe y llama `recordCommercialCapabilityInvocationObservedEvent` (`events/service.ts`) envuelto en el mismo try/catch fail-open que `recordPreGatewayToolRejection` ya usa - una falla de escritura se pliega a `warnings`, nunca se propaga, nunca cambia el `ToolObservation` ya construido.
+- Evento `commercial_capability_invocation_observed` (`events/types.ts`/`normalize.ts`/`dedupe.ts`): una fila por `(inboundMessageId, stepIndex, capability)` - `stepIndex` es el mismo ordinal determinista que `runAgentToolLoop` ya asigna a cada decisión de la fase de gathering (`steps[].stepIndex`), así que una llamada repetida a la misma capability con distinto `stepIndex` nunca colisiona y un retry de grabación sí colapsa. Payload: `capability`, `stepIndex`, `workId`/`workVersion`/`objectiveId`/`objectiveType`, `eligibilityAtTurnStart` (status/reasonCodes/metadataVersion o `null`), `gateway` (status/errorCode/retryable o `null` si nunca se llamó al Gateway) y `toolObservation` (status/errorCode/retryable). Nunca argumentos crudos, texto del cliente, IDs de producto/quote/customer, CoT ni prompt.
+
+Placement: se registra para toda invocation que `processUseToolStep` acepta como decisión de uso de herramienta - incluye los rechazos pre-Gateway (evidencia, duplicado, no registrado, no expuesto, opportunity-unavailable), marcados con `gateway: null` porque el Gateway nunca corrió, nunca con un outcome de Gateway inventado. No se emite por exposición de prompt, construcción de eligibility ni un JSON inválido antes de llegar a `processUseToolStep`.
+
+Sin feature flag dedicado: a diferencia de los shadows P6.2/P6.3 (que informan al modelo o cambian el prompt), P7.2 solo agrega una fila de auditoría descriptiva sobre un tool call que ya está dentro de un turno pilotado/allowlisted - mismo criterio que `recordPreGatewayToolRejection`/`insertCapabilityExecution`, que tampoco tienen flag propio en este archivo.
 
 ## 24. Do Not Accidentally Reintroduce
 

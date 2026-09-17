@@ -629,6 +629,16 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     loopInput.capabilityEligibility = agentTurnInput?.capabilityEligibility ?? null;
   }
 
+  // SALES-AGENT-R3-P7.2. Threads the exact same snapshot computed above
+  // (preCognitionCapabilityEligibility, possibly null if P6 input never ran
+  // or failed) onto the tool loop for invocation-coherence telemetry only -
+  // never recomputed, never the compact AgentCapabilityEligibilityView the
+  // provider sees (that is loopInput.capabilityEligibility above, gated by
+  // capabilityEligibilityInputEnabled). Deliberately unconditional: this is
+  // telemetry-only plumbing, inert without a consumer, same discipline as
+  // P7.1's trustedExecutionContext threading above.
+  loopInput.preCognitionCapabilityEligibility = preCognitionCapabilityEligibility;
+
   // SALES-AGENT-R3-V1.8-D2. Durable BEFORE cognition starts - see
   // recordUserMessageReceivedEvent's own comment. Skipped, not faked, when
   // no real inboundMessageId exists (same condition the post-loop shadow

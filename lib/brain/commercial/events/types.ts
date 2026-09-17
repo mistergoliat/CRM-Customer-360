@@ -96,7 +96,19 @@ export type CommercialEventType =
   // never emitted for NOOP/REJECT/CONTINUE/MODIFY. Descriptive only, the
   // durable state is the crm_commercial_work/crm_commercial_work_objectives
   // rows themselves. Dedupe key is the inbound message id.
-  | "commercial_objective_reconciled";
+  | "commercial_objective_reconciled"
+  // SALES-AGENT-R3-P7.2. One per accepted use_tool request this turn that
+  // reached processUseToolStep's decision point (registered/duplicate/
+  // exposure/evidence/opportunity checks all included, even when never
+  // forwarded to the Gateway) - correlates what the model saw at the start
+  // of the turn (preCognitionCapabilityEligibility, unchanged) against the
+  // real Gateway outcome and the final ToolObservation. Descriptive only:
+  // never authorizes, never recalculates eligibility, never a second
+  // execution path. Dedupe key is (inboundMessageId, stepIndex, capability) -
+  // a turn's own steps array already gives each use_tool decision a stable
+  // ordinal, so two distinct calls to the same capability in one turn never
+  // collide, and a retry of the same call collapses onto the same row.
+  | "commercial_capability_invocation_observed";
 
 export type CommercialEventSource = "meta_whatsapp" | "system_timer" | "internal_command" | "human_operator";
 
@@ -679,6 +691,41 @@ export type CommercialCapabilityEligibilityEvaluatedPayload = {
   eligibleCapabilityNames: string[];
   blockedCapabilities: Array<{ capability: string; reasonCodes: string[] }>;
   metadataVersion: string;
+};
+
+/**
+ * SALES-AGENT-R3-P7.2. eligibilityAtTurnStart is a bounded projection of
+ * CapabilityEligibilitySnapshot for exactly one capability - never the full
+ * snapshot, never PII, never raw model arguments. `null` means either no
+ * snapshot existed this turn (P6 input disabled/failed) or this capability
+ * is not covered by P6's definitions - both distinct from ELIGIBLE/BLOCKED,
+ * never coerced into either. `gateway: null` means processUseToolStep
+ * rejected the request before executeGovernedCapability ever ran (pre-
+ * Gateway rejection) - never a fabricated Gateway outcome.
+ */
+export type CommercialCapabilityInvocationObservedPayload = {
+  schemaVersion: "1";
+  capability: string;
+  stepIndex: number;
+  workId: string | null;
+  workVersion: number | null;
+  objectiveId: string | null;
+  objectiveType: string | null;
+  eligibilityAtTurnStart: {
+    status: string;
+    reasonCodes: string[];
+    metadataVersion: string;
+  } | null;
+  gateway: {
+    status: string;
+    errorCode: string | null;
+    retryable: boolean;
+  } | null;
+  toolObservation: {
+    status: string;
+    errorCode: string | null;
+    retryable: boolean | null;
+  };
 };
 
 export type AgentTurnInputShadowBuiltPayload = {

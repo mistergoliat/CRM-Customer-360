@@ -11,6 +11,7 @@ import type {
   CommercialObjectiveReconciledPayload,
   CommercialObjectiveReconciliationDecidedPayload,
   CommercialCapabilityEligibilityEvaluatedPayload,
+  CommercialCapabilityInvocationObservedPayload,
   CommercialProposalShadowBuiltPayload,
   CommercialWorkAsyncDeliveryEvaluatedPayload,
   CommercialWorkInboundCycleCompletedPayload,
@@ -50,6 +51,7 @@ import {
   buildCommercialObjectiveReconciliationDecidedDedupeKey,
   buildCommercialProposalShadowBuiltDedupeKey,
   buildCommercialCapabilityEligibilityEvaluatedDedupeKey,
+  buildCommercialCapabilityInvocationObservedDedupeKey,
   buildCommercialStatusEventDedupeKey,
   buildCommercialWorkAsyncDeliveryEvaluatedDedupeKey,
   buildCommercialWorkKernelResolvedDedupeKey,
@@ -1073,6 +1075,44 @@ export function normalizeCommercialCapabilityEligibilityEvaluatedEvent(input: {
     receivedAt: input.receivedAt ?? undefined,
     payload: input.payload as unknown as Record<string, unknown>,
     metadata: { eventKind: "commercial_capability_eligibility_evaluated" }
+  });
+}
+
+/**
+ * SALES-AGENT-R3-P7.2. Stores only capability name, step ordinal, trusted
+ * work/objective identifiers, bounded statuses/reason codes and metadata
+ * version - never raw tool arguments, customer text, product/quote/customer
+ * ids or provider response bodies. A missing/empty inboundMessageId throws
+ * (no dedupe key possible) - the caller's own fail-open wrapper must catch
+ * this, exactly like every other per-turn event here.
+ */
+export function normalizeCommercialCapabilityInvocationObservedEvent(input: {
+  inboundMessageId: string;
+  stepIndex: number;
+  payload: CommercialCapabilityInvocationObservedPayload;
+  correlationId?: string | null;
+  conversationId?: string | number | null;
+  opportunityId?: string | number | null;
+  occurredAt?: string | null;
+  receivedAt?: string | null;
+}) {
+  const dedupeSourceId = input.inboundMessageId.trim();
+  if (!dedupeSourceId) throw new Error("commercial_event_missing_dedupe_key");
+  return buildBaseEvent({
+    eventType: "commercial_capability_invocation_observed",
+    source: "internal_command",
+    sourceEventId: input.inboundMessageId,
+    dedupeKey: buildCommercialCapabilityInvocationObservedDedupeKey(dedupeSourceId, input.stepIndex, input.payload.capability),
+    correlationId: input.correlationId,
+    customerId: null,
+    conversationId: input.conversationId ?? null,
+    opportunityId: input.opportunityId ?? null,
+    channel: "whatsapp",
+    provider: null,
+    occurredAt: input.occurredAt ?? undefined,
+    receivedAt: input.receivedAt ?? undefined,
+    payload: input.payload as unknown as Record<string, unknown>,
+    metadata: { eventKind: "commercial_capability_invocation_observed" }
   });
 }
 

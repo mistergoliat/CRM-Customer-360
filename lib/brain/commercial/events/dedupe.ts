@@ -143,6 +143,17 @@ export function buildCommercialCapabilityEligibilityEvaluatedDedupeKey(inboundMe
   return `commercial-capability-eligibility-evaluated:${inboundMessageId.trim()}`;
 }
 
+// SALES-AGENT-R3-P7.2. One coherence observation per (turn, tool-call
+// ordinal, capability) - never just per inbound message, since a single
+// turn can legitimately make several use_tool decisions. stepIndex is the
+// same deterministic ordinal runAgentToolLoop already assigns each
+// gathering-phase decision (steps[].stepIndex), so a retry of the exact
+// same recording collapses onto this row while two distinct calls to the
+// same capability in one turn (different stepIndex) never collide.
+export function buildCommercialCapabilityInvocationObservedDedupeKey(inboundMessageId: string, stepIndex: number, capability: string) {
+  return `commercial-capability-invocation-observed:${inboundMessageId.trim()}:${stepIndex}:${capability.trim()}`;
+}
+
 // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1. Keyed on the delivered work
 // version (an optimistic-concurrency identity only one caller can ever
 // legitimately reach - see commercialWorkExecutor.ts), never a random id -

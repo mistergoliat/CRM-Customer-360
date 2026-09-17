@@ -7,6 +7,7 @@ import {
   normalizeAutonomousTurnDispositionCommercialEvent,
   normalizeCommercialProposalShadowBuiltEvent,
   normalizeCommercialCapabilityEligibilityEvaluatedEvent,
+  normalizeCommercialCapabilityInvocationObservedEvent,
   normalizeCommercialWorkAsyncDeliveryEvaluatedEvent,
   normalizeCommercialWorkInboundCycleCompletedEvent,
   normalizeCommercialObjectiveReconciledEvent,
@@ -186,6 +187,18 @@ export async function recordCommercialCapabilityEligibilityEvaluatedEvent(
   connection?: PoolConnection
 ): Promise<CommercialEventPersistResult> {
   return recordCommercialEvent(normalizeCommercialCapabilityEligibilityEvaluatedEvent(input), connection);
+}
+
+// SALES-AGENT-R3-P7.2. Descriptive coherence observation only; the caller
+// (runAgentToolLoop.ts) wraps this in the same fail-open try/catch discipline
+// as every other per-call observability write in that file (e.g.
+// recordPreGatewayToolRejection) - a recording failure never throws into the
+// turn, never changes the ToolObservation already returned to the model.
+export async function recordCommercialCapabilityInvocationObservedEvent(
+  input: Parameters<typeof normalizeCommercialCapabilityInvocationObservedEvent>[0],
+  connection?: PoolConnection
+): Promise<CommercialEventPersistResult> {
+  return recordCommercialEvent(normalizeCommercialCapabilityInvocationObservedEvent(input), connection);
 }
 
 // SALES-AGENT-R3 ASYNC RESULT DELIVERY V1.
