@@ -64,30 +64,44 @@ export async function setupR3BenchmarkEnvironment(carrierBehavior: BenchmarkCarr
   assertCrmTestDurableFixtureIsSafe();
 
   const legacy = await setupBenchmarkEnvironment(carrierBehavior);
-  const conversation = await seedDurableBenchmarkConversation();
-  const masterCustomerId = await seedDurableBenchmarkMasterCustomer();
-  const opportunityId = await seedDurableBenchmarkOpportunity({ waId: conversation.waId, masterCustomerId });
+  // SALES-AGENT-R3-P7.4. legacy.teardown() closes the local HTTP catalog
+  // fake and restores every module-level test override setupBenchmarkEnvironment
+  // just installed - discovered missing here while building the P7.4
+  // commercial E2E harness: without this guard, a DB-seeding failure below
+  // (e.g. no reachable crm_test MariaDB) left that HTTP server listening
+  // forever, which keeps the whole test process alive until an external
+  // timeout kills it, even though every individual test already failed fast
+  // with its own real ECONNREFUSED. Only the failure path changes; a
+  // successful setup is byte-for-byte unchanged.
+  try {
+    const conversation = await seedDurableBenchmarkConversation();
+    const masterCustomerId = await seedDurableBenchmarkMasterCustomer();
+    const opportunityId = await seedDurableBenchmarkOpportunity({ waId: conversation.waId, masterCustomerId });
 
-  return {
-    baseUrl: legacy.baseUrl,
-    opportunityId,
-    conversationId: conversation.id,
-    waId: conversation.waId,
-    masterCustomerId,
-    // FIX1 section 3: same convention SALES-AGENT-R2-A07.5 already established
-    // for this exact table set - the conversation/master_customer/
-    // crm_opportunities rows are left in crm_test (never deleted), identified
-    // only by their unique "benchmark-fixture*" markers
-    // (uniqueBenchmarkToken() in ../environment.ts). crm_capability_executions
-    // rows written against them carry the same FK and are left too. No
-    // teardown DELETE is attempted here: crm_capability_executions'
-    // opportunity_id/conversation_id FKs are ON DELETE SET NULL (migration
-    // 022), so deleting would be FK-safe, but doing it correctly also means
-    // deleting every crm_request_facts row keyed by this opportunityId's
-    // request anchors - a second cleanup surface with its own risk of
-    // deleting a fact this run didn't own. Leaving fixtures behind, uniquely
-    // marked, is the same tradeoff already accepted for R2 - not repeated
-    // here as a new deviation.
-    teardown: legacy.teardown
-  };
+    return {
+      baseUrl: legacy.baseUrl,
+      opportunityId,
+      conversationId: conversation.id,
+      waId: conversation.waId,
+      masterCustomerId,
+      // FIX1 section 3: same convention SALES-AGENT-R2-A07.5 already established
+      // for this exact table set - the conversation/master_customer/
+      // crm_opportunities rows are left in crm_test (never deleted), identified
+      // only by their unique "benchmark-fixture*" markers
+      // (uniqueBenchmarkToken() in ../environment.ts). crm_capability_executions
+      // rows written against them carry the same FK and are left too. No
+      // teardown DELETE is attempted here: crm_capability_executions'
+      // opportunity_id/conversation_id FKs are ON DELETE SET NULL (migration
+      // 022), so deleting would be FK-safe, but doing it correctly also means
+      // deleting every crm_request_facts row keyed by this opportunityId's
+      // request anchors - a second cleanup surface with its own risk of
+      // deleting a fact this run didn't own. Leaving fixtures behind, uniquely
+      // marked, is the same tradeoff already accepted for R2 - not repeated
+      // here as a new deviation.
+      teardown: legacy.teardown
+    };
+  } catch (error) {
+    await legacy.teardown();
+    throw error;
+  }
 }

@@ -118,7 +118,8 @@ Puntos de entrada y ownership de ciclo:
 | P7.1 trusted execution context | CLOSED | workId/workVersion/objectiveId/objectiveType threadeados de runtime a `CapabilityGatewayContext`, sin autoridad de ejecución |
 | P7.2 eligibility/request/outcome correlation | CLOSED | evento `commercial_capability_invocation_observed` por invocation, PII-safe, fail-open, sin autoridad de ejecución |
 | P7.3 in-turn relevant evidence correlation | CLOSED | `inTurnEvidence` en `commercial_capability_invocation_observed`; distingue evidencia relevante producida en el turno de un pedido repetido sin evidencia nueva, sin afirmar blocker resuelto |
-| P7.4 benchmark connection | NEXT | conectar P7 al benchmark E2E |
+| P7.4 E2E benchmark harness integration | CLOSED | `lib/brain/commercial/agent-loop/benchmark/r3CommercialE2E/`; instrumento de medición construido y validado (trace/metrics/failure taxonomy/15×3 runner/artifacts), sin ejecutar todavía la corrida real de 45 |
+| P7.5 E2E commercial benchmark run | NEXT | ejecutar 15×3 (45 runs) contra el instrumento P7.4 y sacar conclusiones |
 | P8 reproject + continue cognition | PENDING | observar resultado y continuar |
 | P9 durable retry/wait/recovery | PENDING | recuperación durable |
 | P10 follow-up | PENDING | continuidad programada |
@@ -367,7 +368,7 @@ No es el snapshot interno completo: omite `workId`, versiones de work, `objectiv
 
 ## 23. Next Implementation Sequence
 
-P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context), P7.2 (invocation coherence telemetry) y P7.3 (in-turn relevant evidence correlation) están cerrados. Después: P7.4 benchmark connection, P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
+P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context), P7.2 (invocation coherence telemetry), P7.3 (in-turn relevant evidence correlation) y P7.4 (E2E benchmark harness integration) están cerrados. Después: P7.5 E2E commercial benchmark run (ejecutar 15x3 = 45 runs contra el instrumento P7.4 y sacar conclusiones), P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
 
 ## 23.1. P7.1 — Trusted Execution Context
 
@@ -416,6 +417,38 @@ Componentes:
 
 Case 3 (`calculate_shipping` BLOCKED `MISSING_DESTINATION`, `set_shipping_destination` completado antes en el mismo turno) produce `blockerPotentiallyChanged: true` con `COMMERCIAL_DESTINATION_STATE`; Case 4 (mismo blocker, `select_products` - evidencia no relacionada - completado antes) produce `blockerPotentiallyChanged: false`. Ambos casos dejan que el Gateway decida su propio outcome sin condicionarlo.
 
+## 23.4. P7.4 — E2E Benchmark Harness Integration
+
+P7.4 construye el instrumento de medición E2E, no mide todavía al agente. Los dos benchmarks R3 previos (`benchmark/` C01-C12 y `r3StableAgentV1/` TS-0xx) llaman `runAgentToolLoop` directamente - nunca pasan por el kernel P3.5, DRM/eligibility P2/P6, `CommercialProposal` P4, reconciliación P5 ni dispatch/outbox. P7.4 agrega un harness nuevo, separado, que entra por `runSalesAgentRuntimeCycle` (el mismo ciclo R3 que `runNativeAutonomousCycle` usa en producción, sin los gates de canal - access gate, opt-out, pilot allowlist, resolución real de Customer Service - que son concerns de webhook, no del ciclo comercial) y reconstruye causalmente inbound → `AgentTurnInput` → eligibility pre-cognición → tool request(s) → Gateway/`ToolObservation` → in-turn evidence (P7.3) → `CommercialProposal` → P5 → estado durable → respuesta final → outbox.
+
+Componentes (`lib/brain/commercial/agent-loop/benchmark/r3CommercialE2E/`):
+
+- `types.ts`: `BenchmarkE2ERunTrace`/`BenchmarkE2ETurnTrace`/`BenchmarkE2EToolInvocationTrace`/taxonomía de fallas/métricas - proyecciones tipadas de contratos ya existentes (P4/P5/P6/P7, `CommercialDomainReadModel`), nunca un segundo modelo semántico.
+- `eventRows.ts`: lector delgado de `commercial_event` por `source_event_id = inboundMessageId` (nunca "el evento más reciente") y de `brain_message_outbox` por `id` (la PK, nunca una reconstrucción de `dedupe_key`).
+- `buildTurnTrace.ts`: ensamblador puro (sin IO) que arma un `BenchmarkE2ETurnTrace` a partir de las filas ya leídas. `commercial_capability_invocation_observed` (P7.2/P7.3) es la fuente primaria de coherencia por-tool, tal como pide la sección "DATA SOURCE PRIORITY" de la tarea.
+- `durableStateSnapshot.ts`: snapshot antes/después de cada turno via el mismo `buildR3AgentTurnInputShadowDomainReadModel` que P2 ya usa (una lectura externa, nunca una segunda reconstrucción dentro del turno real).
+- `conversationalSignals.ts`: detectores estructurales - re-pregunta de un hecho ya `CURRENT` (gateado por `forbidden.repeatKnownDestination`/`repeatKnownSelection` por-caso, para no confundir "reafirmar sin necesidad" con "el cliente cambió de opinión"), claim de cotización sin `quote` durable, reuso del warning real `agent_loop_mutation_claim_blocked:` (nunca un regex reimplementado), repetición de saludo.
+- `scoreCase.ts` / `failureClassification.ts`: outcome + invariantes (nunca una secuencia de tools rígida salvo que el caso sea de tool-selection), y una taxonomía de 12 categorías donde dependencia/identidad-de-fixture/eligibilidad-ignorada se descartan antes de nunca culpar a "razonamiento del modelo".
+- `environmentHealthPrecheck.ts`: MariaDB (ping real), Quote Service (sólo si el corpus lo requiere), provider endpoint (sólo en modo live) son las únicas dependencias reales; Catalog/Carrier siempre están stubbeados localmente y Customer Service nunca se llama (identidad inyectada) - marcados `NOT_REQUIRED`, nunca un `READY` engañoso.
+- `metrics.ts`: métricas deterministas (progresión comercial, comportamiento de tools, coherencia de eligibility, conversacionales) - todo rate es `null`, nunca `0` fabricado, cuando el denominador es 0.
+- `corpus.ts`: 15 casos nuevos (`E01`-`E15`), orientados a resultado comercial, reusando el mismo catálogo/comunas fixture de `benchmark/environment.ts`. Ninguno impone una secuencia rígida de tools salvo donde el caso es explícitamente sobre eso.
+- `runCommercialE2ECase.ts` / `runCommercialE2ECorpus.ts`: corre N turnos reales por caso, aislados por `setupR3BenchmarkEnvironment` (opportunityId/conversationId frescos por run - nunca compartidos), con los flags P2/P3.5/P4/P5/P6-shadow/P6-input siempre `true` y open-turn/harness-aligned/persistent-session leídos de la config real (`commercialCycleConfig.ts`), nunca asumidos.
+- `artifacts.ts` + `scripts/r3-commercial-e2e-benchmark.ts`: `manifest.json`/`runs.jsonl`/`summary.json`/`failures.json` en `benchmark-results/<run-id>/`. El script requiere `NODE_ENV=test` y `crm_test` (mismo gate de seguridad que `r3StableAgentV1`), nunca `main_management` ni producción.
+
+**Hallazgo/fix colateral**: `setupR3BenchmarkEnvironment` (`r3StableAgentV1/environment.ts`) dejaba el servidor HTTP local de Catalog huérfano (nunca cerrado) si el seeding de DB fallaba después de abrirlo - eso colgaba el proceso de test entero (confirmado también en el archivo preexistente `environment.test.ts`, no es una regresión de P7.4). Corregido con un `try/finally` mínimo alrededor del seeding; el path de éxito queda byte-idéntico.
+
+**Ejecutar el instrumento** (requiere `NODE_ENV=test` + `crm_test`, nunca producción):
+
+```powershell
+NODE_ENV=test npx tsx scripts/r3-commercial-e2e-benchmark.ts                 # offline, 1 run/case (15 runs), humo
+NODE_ENV=test npx tsx scripts/r3-commercial-e2e-benchmark.ts --runs=3        # offline, 15x3 = 45 runs (la corrida P7.5)
+NODE_ENV=test npx tsx scripts/r3-commercial-e2e-benchmark.ts --case=E09      # un solo caso
+```
+
+`ENVIRONMENT_BLOCKED` significa que MariaDB no respondió en el precheck - ningún caso corrió, ninguno cuenta como falla del modelo. Un `DEPENDENCY_FAILURE` por-run (ej. `create_quote` sin `QUOTE_SERVICE_BASE_URL`) es distinto: el batch sí corrió, sólo ese caso no pudo completarse por una dependencia real ausente.
+
+P7.4 no mejora el comportamiento del agente ni corre las 45 runs reales - eso es P7.5.
+
 ## 24. Do Not Accidentally Reintroduce
 
 - No usar `CommercialProposal` como estado persistente ni dejar que el LLM decida directamente el objective durable.
@@ -428,3 +461,7 @@ Case 3 (`calculate_shipping` BLOCKED `MISSING_DESTINATION`, `set_shipping_destin
 - No usar `blockerPotentiallyChangedThisTurn`/`inTurnEvidence` como `blockerResolvedThisTurn`, ni recalcular eligibility a partir de esa señal - sólo P8 (reproyección de DRM) puede afirmar que un prerequisite volvió a `CURRENT`.
 - No agregar una señal genérica `mutationOccurredThisTurn`/"cualquier mutación cuenta" - toda relevancia P7.3 pasa por `CAPABILITY_ELIGIBILITY_REASON_CODE_TO_EVIDENCE` y el `evidenceProduced` real del registry.
 - No reemplazar wiring válido por un rebuild conceptual completo.
+- No hacer que el benchmark E2E (`r3CommercialE2E/`) llame `runAgentToolLoop` directamente ni construya su propio ciclo simplificado - debe entrar por `runSalesAgentRuntimeCycle`, el ciclo R3 real.
+- No usar un LLM-as-judge en P7.4/P7.5 sin necesidad demostrada, y nunca el mismo modelo evaluado como su propio judge.
+- No clasificar automáticamente un rejection de Gateway o una dependencia ausente como falla del modelo (`MODEL_REASONING`) - usar la taxonomía completa (`failureClassification.ts`).
+- No correr `r3-commercial-e2e-benchmark.ts` ni `setupR3BenchmarkEnvironment` fuera de `NODE_ENV=test` + `crm_test`.
