@@ -670,13 +670,21 @@ test("[LLM-R1-T03 Caso 5] gathering system/user prompt lengths are unchanged fro
   // operationSemantics: "FULL_REPLACEMENT" instead - see renderToolLine's
   // OPERATION_SEMANTICS_SENTENCES. This fixture's availableTools does not
   // include select_products, so that generated sentence never renders here.
+  // P7.7 grounding-to-commit fix (later): +803 chars in both phases - one
+  // new SELECT_PRODUCTS_RULE_LINES line appended at the end (+590 chars,
+  // included in both gathering and SELECT_PRODUCTS_FINALIZATION_RULE_LINES'
+  // slice(3) suffix since it is the last element) plus one new exclusion
+  // clause appended to the existing COMMERCIAL_CLOSING_RULE_LINES "Never add
+  // this closing offer when" line (+213 chars, that array is spread verbatim
+  // into both phases) - see buildAgentStepPromptPackage.ts's own comments
+  // above both edits and docs/R3_COMMERCIAL_AGENT_HANDOFF.md 23.7.
   const { messages } = buildAgentStepPromptPackage({
     ...baseInput,
     phase: "gathering",
     identityConfiguration: pesasChileConfig(),
     availableTools: [{ name: "explore_catalog", description: "d" }]
   });
-  assert.equal(messages[0].content.length, 25982, "gathering systemPrompt.length must match the post-COMMERCIAL-POLICY-V1 measurement");
+  assert.equal(messages[0].content.length, 26785, "gathering systemPrompt.length must match the post-P7.7 measurement");
   // SALES-AGENT-R3-V1.8.1b (later): +126 chars - the new conversationContinuity
   // field (CONVERSATION_CONTINUITY_UNKNOWN, baseInput sets none) added to the
   // user payload alongside customerMessage/commercialContext/etc.
@@ -709,7 +717,9 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt stays meaningfully smaller 
     messages[0].content.length < gathering.messages[0].content.length,
     `finalization systemPrompt.length (${messages[0].content.length}) must be less than gathering's (${gathering.messages[0].content.length})`
   );
-  assert.equal(messages[0].content.length, 21218, "finalization systemPrompt.length must match the post-COMMERCIAL-POLICY-V1 measurement");
+  // P7.7 grounding-to-commit fix (later): +803 chars, same delta and same
+  // reason as the Caso 5 comment above - identical in both phases.
+  assert.equal(messages[0].content.length, 22021, "finalization systemPrompt.length must match the post-P7.7 measurement");
   // SALES-AGENT-R3-V1.8.1b (later): +126 chars, same conversationContinuity
   // field addition the Caso 5 comment above explains - identical delta in
   // both phases (the user-payload shape is shared by gathering/finalization).
@@ -752,8 +762,10 @@ test("[LLM-R1-T03 Caso 8] finalization system prompt stays meaningfully smaller 
 // useWhen/doNotUseWhen semantics added for all 14 pool capabilities are NOT
 // in these numbers: this fixture's availableTools is a hand-built
 // [{name:"explore_catalog", description:"d"}], not buildToolDescriptions().
-const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 21218;
-const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 25982;
+// P7.7 grounding-to-commit fix (later): +803 chars in both phases - see the
+// Caso 5 golden-length comment further below for the exact breakdown.
+const FINALIZATION_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 22021;
+const GATHERING_SYSTEM_PROMPT_LENGTH_NORMAL_T04 = 26785;
 
 test("[LLM-R1-T04 Caso 1] a normal call (no priorAttemptFailure) is byte-identical to before this task - no repair instruction present", () => {
   for (const phase of ["gathering", "finalization"] as const) {
@@ -963,6 +975,54 @@ test("[T08C Case D] finalization, select_products already completed this turn - 
   const selectStep = user.priorStepsThisTurn.find((entry) => entry.step.type === "use_tool" && entry.step.tool === "select_products");
   assert.ok(selectStep, "the completed select_products observation must reach the model via priorStepsThisTurn");
   assert.equal(selectStep?.observation?.status, "completed");
+});
+
+// ---------------------------------------------------------------------------
+// P7.7 grounding-to-commit fix. Measured mechanism (docs/R3_COMMERCIAL_AGENT_
+// HANDOFF.md 23.6/23.7): the model reaches get_product_details, grounds the
+// product, and then answers informationally (mandated by the pre-existing
+// closing-offer rule) without ever attempting select_products. These tests
+// assert the policy text only - never that the model always calls the tool,
+// since that is a live-model behavior these unit tests cannot observe.
+// ---------------------------------------------------------------------------
+
+const GROUNDING_TO_COMMIT_RULE = /Explicit purchase or selection intent \(e\.g\. wanting, choosing, adding, or asking to change a product or its quantity\) is a request to act, not merely an informational one; a get_product_details observation only grounds evidence about that product, it does not fulfill the request - once the product and the required quantity are both sufficiently confirmed, execute select_products in this same turn before writing a response that only presents or offers to link the product, and if quantity is the only missing piece, ask for it directly instead of closing with product information alone\./;
+const CLOSING_OFFER_PURCHASE_INTENT_EXCLUSION = /or the customer expressed explicit purchase\/selection intent for that product and select_products can still be executed this turn - persist the selection or ask for the missing quantity instead of offering the link\./;
+
+test("[P7.7] gathering prompt states that explicit purchase intent is an action request and grounding is not completion", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "gathering",
+    customerMessage: "quiero la barra olimpica classic",
+    priorSteps: [],
+    identityConfiguration: pesasChileConfig()
+  });
+  const system = messages[0].content;
+  assert.match(system, GROUNDING_TO_COMMIT_RULE);
+  assert.match(system, CLOSING_OFFER_PURCHASE_INTENT_EXCLUSION);
+});
+
+test("[P7.7] finalization prompt keeps the same grounding-to-commit rule (governs the response text, not a tool invocation)", () => {
+  const { messages } = buildAgentStepPromptPackage({
+    ...baseInput,
+    phase: "finalization",
+    availableTools: [],
+    priorSteps: [],
+    identityConfiguration: pesasChileConfig()
+  });
+  const system = messages[0].content;
+  assert.match(system, GROUNDING_TO_COMMIT_RULE);
+  assert.match(system, CLOSING_OFFER_PURCHASE_INTENT_EXCLUSION);
+  // No tool reintroduced as a side effect of this fix.
+  assert.doesNotMatch(system, /Available tools:/);
+  assert.doesNotMatch(system, /"type":"use_tool"/);
+});
+
+test("[P7.7] the mandatory single-product closing question rule is unchanged - only its exclusion list grew by one clause", () => {
+  const { messages } = buildAgentStepPromptPackage({ ...baseInput, phase: "gathering", identityConfiguration: pesasChileConfig() });
+  const system = messages[0].content;
+  assert.match(system, /close with exactly: "¿Quieres que te envíe el link para revisarlo\?"/);
+  assert.match(system, CLOSING_OFFER_PURCHASE_INTENT_EXCLUSION);
 });
 
 test("[T08C Case E] no selection intent (\"gracias\") - the new rule constrains claims, it never becomes an unconditional requirement to call select_products", () => {

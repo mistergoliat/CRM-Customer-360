@@ -47,6 +47,7 @@ P6.3 -> informar cognición con eligibility
 P7.1 -> trusted execution context (workId/objectiveId llegan al Gateway)
 P7.2 -> correlacionar eligibility pre-cognición <-> request <-> outcome real
 P7.3 -> distinguir bloqueador resuelto en el turno vs pedido repetido
+P7.7 -> intento de fix mínimo de prompt para grounding -> commit (RED, ver 23.7)
 P8   -> reproyectar estado durable después de efectos y continuar cognición
 P9   -> recovery/retry/wait durable
 ```
@@ -121,7 +122,7 @@ Puntos de entrada y ownership de ciclo:
 | P7.4 E2E benchmark harness integration | CLOSED | `lib/brain/commercial/agent-loop/benchmark/r3CommercialE2E/`; instrumento de medición construido y validado (trace/metrics/failure taxonomy/15×3 runner/artifacts); la corrida real de 45 es P7.5 |
 | P7.5 E2E commercial benchmark run | CLOSED | run `2026-09-18T03-56-41-903Z-live`, 45/45 ejecutadas, HYBRID; ver sección 23.5. Cuello de botella medido: grounding→commit (`select_products`) y timeout de 20s; P8 no respaldado por la evidencia |
 | P7.6 runtime configuration parity & commercial decision completion | CLOSED | `docs/audits/r3-p7-6-runtime-config-parity-audit.md`; grounding → commit reproduce bajo configuración cognitiva/temporal equivalente a EC2 sobre `develop`; causa primaria PROMPT_POLICY / decisión del modelo; P8 sin evidencia a favor; ver sección 23.6 |
-| P7.7 grounding-to-commit behavior fix | NEXT (propuesta por evidencia P7.6; no iniciada) | cambio mínimo de prompt/semántica de tools, medido con la configuración EC2-equivalente de 23.6 |
+| P7.7 grounding-to-commit behavior fix | CLOSED | `docs/audits/r3-p7-7-grounding-to-commit-behavior-fix.md`; fix mínimo aplicado y medido con la configuración EC2-equivalente de 23.6; `commitAfterGroundingRate` no mejoró (2/18=11.1% vs baseline 2/20=10%); architecture signal RED sobre la métrica declarada, con efecto lateral real (no atribuible a ruido) en turnos de seguimiento; ver 23.7 |
 | P8 reproject + continue cognition | PENDING | sin evidencia a favor en P7.5 ni P7.6; no se promueve a NEXT |
 | P9 durable retry/wait/recovery | PENDING | recuperación durable |
 | P10 follow-up | PENDING | continuidad programada |
@@ -370,7 +371,7 @@ No es el snapshot interno completo: omite `workId`, versiones de work, `objectiv
 
 ## 23. Next Implementation Sequence
 
-P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context), P7.2 (invocation coherence telemetry), P7.3 (in-turn relevant evidence correlation) P7.4 (E2E benchmark harness integration) P7.5 (E2E commercial benchmark run, sección 23.5) y P7.6 (runtime configuration parity, sección 23.6) están cerrados. Siguiente por evidencia: P7.7 (grounding-to-commit behavior fix). Después: P8 reprojection + continuation y P9 durable recovery, sin promoción automática a NEXT: la evidencia de P7.5 y P7.6 no respalda P8 como siguiente paso (ver 23.5 y 23.6). No crear fases alternativas sin reconciliarlas con la documentación activa.
+P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context), P7.2 (invocation coherence telemetry), P7.3 (in-turn relevant evidence correlation) P7.4 (E2E benchmark harness integration), P7.5 (E2E commercial benchmark run, sección 23.5), P7.6 (runtime configuration parity, sección 23.6) y P7.7 (grounding-to-commit behavior fix, sección 23.7) están cerrados. P7.7 midió architecture signal RED sobre la métrica declarada (`commitAfterGroundingRate` no mejoró bajo la configuración EC2-equivalente) - no hay una fase P7.8 automática por evidencia; el siguiente paso recomendado (A/B contra el harness autónomo de DeepSeek, o un corpus derivado de tráfico real de EC2) queda fuera del alcance de este documento hasta que se autorice explícitamente. P8 reprojection + continuation y P9 durable recovery siguen sin promoción automática a NEXT: la evidencia de P7.5, P7.6 y P7.7 no respalda P8 como siguiente paso (ver 23.5, 23.6, 23.7). No crear fases alternativas sin reconciliarlas con la documentación activa.
 
 ## 23.1. P7.1 — Trusted Execution Context
 
@@ -541,6 +542,24 @@ Otras lecturas: cuando el mensaje trae cantidad y destino el modelo avanza (E15 
 
 **Siguiente (P7.7, no iniciado):** cambio mínimo, medido con la configuración EC2-equivalente de esta sección: primero una variante acotada de la política de commit vía `configuration.customInstructions` (vacío en EC2, prueba reversible); solo si funciona, evaluar `SELECT_PRODUCTS_RULE_LINES` y la regla de cierre obligatoria del link, y alinear `Steps remaining` con el contrato real. Guardas: E04 turno 1 no debe empeorar y E15 debe conservar 2 de 3.
 
+## 23.7. P7.7 — Grounding-to-Commit Behavior Fix
+
+**P7.7 CLOSED - RED.** Detalle completo, auditoría de la política de prompt y trazas: `docs/audits/r3-p7-7-grounding-to-commit-behavior-fix.md`. Sin backend guard, sin forced tool call, sin cambio de Gateway/P4/P5/P6, sin P8, sin MCP.
+
+**Causa confirmada (auditoría, antes de editar).** La regla de cierre obligatoria (`COMMERCIAL_CLOSING_RULE_LINES`: cerrar con exactamente `"¿Quieres que te envíe el link para revisarlo?"` cuando la respuesta identifica un único producto) es más específica e imperativa que `SELECT_PRODUCTS_RULE_LINES` y nunca menciona `select_products` como alternativa - compite directamente con `COMMERCIAL_BEHAVIOR_POLICY_RULE_LINES[0]` ("prefer executing over asking permission"). No existía ninguna regla que conectara explícitamente "grounding vía `get_product_details`" con "por lo tanto persistir con `select_products`". Cantidad: `SELECT_PRODUCTS_INPUT_SCHEMA` no tiene default de `quantity` - correcto no inventar uno; la regla preexistente que pide aclarar cantidad ambigua ya cubría eso y no se tocó.
+
+**Fix aplicado (dos ediciones, un archivo, `buildAgentStepPromptPackage.ts`).** (A) una línea nueva al final de `SELECT_PRODUCTS_RULE_LINES` ("explicit purchase or selection intent... is a request to act, not merely an informational one... get_product_details only grounds evidence... execute select_products in this same turn before writing a response that only presents or offers to link the product"), que fluye automáticamente a `SELECT_PRODUCTS_FINALIZATION_RULE_LINES` sin renumerar el `slice(3)` existente. (B) una cláusula nueva en la lista de exclusiones ya existente de `COMMERCIAL_CLOSING_RULE_LINES` (nunca ofrecer el link cuando el cliente expresó intención de compra explícita y `select_products` todavía puede ejecutarse ese turno). Nada más se tocó - ni P4/P5/P6, ni tool metadata, ni `Steps remaining`.
+
+**Medición (misma configuración EC2-equivalente de 23.6, mismo cohorte de 27 turnos que R2).** `commitAfterGroundingRate` = 2/18 = 11.1% (baseline 2/20 = 10%) - **sin mejora material**, la diferencia está dentro del ruido de `n=3`. El patrón "grounding -> `respond` con oferta de link, sin intentar `select_products`" persiste idéntico en 15 de 16 turnos t0 no-E15 (E02, E04 t0, E05 t0, E07, E14 t0: 3/3 cada uno), **con el texto del fix confirmado presente, vía `providerCalls[].requestMessages`, en el prompt real que produjo esas respuestas** - no fue un fix inerte ni un flag no alcanzado.
+
+**Efecto lateral real (no la métrica objetivo).** En turnos de seguimiento donde el cliente aporta el hecho que faltaba en el mismo turno: E04 t1 ("mejor dos unidades") pasó de 0/3 (P7.6-B, EC2-config) a 1/3 con `select_products` ejecutado de inmediato y 2/3 pidiendo la comuna (un hecho real pendiente) en vez de ofrecer el link; E14 t1 ("mejor cotizamela") pasó a 3/3 pidiendo exactamente cantidad+comuna en vez de un link o una cotización fabricada (`ungroundedMutationClaimRate=0`). E15 (multi-hecho en un turno) se mantuvo en 2/3 sin regresión (guarda cumplida).
+
+**Controles negativos y de cantidad.** E01 (consulta puramente informativa): 0/3 llamó `select_products` - sin sobre-mutación. E06/E08 (prerequisitos de shipping): sin sobre-mutación, piden el hecho faltante. Cantidad explícita en el mensaje inicial (E04 t0, "una barra"=1): el fix no logró comprometer en el mismo turno. Reemplazo (E05 t1, "en realidad prefiero la pro"): inconcluso, artefacto del stub de catálogo (mismo gap ya documentado en 23.6 para "la Pro"), sin corrupción de estado.
+
+**Architecture signal: RED sobre la métrica declarada.** No se cumple el criterio de "mejora clara y consistente" sobre el baseline 10%. Por diseño del experimento no se agregaron reglas adicionales más específicas para forzar el número - eso habría sido el patrón de "lógica determinista creciente fuera del modelo" que la fase pedía detectar, no ocultar. El resultado es evidencia directa (no falta de intentos) de que la política textual, aun nombrando explícitamente el conflicto exacto y con el texto confirmado en el prompt real, no desplaza esta decisión concreta del modelo bajo `deepseek-v4-flash` con esta configuración.
+
+**Siguiente por evidencia (no iniciado, fuera de esta fase):** A/B contra el harness autónomo de DeepSeek para aislar si el patrón es específico del modelo/política o estructural al enfoque híbrido; por separado, evaluar un corpus derivado de tráfico real de EC2 (donde `select_products` sí se solicitó tras el grounding en 4 de 5 conversaciones, 23.6 sección 2.8) en vez de seguir iterando sobre el mismo corpus sintético "quiero X sin cantidad" que ya demostró resistencia a este tipo de cambio. No autorizado en este documento; requiere decisión explícita antes de iniciarse.
+
 ## 24. Do Not Accidentally Reintroduce
 
 - No usar `CommercialProposal` como estado persistente ni dejar que el LLM decida directamente el objective durable.
@@ -559,3 +578,4 @@ Otras lecturas: cuando el mensaje trae cantidad y destino el modelo avanza (E15 
 - No correr `r3-commercial-e2e-benchmark.ts` ni `setupR3BenchmarkEnvironment` fuera de `NODE_ENV=test` + `crm_test`.
 - No leer "EC2-equivalent" como paridad total: live assimilation no se ejercita en el harness y el canal (webhook, HTTPS, firma, settle, delivery/read, outbox real) es `EC2_ONLY_CHANNEL_BEHAVIOR`; no simularlo con `sleep`.
 - No extrapolar a producción una medición del harness sin declarar la configuración efectiva (`manifest.modelConfig`, `flags`, `benchmarkOverrides`, `notReproducibleInHarness`); P7.5 midió un runtime distinto al de EC2.
+- No seguir agregando reglas de prompt cada vez más específicas al patrón grounding -> commit sin nueva evidencia: P7.7 (23.7) ya probó el cambio mínimo/general con el texto confirmado presente en el prompt real y midió RED; iterar con más texto sin un hallazgo nuevo reproduciría exactamente el patrón de lógica determinista creciente que la fase pedía evitar.

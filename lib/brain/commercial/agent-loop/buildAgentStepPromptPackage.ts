@@ -380,7 +380,7 @@ const COMMERCIAL_CLOSING_RULE_LINES = [
   "Ask a clarifying question instead of recommending or sending a link only when missing information genuinely prevents a useful recommendation, or when the product's identity or link evidence is not yet certain enough (e.g. no get_product_details confirmation yet, or the reference is still ambiguous between multiple products) - never merely to ask permission for an already-justified read-only action.",
   'When your reply identifies exactly one concrete product (a resolvable productId, from explore_catalog, search_products, or get_product_details) and you have not already delivered its public link this turn, and the customer did not explicitly ask for the link, close with exactly: "¿Quieres que te envíe el link para revisarlo?" - do not repeat "Este es el producto: <name>" if that product was already named in the sentence right before. You do not need to already know whether a public link exists to make this offer.',
   'When your reply presents more than one concrete product, close with exactly: "¿Quieres que te envíe el link de alguno de estos productos?" - always this neutral phrasing, never an attempt at grammatical gender agreement with a specific product name.',
-  "Never add this closing offer when: a public link was already delivered or already verified this turn; the customer explicitly asked for the link (handled by the rule below instead); no concrete product was identified; your reply is a clarifying question; a tool failed or was blocked; you are handing off; you still need to ask the customer for a precision before recommending; or your reply is not a commercial product presentation.",
+  "Never add this closing offer when: a public link was already delivered or already verified this turn; the customer explicitly asked for the link (handled by the rule below instead); no concrete product was identified; your reply is a clarifying question; a tool failed or was blocked; you are handing off; you still need to ask the customer for a precision before recommending; your reply is not a commercial product presentation; or the customer expressed explicit purchase/selection intent for that product and select_products can still be executed this turn - persist the selection or ask for the missing quantity instead of offering the link.",
   "When the customer explicitly asks for or accepts the link: use get_product_details for that product. If publicLink.available is true, deliver the real canonical URL from publicLink.canonicalUrl. If it is not available, tell the customer no public link is available for that product right now - never invent a URL. Either way, never ask again whether they want the link, and never turn that reply into another question."
 ];
 
@@ -549,7 +549,17 @@ const SELECT_PRODUCTS_RULE_LINES = [
   // can DO about a gap differs, and that already follows from whether tools
   // are offered this phase, an existing mechanism this task does not touch).
   "A product selection, addition, or quantity change is confirmed only when a select_products tool observation from this turn has status \"completed\" (data.status \"selected\"), or commercialContext.commercialLineItems already durably reflects that exact selection from a previous turn with nothing changed this turn (see the reuse rule above) - if neither is true, never say the selection, quantity, or order is done, confirmed, ready, or registered.",
-  "Understanding what the customer wants is not the same as it being done: never turn \"the customer wants 3 units\" into \"I left you 3 units\" (or any equivalent confirmation) without that select_products evidence."
+  "Understanding what the customer wants is not the same as it being done: never turn \"the customer wants 3 units\" into \"I left you 3 units\" (or any equivalent confirmation) without that select_products evidence.",
+  // P7.7 grounding-to-commit fix. Appended (never inserted earlier) so it
+  // flows into SELECT_PRODUCTS_FINALIZATION_RULE_LINES via the existing
+  // slice(3) with no index renumbering - it governs the response itself in
+  // both phases, same class as the two rules directly above. Deliberately
+  // phrased at the level of intent and outcome (explicit request to act vs.
+  // informational grounding), never a fixed tool sequence or a hardcoded
+  // customer phrase - see docs/R3_COMMERCIAL_AGENT_HANDOFF.md 23.6/23.7 for
+  // the measured mechanism this closes: the model reaches get_product_details
+  // then answers informationally without ever attempting select_products.
+  "Explicit purchase or selection intent (e.g. wanting, choosing, adding, or asking to change a product or its quantity) is a request to act, not merely an informational one; a get_product_details observation only grounds evidence about that product, it does not fulfill the request - once the product and the required quantity are both sufficiently confirmed, execute select_products in this same turn before writing a response that only presents or offers to link the product, and if quantity is the only missing piece, ask for it directly instead of closing with product information alone."
 ];
 
 /**
