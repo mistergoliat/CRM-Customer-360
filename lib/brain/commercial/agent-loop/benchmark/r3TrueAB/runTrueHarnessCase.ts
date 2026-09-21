@@ -64,7 +64,7 @@ export function renderCommercialState(drm: CommercialDomainReadModel): TrueHarne
 }
 
 export type RunTrueHarnessCaseOptions = {
-  arm: "B_PURE_CURRENT_TOOLS" | "C1_PURE_THIN_TOOLS";
+  arm: string; // P7.8-R: "B_PURE_CURRENT_TOOLS" | "C1_PURE_THIN_TOOLS"; P7.9: a variant id (label only)
   surface: ToolSurface;
   runOrdinal: number;
   benchmarkRunId: string;

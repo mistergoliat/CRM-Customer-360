@@ -41,12 +41,12 @@ export const TRUE_HARNESS_TOOL_NAMES = [
 export const THIN_RELEVANT_TOOL_NAMES = ["search_products", "get_product_details", "select_products", "set_shipping_destination", "calculate_shipping", "create_quote", "get_quote"] as const;
 
 // Same two sentences buildAgentStepPromptPackage.ts appends for these semantics classes (verified by test against renderToolLine).
-const OPERATION_SEMANTICS_SENTENCES: Record<string, string> = {
+export const OPERATION_SEMANTICS_SENTENCES: Record<string, string> = {
   FULL_REPLACEMENT: "This call's arguments must represent the complete desired state after the operation, never only what changed - it replaces the entire previous state, it is not a delta or merge.",
   CREATE_SNAPSHOT: "This call creates a new snapshot from current backend state; it is not a delta or merge operation."
 };
 
-export type ToolSurfaceId = "current" | "thin";
+export type ToolSurfaceId = string; // "current" | "thin" (P7.8-R) or a P7.9 variant id
 
 export type ToolAdaptResult = { ok: true; capability: string; input: Record<string, unknown> } | { ok: false; errorCode: string };
 
@@ -118,7 +118,7 @@ export const THIN_TOOL_DEFINITIONS: Readonly<Record<(typeof THIN_RELEVANT_TOOL_N
   get_quote: { name: "get_quote", description: "Get the current status of the customer's quote.", parameters: { ...NO_ARGUMENTS } }
 };
 
-function computeStats(tools: readonly NativeToolDefinition[]): ToolSurfaceStats {
+export function computeStats(tools: readonly NativeToolDefinition[]): ToolSurfaceStats {
   const relevant = new Set<string>(THIN_RELEVANT_TOOL_NAMES);
   const schemaChars = (tool: NativeToolDefinition) => JSON.stringify(tool.parameters).length;
   const relevantTools = tools.filter((tool) => relevant.has(tool.name));
@@ -133,7 +133,7 @@ function computeStats(tools: readonly NativeToolDefinition[]): ToolSurfaceStats 
   };
 }
 
-function buildSurface(id: ToolSurfaceId, tools: NativeToolDefinition[]): ToolSurface {
+export function buildSurface(id: ToolSurfaceId, tools: NativeToolDefinition[]): ToolSurface {
   const names = new Set(tools.map((tool) => tool.name));
   return {
     id,

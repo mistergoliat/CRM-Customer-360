@@ -264,12 +264,16 @@ function classifyTurn(input: {
   return { category: "OTHER", unnecessaryConfirmation: false, askedForQuantity };
 }
 
-export function analyzeRun(record: AbRunRecord): P78TurnAnalysis[] {
-  const caseTurnCount = record.trace?.turns.length ?? annotatedTurnCount(record.caseId);
+/** P7.9: the per-turn intent annotations are injectable (default: the P7.8 tables), so another corpus reuses the exact same per-turn analysis. */
+export type P78AnnotationResolver = { annotationFor: (caseId: string, turnOrdinal: number) => P78TurnAnnotation; annotatedTurnCount: (caseId: string) => number };
+const DEFAULT_ANNOTATION_RESOLVER: P78AnnotationResolver = { annotationFor, annotatedTurnCount };
+
+export function analyzeRun(record: AbRunRecord, resolver: P78AnnotationResolver = DEFAULT_ANNOTATION_RESOLVER): P78TurnAnalysis[] {
+  const caseTurnCount = record.trace?.turns.length ?? resolver.annotatedTurnCount(record.caseId);
   const analyses: P78TurnAnalysis[] = [];
 
   for (let turnOrdinal = 0; turnOrdinal < caseTurnCount; turnOrdinal += 1) {
-    const annotation = annotationFor(record.caseId, turnOrdinal);
+    const annotation = resolver.annotationFor(record.caseId, turnOrdinal);
     if (annotation.kind === "other") continue;
 
     const turn = record.trace?.turns[turnOrdinal];
@@ -411,7 +415,7 @@ export function computeVariantMetrics(variant: AbVariantId, records: readonly Ab
   const mine = records.filter((record) => record.variant === variant);
   const executedRecords = mine.filter((record) => record.trace !== null);
   const traces = executedRecords.map((record) => record.trace as BenchmarkE2ERunTrace);
-  const analyses = mine.flatMap(analyzeRun);
+  const analyses = mine.flatMap((record) => analyzeRun(record));
   const executed = analyses.filter((analysis) => analysis.executed);
 
   const explicit = executed.filter((analysis) => analysis.kind === "explicit_purchase");

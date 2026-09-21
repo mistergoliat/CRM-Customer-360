@@ -1,0 +1,464 @@
+[
+ {
+  "id": "p78r:A-E02-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra olímpica de acero, 20 kg, uso general. Precio: $89.990. Quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:B-E02-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la Barra Olímpica Classic 20kg 👇\n\n• Precio: $89.990 CLP\n• Disponible: 15 unidades en stock\n• Barra olímpica de acero, 20 kg, uso general\n\n¿Te gustaría que la agregue a tu compra? Si me confirmas, también necesito saber a qué comuna la enviamos para cotizar el despacho.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:C1-E02-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* disponible:\n\n- Precio: $89.990 CLP\n- Stock: 15 unidades\n- Barra olímpica de acero, 20 kg, uso general\n\n¿Quieres que la agregue a tu pedido? Si me indicas tu comuna de despacho, te calculo el envío.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:B-E02-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la Barra Olímpica Classic 20kg 👇\n\n• Precio: $89.990 CLP\n• Disponibilidad: en stock (15 unidades)\n• Barra olímpica de acero, 20 kg, uso general\n\n¿Te gustaría que la agregue a tu compra? Si me confirmas, también necesito saber a qué comuna la enviaríamos para cotizar el despacho.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:C1-E02-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Precio: $89.990 CLP\n• Disponible: 15 unidades en stock\n• Descripción: barra olímpica de acero, 20 kg, uso general\n\n¿Quieres que la agregue a tu pedido? Si me indicas tu comuna de despacho, te calculo el envío.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:A-E02-t0-r1",
+  "source": "p7.8r-real",
+  "reply": null,
+  "label": "NO_REPLY"
+ },
+ {
+  "id": "p78r:C1-E02-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* disponible:\n\n- Precio: $89.990 CLP\n- Stock: 15 unidades\n- Barra olímpica de acero, 20 kg, uso general\n\n¿Te la dejo apartada? Si me confirmas, la agrego a tu pedido y me indicas la comuna de entrega para calcular el envío.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:A-E02-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra olímpica de acero, 20 kg, uso general. Precio $89.990 y quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:B-E02-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* disponible:\n\n- Precio: $89.990 CLP\n- Stock: 15 unidades\n- Barra olímpica de acero, 20 kg, uso general\n\n¿Quieres que la agregue a tu compra? Si me indicas la comuna de entrega, te calculo el envío.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:A-E05-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra olímpica de acero, 20 kg, de uso general. Precio $89.990 y quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:A-E05-t1-r0",
+  "source": "p7.8r-real",
+  "reply": "Entiendo, prefieres la versión Pro. Encontré la **Barra Olímpica Pro 20kg** (queda 6 unidades disponibles).\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:B-E05-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "Encontré la **Barra Olímpica Classic 20kg**. ¿Quieres que te confirme precio, stock y link, o la agregamos directo a tu compra?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:B-E05-t1-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Perfecto! La **Barra Olímpica Pro 20kg** está disponible:\n\n- Precio: $149.990 CLP\n- Stock: 6 unidades\n- Barra olímpica de competición, 20 kg, con rodamientos de alta rotación.\n\n¿La agrego a tu compra? Si me confirmas, también necesito saber a qué comuna la enviamos.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:C1-E05-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Listo! Encontré la **Barra Olímpica Classic 20kg**:\n\n- Precio: $89.990 CLP\n- Disponibilidad: en stock (15 unidades)\n- Barra olímpica de acero, 20 kg, uso general\n\n¿Quieres que la agregue a tu pedido? Si es así, indícame cuántas unidades y a qué comuna la quieres recibir para calcular el envío.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:C1-E05-t1-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Buena elección! Aquí está la **Barra Olímpica Pro 20kg**:\n\n- Precio: $149.990 CLP\n- Disponibilidad: en stock (6 unidades)\n- Barra olímpica de competición, 20 kg, con rodamientos de alta rotación\n\n¿Cuántas unidades quieres y a qué comuna la enviamos? Con eso te calculo el envío.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:B-E05-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "Encontré la **Barra Olímpica Classic 20kg**. ¿Quieres que te confirme precio, stock y link, o la agregamos directo a tu compra?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:B-E05-t1-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Perfecto! La **Barra Olímpica Pro 20kg** está disponible:\n\n- Precio: $149.990 CLP\n- Stock: 6 unidades\n- Barra olímpica de competición, 20 kg, con rodamientos de alta rotación.\n\n¿La agrego a tu compra? Si me confirmas, seguimos con el envío.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:C1-E05-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "Encontré la **Barra Olímpica Classic 20kg**. ¿Quieres que te confirme precio y stock, y la agregamos a tu pedido?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:C1-E05-t1-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Perfecto! La **Barra Olímpica Pro 20kg** está disponible:\n\n- Precio: $149.990 CLP\n- Stock: 6 unidades\n- Barra olímpica de competición, 20 kg, con rodamientos de alta rotación.\n\n¿La agrego a tu pedido? Si me confirmas, también necesito la comuna de entrega para cotizar el despacho.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:A-E05-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra olímpica de acero, 20 kg, de uso general. Precio: $89.990 CLP. Quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:A-E05-t1-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! No logro identificar a qué producto te refieres con \"la pro\". ¿Me confirmas el nombre o modelo exacto? Si te refieres a la Barra Olímpica Classic 20kg que vimos, dímelo y te ayudo con esa.",
+  "label": "OTHER_QUESTION"
+ },
+ {
+  "id": "p78r:C1-E05-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! 😊 Encontré la **Barra Olímpica Classic 20kg**:\n\n- Barra olímpica de acero, 20 kg, uso general\n- Precio: **$89.990**\n- Disponible: 15 unidades en stock\n\n¿Cuántas quieres y a qué comuna te la enviamos? Así te preparo la cotización.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:C1-E05-t1-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Listo! Aquí está la **Barra Olímpica Pro 20kg**:\n\n- Barra olímpica de competición, 20 kg, con rodamientos de alta rotación\n- Precio: **$149.990**\n- Disponible: 6 unidades en stock\n\n¿Cuántas quieres y a qué comuna te la enviamos? Así te preparo la cotización. 😊",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:A-E05-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra olímpica de acero, 20 kg, de uso general. Precio: $89.990 CLP. Quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:A-E05-t1-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Entiendo que prefieres la \"pro\", pero necesito confirmar a qué producto te refieres. ¿Me indicas el nombre completo o la marca del producto \"pro\" que buscas? Así puedo mostrarte las opciones correctas.",
+  "label": "OTHER_QUESTION"
+ },
+ {
+  "id": "p78r:B-E05-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "Encontré la **Barra Olímpica Classic 20kg**. ¿Quieres que te confirme precio, stock y link, o la agregamos directo a tu compra?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:B-E05-t1-r2",
+  "source": "p7.8r-real",
+  "reply": "La **Barra Olímpica Pro 20kg** está disponible: $149.990, con 6 unidades en stock. Es de competición, 20 kg y con rodamientos de alta rotación.\n\n¿La agrego a tu compra?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:A-E07-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra olímpica de acero, 20 kg, uso general. Precio $89.990 y quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:B-E07-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Barra olímpica de acero, 20 kg, uso general\n• Precio: $89.990 CLP\n• Disponible: 15 unidades en stock\n\n¿Te gustaría que la agregue a tu compra? Si me confirmas, también necesito saber a qué comuna la enviaríamos para cotizar el despacho.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:C1-E07-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Barra olímpica de acero, 20 kg, uso general\n• Precio: $89.990\n• Stock: 15 unidades disponibles\n\n¿Te la dejo apartada? Si me confirmas cuántas quieres y la comuna de entrega, te calculo el envío y te preparo la cotización.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:B-E07-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Barra olímpica de acero, 20 kg, uso general\n• Precio: $89.990 CLP\n• Disponible: 15 unidades en stock\n\n¿Te gustaría que la agregue a tu compra? Si me confirmas, también necesito saber a qué comuna la enviaríamos para cotizar el despacho.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:C1-E07-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Barra olímpica de acero, 20 kg, uso general\n• Precio: $89.990 CLP\n• Stock: 15 unidades disponibles\n\n¿Te la dejo apartada? Si me confirmas, la agrego a tu pedido y me indicas la comuna de entrega para calcular el envío.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:A-E07-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra de acero de 20 kg para uso general, a $89.990. Quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:C1-E07-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Barra olímpica de acero, 20 kg, uso general\n• Precio: $89.990 CLP\n• Stock: 15 unidades disponibles\n\n¿Te la dejo apartada? Si me confirmas, la agrego a tu pedido y me indicas la comuna de entrega para calcular el envío.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:A-E07-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra de acero, 20 kg, de uso general. Precio: $89.990 CLP. Quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:B-E07-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Barra olímpica de acero, 20 kg, uso general\n• Precio: $89.990 CLP\n• Disponible: 15 unidades en stock\n\n¿Te gustaría que la agregue a tu compra? Si me confirmas, también necesito saber a qué comuna la enviaríamos para cotizar el despacho.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:A-E14-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra olímpica de acero, 20 kg, de uso general. Precio: $89.990. Quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:A-E14-t1-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Con gusto te ayudo con la cotización de la Barra Olímpica Classic 20kg.\n\nPara prepararla necesito confirmar dos cosas:\n1. ¿Cuántas unidades quieres?\n2. ¿A qué comuna la necesitas?\n\nCon eso dejo la cotización lista para ti.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:B-E14-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg*:\n\n- Precio: $89.990 CLP\n- Disponible: 15 unidades en stock\n- Barra olímpica de acero, 20 kg, uso general\n\n¿Quieres que la agregue a tu compra? Si me confirmas, también necesito saber a qué comuna la enviamos para cotizar el despacho.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p78r:B-E14-t1-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Perfecto! Para cotizarte necesito confirmar dos cosas:\n\n1. ¿Cuántas unidades quieres? (por defecto 1)\n2. ¿A qué comuna la enviamos?\n\nCon eso te preparo la cotización.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:C1-E14-t0-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Barra olímpica de acero, 20 kg, uso general\n• Precio: $89.990 CLP\n• Disponible: 15 unidades en stock\n\n¿Cuántas quieres y a qué comuna la enviamos? Con eso te preparo la cotización.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:C1-E14-t1-r0",
+  "source": "p7.8r-real",
+  "reply": "¡Perfecto! Para cotizarla necesito dos datos:\n\n1. ¿Cuántas barras quieres? (por defecto te pongo 1)\n2. ¿A qué comuna la enviamos?\n\nCon eso te dejo la cotización lista.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:B-E14-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg*:\n\n- Precio: $89.990 CLP\n- Disponible: 15 unidades en stock\n- Barra olímpica de acero, 20 kg, uso general\n\n¿Cuántas quieres y a qué comuna la enviamos? Con eso te preparo la cotización.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:B-E14-t1-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Listo! Para cotizarla necesito confirmar dos cosas:\n\n1. ¿Cuántas barras quieres? (por defecto te pongo 1)\n2. ¿A qué comuna la enviamos?\n\nCon eso te dejo la cotización lista.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:C1-E14-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Barra olímpica de acero, 20 kg, uso general\n• Precio: $89.990\n• Stock disponible: 15 unidades\n\n¿Cuántas quieres y a qué comuna la enviamos? Con eso te preparo la cotización.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:C1-E14-t1-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Perfecto! Para cotizarla necesito dos datos:\n\n1️⃣ ¿Cuántas barras quieres?\n2️⃣ ¿A qué comuna la enviamos?\n\nCon eso te dejo la cotización lista.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:A-E14-t0-r1",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra olímpica de acero, 20 kg, de uso general. Precio: $89.990 CLP. Quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:A-E14-t1-r1",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Con gusto te ayudo con la cotización de la Barra Olímpica Classic 20kg. Para dejarla lista necesito confirmar la cantidad de unidades que quieres. ¿Cuántas barras necesitas?",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:C1-E14-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg* 👇\n\n• Barra olímpica de acero, 20 kg, uso general\n• Precio: $89.990\n• Stock disponible: 15 unidades\n\n¿Cuántas quieres y a qué comuna la enviamos? Con eso te preparo la cotización.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:C1-E14-t1-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Perfecto! Para dejarte la cotización lista necesito dos datos:\n\n1. ¿Cuántas barras quieres? (o si es solo 1)\n2. ¿A qué comuna la enviamos?\n\nCon eso te calculo el envío y te genero la cotización.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:A-E14-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "Encontré la Barra Olímpica Classic 20kg: barra olímpica de acero, 20 kg, uso general. Precio $89.990 y quedan 15 unidades disponibles.\n\n¿Quieres que te envíe el link para revisarlo?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "p78r:A-E14-t1-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Con gusto te ayudo con la cotización. Para dejarla lista necesito confirmar dos cosas:\n\n1. ¿Cuántas unidades de la Barra Olímpica Classic 20kg quieres?\n2. ¿A qué comuna la necesitas?\n\nCon eso avanzo de inmediato.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:B-E14-t0-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Hola! Sí, tenemos la *Barra Olímpica Classic 20kg*:\n\n- Precio: $89.990 CLP\n- Disponible: 15 unidades en stock\n- Barra olímpica de acero, 20 kg, uso general\n\n¿Cuántas quieres y a qué comuna la enviamos? Con eso te preparo la cotización.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "p78r:B-E14-t1-r2",
+  "source": "p7.8r-real",
+  "reply": "¡Perfecto! Para cotizarla necesito confirmar dos cosas:\n\n1. ¿Cuántas barras quieres? (por defecto te pongo 1)\n2. ¿A qué comuna la enviamos?\n\nCon eso te dejo la cotización lista.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "spec:0",
+  "source": "spec-example",
+  "reply": "Quedan 15 unidades. ¿Quieres el link?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "spec:1",
+  "source": "spec-example",
+  "reply": "¿Quieres que lo agregue?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "spec:2",
+  "source": "spec-example",
+  "reply": "¿Quieres revisarlo?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "spec:3",
+  "source": "spec-example",
+  "reply": "¿Avanzamos?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "spec:4",
+  "source": "spec-example",
+  "reply": "¿Te lo agrego a la compra?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "spec:5",
+  "source": "spec-example",
+  "reply": "¿Cuántas unidades necesitas?",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "spec:6",
+  "source": "spec-example",
+  "reply": "¿Qué cantidad quieres?",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "spec:7",
+  "source": "spec-example",
+  "reply": "¿Una o dos unidades?",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "spec:8",
+  "source": "spec-example",
+  "reply": "Perfecto. Indícame cuántas unidades llevas y te lo dejo listo.",
+  "label": "CORRECT_QUANTITY_REQUEST"
+ },
+ {
+  "id": "spec:9",
+  "source": "spec-example",
+  "reply": "La Classic cuesta $89.990 y quedan 15 unidades disponibles.",
+  "label": "PRODUCT_INFORMATION"
+ },
+ {
+  "id": "spec:10",
+  "source": "spec-example",
+  "reply": "Tenemos stock de la Pro. Es de competición y viene con rodamientos de alta rotación.",
+  "label": "PRODUCT_INFORMATION"
+ },
+ {
+  "id": "spec:11",
+  "source": "spec-example",
+  "reply": "¿Cuál de las dos prefieres, la Classic o la Pro?",
+  "label": "OTHER_QUESTION"
+ },
+ {
+  "id": "spec:12",
+  "source": "spec-example",
+  "reply": "¿Me confirmas el modelo exacto?",
+  "label": "OTHER_QUESTION"
+ },
+ {
+  "id": "spec:13",
+  "source": "spec-example",
+  "reply": "Quedan 6 unidades. ¿Te envío el enlace para que la revises?",
+  "label": "LINK_OFFER"
+ },
+ {
+  "id": "spec:14",
+  "source": "spec-example",
+  "reply": "",
+  "label": "NO_REPLY"
+ },
+ {
+  "id": "p7.9-smoke:0",
+  "source": "p7.9-smoke",
+  "reply": "¿Confirmo las 2 unidades? Si me indicas también la comuna de entrega, te calculo el envío.",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p7.9-smoke:1",
+  "source": "p7.9-smoke",
+  "reply": "¿Confirmas las 2 unidades para dejarlas registradas en tu pedido?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p7.9-smoke:2",
+  "source": "p7.9-smoke",
+  "reply": "¿Confirmas el pedido?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p7.9-smoke:3",
+  "source": "p7.9-smoke",
+  "reply": "¿Te gustaría que te arme una cotización?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p7.9-smoke:4",
+  "source": "p7.9-smoke",
+  "reply": "La Barra Pro está a $149.990 y hay 6 unidades. ¿Te gustaría que te arme una cotización?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p7.9-smoke:5",
+  "source": "p7.9-smoke",
+  "reply": "¿Te gustaría que te ayude con algo más, como calcular el envío o preparar una cotización?",
+  "label": "GENERIC_CONFIRMATION"
+ },
+ {
+  "id": "p7.9-smoke:6",
+  "source": "p7.9-smoke",
+  "reply": "¿Necesitas algo más?",
+  "label": "OTHER_QUESTION"
+ },
+ {
+  "id": "p7.9-smoke:7",
+  "source": "p7.9-smoke",
+  "reply": "¿Me confirmas la comuna de entrega?",
+  "label": "OTHER_QUESTION"
+ }
+]
