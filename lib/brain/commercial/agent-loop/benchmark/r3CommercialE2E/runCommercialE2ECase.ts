@@ -88,7 +88,7 @@ function buildOpportunitySnapshot(input: { opportunityId: number; conversationId
   };
 }
 
-function buildBaseSnapshot(input: { conversationId: number; waId: string; opportunityId: number; masterCustomerId: number; currentTime: string }): CommercialContextSnapshot {
+export function buildBaseSnapshot(input: { conversationId: number; waId: string; opportunityId: number; masterCustomerId: number; currentTime: string }): CommercialContextSnapshot {
   return {
     contractName: "CommercialContext",
     schemaVersion: "1.0",
