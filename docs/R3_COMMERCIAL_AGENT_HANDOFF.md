@@ -120,7 +120,9 @@ Puntos de entrada y ownership de ciclo:
 | P7.3 in-turn relevant evidence correlation | CLOSED | `inTurnEvidence` en `commercial_capability_invocation_observed`; distingue evidencia relevante producida en el turno de un pedido repetido sin evidencia nueva, sin afirmar blocker resuelto |
 | P7.4 E2E benchmark harness integration | CLOSED | `lib/brain/commercial/agent-loop/benchmark/r3CommercialE2E/`; instrumento de medición construido y validado (trace/metrics/failure taxonomy/15×3 runner/artifacts); la corrida real de 45 es P7.5 |
 | P7.5 E2E commercial benchmark run | CLOSED | run `2026-09-18T03-56-41-903Z-live`, 45/45 ejecutadas, HYBRID; ver sección 23.5. Cuello de botella medido: grounding→commit (`select_products`) y timeout de 20s; P8 no respaldado por la evidencia |
-| P8 reproject + continue cognition | PENDING | observar resultado y continuar |
+| P7.6 runtime configuration parity & commercial decision completion | CLOSED | `docs/audits/r3-p7-6-runtime-config-parity-audit.md`; grounding → commit reproduce bajo configuración cognitiva/temporal equivalente a EC2 sobre `develop`; causa primaria PROMPT_POLICY / decisión del modelo; P8 sin evidencia a favor; ver sección 23.6 |
+| P7.7 grounding-to-commit behavior fix | NEXT (propuesta por evidencia P7.6; no iniciada) | cambio mínimo de prompt/semántica de tools, medido con la configuración EC2-equivalente de 23.6 |
+| P8 reproject + continue cognition | PENDING | sin evidencia a favor en P7.5 ni P7.6; no se promueve a NEXT |
 | P9 durable retry/wait/recovery | PENDING | recuperación durable |
 | P10 follow-up | PENDING | continuidad programada |
 | P11 benchmark/hardening | PENDING | evidencia operacional y endurecimiento |
@@ -368,7 +370,7 @@ No es el snapshot interno completo: omite `workId`, versiones de work, `objectiv
 
 ## 23. Next Implementation Sequence
 
-P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context), P7.2 (invocation coherence telemetry), P7.3 (in-turn relevant evidence correlation) P7.4 (E2E benchmark harness integration) y P7.5 (E2E commercial benchmark run, sección 23.5) están cerrados. Después: P8 reprojection + continuation y P9 durable recovery, sin promoción automática a NEXT: la evidencia de P7.5 no respalda P8 como siguiente paso (ver 23.5). No crear fases alternativas sin reconciliarlas con la documentación activa.
+P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context), P7.2 (invocation coherence telemetry), P7.3 (in-turn relevant evidence correlation) P7.4 (E2E benchmark harness integration) P7.5 (E2E commercial benchmark run, sección 23.5) y P7.6 (runtime configuration parity, sección 23.6) están cerrados. Siguiente por evidencia: P7.7 (grounding-to-commit behavior fix). Después: P8 reprojection + continuation y P9 durable recovery, sin promoción automática a NEXT: la evidencia de P7.5 y P7.6 no respalda P8 como siguiente paso (ver 23.5 y 23.6). No crear fases alternativas sin reconciliarlas con la documentación activa.
 
 ## 23.1. P7.1 — Trusted Execution Context
 
@@ -490,6 +492,55 @@ P7.5 no agrega arquitectura: mide al agente actual con el instrumento P7.4. Ning
 
 **Siguiente fase recomendada por evidencia**: no P8. Primero (i) investigación acotada de por qué el agente no completa `select_products` tras `get_product_details`, (ii) revisión del timeout de 20 s frente a latencia real en turnos multi-decisión, (iii) parity audit local vs EC2, (iv) repetir E09-E14 con Quote Service configurado. P8 sigue `PENDING`.
 
+**Nota P7.6 (matiza este baseline)**: P7.5 midió un runtime materialmente distinto al de EC2 (sin open-turn, harness-aligned ni compaction; timeout 20 s en vez de 60 s; `thinking` activo en vez de deshabilitado; vista P6.3 que EC2 no tiene). Por eso: el hallazgo 2 (timeout de 20 s) era solo local y con la configuración productiva desaparece (0 de 30 turnos); el estado durable post-turno del harness era obsoleto (3 de las 35 fallas eran falsos negativos, 10 → 13 PASS de 45); el techo de 2 tools explicaba el "todo junto" pero no el hallazgo 1, que sí se sostiene (ver 23.6). Ítems (i) a (iii) quedaron resueltos en P7.6; (iv) sigue abierto y `quote-service` está detenido en EC2.
+
+## 23.6. P7.6 — Runtime Configuration Parity & Commercial Decision Completion
+
+**P7.6 CLOSED.** Detalle completo, matriz LOCAL vs EC2 y trazas: `docs/audits/r3-p7-6-runtime-config-parity-audit.md`. Sin cambios de prompt, Gateway, eligibility, CommercialWork ni arquitectura de tools; sin P8, sin MCP.
+
+**Conclusión causal.** El defecto *grounding → commit* reproduce bajo configuración cognitiva/temporal equivalente a EC2 sobre el código actual de `develop`.
+
+- **Causa primaria: PROMPT_POLICY / decisión del modelo.** El modelo declara `requestedOutcome` `PRODUCT_SELECTION` o `QUOTE_CREATION` en los turnos sin commit (entiende la intención) y decide responder, mayormente ofreciendo el link.
+- **Descartados como causa primaria:** timeout, presupuesto de tools, vista P6.3 de eligibility, `thinking` y el catálogo del harness.
+- **P8: sin evidencia a favor.** No apareció ningún caso de decisión tomada sobre un snapshot obsoleto; el único snapshot viejo real fue el del propio harness y está corregido.
+
+**Configuración EC2 verificada (2026-09-21, solo lectura).** EC2 corre `develop` @ `b2fd0c5` (10 commits detrás: sin P6/P6.3/P7.x), R3 habilitado con allowlist de piloto, open-turn, harness-aligned, live assimilation y compaction en `true`, delay de settle 5000 ms (máx. 20000), envío real a Meta habilitado, `thinking: "disabled"` en la rama R3 y config publicada (id 2) con `timeoutMs` 60000, `maxOutputTokens` 4000, `maxModelRetries` 5 y `customInstructions` vacío. `quote-service`, `crm-commercial-work` y `crm-followup` están detenidos. Tasa de timeout observada en producción: 5 de 143 loops (3.5%), todos el 2026-09-14.
+
+**Qué reproduce (y qué no) el harness.** "EC2-equivalent" no es paridad total:
+
+| Categoría | Elementos |
+|---|---|
+| EC2-equivalent reproducido | open-turn; harness-aligned message model; timeout 60 s; `maxOutputTokens` 4000; `maxModelRetries` 5; `thinking` deshabilitado; compaction habilitada pero **no disparada** (solo actúa sobre 40 mensajes crudos) |
+| `NOT_REPRODUCIBLE_IN_HARNESS` | **live assimilation**: el flag se pasa pero **no fue realmente ejercitado**; su ancla es `Number(inboundMessageId)` como id de `conversation_message` y el harness usa ids de texto y no crea mensajes entrantes posteriores |
+| `EC2_ONLY_CHANNEL_BEHAVIOR` | Meta webhook; HTTPS; verificación de firma; settle de 5 s; eventos delivery/read; worker real de outbox (no se simuló con `sleep`) |
+
+Tipo de benchmark: **develop-target parity** (código actual con P5/P6/P7 encendidos + configuración cognitiva/temporal de EC2), no EC2-current parity (`b2fd0c5`, no ejecutado). Diferencias residuales: identidad de empresa del prompt, catálogo/carrier/identidad stubbeados.
+
+**Palancas del harness** (`BENCHMARK_E2E_*`, apagadas por defecto, `.env` intacto; el manifest registra `benchmarkOverrides` y `notReproducibleInHarness`): `OPEN_TURN_ENABLED`, `HARNESS_ALIGNED_MESSAGE_MODEL_ENABLED`, `LIVE_TURN_ASSIMILATION_ENABLED`, `SESSION_COMPACTION_ENABLED`, `MODEL_TIMEOUT_MS`, `MAX_OUTPUT_TOKENS`, `MAX_MODEL_RETRIES`, `THINKING`, más `MAX_TOOL_CALLS`, `ELIGIBILITY_INPUT_ENABLED` y `CATALOG_QUERY_AWARE` (diagnóstico).
+
+**Resultado R2** (configuración EC2-equivalente + catálogo que resuelve el producto nombrado; 6 casos x 3 runs; run `2026-09-21T04-10-06-911Z-live`, archivado en `~/benchmark-archive/r3-p7-6/`):
+
+| Medición | R2 |
+|---|---|
+| Turnos con intención de compra explícita | **27** |
+| Llegaron a `get_product_details` | **20** |
+| Intentaron `select_products` | **2** (ambos E15) |
+| Grounded → respuesta final sin `select_products` | **18 de 20** |
+| Finalización forzada | **0** |
+| Timeouts | **0** |
+| Tool executions aún disponibles tras el grounding | **18-19** |
+| Tiempo transcurrido tras el grounding | **3.0-4.6 s de 60 s** |
+
+R1 (misma configuración con el catálogo del harness sin cambios, `2026-09-21T04-08-10-961Z-live`) no responde la pregunta: el stub siempre devuelve `clarification_required` con 2 candidatos y solo 2 de 27 turnos llegan al grounding.
+
+Otras lecturas: cuando el mensaje trae cantidad y destino el modelo avanza (E15 completa `select_products`, `set_shipping_destination` y `calculate_shipping` en un turno en 2 de 3 runs; con el techo de 2 tools de P7.5 eran 0 de 3). Con `thinking` deshabilitado la latencia por llamada es p50 1.4 s / p90 2.0 s. E04 turno 1 ("mejor dos unidades") baja de 3/3 (config local) a 0/3 con la configuración EC2, sin atribuir a una palanca.
+
+**Fixes del instrumento** (no cambian al agente): estado durable post-turno releído antes de cada captura (con test de regresión); categoría `TIMEOUT` propia; `QUOTE_CONFIRMATION_CLAIM_PATTERN` entiende negaciones; precheck de Quote Service con `QUOTE_SERVICE_AUTH_TOKEN`; regex del stub de catálogo corregida (afectaba solo a las consultas por la "Pro" en C4/C5, E05 turno 1).
+
+**Cautelas y deuda abierta.** n=3 por celda; catálogo, carrier e identidad son stubs. El tráfico real de EC2 (5 conversaciones) mostró solicitudes de `select_products` tras el grounding en 4 de 5, así que el corpus (primer mensaje "quiero X") puede ser más exigente. Clasificador: un caso que nunca intenta la herramienta cae en `UNKNOWN` y `DURABLE_STATE_FAILURE` se dispara si *cualquier* tool relevante completó (13 de 16 fallas de R2 son `UNKNOWN`). Fuera del agente: restaurar `quote-service` en EC2 y revisar por qué `crm-commercial-work` y `crm-followup` están detenidos con el worker habilitado.
+
+**Siguiente (P7.7, no iniciado):** cambio mínimo, medido con la configuración EC2-equivalente de esta sección: primero una variante acotada de la política de commit vía `configuration.customInstructions` (vacío en EC2, prueba reversible); solo si funciona, evaluar `SELECT_PRODUCTS_RULE_LINES` y la regla de cierre obligatoria del link, y alinear `Steps remaining` con el contrato real. Guardas: E04 turno 1 no debe empeorar y E15 debe conservar 2 de 3.
+
 ## 24. Do Not Accidentally Reintroduce
 
 - No usar `CommercialProposal` como estado persistente ni dejar que el LLM decida directamente el objective durable.
@@ -506,3 +557,5 @@ P7.5 no agrega arquitectura: mide al agente actual con el instrumento P7.4. Ning
 - No usar un LLM-as-judge en P7.4/P7.5 sin necesidad demostrada, y nunca el mismo modelo evaluado como su propio judge.
 - No clasificar automáticamente un rejection de Gateway o una dependencia ausente como falla del modelo (`MODEL_REASONING`) - usar la taxonomía completa (`failureClassification.ts`).
 - No correr `r3-commercial-e2e-benchmark.ts` ni `setupR3BenchmarkEnvironment` fuera de `NODE_ENV=test` + `crm_test`.
+- No leer "EC2-equivalent" como paridad total: live assimilation no se ejercita en el harness y el canal (webhook, HTTPS, firma, settle, delivery/read, outbox real) es `EC2_ONLY_CHANNEL_BEHAVIOR`; no simularlo con `sleep`.
+- No extrapolar a producción una medición del harness sin declarar la configuración efectiva (`manifest.modelConfig`, `flags`, `benchmarkOverrides`, `notReproducibleInHarness`); P7.5 midió un runtime distinto al de EC2.

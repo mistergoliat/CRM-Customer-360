@@ -12,7 +12,7 @@ function bundle(): BenchmarkE2EArtifactBundle {
       corpusVersion: "r3-commercial-e2e.v1",
       startedAt: "2026-09-17T00:00:00.000Z",
       environmentHealth: { status: "READY", checkedAt: "t", dependencies: [] },
-      modelConfig: { mode: "offline", provider: "benchmark-offline-scripted-provider", model: "benchmark-offline-model", temperature: null, maxOutputTokens: null, maxDecisions: 3, maxToolExecutions: 2, timeoutMs: 30000 },
+      modelConfig: { mode: "offline", provider: "benchmark-offline-scripted-provider", model: "benchmark-offline-model", temperature: null, maxOutputTokens: null, maxModelRetries: null, thinking: null, maxDecisions: 3, maxToolExecutions: 2, timeoutMs: 30000 },
       flags: {
         agentTurnInputShadowEnabled: true,
         commercialWorkKernelEnabled: true,
@@ -27,6 +27,8 @@ function bundle(): BenchmarkE2EArtifactBundle {
         liveTurnAssimilationEnabled: false,
         legacyCommercialWorkRuntimeReachable: false
       },
+      benchmarkOverrides: {},
+      notReproducibleInHarness: [],
       runsPerCase: 1,
       caseCount: 1
     },

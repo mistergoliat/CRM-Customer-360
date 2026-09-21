@@ -33,9 +33,10 @@ async function checkMariaDb(): Promise<BenchmarkE2EDependencyCheck> {
 
 function checkQuoteServiceConfigured(): BenchmarkE2EDependencyCheck {
   const baseUrl = process.env.QUOTE_SERVICE_BASE_URL?.trim();
-  const apiKey = process.env.QUOTE_SERVICE_API_KEY?.trim();
-  if (baseUrl && apiKey) return { name: "quoteService", status: "READY", detail: "QUOTE_SERVICE_BASE_URL/API_KEY configured" };
-  return { name: "quoteService", status: "BLOCKED", detail: "QUOTE_SERVICE_BASE_URL/QUOTE_SERVICE_API_KEY not configured - create_quote/get_quote cases cannot execute" };
+  // Same variable the real client reads (lib/integrations/quote-service/config.ts); QUOTE_SERVICE_API_KEY is not one of them.
+  const apiKey = process.env.QUOTE_SERVICE_AUTH_TOKEN?.trim();
+  if (baseUrl && apiKey) return { name: "quoteService", status: "READY", detail: "QUOTE_SERVICE_BASE_URL/AUTH_TOKEN configured" };
+  return { name: "quoteService", status: "BLOCKED", detail: "QUOTE_SERVICE_BASE_URL/QUOTE_SERVICE_AUTH_TOKEN not configured - create_quote/get_quote cases cannot execute" };
 }
 
 function checkProviderEndpoint(mode: "offline" | "live"): BenchmarkE2EDependencyCheck {

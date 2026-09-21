@@ -1,11 +1,15 @@
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { checkEnvironmentHealth } from "./environmentHealthPrecheck";
-import { resolveBenchmarkE2EFlags, runCommercialE2ECase } from "./runCommercialE2ECase";
+import { resolveBenchmarkE2EFlags, resolveBenchmarkE2ELoopConfiguration, runCommercialE2ECase } from "./runCommercialE2ECase";
 import { resolveLiveBenchmarkProviderConfig, type LiveBenchmarkProviderConfig } from "../liveProvider";
 import { computeBenchmarkE2ESummaryMetrics } from "./metrics";
-import { SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT, SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT } from "../../../sales-agent-configuration";
-import type { BenchmarkE2EArtifactBundle, BenchmarkE2ECase, BenchmarkE2EFailure, BenchmarkE2EModelConfig, BenchmarkE2ERunTrace } from "./types";
+import { applyBenchmarkE2EOverridesToLiveConfig, listActiveBenchmarkE2EOverrides, readBenchmarkE2EOverrides } from "./benchmarkOverrides";
+import { buildSessionCompactionFeatureFlags } from "../../../config/commercialCycleConfig";
+import { SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT } from "../../../sales-agent-configuration";
+import type { BenchmarkE2EArtifactBundle, BenchmarkE2ECase, BenchmarkE2EFailure, BenchmarkE2EFlagsConfig, BenchmarkE2EModelConfig, BenchmarkE2ERunTrace } from "./types";
+
+type BenchmarkE2ERunTraceFlags = BenchmarkE2EFlagsConfig;
 
 /**
  * SALES-AGENT-R3-P7.4. This is the INSTRUMENT, not a measurement run - "P7.4
@@ -31,10 +35,33 @@ function buildModelConfig(mode: "offline" | "live", liveConfig: LiveBenchmarkPro
     model: mode === "offline" ? "benchmark-offline-model" : (liveConfig?.model ?? null),
     temperature: mode === "offline" ? null : (liveConfig?.temperature ?? null),
     maxOutputTokens: mode === "offline" ? null : (liveConfig?.maxOutputTokens ?? null),
-    maxDecisions: SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT.maxAgentStepsPerTurn,
-    maxToolExecutions: SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT.maxToolCallsPerTurn,
-    timeoutMs: SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.timeoutMs
+    maxModelRetries: mode === "offline" ? null : (liveConfig?.maxModelRetries ?? null),
+    thinking: mode === "offline" ? null : (liveConfig?.thinking ?? null),
+    maxDecisions: resolveBenchmarkE2ELoopConfiguration().maxAgentStepsPerTurn,
+    maxToolExecutions: resolveBenchmarkE2ELoopConfiguration().maxToolCallsPerTurn,
+    timeoutMs: readBenchmarkE2EOverrides().modelTimeoutMs ?? SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT.timeoutMs
   };
+}
+
+/**
+ * P7.6-B. States, in the manifest, what a run does NOT reproduce instead of
+ * simulating it. Channel behavior is always listed; a cognitive feature is
+ * listed only when its flag is on but the harness cannot exercise it.
+ */
+function describeNotReproducibleInHarness(flags: BenchmarkE2ERunTraceFlags): string[] {
+  const notes = [
+    "EC2_ONLY_CHANNEL_BEHAVIOR: Meta webhook/HTTPS and signature, turn-settlement delay, delivery/read events and the real outbox worker are outside runSalesAgentRuntimeCycle; the harness enters the cycle directly and adds no artificial delay."
+  ];
+  if (flags.openTurnExecutionEnabled) {
+    notes.push("OPEN_TURN_NOTE: maxDecisions/maxToolExecutions in modelConfig are inert under open-turn; the governors are the deadline (timeoutMs), the no-progress guard and the emergency ceilings (24 accepted steps / 20 tool executions).");
+  }
+  if (flags.liveTurnAssimilationEnabled) {
+    notes.push("NOT_REPRODUCIBLE_IN_HARNESS: live_turn_assimilation - the flag is passed but inert: its anchor is Number(inboundMessageId) as a conversation_message id (runAgentToolLoop.ts) and the harness uses text ids and creates no newer inbound rows.");
+  }
+  if (flags.sessionCompactionEnabled) {
+    notes.push(`ENABLED_NOT_EXERCISED: session_compaction - only triggers above ${buildSessionCompactionFeatureFlags().maxRawMessages} raw session messages; corpus conversations stay far below that.`);
+  }
+  return notes;
 }
 
 export type RunCommercialE2ECorpusOptions = {
@@ -55,7 +82,7 @@ export async function runCommercialE2ECorpus(options: RunCommercialE2ECorpusOpti
   let liveConfig: LiveBenchmarkProviderConfig | null = null;
   if (options.mode === "live") {
     const resolution = resolveLiveBenchmarkProviderConfig();
-    if (resolution.ok) liveConfig = resolution.config;
+    if (resolution.ok) liveConfig = applyBenchmarkE2EOverridesToLiveConfig(resolution.config, readBenchmarkE2EOverrides());
   }
 
   // Section "ENVIRONMENT HEALTH PRECHECK": "Si dependencia requerida está
@@ -102,6 +129,8 @@ export async function runCommercialE2ECorpus(options: RunCommercialE2ECorpusOpti
         environmentHealth,
         modelConfig,
         flags,
+        benchmarkOverrides: listActiveBenchmarkE2EOverrides(),
+        notReproducibleInHarness: describeNotReproducibleInHarness(flags),
         runsPerCase: options.runsPerCase,
         caseCount: options.corpus.length
       },

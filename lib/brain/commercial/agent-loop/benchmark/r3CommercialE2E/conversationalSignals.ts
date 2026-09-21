@@ -47,9 +47,23 @@ export function turnRepeatsKnownSelection(turn: BenchmarkE2ETurnTrace): boolean 
  */
 const QUOTE_CONFIRMATION_CLAIM_PATTERN = /\b(cotizaci[oó]n|presupuesto)\b.*\b(list[ao]|generad[ao]|preparad[ao]|envi[ea]d[ao])\b/i;
 
+/**
+ * P7.6. A negated statement ("todavia no hay una cotizacion generada") is a
+ * correct, grounded answer, not a claim - the bare pattern above matched it
+ * because "cotizacion" and "generada" both appear.
+ *
+ * ponytail: sentence-level negation check; a positive claim that happens to
+ * contain "no"/"sin" in the same sentence is missed. Upgrade path: a
+ * structured claim signal from the response contract, not more regex.
+ */
+const CLAIM_NEGATION_PATTERN = /\b(no|nunca|ni|sin)\b/i;
+
 export function turnHasUngroundedQuoteClaim(turn: BenchmarkE2ETurnTrace): boolean {
   if (!turn.response.finalMessage) return false;
-  if (!QUOTE_CONFIRMATION_CLAIM_PATTERN.test(turn.response.finalMessage)) return false;
+  const claimsQuote = turn.response.finalMessage
+    .split(/(?<=[.!?\n])\s+/)
+    .some((sentence) => QUOTE_CONFIRMATION_CLAIM_PATTERN.test(sentence) && !CLAIM_NEGATION_PATTERN.test(sentence));
+  if (!claimsQuote) return false;
   return !(turn.durableStateAfterTurn?.quote.present ?? false);
 }
 

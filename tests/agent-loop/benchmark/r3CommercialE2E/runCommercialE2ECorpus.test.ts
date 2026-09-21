@@ -60,6 +60,8 @@ test("P7.4-M/A: a single offline case run produces a structured trace with the r
   assert.equal(trace.turns.length, 1);
   assert.equal(trace.turns[0].toolInvocations.length > 0, true, "select_products/get_product_details must have been observed via P7.2 telemetry");
   assert.ok(trace.finalState, "a durable state snapshot must be captured after the turn");
+  // P7.6 regression: the E02 script commits select_products in this same turn; the after-turn snapshot must see it (it used to be one turn stale).
+  assert.equal(trace.finalState?.selection.present, true, "durableStateAfterTurn must be re-read after the turn executes");
 });
 
 test("P7.4: runCommercialE2ECorpus supports the 15x3 shape end to end for a small subset (2 cases x 2 runs)", async () => {

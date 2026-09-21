@@ -48,6 +48,23 @@ export function classifyFailure(testCase: BenchmarkE2ECase, turns: readonly Benc
     }
   }
 
+  // P7.6. A run whose turn hit the deadline never had a complete opportunity
+  // to behave, so it is attributed to TIMEOUT before any behavioral category.
+  // ponytail: this can shadow a behavioral omission in an earlier turn of the
+  // same run; behavior is read from toolInvocations, never from this label.
+  const timedOut = turns.find((candidate) => candidate.response.terminalReason === "timeout");
+  if (timedOut) {
+    const providerMs = timedOut.providerCalls.reduce((total, call) => total + (call.elapsedMs ?? 0), 0);
+    return {
+      category: "TIMEOUT",
+      reason: "a turn ended at the loop deadline before the model could finish",
+      causalTrace: [
+        `Turn ${timedOut.turnOrdinal}: terminalReason=timeout after ${timedOut.providerCalls.length} provider call(s) totaling ${providerMs} ms`,
+        `Turn ${timedOut.turnOrdinal}: ${timedOut.toolInvocations.length} tool invocation(s) reached the Gateway before the deadline`
+      ]
+    };
+  }
+
   const eligibilityIgnored = findInvocation(
     turns,
     (invocation) => invocation.eligibilityAtTurnStart?.status === "BLOCKED" && !invocation.inTurnEvidence.blockerPotentiallyChanged && invocation.toolObservation.status !== "completed"

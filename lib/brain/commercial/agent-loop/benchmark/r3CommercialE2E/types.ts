@@ -214,6 +214,7 @@ export const BENCHMARK_E2E_FAILURE_CATEGORIES = [
   "IDENTITY_FIXTURE",
   "GATEWAY_REJECTION",
   "DEPENDENCY_FAILURE",
+  "TIMEOUT",
   "DURABLE_STATE_FAILURE",
   "OUTBOX_FAILURE",
   "HARNESS_FAILURE",
@@ -300,6 +301,10 @@ export type BenchmarkE2EModelConfig = {
   model: string | null;
   temperature: number | null;
   maxOutputTokens: number | null;
+  /** P7.6-B. null in offline mode. */
+  maxModelRetries: number | null;
+  /** P7.6-B. null = field omitted from the request (provider default). */
+  thinking: "enabled" | "disabled" | null;
   maxDecisions: number;
   maxToolExecutions: number;
   timeoutMs: number;
@@ -406,6 +411,10 @@ export type BenchmarkE2EManifest = {
   environmentHealth: BenchmarkE2EEnvironmentHealth;
   modelConfig: BenchmarkE2EModelConfig;
   flags: BenchmarkE2EFlagsConfig;
+  /** P7.6-B. Every BENCHMARK_E2E_* variable in effect for this batch (empty = harness defaults). */
+  benchmarkOverrides: Record<string, string>;
+  /** P7.6-B. Runtime behavior the harness cannot exercise, stated instead of simulated. */
+  notReproducibleInHarness: string[];
   runsPerCase: number;
   caseCount: number;
 };

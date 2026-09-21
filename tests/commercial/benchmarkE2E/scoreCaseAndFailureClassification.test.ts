@@ -224,3 +224,14 @@ test("BLOCKED->completed is never automatically classified as an error - it is a
   const outcome = scoreCase(testCase, [invokedTurn], state({ selection: { present: true, freshness: "CURRENT", itemCount: 1 } }));
   assert.equal(caseOutcomePassed(outcome), true);
 });
+
+test("P7.6: a run whose turn hit the loop deadline is classified TIMEOUT, never MODEL_REASONING or UNKNOWN", () => {
+  const timedOutTurn = turn({
+    response: { status: "failed", terminalReason: "timeout", finalMessage: null, handoffReason: null, toolExecutionCount: 0 },
+    providerCalls: [{ elapsedMs: 3000 }, { elapsedMs: 17008 }] as unknown as BenchmarkE2ETurnTrace["providerCalls"]
+  });
+  const outcome = scoreCase(baseCase({ expected: { selectionExists: true } }), [timedOutTurn], state());
+  const classification = classifyFailure(baseCase({ expected: { selectionExists: true } }), [timedOutTurn], outcome);
+  assert.equal(classification.category, "TIMEOUT");
+  assert.match(classification.causalTrace[0], /20008 ms/);
+});

@@ -25,6 +25,7 @@ import {
 import type { CommercialContextSnapshot } from "../../../context/buildNativeCommercialContext";
 import { getActiveShippingDestinationForOpportunity } from "@/lib/domains/shipping-destination";
 import { getActiveCommercialLineItemsForOpportunity } from "@/lib/domains/commercial-line-items";
+import { readBenchmarkE2EOverrides } from "./benchmarkOverrides";
 import { loadCommercialEventRowsForInboundMessage, loadOutboxRowById } from "./eventRows";
 import { fetchDurableStateSnapshot } from "./durableStateSnapshot";
 import { buildTurnTrace } from "./buildTurnTrace";
@@ -131,6 +132,28 @@ function buildBaseSnapshot(input: { conversationId: number; waId: string; opport
   };
 }
 
+/**
+ * P7.6 diagnostic lever. Unset reproduces the P7.5 baseline exactly
+ * (SAFE_DEFAULT 3 decisions / 2 tool executions); a positive integer changes
+ * ONLY maxToolCallsPerTurn, one dimension at a time. Not a tuning proposal.
+ */
+export function resolveBenchmarkE2ELoopConfiguration() {
+  const override = Number.parseInt(process.env.BENCHMARK_E2E_MAX_TOOL_CALLS ?? "", 10);
+  return Number.isInteger(override) && override > 0
+    ? { ...SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT, maxToolCallsPerTurn: override }
+    : SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT;
+}
+
+/** P7.6-B. Same discipline as the levers above: unset -> nothing added, the P7.5 baseline is byte-identical. */
+function benchmarkModelConfigurationOverrides(): Partial<ResolvedSalesAgentConfiguration["effectiveModelConfiguration"]> {
+  const o = readBenchmarkE2EOverrides();
+  return {
+    ...(o.modelTimeoutMs !== undefined ? { timeoutMs: o.modelTimeoutMs } : {}),
+    ...(o.maxOutputTokens !== undefined ? { maxOutputTokens: o.maxOutputTokens } : {}),
+    ...(o.maxModelRetries !== undefined ? { maxModelRetries: o.maxModelRetries } : {})
+  };
+}
+
 function buildResolvedConfiguration(overrides: Partial<ResolvedSalesAgentConfiguration["effectiveModelConfiguration"]> = {}): ResolvedSalesAgentConfiguration {
   return {
     source: "safe_default",
@@ -139,8 +162,8 @@ function buildResolvedConfiguration(overrides: Partial<ResolvedSalesAgentConfigu
     version: null,
     configurationHash: null,
     configuration: SALES_AGENT_CONFIGURATION_SAFE_DEFAULT,
-    effectiveModelConfiguration: { ...SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT, ...overrides },
-    effectiveLoopConfiguration: SALES_AGENT_LOOP_CONFIGURATION_SAFE_DEFAULT,
+    effectiveModelConfiguration: { ...SALES_AGENT_MODEL_CONFIGURATION_SAFE_DEFAULT, ...overrides, ...benchmarkModelConfigurationOverrides() },
+    effectiveLoopConfiguration: resolveBenchmarkE2ELoopConfiguration(),
     effectiveFollowUpConfiguration: SALES_AGENT_FOLLOW_UP_CONFIGURATION_SAFE_DEFAULT
   };
 }
@@ -149,18 +172,20 @@ function buildResolvedConfiguration(overrides: Partial<ResolvedSalesAgentConfigu
 export function resolveBenchmarkE2EFlags(): BenchmarkE2EFlagsConfig {
   const sessionCompaction = buildSessionCompactionFeatureFlags();
   const persistentSessionCognitionEnabled = shouldEnablePersistentSessionCognition();
+  const overrides = readBenchmarkE2EOverrides();
   return {
     agentTurnInputShadowEnabled: true,
     commercialWorkKernelEnabled: true,
     commercialProposalShadowEnabled: true,
     commercialObjectiveReconciliationEnabled: true,
     capabilityEligibilityShadowEnabled: true,
-    capabilityEligibilityInputEnabled: true,
-    openTurnExecutionEnabled: shouldEnableOpenTurnExecution(),
-    harnessAlignedMessageModelEnabled: shouldEnableHarnessAlignedMessageModel(),
+    // P7.6 diagnostic lever: only the literal "false" turns the P6.3 view off; unset keeps the P7.5 baseline (true).
+    capabilityEligibilityInputEnabled: process.env.BENCHMARK_E2E_ELIGIBILITY_INPUT_ENABLED?.trim().toLowerCase() !== "false",
+    openTurnExecutionEnabled: overrides.openTurnEnabled ?? shouldEnableOpenTurnExecution(),
+    harnessAlignedMessageModelEnabled: overrides.harnessAlignedMessageModelEnabled ?? shouldEnableHarnessAlignedMessageModel(),
     persistentSessionCognitionEnabled,
-    sessionCompactionEnabled: sessionCompaction.sessionCompactionEnabled && persistentSessionCognitionEnabled,
-    liveTurnAssimilationEnabled: false,
+    sessionCompactionEnabled: (overrides.sessionCompactionEnabled ?? sessionCompaction.sessionCompactionEnabled) && persistentSessionCognitionEnabled,
+    liveTurnAssimilationEnabled: overrides.liveTurnAssimilationEnabled ?? false,
     legacyCommercialWorkRuntimeReachable: false
   };
 }
@@ -207,6 +232,17 @@ export async function runCommercialE2ECase(testCase: BenchmarkE2ECase, options: 
 
     const snapshot = buildBaseSnapshot({ conversationId: env.conversationId, waId: env.waId, opportunityId: env.opportunityId, masterCustomerId: env.masterCustomerId, currentTime: identitySeedTime });
 
+    // The DRM reads cart/destination straight off this snapshot, so it must be
+    // refreshed before EVERY capture (initial, per-turn start, per-turn end);
+    // otherwise a mutation made during a turn is invisible in its own
+    // durableStateAfterTurn (P7.6: 100% of completed mutations were persisted
+    // in the DB while the after-turn snapshot reported them absent).
+    const refreshSnapshotFacts = async () => {
+      snapshot.shippingDestination = await getActiveShippingDestinationForOpportunity(env.opportunityId);
+      snapshot.commercialLineItems = await getActiveCommercialLineItemsForOpportunity(env.opportunityId);
+    };
+
+    await refreshSnapshotFacts();
     const initialState = await fetchDurableStateSnapshot({
       conversationId: env.conversationId,
       opportunityId: env.opportunityId,
@@ -228,8 +264,7 @@ export async function runCommercialE2ECase(testCase: BenchmarkE2ECase, options: 
       // builder (buildNativeCommercialContext.ts, which reads both live every
       // turn) - a setup()-seeded or same-run selection/destination was
       // invisible to P2/P6.3 cognition, never a model reasoning gap.
-      snapshot.shippingDestination = await getActiveShippingDestinationForOpportunity(env.opportunityId);
-      snapshot.commercialLineItems = await getActiveCommercialLineItemsForOpportunity(env.opportunityId);
+      await refreshSnapshotFacts();
 
       const recentCatalogContextResult = await loadRecentCatalogContext({ conversationId: env.conversationId, currentTime });
       const pendingCatalogActionResult = await loadPendingCatalogAction({ conversationId: env.conversationId });
@@ -267,6 +302,7 @@ export async function runCommercialE2ECase(testCase: BenchmarkE2ECase, options: 
 
       const eventRows = await loadCommercialEventRowsForInboundMessage(inboundMessageId);
       const outboxRow = cycleResult.dispatch.outboxId !== null ? await loadOutboxRowById(cycleResult.dispatch.outboxId) : null;
+      await refreshSnapshotFacts();
       const durableStateAfterTurn = await fetchDurableStateSnapshot({
         conversationId: env.conversationId,
         opportunityId: env.opportunityId,

@@ -96,3 +96,13 @@ test("turnOpensWithGreeting / caseHasGreetingRepetition: only flags a SECOND gre
   const repeated = [...turns, turn({ turnOrdinal: 2, response: { status: "responded", terminalReason: "responded", finalMessage: "Hola de nuevo!", handoffReason: null, toolExecutionCount: 0 } })];
   assert.equal(caseHasGreetingRepetition(repeated), true);
 });
+
+test("P7.6: a negated quote statement is a grounded answer, not an ungrounded claim", () => {
+  const negated = turn({ response: { status: "responded", terminalReason: "responded", finalMessage: "Hola. Todavia no hay una cotizacion generada y registrada, asi que no puedo confirmarte un estado.", handoffReason: null, toolExecutionCount: 0 }, durableStateAfterTurn: state() });
+  assert.equal(turnHasUngroundedQuoteClaim(negated), false);
+});
+
+test("P7.6: a positive quote claim without a durable quote is still flagged, even when another sentence is negated", () => {
+  const claimed = turn({ response: { status: "responded", terminalReason: "responded", finalMessage: "No te preocupes. Tu cotizacion esta lista.", handoffReason: null, toolExecutionCount: 0 }, durableStateAfterTurn: state() });
+  assert.equal(turnHasUngroundedQuoteClaim(claimed), true);
+});

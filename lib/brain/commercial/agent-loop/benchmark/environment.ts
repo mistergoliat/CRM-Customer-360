@@ -135,6 +135,23 @@ function catalogRequestHandler(req: http.IncomingMessage, res: http.ServerRespon
     req.on("end", () => {
       const parsed = JSON.parse(body || "{}") as { query?: string };
       const query = parsed.query ?? "barra olimpica";
+      // P7.6 diagnostic lever, off by default (the legacy corpora depend on the
+      // never-query-aware behavior above): when on, a query naming exactly one
+      // fixture product resolves to it instead of always being ambiguous.
+      const normalizedQuery = query.toLowerCase();
+      const namesClassic = normalizedQuery.includes("classic");
+      const namesPro = /\bpro\b/.test(normalizedQuery);
+      if (process.env.BENCHMARK_E2E_CATALOG_QUERY_AWARE === "true" && namesClassic !== namesPro) {
+        const target = BENCHMARK_PRODUCTS[namesClassic ? "31" : "32"];
+        return sendJson(res, 200, {
+          query: { original: query, normalized: query },
+          resolution: { status: "resolved", confidence: 0.95, sourceProduct: { productId: target.productId } },
+          candidates: [productIntentCandidate(target, 1)],
+          statistics: { retrieved: 1, eligible: 1, returned: 1 },
+          warnings: [],
+          correlationId: "benchmark"
+        });
+      }
       return sendJson(res, 200, {
         query: { original: query, normalized: query },
         resolution: { status: "clarification_required", confidence: 0.5 },
