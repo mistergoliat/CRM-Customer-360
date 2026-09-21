@@ -261,6 +261,14 @@ export type RunAgentToolLoopInput = {
    */
   commercialProposalShadowEnabled?: boolean;
   /**
+   * SALES-AGENT-R3-P7.8 (Autonomous Harness A/B). Benchmark-only seam: the
+   * ONLY thing it swaps is the prompt/message builder - same tools, same
+   * loop, same Gateway, same evidence gate and mutation-claim guard. Absent
+   * (every production caller) is buildAgentStepPromptPackage, byte-identical
+   * to before this task.
+   */
+  promptBuilder?: typeof buildAgentStepPromptPackage;
+  /**
    * SALES-AGENT-R3-P7.1 (Trusted Execution Context). Durable CommercialWork/
    * objective trace context for this turn, resolved by the caller
    * (salesAgentRuntime.ts) from the same work the P3.5 kernel already
@@ -1411,7 +1419,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       return finalize("timeout");
     }
 
-    const promptPackage = buildAgentStepPromptPackage({
+    const promptPackage = (input.promptBuilder ?? buildAgentStepPromptPackage)({
       currentTime: input.currentTime,
       customerMessage,
       commercialContextSummary,
@@ -1707,7 +1715,7 @@ export async function runAgentToolLoop(input: RunAgentToolLoopInput): Promise<Ag
       return finalize("timeout");
     }
 
-    const promptPackage = buildAgentStepPromptPackage({
+    const promptPackage = (input.promptBuilder ?? buildAgentStepPromptPackage)({
       currentTime: input.currentTime,
       customerMessage,
       commercialContextSummary,

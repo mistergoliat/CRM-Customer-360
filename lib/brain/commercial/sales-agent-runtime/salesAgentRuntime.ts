@@ -162,6 +162,8 @@ export type SalesAgentRuntimeInput = {
   harnessAlignedMessageModelEnabled?: boolean;
   /** SALES-AGENT-R3-P4. Enables the terminal CommercialProposal prompt contract. Default false. */
   commercialProposalShadowEnabled?: boolean;
+  /** SALES-AGENT-R3-P7.8. Benchmark-only prompt-builder seam, threaded to runAgentToolLoop unchanged; absent in every production caller. */
+  promptBuilder?: RunAgentToolLoopInput["promptBuilder"];
   /** SALES-AGENT-R3-P2. Read-only AgentTurnInput v1 construction, resolved at the R3 cycle boundary. */
   agentTurnInputShadow?: AgentTurnInputShadowRuntimeOptions;
   /** P6.3 pre-cognition eligibility. This is cognition-only, never a Gateway authorization. */
@@ -526,7 +528,8 @@ export async function runSalesAgentRuntime(input: SalesAgentRuntimeInput): Promi
     refreshCommercialContextSummary: input.refreshCommercialContextSummary,
     openTurnExecutionEnabled: input.openTurnExecutionEnabled,
     harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled,
-    commercialProposalShadowEnabled: input.commercialProposalShadowEnabled
+    commercialProposalShadowEnabled: input.commercialProposalShadowEnabled,
+    ...(input.promptBuilder ? { promptBuilder: input.promptBuilder } : {})
   };
 
   // SALES-AGENT-R3-P2. This is the cognition-adjacent shadow seam: the

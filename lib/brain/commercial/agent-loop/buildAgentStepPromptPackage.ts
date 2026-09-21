@@ -734,7 +734,7 @@ const OPERATION_SEMANTICS_SENTENCES: Record<CapabilityOperationSemantics, string
  * capability that declares them, byte-identical to before this task for
  * every capability that does not.
  */
-function renderToolLine(tool: AgentLoopToolDescription): string {
+export function renderToolLine(tool: AgentLoopToolDescription): string {
   const schemaText = tool.inputSchema ? ` Arguments must satisfy exactly this JSON Schema (no properties beyond what it lists): ${JSON.stringify(tool.inputSchema)}` : "";
   const useWhenText = tool.useWhen ? ` Use when: ${tool.useWhen}.` : "";
   const doNotUseWhenText = tool.doNotUseWhen ? ` Do not use when: ${tool.doNotUseWhen}.` : "";

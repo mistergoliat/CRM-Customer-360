@@ -26,7 +26,8 @@ export function mapDomainReadModelToDurableStateSnapshot(
     selection: {
       present: drm.cart.factId !== null && drm.cart.items.length > 0,
       freshness: drm.cart.factId !== null ? drm.cart.freshness.state : null,
-      itemCount: drm.cart.factId !== null ? drm.cart.items.length : null
+      itemCount: drm.cart.factId !== null ? drm.cart.items.length : null,
+      items: drm.cart.factId !== null ? drm.cart.items.map((item) => ({ productId: item.productId, quantity: item.quantity })) : []
     },
     destination: {
       present: drm.destination !== null,

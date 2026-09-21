@@ -142,6 +142,8 @@ export type RunSalesAgentRuntimeCycleInput = {
   agentTurnInputShadowEnabled?: boolean;
   /** SALES-AGENT-R3-P4. Same-harness CommercialProposal shadow; default false and independent from P2. */
   commercialProposalShadowEnabled?: boolean;
+  /** SALES-AGENT-R3-P7.8. Benchmark-only prompt-builder seam, threaded to runSalesAgentRuntime unchanged; never set by runNativeAutonomousCycle. */
+  promptBuilder?: Parameters<typeof runSalesAgentRuntime>[0]["promptBuilder"];
   /** Test/DI seam for the P2 read-only domain builder; production uses the real P0 wiring below. */
   buildAgentTurnInputShadowDomainReadModel?: () => Promise<CommercialDomainReadModel>;
   /** SALES-AGENT-R3-P3.5. Resolved by the caller from BRAIN_R3_COMMERCIAL_WORK_KERNEL_ENABLED; default false. */
@@ -516,6 +518,7 @@ export async function runSalesAgentRuntimeCycle(input: RunSalesAgentRuntimeCycle
     openTurnExecutionEnabled: input.openTurnExecutionEnabled,
     harnessAlignedMessageModelEnabled: input.harnessAlignedMessageModelEnabled,
     commercialProposalShadowEnabled: input.commercialProposalShadowEnabled,
+    ...(input.promptBuilder ? { promptBuilder: input.promptBuilder } : {}),
     agentTurnInputShadow,
     capabilityEligibilityInput: {
       enabled: input.capabilityEligibilityInputEnabled === true,

@@ -169,7 +169,13 @@ export type BenchmarkE2EDurableStateSnapshot = {
   workStatus: string | null;
   objectiveType: string | null;
   objectiveStatus: string | null;
-  selection: { present: boolean; freshness: string | null; itemCount: number | null };
+  selection: {
+    present: boolean;
+    freshness: string | null;
+    itemCount: number | null;
+    /** P7.8. Optional (absent in older artifacts): the durable line items themselves - productId/quantity only, so wrong-quantity and selection-corruption are measurable. */
+    items?: readonly { productId: string; quantity: number }[];
+  };
   destination: { present: boolean; freshness: string | null; communeId: number | null };
   shipping: { present: boolean; freshness: string | null };
   quote: { present: boolean; freshness: string | null; quoteId: string | null; quoteStatus: string | null };

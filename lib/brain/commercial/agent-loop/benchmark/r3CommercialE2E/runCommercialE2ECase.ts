@@ -196,6 +196,8 @@ export type RunCommercialE2ECaseOptions = {
   runOrdinal: number;
   benchmarkRunId: string;
   flags: BenchmarkE2EFlagsConfig;
+  /** P7.8 A/B. Swaps only the cognitive prompt layer (see runAgentToolLoop's promptBuilder); absent = the hybrid production builder. */
+  promptBuilder?: Parameters<typeof runSalesAgentRuntimeCycle>[0]["promptBuilder"];
 };
 
 /**
@@ -290,6 +292,7 @@ export async function runCommercialE2ECase(testCase: BenchmarkE2ECase, options: 
         agentTurnInputShadowEnabled: options.flags.agentTurnInputShadowEnabled,
         commercialWorkKernelEnabled: options.flags.commercialWorkKernelEnabled,
         commercialProposalShadowEnabled: options.flags.commercialProposalShadowEnabled,
+        ...(options.promptBuilder ? { promptBuilder: options.promptBuilder } : {}),
         commercialObjectiveReconciliationEnabled: options.flags.commercialObjectiveReconciliationEnabled,
         capabilityEligibilityShadowEnabled: options.flags.capabilityEligibilityShadowEnabled,
         capabilityEligibilityInputEnabled: options.flags.capabilityEligibilityInputEnabled,
