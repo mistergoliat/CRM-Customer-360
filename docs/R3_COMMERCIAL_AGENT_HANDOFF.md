@@ -118,8 +118,8 @@ Puntos de entrada y ownership de ciclo:
 | P7.1 trusted execution context | CLOSED | workId/workVersion/objectiveId/objectiveType threadeados de runtime a `CapabilityGatewayContext`, sin autoridad de ejecución |
 | P7.2 eligibility/request/outcome correlation | CLOSED | evento `commercial_capability_invocation_observed` por invocation, PII-safe, fail-open, sin autoridad de ejecución |
 | P7.3 in-turn relevant evidence correlation | CLOSED | `inTurnEvidence` en `commercial_capability_invocation_observed`; distingue evidencia relevante producida en el turno de un pedido repetido sin evidencia nueva, sin afirmar blocker resuelto |
-| P7.4 E2E benchmark harness integration | CLOSED | `lib/brain/commercial/agent-loop/benchmark/r3CommercialE2E/`; instrumento de medición construido y validado (trace/metrics/failure taxonomy/15×3 runner/artifacts), sin ejecutar todavía la corrida real de 45 |
-| P7.5 E2E commercial benchmark run | NEXT | ejecutar 15×3 (45 runs) contra el instrumento P7.4 y sacar conclusiones |
+| P7.4 E2E benchmark harness integration | CLOSED | `lib/brain/commercial/agent-loop/benchmark/r3CommercialE2E/`; instrumento de medición construido y validado (trace/metrics/failure taxonomy/15×3 runner/artifacts); la corrida real de 45 es P7.5 |
+| P7.5 E2E commercial benchmark run | CLOSED | run `2026-09-18T03-56-41-903Z-live`, 45/45 ejecutadas, HYBRID; ver sección 23.5. Cuello de botella medido: grounding→commit (`select_products`) y timeout de 20s; P8 no respaldado por la evidencia |
 | P8 reproject + continue cognition | PENDING | observar resultado y continuar |
 | P9 durable retry/wait/recovery | PENDING | recuperación durable |
 | P10 follow-up | PENDING | continuidad programada |
@@ -368,7 +368,7 @@ No es el snapshot interno completo: omite `workId`, versiones de work, `objectiv
 
 ## 23. Next Implementation Sequence
 
-P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context), P7.2 (invocation coherence telemetry), P7.3 (in-turn relevant evidence correlation) y P7.4 (E2E benchmark harness integration) están cerrados. Después: P7.5 E2E commercial benchmark run (ejecutar 15x3 = 45 runs contra el instrumento P7.4 y sacar conclusiones), P8 reprojection + continuation y P9 durable recovery. No crear fases alternativas sin reconciliarlas con la documentación activa.
+P6.3-A/B/C/D está cerrado en código y pruebas locales. La activación de `BRAIN_R3_CAPABILITY_ELIGIBILITY_INPUT_ENABLED` queda apagada por defecto y requiere rollout controlado separado. P7.0 (auditoría comparativa, `docs/audits/r3-p7-0-comparative-harness-capability-runtime-audit.md`), P7.1 (trusted execution context), P7.2 (invocation coherence telemetry), P7.3 (in-turn relevant evidence correlation) P7.4 (E2E benchmark harness integration) y P7.5 (E2E commercial benchmark run, sección 23.5) están cerrados. Después: P8 reprojection + continuation y P9 durable recovery, sin promoción automática a NEXT: la evidencia de P7.5 no respalda P8 como siguiente paso (ver 23.5). No crear fases alternativas sin reconciliarlas con la documentación activa.
 
 ## 23.1. P7.1 — Trusted Execution Context
 
@@ -448,6 +448,47 @@ NODE_ENV=test npx tsx scripts/r3-commercial-e2e-benchmark.ts --case=E09      # u
 `ENVIRONMENT_BLOCKED` significa que MariaDB no respondió en el precheck - ningún caso corrió, ninguno cuenta como falla del modelo. Un `DEPENDENCY_FAILURE` por-run (ej. `create_quote` sin `QUOTE_SERVICE_BASE_URL`) es distinto: el batch sí corrió, sólo ese caso no pudo completarse por una dependencia real ausente.
 
 P7.4 no mejora el comportamiento del agente ni corre las 45 runs reales - eso es P7.5.
+
+## 23.5. P7.5 — E2E Commercial Benchmark Run
+
+P7.5 no agrega arquitectura: mide al agente actual con el instrumento P7.4. Ningún prompt, Gateway, eligibility, tool pool ni CommercialWork fue modificado.
+
+**Corrida**
+
+| Campo | Valor |
+|---|---|
+| Run ID / artifacts | `benchmark-results/2026-09-18T03-56-41-903Z-live/` (`manifest.json`, `runs.jsonl`, `summary.json`, `failures.json`; untracked) |
+| SHA medido | `db23a29f74de997fb06310515b0ade71ad8588b4` (el `gitSha` del manifest) |
+| Código efectivamente ejecutado | `db23a29` + el parche instrumental de 2 archivos descrito abajo, aún sin commitear durante la corrida. El commit posterior que contiene ese parche y este documento **no** es el SHA benchmarkeado |
+| Execution mode | `HYBRID`: runtime/Gateway/MariaDB/P4/P5/P6/P7/outbox reales; Catalog/Carrier/commune stubbeados; provider DeepSeek real |
+| Modelo | `deepseek-v4-flash`, temperature 0, maxDecisions 3, maxToolExecutions 2, timeout 20000 ms (defaults seguros de `sales-agent-configuration`, no afinados) |
+| Flags | P2/P3.5/P4/P5/P6-shadow/P6-input forzados `true` por el harness; open-turn, harness-aligned, live-assimilation, compaction `false`; persistent-session `true` (default de código) |
+| Runs | 45 planificadas, 45 ejecutadas, 0 abortadas, 0 traces incompletos |
+| Entorno | MariaDB `READY` (`crm_test` local, Docker), provider `READY`, Quote Service `BLOCKED` (sin `QUOTE_SERVICE_BASE_URL`/`API_KEY`), Catalog/Carrier/Customer Service `NOT_REQUIRED` |
+| Overrides de sesión | `NODE_ENV=test`, `DATABASE_NAME=DB_NAME=crm_test`, `DB_WRITE_ENABLED=true`, `BENCHMARK_LIVE_LLM_ENABLED=true`, `BRAIN_AUTONOMOUS_RESPONSES_ENABLED=true` (solo permite el INSERT en `brain_message_outbox`; ningún worker de envío corre) |
+
+**Correcciones instrumentales previas al batch** (HARNESS_FAILURE, no comportamiento del modelo; commit `fix(r3-benchmark): harden commercial E2E baseline harness`):
+
+1. `runCommercialE2ECase.ts`: `buildBaseSnapshot()` dejaba `commercialLineItems`/`shippingDestination` en `null`, a diferencia de `buildNativeCommercialContext.ts`, que los lee en vivo por turno. Estado sembrado por `setup()` o mutado en un turno previo era invisible para P2/P6.3. Ahora se leen en vivo al inicio de cada turno con las mismas funciones que usa producción.
+2. `scripts/r3-commercial-e2e-benchmark.ts`: nunca cerraba el pool de `lib/db.ts`, por lo que el proceso no terminaba tras escribir los artifacts. Ahora `resetPoolForTests()` en `finally`.
+
+**Hallazgos**
+
+1. **Grounding → commit (`select_products`)**. En 19 de 21 turnos no confundidos por timeout con intención de selección explícita, el agente llama `get_product_details` y responde sin llamar `select_products` (E02, E04, E05, E07, E14, E15). Es la causa raíz dominante de las fallas de progresión; no es Gateway, argumentos ni estado durable.
+2. **Timeout de 20 s**. 19/63 turnos terminaron en `timeout` (100% en E03, 50-100% en E09-E13, 0% en E01/E02/E06/E08/E15), correlacionado con el número de decisiones secuenciales por turno y sin deriva temporal. Es la configuración segura vigente, no una afinada para el benchmark.
+3. **Quote Service local unavailable**. Sin Quote Service configurado, el funnel de cotización (E09-E14, 18 runs) no es medible; además muchos turnos expiran antes de llegar a `create_quote`. `quoteConversionRate=0%` no es evidencia sobre el agente.
+4. **P8 no respaldado por evidencia**. El patrón "tool ejecuta → estado cambia → el agente razona sobre snapshot viejo en el mismo turno" no domina: los hallazgos 1 y 2 ocurren antes de cualquier reproyección.
+5. **Local ≠ EC2**. Esta corrida usa el `.env` y la base Docker locales; no se pudo verificar la configuración productiva (EC2 inalcanzable por SSH desde este entorno). Se requiere un parity audit local vs EC2 (flags, timeout, config publicada del agente, Catalog/Quote Service) antes de extrapolar cualquier número a producción.
+
+**Métricas principales (sobre 45 runs)**: commercialOutcomeCompletionRate 40%; correctObjectiveBehaviorRate 71.1%; gatewayCompletionRate 89.9% (62/69); validArgumentsRate 100%; duplicateToolCallRate 0%; unnecessaryRequestionRate 0%; outboxCompletionRate 100%; terminalReasonDistribution `responded` 42 / `timeout` 19 / `handoff` 2 (63 turnos). `blockedThenCompleted=10` corresponde íntegramente a `OBJECTIVE_REQUIRED`/`OBJECTIVE_INCOMPATIBLE`, evaluados antes de que P5 fije el objective del turno y excluidos a propósito del mapping P7.3; `blockedRequestCoherenceRate=0%` es estructural para este corpus.
+
+**Defectos históricos**: re-saludo 0; re-preguntar destino conocido 0; tool-budget ceiling 0 (el timeout interviene antes); identity fixture descartado (E12 run2 muestra `master_identity_required` correcto); "todo junto" reproduce 3/3 (E15 nunca fija el destino dicho en el mismo mensaje); reemplazo de selección inconcluso (E04/E05 no llegan a mutar).
+
+**Deuda del harness detectada (no corregida, fuera de la ventana de smoke)**: (a) `QUOTE_CONFIRMATION_CLAIM_PATTERN` en `conversationalSignals.ts` es ciega a negación y produjo un falso positivo en E11 run0; (b) `failureClassification.ts` no tiene rama para `terminalReason=timeout`, así que esos casos caen en `UNKNOWN`/`DURABLE_STATE_FAILURE`/`MODEL_REASONING`; (c) casos sin `requiredToolsAnyTurn` que nunca intentan la mutación caen en `UNKNOWN`.
+
+**Comparación histórica**: las cifras del benchmark previo (tool selection ≈86.7%, boundary ≈0%) no constan en artifacts ni docs del repo; `validArgumentsRate` y duplicados son LEGACY COMPARABLE, el resto NEW E2E METRIC. No se declara mejora porcentual.
+
+**Siguiente fase recomendada por evidencia**: no P8. Primero (i) investigación acotada de por qué el agente no completa `select_products` tras `get_product_details`, (ii) revisión del timeout de 20 s frente a latencia real en turnos multi-decisión, (iii) parity audit local vs EC2, (iv) repetir E09-E14 con Quote Service configurado. P8 sigue `PENDING`.
 
 ## 24. Do Not Accidentally Reintroduce
 

@@ -23,6 +23,8 @@ import {
   shouldEnablePersistentSessionCognition
 } from "../../../config/commercialCycleConfig";
 import type { CommercialContextSnapshot } from "../../../context/buildNativeCommercialContext";
+import { getActiveShippingDestinationForOpportunity } from "@/lib/domains/shipping-destination";
+import { getActiveCommercialLineItemsForOpportunity } from "@/lib/domains/commercial-line-items";
 import { loadCommercialEventRowsForInboundMessage, loadOutboxRowById } from "./eventRows";
 import { fetchDurableStateSnapshot } from "./durableStateSnapshot";
 import { buildTurnTrace } from "./buildTurnTrace";
@@ -220,6 +222,14 @@ export async function runCommercialE2ECase(testCase: BenchmarkE2ECase, options: 
       const inboundMessageId = `${options.benchmarkRunId}-turn${turnOrdinal}`;
       const correlationId = `${options.benchmarkRunId}-turn${turnOrdinal}-${randomUUID()}`;
       const currentTime = new Date().toISOString();
+
+      // HARNESS_FAILURE fix (P7.5 smoke, case E08): buildBaseSnapshot() below
+      // never populates these two fields, unlike the real per-message context
+      // builder (buildNativeCommercialContext.ts, which reads both live every
+      // turn) - a setup()-seeded or same-run selection/destination was
+      // invisible to P2/P6.3 cognition, never a model reasoning gap.
+      snapshot.shippingDestination = await getActiveShippingDestinationForOpportunity(env.opportunityId);
+      snapshot.commercialLineItems = await getActiveCommercialLineItemsForOpportunity(env.opportunityId);
 
       const recentCatalogContextResult = await loadRecentCatalogContext({ conversationId: env.conversationId, currentTime });
       const pendingCatalogActionResult = await loadPendingCatalogAction({ conversationId: env.conversationId });

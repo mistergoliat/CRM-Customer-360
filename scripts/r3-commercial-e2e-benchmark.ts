@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { BENCHMARK_E2E_CORPUS, BENCHMARK_E2E_CORPUS_VERSION } from "../lib/brain/commercial/agent-loop/benchmark/r3CommercialE2E/corpus";
 import { runCommercialE2ECorpus } from "../lib/brain/commercial/agent-loop/benchmark/r3CommercialE2E/runCommercialE2ECorpus";
 import { buildArtifactFiles } from "../lib/brain/commercial/agent-loop/benchmark/r3CommercialE2E/artifacts";
+import { resetPoolForTests } from "../lib/db";
 
 const ARTIFACT_ROOT = join(process.cwd(), "benchmark-results");
 
@@ -51,43 +52,51 @@ function parseArgs(argv: string[]) {
 }
 
 async function main() {
-  const { mode, runsPerCase, caseFilter } = parseArgs(process.argv.slice(2));
+  try {
+    const { mode, runsPerCase, caseFilter } = parseArgs(process.argv.slice(2));
 
-  let corpus = BENCHMARK_E2E_CORPUS;
-  if (caseFilter) {
-    const caseFilterSet = new Set(caseFilter);
-    corpus = BENCHMARK_E2E_CORPUS.filter((testCase) => caseFilterSet.has(testCase.caseId));
-    const missing = caseFilter.filter((id) => !BENCHMARK_E2E_CORPUS.some((testCase) => testCase.caseId === id));
-    if (missing.length > 0) {
-      console.error(`--case referenced unknown caseId(s): ${missing.join(", ")}`);
+    let corpus = BENCHMARK_E2E_CORPUS;
+    if (caseFilter) {
+      const caseFilterSet = new Set(caseFilter);
+      corpus = BENCHMARK_E2E_CORPUS.filter((testCase) => caseFilterSet.has(testCase.caseId));
+      const missing = caseFilter.filter((id) => !BENCHMARK_E2E_CORPUS.some((testCase) => testCase.caseId === id));
+      if (missing.length > 0) {
+        console.error(`--case referenced unknown caseId(s): ${missing.join(", ")}`);
+        process.exitCode = 1;
+        return;
+      }
+    }
+
+    console.log(`R3 Commercial E2E Benchmark - ${mode} mode, ${runsPerCase} run(s)/case, ${corpus.length} case(s).`);
+
+    const result = await runCommercialE2ECorpus({ mode, runsPerCase, corpus, corpusVersion: BENCHMARK_E2E_CORPUS_VERSION });
+    if (!result.ok) {
+      console.error("ENVIRONMENT_BLOCKED: MariaDB is unreachable - no case was run, nothing was scored as a model failure.");
+      console.error(JSON.stringify(result.environmentHealth, null, 2));
       process.exitCode = 1;
       return;
     }
+
+    const runId = `${result.bundle.manifest.startedAt.replace(/[:.]/g, "-")}-${mode}`;
+    const runDir = join(ARTIFACT_ROOT, runId);
+    mkdirSync(runDir, { recursive: true });
+
+    const files = buildArtifactFiles(result.bundle);
+    for (const [fileName, content] of Object.entries(files)) {
+      writeFileSync(join(runDir, fileName), content, "utf8");
+    }
+
+    console.log(`environmentHealth.status=${result.bundle.manifest.environmentHealth.status}`);
+    console.log(`runCompletionRate=${result.bundle.summary.runCompletionRate}`);
+    console.log(`failures=${result.bundle.failures.length}`);
+    console.log(`\nArtifacts written to: ${runDir}`);
+  } finally {
+    // HARNESS_FAILURE fix (P7.5 smoke): lib/db.ts's mysql2 Pool keeps idle
+    // keep-alive sockets open, which never lets this one-shot CLI process
+    // exit on its own once main() resolves - confirmed by the smoke run's
+    // node process still running long after its artifacts were written.
+    await resetPoolForTests();
   }
-
-  console.log(`R3 Commercial E2E Benchmark - ${mode} mode, ${runsPerCase} run(s)/case, ${corpus.length} case(s).`);
-
-  const result = await runCommercialE2ECorpus({ mode, runsPerCase, corpus, corpusVersion: BENCHMARK_E2E_CORPUS_VERSION });
-  if (!result.ok) {
-    console.error("ENVIRONMENT_BLOCKED: MariaDB is unreachable - no case was run, nothing was scored as a model failure.");
-    console.error(JSON.stringify(result.environmentHealth, null, 2));
-    process.exitCode = 1;
-    return;
-  }
-
-  const runId = `${result.bundle.manifest.startedAt.replace(/[:.]/g, "-")}-${mode}`;
-  const runDir = join(ARTIFACT_ROOT, runId);
-  mkdirSync(runDir, { recursive: true });
-
-  const files = buildArtifactFiles(result.bundle);
-  for (const [fileName, content] of Object.entries(files)) {
-    writeFileSync(join(runDir, fileName), content, "utf8");
-  }
-
-  console.log(`environmentHealth.status=${result.bundle.manifest.environmentHealth.status}`);
-  console.log(`runCompletionRate=${result.bundle.summary.runCompletionRate}`);
-  console.log(`failures=${result.bundle.failures.length}`);
-  console.log(`\nArtifacts written to: ${runDir}`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
