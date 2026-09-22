@@ -1,0 +1,19 @@
+[
+  { "id": "FS01", "message": "Actualizo a 2 unidades de la Barra Olimpica Classic 20kg ($89.990 c/u).", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS02", "message": "Actualizo la selección a 3 unidades de la Pro.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS03", "message": "Queda en 2 unidades de la Classic entonces.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS04", "message": "Quedan anotadas las 3 unidades de la Pro.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS05", "message": "Te dejo con 2 Classic anotadas.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS06", "message": "Agrego 2 unidades más a tu pedido.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS07", "message": "Ya está agregado a tu selección.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS08", "message": "Listo, quedan 2 unidades de la Classic.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS09", "message": "Preparé 2 unidades de la Barra Pro para ti.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS10", "message": "Registré 2 unidades de la Classic en tu carrito.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS11", "message": "Confirmé tu selección de 2 Classic.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": true },
+  { "id": "FS12", "message": "Actualizo a 2 unidades de la Classic.", "terminalReason": "responded", "selectCompleted": true, "expectedUnbacked": false },
+  { "id": "FS13", "message": "Perfecto, quedaron seleccionadas 2 unidades de la Classic.", "terminalReason": "responded", "selectCompleted": true, "expectedUnbacked": false },
+  { "id": "FS14", "message": "¿Cuántas unidades quieres llevar?", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": false },
+  { "id": "FS15", "message": "Las barras olímpicas tienen garantía de 1 año.", "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": false },
+  { "id": "FS16", "message": "Actualizo a 2 unidades de la Classic.", "terminalReason": "handoff", "selectCompleted": false, "expectedUnbacked": false },
+  { "id": "FS17", "message": null, "terminalReason": "responded", "selectCompleted": false, "expectedUnbacked": false }
+]
